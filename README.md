@@ -12,8 +12,14 @@ interactive tree (pan, zoom, click a node to read it) in a browser.
 The notes are plain, Obsidian-compatible markdown in your repository (`vault/` by default) and
 are the source of truth. You never need Obsidian open.
 
-<!-- Screenshots to add in docs/screenshots/: tree-view.png, pane-desktop.png, pane-terminal.png -->
-_Screenshots: coming soon (the tree view, the outline pane on the desktop app and in the terminal)._
+![The tree view of a demo project: experiments and directions as a tree, coloured by status](docs/screenshots/tree.png)
+
+| Click a node to read its note | Filter by tag, type, status or date |
+|---|---|
+| ![A note open in the side drawer](docs/screenshots/note.png) | ![The filters panel, with the augmentation tag selected and the other notes dimmed](docs/screenshots/filters.png) |
+
+_The screenshots show the fictional project in [`examples/demo`](examples/demo): `cd` into it and
+run `/rft` to try the view without setting anything up._
 
 ## Install
 
@@ -82,10 +88,10 @@ they are (ids, statuses and the next free id are read from the notes).
 
 `/rft` also starts a small local server for the interactive tree view.
 
-- **On the desktop app** it opens the view in the app's built-in browser pane by itself, reusing
-  the tab already on it (if the pane is hidden, press **Ctrl+Shift+B**, **Cmd+Shift+B** on
-  macOS). If the browser pane cannot be reached, it prints the address and opens the outline
-  pane instead.
+- **On the desktop app** it tries to open the view in the app's built-in browser pane, reusing
+  the tab already on it. When the plugin cannot reach the browser pane (the usual case today),
+  it prints the address and opens the outline pane: click the address and choose to open it in
+  the app.
 - **In the terminal and elsewhere** it prints the address, e.g. `http://127.0.0.1:41234/`, and
   opens the outline pane. Open the address in any browser on the same machine.
 
