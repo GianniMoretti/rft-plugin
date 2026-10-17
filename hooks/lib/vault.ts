@@ -47,6 +47,8 @@ export type Config = {
   canvas: boolean
   mermaid: boolean
   lastId: { E: number; D: number }
+  /** The web view's port; 0 or absent: a free one. */
+  webPort?: number
 }
 
 export type Io = {

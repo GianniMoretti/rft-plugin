@@ -2,7 +2,8 @@
 // export the HTML view, and the operating rules injected into a session. Each takes an `Io`
 // and returns plain text for the model or the person.
 
-import { treeHtml } from './html'
+import type { PageAssets } from './page'
+import { staticPage } from './page'
 import type { Config, Io, Loaded, NodeType, RftNode, Tree } from './vault'
 import {
   CONFIG_PATH, DIRECTION_TEMPLATE, EXPERIMENT_TEMPLATE, INDEX, LEGEND, MERMAID, STATUSES, SUBDIR,
@@ -197,8 +198,9 @@ ${lines.join('\n')}`
 
 // ---------------------------------------------------------------- export
 
-export async function exportHtml(io: Io, loaded: Loaded, generated: string): Promise<string> {
+export async function exportHtml(io: Io, loaded: Loaded, assets: PageAssets): Promise<string> {
   const path = join(loaded.config.vault, 'tree.html')
-  await io.write(path, treeHtml(loaded.tree, loaded.texts, loaded.config.project, generated))
+  const { tree, texts, config, signature } = loaded
+  await io.write(path, staticPage(assets, tree, texts, config.project, signature.length.toString(36)))
   return path
 }

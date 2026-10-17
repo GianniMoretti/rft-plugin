@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reasoning tree</title>
+<link rel="stylesheet" href="app.css" data-rft-inline>
+</head>
+<body>
+<header id="bar">
+  <h1 id="title">Reasoning tree</h1>
+  <span id="counts" class="muted"></span>
+  <span id="live" class="live" title="Live: follows the vault"></span>
+  <div class="group" role="group" aria-label="Layout">
+    <button data-layout="td" aria-pressed="true">Top-down</button>
+    <button data-layout="lr" aria-pressed="false">Left-right</button>
+    <button data-layout="radial" aria-pressed="false">Radial</button>
+  </div>
+  <div class="group">
+    <button id="fit" title="Show the whole tree">Fit</button>
+    <button id="centre" title="Centre on the root">Centre on root</button>
+    <button id="expand" title="Expand every branch">Expand all</button>
+    <button id="collapse" title="Collapse every branch below the root">Collapse all</button>
+  </div>
+  <input id="search" type="search" placeholder="Search notes (Enter: next)" autocomplete="off" spellcheck="false">
+</header>
+<main>
+  <svg id="canvas" aria-label="The reasoning tree"><defs><marker id="arrow" viewBox="0 -4 8 8" refX="8" refY="0" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,-4L8,0L0,4Z"></path></marker></defs><g id="viewport"><g id="links"></g><g id="nodes"></g></g></svg>
+  <aside id="legend" aria-label="Legend and filter">
+    <div class="legend-title">Status <span class="muted">(click to filter)</span></div>
+    <div id="statuses"></div>
+    <div class="legend-title">Type</div>
+    <div class="row"><span class="ring ring-direction"></span>Direction (D..)</div>
+    <div class="row"><span class="ring ring-experiment"></span>Experiment (E..)</div>
+    <div class="hint muted">Drag to pan, scroll to zoom. Click a node to read it, double-click or ± to fold.</div>
+  </aside>
+  <aside id="drawer" hidden>
+    <div class="drawer-head">
+      <span id="drawer-meta" class="muted"></span>
+      <button id="drawer-close" title="Close">✕</button>
+    </div>
+    <article id="note"></article>
+  </aside>
+</main>
+<div id="tooltip" hidden></div>
+<script src="vendor/d3.v7.9.0.min.js" data-rft-inline></script>
+<script src="app.js" data-rft-inline></script>
+</body>
+</html>

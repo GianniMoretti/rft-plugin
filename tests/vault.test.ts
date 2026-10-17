@@ -3,9 +3,10 @@
 
 import { describe, expect, test } from 'claude-code/testing'
 
-import { addNode, exportHtml, initVault, setStatus } from '../hooks/lib/ops'
+import { addNode, initVault, setStatus } from '../hooks/lib/ops'
+import { staticPage } from '../hooks/lib/page'
 import { canvasJson, compactTree, front, load, readConfig, sanitiseTitle, sync, validate } from '../hooks/lib/vault'
-import { D00, D01, E01, E02, MemoryFs, demoFiles } from './fixture'
+import { D00, D01, E01, E02, MemoryFs, WEB_FILES, demoFiles } from './fixture'
 
 const loadDemo = async (fs = new MemoryFs(demoFiles())) => {
   const io = fs.io()
@@ -125,15 +126,17 @@ describe('vault', () => {
     expect(old.read(`vault/experiments/${E01}.md`)).toBe(files[`vault/experiments/${E01}.md`])
   })
 
-  test('the HTML export is one standalone page with every note', async () => {
-    const { fs, io, loaded } = await loadDemo()
-    const path = await exportHtml(io, loaded, '2026-02-01')
-    const html = fs.read(path)
-    expect(path).toBe('vault/tree.html')
-    expect(html.startsWith('<!doctype html>')).toBe(true)
-    expect(html).toContain('<svg')
-    expect(html).toContain('data-id="E02"')
-    expect(html).toContain('Text of D01.')
-    expect(html).not.toMatch(/<script src=|<link [^>]*href="http/)
+  test('the static page inlines the web view and embeds the tree with every note', async () => {
+    const { tree, texts } = (await loadDemo()).loaded
+    const html = staticPage({ html: WEB_FILES['web/index.html']!, css: 'a{}', js: 'go()', d3: 'd3()' }, tree, texts, 'demo', 'v1')
+    const data = JSON.parse(/window\.RFT_DATA = (.*?);<\/script>/.exec(html)![1]!)
+    expect(data.tree.project).toBe('demo')
+    expect(data.tree.roots).toEqual(['D00'])
+    expect(data.tree.nodes).toHaveLength(4)
+    expect(data.bodies.E02).toContain('Text of E02.')
+    expect(data.bodies.E02).not.toContain('status: running')
+    expect(html).toContain('<style>a{}</style>')
+    expect(html).not.toMatch(/src=|href="app\.css"/)
   })
+
 })

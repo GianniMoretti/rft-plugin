@@ -1,14 +1,12 @@
 // The plugin in a session: activation by the config marker, the injected rules, the tools,
 // the commands, and the tree pane on the terminal and the desktop.
 
+import type { On } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { CWD, D01, E02, demoFiles, paneProps, world } from './fixture'
+import { CWD, D01, E02, WEB_FILES, demoFiles, paneProps, world } from './fixture'
 
 const SURFACES = ['terminal', 'desktop'] as const
-/** A size the Svg's markup declares on its root element. */
-const svgAttr = (svg: { props: Record<string, unknown> }, name: string) =>
-  Number(new RegExp(`<svg[^>]* ${name}="([\\d.]+)"`).exec(String(svg.props.source))?.[1])
 // the `name` of skills/rft-manual/SKILL.md
 const SKILL = 'rft-manual'
 const PANE = { plugin: 'rft', component: 'Pane', requestId: 'rft-tree', props: paneProps() } as const
@@ -103,13 +101,108 @@ describe('commands', () => {
     expect(w.tools).toContain('rft_add_node')
   })
 
-  test('/rft-view writes tree.html', async ($, on) => {
+  test('/rft-view writes one standalone page: the web view with the tree and the notes inlined', async ($, on) => {
     mock.clock(on)
-    const w = world(on, demoFiles())
+    const w = world(on, { ...demoFiles(), ...WEB_FILES })
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
     const res = await $.command.run({ command: 'rft-view', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } } as never)
     expect(res.text).toContain(`file://${CWD}/vault/tree.html`)
-    expect(w.fs.read('vault/tree.html')).toContain('<svg')
+    const html = w.fs.read('vault/tree.html')
+    expect(html).not.toContain('data-rft-inline')
+    expect(html).toContain('<style>body { color: red }</style>')
+    expect(html).toContain('"$&"')
+    expect(html).toContain('"<\\/script>"')
+    expect(html).toContain('window.RFT_DATA = {"tree":{"project":"demo"')
+    expect(html).toContain('Text of D01.')
+    expect(html.indexOf('window.RFT_DATA')).toBeLessThan(html.indexOf('console.log(window.RFT_DATA'))
+  })
+})
+
+/** The server child: says where it listens, then runs until the plugin ends the loop. */
+function fakeServer(on: On, opts: { fail?: string[] } = {}) {
+  const seen: string[][] = []
+  const state = { isRunning: false }
+  on('process.spawn', async function* (_$: unknown, e: { argv: readonly string[] }, next: { signal: AbortSignal }) {
+    seen.push([...e.argv])
+    if (opts.fail?.includes(e.argv[0]!)) throw new Error(`ENOENT: ${e.argv[0]}`)
+    state.isRunning = true
+    try {
+      yield { stream: 'stdout' as const, text: 'RFT_SERVER_URL http://127.0.0.1:5555/\n' }
+      // runs until the plugin ends the loop, which aborts this dispatch
+      await new Promise(resolve => next.signal.addEventListener('abort', resolve))
+      return { value: { code: null, signal: 'SIGTERM' } }
+    } finally {
+      state.isRunning = false
+    }
+  })
+  return { seen, state }
+}
+
+const RUN = (args: string) => ({ command: 'rft', args, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } }) as never
+
+describe('web view', () => {
+  test('/rft starts the read-only server once, prints how to open it, and the pane shows the URL', async ($, on) => {
+    mock.clock(on)
+    world(on, demoFiles())
+    const srv = fakeServer(on)
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const first = await $.command.run(RUN(''))
+    expect(first.text).toContain('Tree view: http://127.0.0.1:5555/')
+    expect(first.text).toContain('Ctrl+Shift+B')
+    expect(first.text).toContain('ssh -L 5555:127.0.0.1:5555')
+    expect(srv.seen).toHaveLength(1)
+    const argv = srv.seen[0]!
+    expect(argv[0]).toBe('python3')
+    expect(argv[1]).toMatch(/server\/rft_server\.py$/)
+    expect(argv.slice(2)).toEqual(['--vault', `${CWD}/vault`, '--web', expect.stringMatching(/\/web$/), '--project', 'demo', '--port', '0'])
+    const again = await $.command.run(RUN(''))
+    expect(again.text).toContain('http://127.0.0.1:5555/')
+    expect(srv.seen).toHaveLength(1)
+    for (const surface of SURFACES) {
+      const ui = await $.ui.mount({ ...PANE, surface })
+      expect((await ui.find({ type: 'Text', text: /^Tree view: / }))?.text).toBe('Tree view: http://127.0.0.1:5555/')
+      await ui.unmount()
+    }
+    expect(srv.state.isRunning).toBe(true)
+    const stopped = await $.command.run(RUN('stop'))
+    expect(stopped.text).toContain('stopped')
+    expect(srv.state.isRunning).toBe(false)
+    const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+    expect(await ui.find({ type: 'Text', text: /^Tree view: / })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /Run \/rft for the interactive tree/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('the server stops when the session ends', async ($, on) => {
+    mock.clock(on)
+    world(on, demoFiles())
+    const srv = fakeServer(on)
+    on('session.end', () => ({ sessionId: 'test' }) as never)
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    await $.command.run(RUN(''))
+    expect(srv.state.isRunning).toBe(true)
+    await $.session.end({ reason: 'other' } as never)
+    expect(srv.state.isRunning).toBe(false)
+  })
+
+  test('without python3 it tries python, and without either it says what is needed', async ($, on) => {
+    mock.clock(on)
+    world(on, demoFiles())
+    const srv = fakeServer(on, { fail: ['python3', 'python'] })
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const res = await $.command.run(RUN(''))
+    expect(srv.seen.map(a => a[0])).toEqual(['python3', 'python'])
+    expect(res.text).toContain('needs Python 3 on PATH')
+    expect(res.text).toContain('/rft-view')
+  })
+
+  test('/rft outside an RFT project starts nothing', async ($, on) => {
+    mock.clock(on)
+    world(on, {})
+    const srv = fakeServer(on)
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    expect((await $.command.run(RUN(''))).text).toContain('not active')
+    expect(srv.seen).toHaveLength(0)
   })
 })
 
@@ -136,110 +229,18 @@ describe('pane', () => {
     await ui.unmount()
   })
 
-  test('the desktop shows the tree alone, vertical and readable at the pane width, or the list', async ($, on) => {
+  test('the desktop pane is the outline too, with no picture', async ($, on) => {
     mock.clock(on)
     world(on, demoFiles())
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-    const svg = await ui.find({ type: 'Svg' })
-    expect(svg).toBeDefined()
-    expect(await ui.find({ key: 'node-E02' })).toBeUndefined()
-    expect((await ui.find({ key: 'view-tree' }))?.text).toBe('● Tree')
-    expect((await ui.find({ key: 'orient' }))?.text).toBe('Layout: Vertical')
-    // 80 columns of 8 px, less a margin; 12.5 px text at 1:1; one row per node
-    expect(svgAttr(svg!, 'width')).toBe(80 * 8 - 16)
-    expect(String(svg!.props.source)).toContain('font-size="12.5"')
-    const h = svgAttr(svg!, 'height')
-    expect(h).toBeGreaterThan(4 * 26)
-
-    await ui.press({ key: 'zoom-in' })
-    expect(String((await ui.find({ type: 'Svg' }))!.props.source)).toContain('font-size="15.625"')
-    expect(svgAttr((await ui.find({ type: 'Svg' }))!, 'width')).toBe(80 * 8 - 16)
-    await ui.press({ key: 'zoom-out' })
-    await ui.press({ key: 'zoom-out' })
-    expect(String((await ui.find({ type: 'Svg' }))!.props.source)).toContain('font-size="10"')
-    await ui.press({ key: 'zoom-fit' })
-    expect((await ui.find({ key: 'zoom-fit' }))?.text).toBe('● Fit')
-    expect(svgAttr((await ui.find({ type: 'Svg' }))!, 'height')).toBeLessThanOrEqual(40 * 18)
-    await ui.press({ key: 'zoom-in' })
-    expect(String((await ui.find({ type: 'Svg' }))!.props.source)).toContain('font-size="12.5"')
-
-    await ui.press({ key: 'orient' })
-    expect((await ui.find({ key: 'orient' }))?.text).toBe('Layout: Top-down')
-    await ui.press({ key: 'orient' })
-    expect((await ui.find({ key: 'orient' }))?.text).toBe('Layout: Left-right')
-    await ui.press({ key: 'orient' })
-    expect((await ui.find({ key: 'orient' }))?.text).toBe('Layout: Vertical')
-
-    await ui.press({ key: 'view-list' })
-    expect(await ui.find({ type: 'Svg' })).toBeUndefined()
-    expect(await ui.find({ key: 'node-E02' })).toBeDefined()
-    await ui.press({ key: 'node-D01' })
-    expect((await ui.find({ key: 'note-text' }))?.text).toContain('Text of D01.')
-    await ui.unmount()
-
-    // the choice is kept; back in the tree, the open note shows under it and can be focused
-    const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
-    expect(await again.find({ type: 'Svg' })).toBeUndefined()
-    await again.press({ key: 'view-tree' })
-    expect((await again.find({ key: 'note-text' }))?.text).toContain('Text of D01.')
-    await again.press({ key: 'focus' })
-    const focused = String((await again.find({ type: 'Svg' }))!.props.source)
-    expect(focused).toContain('D01')
-    expect(focused).toContain('E02')
-    expect(focused).not.toContain('D00')
-    expect(await again.find({ key: 'focus' })).toBeUndefined()
-    await again.press({ key: 'unfocus' })
-    expect(String((await again.find({ type: 'Svg' }))!.props.source)).toContain('D00')
-    await again.unmount()
-  })
-
-  test('a fresh desktop session draws the tree with only the elements the desktop page paints', async ($, on) => {
-    mock.clock(on)
-    world(on, demoFiles())
-    await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    const fresh = [
-      paneProps(),
-      { ...paneProps(), bodyColumns: 0, scroll: { offset: 0, bodyRows: 0 } },
-      { title: 'Reasoning tree', isFocused: false, bodyColumns: 0, placement: 'dock' as const, view: {} },
-    ]
-    for (const props of fresh) {
-      const ui = await $.ui.mount({ ...PANE, props: props as never, surface: 'desktop' })
-      const drawn = await ui.drawn()
-      const seen = new Set<string>()
-      const visit = (el: unknown) => {
-        if (!el || typeof el !== 'object') return
-        const node = el as { type?: string; props?: Record<string, unknown>; children?: unknown[] }
-        if (node.type) {
-          seen.add(node.type)
-          expect(node.props?.variant).toBeUndefined()
-          if (node.type === 'Svg') {
-            expect(node.props?.width).toBeUndefined()
-            expect(node.props?.height).toBeUndefined()
-          }
-        }
-        for (const k of node.children ?? []) visit(k)
-      }
-      visit(drawn)
-      expect([...seen].filter(t => !['Box', 'Text', 'Button', 'Svg', 'Markdown'].includes(t))).toEqual([])
-      expect(seen.has('Svg')).toBe(true)
-      const svg = await ui.find({ type: 'Svg' })
-      const src = String(svg!.props.source)
-      expect(src).toMatch(/viewBox="0 0 \d+ \d+"/)
-      expect(src).toContain('preserveAspectRatio="xMidYMid meet"')
-      // measured: the pane's width in px; unmeasured: a fixed sidebar width, never 0 or NaN
-      expect(svgAttr(svg!, 'width')).toBe(props.bodyColumns > 0 ? props.bodyColumns * 8 - 16 : 480)
-      await ui.unmount()
-    }
-  })
-
-  test('VS Code and the mobile app draw the tree too', async ($, on) => {
-    mock.clock(on)
-    world(on, demoFiles())
-    await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    for (const surface of ['vscode', 'mobile'] as const) {
+    for (const surface of ['desktop', 'vscode', 'mobile'] as const) {
       const ui = await $.ui.mount({ ...PANE, surface })
-      expect(await ui.find({ type: 'Svg' })).toBeDefined()
+      expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+      expect(await ui.find({ key: 'node-E02' })).toBeDefined()
+      expect(await ui.find({ key: 'view-tree' })).toBeUndefined()
+      await ui.press({ key: 'node-D01' })
+      expect((await ui.find({ key: 'note-text' }))?.text).toContain('Text of D01.')
+      await ui.press({ key: 'close-note' })
       await ui.unmount()
     }
   })
@@ -256,8 +257,7 @@ describe('pane', () => {
     for (const surface of SURFACES) {
       const ui = await $.ui.mount({ ...PANE, surface })
       expect(await ui.find({ text: /3 directions/ })).toBeDefined()
-      if (surface === 'terminal') expect(await ui.find({ key: 'node-D02' })).toBeDefined()
-      else expect(String((await ui.find({ type: 'Svg' }))!.props.source)).toContain('D02')
+      expect(await ui.find({ key: 'node-D02' })).toBeDefined()
       await ui.unmount()
     }
   })

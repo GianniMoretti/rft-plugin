@@ -35,6 +35,15 @@ export const E01 = 'E01 First check'
 export const D01 = 'D01 A better variant'
 export const E02 = 'E02 Variant run'
 
+/** Stand-ins for the web view's files, with the markers the static export inlines. */
+export const WEB_FILES: Record<string, string> = {
+  'web/index.html': '<!doctype html><html><head><link rel="stylesheet" href="app.css" data-rft-inline></head><body>' +
+    '<script src="vendor/d3.v7.9.0.min.js" data-rft-inline></script><script src="app.js" data-rft-inline></script></body></html>',
+  'web/app.css': 'body { color: red }',
+  'web/app.js': 'console.log(window.RFT_DATA.tree.nodes.length, "$&")',
+  'web/vendor/d3.v7.9.0.min.js': '/* d3 */ var d3 = {}; "</script>"',
+}
+
 export function demoFiles(): Record<string, string> {
   return {
     '.rft/config.json': JSON.stringify({ version: 1, vault: 'vault', project: 'demo', canvas: true, mermaid: false, lastId: { E: 2, D: 1 } }),
@@ -55,7 +64,7 @@ export class MemoryFs {
   }
   norm(p: string) {
     // the engine resolves relative paths against the test session's folder
-    return p.replace(/^\/.*?\/(?=(\.rft|vault)(\/|$))/, '').replace(/^\.\//, '')
+    return p.replace(/^\/.*?\/(?=(\.rft|vault|web|server)(\/|$))/, '').replace(/^\.\//, '')
   }
   read(p: string) {
     const f = this.files.get(this.norm(p))

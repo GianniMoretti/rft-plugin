@@ -1,14 +1,15 @@
 // rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-view), the model's
 // tools (rft_add_node, rft_set_status, rft_tree, rft_validate, rft_sync), the operating rules
-// injected into the system prompt, and the live tree pane. Everything is inert in a project
-// without `.rft/config.json`.
+// injected into the system prompt, the outline pane, and the web view: /rft starts a local,
+// read-only server (server/rft_server.py) for the interactive tree page (web/). Everything is
+// inert in a project without `.rft/config.json`.
 
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { RftSnapshot } from '../types'
 import { addNode, exportHtml, initVault, loadActive, rulesText, setStatus, today, treeReport } from './lib/ops'
-import { fitSize, layout as layoutTree, treeSvg } from './lib/svg'
+import { ASSET_PATHS } from './lib/page'
 import type { Config, Io, NodeType, Tree } from './lib/vault'
 import { LEGEND, MARK, bodyOf, counts, join, readConfig, signatureOf, sync, validate } from './lib/vault'
 
@@ -20,17 +21,7 @@ const snapshot = atom({ plugin: 'rft', key: 'snapshot' } as const, null)
 const collapsed = atom({ plugin: 'rft', key: 'collapsed' } as const, [])
 const selected = atom({ plugin: 'rft', key: 'selected' } as const, null)
 const note = atom({ plugin: 'rft', key: 'note' } as const, null)
-// the pane is a tall, narrow sidebar: the vertical tree at a readable size, scrolled, by default
-const orientation = atom({ plugin: 'rft', key: 'orientation' } as const, 'V')
-const zoom = atom({ plugin: 'rft', key: 'zoom' } as const, 'full')
-const scale = atom({ plugin: 'rft', key: 'scale' } as const, 1)
-const focus = atom({ plugin: 'rft', key: 'focus' } as const, null)
-const viewMode = atom({ plugin: 'rft', key: 'view' } as const, null)
-
-// the size of a monospace cell on the desktop and in VS Code, in CSS pixels (an estimate:
-// the surfaces report the pane in cells)
-const CELL_W = 8
-const CELL_H = 18
+const webUrl = atom({ plugin: 'rft', key: 'webUrl' } as const, null)
 
 const ioOf = ($: EngineInterface): Io => ({
   read: path => $.fs.read(path),
@@ -182,7 +173,7 @@ async function registerCommands($: EngineInterface): Promise<void> {
   const attempt = async (name: string, run: () => Promise<unknown>) => {
     try { await run() } catch (err) { failed.push(`/${name} (${message(err)})`) }
   }
-  await attempt('rft', () => $.command.register({ name: 'rft', description: 'Show the reasoning tree pane (/rft text prints it inline)', argumentHint: '[text]' }))
+  await attempt('rft', () => $.command.register({ name: 'rft', description: 'Open the interactive tree view and the outline pane (/rft text prints it, /rft stop stops the server)', argumentHint: '[text|stop]' }))
   await attempt('rft-init', () => $.command.register({ name: 'rft-init', description: 'Activate the Reasoning Flow Tree in this project and create its vault', argumentHint: '[starting question]' }))
   await attempt('rft-view', () => $.command.register({ name: 'rft-view', description: 'Write a standalone HTML view of the tree to <vault>/tree.html' }))
   if (failed.length) reportFailures($, failed)
@@ -262,39 +253,101 @@ async function foldAll($: EngineInterface, ids: string[]): Promise<void> {
   await update($, collapsed, () => ids)
 }
 
-const LAYOUTS = ['V', 'TD', 'LR'] as const
-const LAYOUT_NAME = { V: 'Vertical', TD: 'Top-down', LR: 'Left-right' } as const
+// ---------------------------------------------------------------- the web view's server
 
-async function cycleLayout($: EngineInterface): Promise<void> {
-  await update($, orientation, o => LAYOUTS[(LAYOUTS.indexOf(o) + 1) % LAYOUTS.length]!)
+// the running server, one per session; a reload of the module kills the child with it
+let server: { url: string; stop: () => void } | null = null
+
+/** Starts the web view's server, or answers the running one's URL. */
+async function startServer($: EngineInterface): Promise<string> {
+  if (server) return server.url
+  const config = await readConfig(ioOf($))
+  if (!config) throw new Error(NOT_ACTIVE)
+  const cwd = await $.session.cwd()
+  const vault = /^([A-Za-z]:)?[\\/]/.test(config.vault) ? config.vault : join(cwd, config.vault)
+  const root = $.plugin.root
+  const args = [
+    join(root, 'server/rft_server.py'), '--vault', vault, '--web', join(root, 'web'),
+    '--project', config.project, '--port', String(config.webPort ?? 0),
+  ]
+  const failures: string[] = []
+  for (const python of ['python3', 'python']) {
+    try {
+      return await spawnServer($, [python, ...args])
+    } catch (err) {
+      failures.push(`${python}: ${message(err)}`)
+    }
+  }
+  throw new Error(`the web view needs Python 3 on PATH (${failures.join('; ')})`)
 }
 
-async function setView($: EngineInterface, mode: 'tree' | 'list'): Promise<void> {
-  await update($, viewMode, () => mode)
+/** Runs one server child for the session and resolves its URL once it listens. */
+async function spawnServer($: EngineInterface, argv: string[]): Promise<string> {
+  const child = $.process.spawn({ argv })
+  let found: (url: string) => void = () => undefined
+  let failed: (err: Error) => void = () => undefined
+  const listening = new Promise<string>((resolve, reject) => { found = resolve; failed = reject })
+  // the loop is the child's life: it runs on after this call returns, until the child exits,
+  // `stop` ends it, or the module unloads
+  void (async () => {
+    let out = ''
+    let err = ''
+    try {
+      for await (const chunk of child) {
+        if (chunk.stream === 'stdout') {
+          out += chunk.text
+          const m = /RFT_SERVER_URL (\S+)/.exec(out)
+          if (m) found(m[1]!)
+        } else err += chunk.text
+      }
+      failed(new Error(err.trim().split('\n').pop() || 'the server exited'))
+    } catch (e) {
+      failed(e instanceof Error ? e : new Error(String(e)))
+    }
+    if (server?.stop === stop) {
+      server = null
+      await update($, webUrl, () => null)
+    }
+  })()
+  const stop = () => { void child.return?.(undefined as never) }
+  const late = $.clock.sleep(8000).then(() => { throw new Error('the server did not start within 8 s') })
+  late.catch(() => undefined)
+  try {
+    const url = await Promise.race([listening, late])
+    server = { url, stop }
+    await update($, webUrl, () => url)
+    return url
+  } catch (err) {
+    stop()
+    throw err
+  }
 }
 
-async function zoomBy($: EngineInterface, factor: number): Promise<void> {
-  // from a fitted view, start at 1:1
-  const wasFit = (await read($, zoom)) === 'fit'
-  await update($, scale, v => (wasFit ? 1 : Math.min(3, Math.max(0.4, Math.round(v * factor * 100) / 100))))
-  await update($, zoom, () => 'full')
+async function stopServer($: EngineInterface): Promise<boolean> {
+  const was = server
+  server = null
+  was?.stop()
+  await update($, webUrl, () => null)
+  return was !== null
 }
 
-async function zoomFit($: EngineInterface): Promise<void> {
-  await update($, zoom, () => 'fit')
+const webHelp = (url: string) => {
+  const port = /:(\d+)\//.exec(url)?.[1] ?? '<port>'
+  return [
+    `Tree view: ${url}`,
+    'Open it in the desktop app\'s built-in browser (Ctrl+Shift+B, Cmd+Shift+B on macOS) and paste the URL in its address bar, or in any browser on this machine.',
+    `On a remote machine, forward the port first: ssh -L ${port}:127.0.0.1:${port} <host>, then open ${url} locally.`,
+    'The outline stays in the pane; /rft stop stops the server.',
+  ].join('\n')
 }
-
-async function setFocus($: EngineInterface, id: string | null): Promise<void> {
-  await update($, focus, () => id)
-}
-
-// The commands' names must not be a skill's: the plugin's skill is `rft-manual` (`/rft:rft-manual`).
 
 const NOT_ACTIVE = 'RFT is not active in this project. Run /rft-init [starting question] to set it up.'
 
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await registerCommands($)
+    // a server of an earlier load of this module died with it
+    if (!server) await update($, webUrl, () => null)
     let isActive = false
     try { isActive = (await readConfig(ioOf($))) !== null } catch { /* treated as inactive */ }
     if (isActive) await activate($, options.autoOpen !== false)
@@ -305,6 +358,7 @@ export const register: Register = (on, options) => {
   on('session.end', async ($, e, next) => {
     poller?.cancel()
     poller = null
+    await stopServer($)
 
     return next(e)
   })
@@ -319,13 +373,17 @@ export const register: Register = (on, options) => {
   // ---------------------------------------------------------------- commands
 
   on('command.run', { command: 'rft' }, async ($, e) => {
+    const arg = e.args.trim()
+    if (arg === 'stop') return { text: (await stopServer($)) ? 'The tree view server is stopped.' : 'The tree view server was not running.' }
     const s = await refresh($, true)
     if (!s) return { text: NOT_ACTIVE }
-    const text = treeReport(await loadActive(ioOf($)))
-    if (e.args.trim() === 'text') return { text }
-    const placed = await $.ui.open({ id: PANE, title: TITLE, focus: true })
-
-    return { text: placed.isPlaced ? 'Reasoning tree pane opened.' : text }
+    if (arg === 'text') return { text: treeReport(await loadActive(ioOf($))) }
+    void $.ui.open({ id: PANE, title: TITLE, focus: true }).catch(() => undefined)
+    try {
+      return { text: webHelp(await startServer($)) }
+    } catch (err) {
+      return { text: `The outline is in the pane, but the tree view could not start: ${message(err)}.\n/rft-view writes a standalone vault/tree.html instead.` }
+    }
   })
 
   on('command.run', { command: 'rft-init' }, async ($, e) => {
@@ -345,7 +403,14 @@ export const register: Register = (on, options) => {
     try {
       const io = ioOf($)
       const loaded = await loadActive(io)
-      const path = await exportHtml(io, loaded, today())
+      const root = $.plugin.root
+      const assets = {
+        html: await $.fs.read(join(root, ASSET_PATHS.html)),
+        css: await $.fs.read(join(root, ASSET_PATHS.css)),
+        js: await $.fs.read(join(root, ASSET_PATHS.js)),
+        d3: await $.fs.read(join(root, ASSET_PATHS.d3)),
+      }
+      const path = await exportHtml(io, loaded, assets)
       const cwd = await $.session.cwd()
 
       return { text: `Wrote ${path} (${Object.keys(loaded.tree.nodes).length} notes): open file://${join(cwd, path)} in a browser.` }
@@ -394,10 +459,7 @@ export const register: Register = (on, options) => {
     const folded = new Set(await read($, collapsed))
     const sel = await read($, selected)
     const view = await read($, note)
-    const orient = await read($, orientation)
-    const z = await read($, zoom)
-    const sc = await read($, scale)
-    const focusId = await read($, focus)
+    const url = await read($, webUrl)
     const cols = Math.max(24, e.props.bodyColumns || e.viewport?.columns || 60)
     const c = counts(tree)
 
@@ -444,87 +506,28 @@ export const register: Register = (on, options) => {
       )
     }
 
-    // the tree or the list, never both: the tree where the surface draws Svg, the list elsewhere
-    // Svg draws everywhere but the terminal. The tree view keeps to the elements the desktop
-    // page is known to paint (Text, Button, Svg, Markdown, Box): no Select, no Button variant,
-    // and no width / height on the Svg, whose markup carries the size it is drawn at
-    const hasSvg = e.surface !== 'terminal'
-    const mode = hasSvg ? ((await read($, viewMode)) ?? 'tree') : 'list'
+    // the pane is the outline; the interactive tree is the web view /rft serves
     const foldable = Object.values(tree.nodes).filter(n => n.children.length && n.parent).map(n => n.id)
-    const header = (
+
+    return (
       <Box flexDirection="column">
         <Text bold>{`${s.project}: ${c.direction ?? 0} directions, ${c.experiment ?? 0} experiments`}</Text>
+        {url
+          ? <Text color="claude">{`Tree view: ${url}`}</Text>
+          : <Text dimColor>Run /rft for the interactive tree view in a browser.</Text>}
         {s.error ? <Text color="error">{s.error}</Text> : null}
         {s.problems.length ? <Text color="warning">{`${s.problems.length} problem(s), e.g. ${s.problems[0]}`}</Text> : null}
+        <Text dimColor>{LEGEND}</Text>
         <Box flexDirection="row" gap={1} flexWrap="wrap">
-          {hasSvg ? <Button key="view-tree" label={mode === 'tree' ? '● Tree' : 'Tree'} onPress={() => setView($, 'tree')} /> : null}
-          {hasSvg ? <Button key="view-list" label={mode === 'list' ? '● List' : 'List'} onPress={() => setView($, 'list')} /> : null}
-          {mode === 'tree' ? <Button key="orient" label={`Layout: ${LAYOUT_NAME[orient]}`} onPress={() => cycleLayout($)} /> : null}
-          {mode === 'tree' ? <Button key="zoom-out" label="−" onPress={() => zoomBy($, 1 / 1.25)} /> : null}
-          {mode === 'tree' ? <Button key="zoom-in" label="+" onPress={() => zoomBy($, 1.25)} /> : null}
-          {mode === 'tree' ? <Button key="zoom-fit" label={z === 'fit' ? '● Fit' : 'Fit'} onPress={() => zoomFit($)} /> : null}
-          {mode === 'tree' && sel && sel !== focusId ? <Button key="focus" label={`Focus ${sel}`} onPress={() => setFocus($, sel)} /> : null}
-          {mode === 'tree' && focusId ? <Button key="unfocus" label="Back to root" onPress={() => setFocus($, null)} /> : null}
           <Button key="fold-all" label="Fold all" onPress={() => foldAll($, foldable)} />
           <Button key="unfold-all" label="Unfold all" onPress={() => foldAll($, [])} />
         </Box>
-      </Box>
-    )
-
-    if (mode === 'list' || e.surface === 'terminal') {
-      return (
-        <Box flexDirection="column">
-          {header}
-          <Text dimColor>{LEGEND}</Text>
-          {detail}
-          <Box key="outline" flexDirection="column" marginTop={1}>{rows}</Box>
-        </Box>
-      )
-    }
-
-    // the tree fills the pane: its room in cells, less the header and an open note, in pixels
-    const { Svg } = ui
-    // fitted to what the surface measured: the body's columns, and its rows when it says
-    // (else the whole surface's, less a margin); unmeasured, the drawing's own size
-    const measuredCols = e.props.bodyColumns > 0 ? e.props.bodyColumns : (e.viewport?.columns ?? 0)
-    const measuredRows = (e.props.scroll?.bodyRows ?? 0) > 0 ? e.props.scroll!.bodyRows : Math.max(0, (e.viewport?.rows ?? 0) - 6)
-    const headerRows = 3 + (s.error ? 1 : 0) + (s.problems.length ? 1 : 0)
-    const treeRows = measuredRows > 0 ? Math.max(8, Math.floor((measuredRows - headerRows) / (detail ? 2 : 1)) - 1) : 0
-    // focus: only the subtree of one node
-    const shownTree = focusId && tree.nodes[focusId] ? { nodes: tree.nodes, roots: [focusId] } : tree
-    const widthPx = measuredCols > 0 ? measuredCols * CELL_W - 16 : 480
-    const heightPx = treeRows * CELL_H
-    let drawing: { svg: string }
-    if (orient === 'V') {
-      // drawn at the pane's width: 1:1 (or the zoom) scrolls down; Fit shrinks the text until
-      // the whole tree is as tall as the pane
-      const one = layoutTree(shownTree, folded, 'V', { width: widthPx, scale: 1 })
-      const k = z === 'fit' ? (heightPx > 0 ? Math.max(0.35, Math.min(1, heightPx / one.height)) : 1) : sc
-      drawing = treeSvg(shownTree, { collapsed: folded, orientation: 'V', selected: sel, layout: { width: widthPx, scale: k } })
-    } else {
-      const natural = layoutTree(shownTree, folded, orient)
-      const size = z === 'fit'
-        ? (measuredCols > 0 ? fitSize(natural, widthPx, heightPx) : undefined)
-        : { width: Math.round(natural.width * sc), height: Math.round(natural.height * sc) }
-      drawing = treeSvg(shownTree, { collapsed: folded, orientation: orient, selected: sel, size: saneSize(size) })
-    }
-    const { svg } = drawing
-    return (
-      <Box flexDirection="column">
-        {header}
-        <Text dimColor>{focusId && tree.nodes[focusId] ? `Showing ${tree.nodes[focusId]!.name} and what grows from it.` : 'Hover a node for its name; open notes from the List view, then Focus on them.'}</Text>
-        {svg.length < 130000
-          ? <Svg source={svg} alt={`The reasoning tree: ${c.direction ?? 0} directions, ${c.experiment ?? 0} experiments`} isInteractive />
-          : <Text dimColor>The tree is too large to draw: fold some branches, or use the list.</Text>}
         {detail}
+        <Box key="outline" flexDirection="column" marginTop={1}>{rows}</Box>
       </Box>
     )
   })
 }
-
-/** A size only when both sides are finite and positive; else the drawing keeps its own. */
-const saneSize = (size: { width: number; height: number } | undefined) =>
-  size && Number.isFinite(size.width) && Number.isFinite(size.height) && size.width > 0 && size.height > 0 ? size : undefined
 
 const READ_ONLY = /^(Read|Grep|Glob|LS|WebFetch|WebSearch|ToolSearch|TodoWrite)$/
 

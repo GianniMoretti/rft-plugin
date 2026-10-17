@@ -93,5 +93,6 @@ gets a direction node.
 
 ## Viewing
 
-`/rft` opens the live tree pane (`/rft text` prints it), `/rft-view` writes a standalone
-`<vault>/tree.html`, and Obsidian shows `Reasoning tree.canvas`.
+`/rft` starts the interactive tree view (a local page; the user opens its address in a
+browser) and the outline pane; `/rft text` prints the tree; `/rft-view` writes a standalone
+`<vault>/tree.html`; Obsidian shows `Reasoning tree.canvas`.

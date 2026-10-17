@@ -2,17 +2,18 @@
 
 A Claude Code plugin that keeps the reasoning of a research project readable: **one note per
 experiment and one per idea, linked parent → children as a tree**, kept up to date by Claude as
-it works and shown live in a pane next to the conversation.
+it works, and shown live: as an outline in a pane next to the conversation, and as an
+interactive tree (pan, zoom, click a node to read it) in a browser.
 
 - **Experiments (E..)**: something run or computed that produced a result.
 - **Directions (D..)**: ideas, questions, hypotheses, including the ones rejected, so the tree
   also says why a path was not taken. **D00** is the starting question.
 
 The notes are plain, Obsidian-compatible markdown in your repository (`vault/` by default) and
-are the source of truth. You never need Obsidian open: the tree is drawn by Claude Code itself.
+are the source of truth. You never need Obsidian open.
 
-<!-- Screenshots to add in docs/screenshots/: pane-desktop.png, pane-terminal.png, tree-html.png -->
-_Screenshots: coming soon (the pane on the desktop app, the pane in the terminal, `tree.html`)._
+<!-- Screenshots to add in docs/screenshots/: tree-view.png, pane-desktop.png, pane-terminal.png -->
+_Screenshots: coming soon (the tree view, the outline pane on the desktop app and in the terminal)._
 
 ## Install
 
@@ -28,7 +29,9 @@ add the marketplace, then pick a scope). Installed at the user scope it is avail
 project, and stays inert in projects where RFT is not activated.
 
 The plugin is a Claude Code *mod* (a hooks module plus a skill): it needs a Claude Code build
-with function hooks (2.1.29x or later). No Node, Python or server is required.
+with function hooks (2.1.29x or later). The notes, the tools, the outline pane and `/rft-view`
+need nothing else. **The live tree view needs Python 3** (`python3` or `python` on `PATH`,
+standard library only) for its small local server; without it `/rft` says so and the rest works.
 
 ## Usage
 
@@ -67,27 +70,50 @@ they are (ids, statuses and the next free id are read from the notes).
   | `rft_validate` | checks ids, types, statuses, titles, parents, broken wikilinks, derived fields |
   | `rft_sync` | regenerates children / up / down, the index tree and the canvas after hand edits |
 
-- **The tree pane** opens as a sidebar where the surface docks panes (turn this off with the
-  `autoOpen` option), or with `/rft`. It shows one view at a time, switched with **Tree | List**:
-  - **Tree** (the default on the desktop app, VS Code and mobile): the tree as a picture,
-    coloured by type and status. The default **Vertical** layout puts one node per row,
-    indented by depth, at the pane's width and a readable size, and scrolls down; **Layout**
-    switches to top-down or left-right. **−** / **+** zoom, **Fit** shows the whole tree at
-    once. Open a note in the List view, and **Focus** draws only that note's subtree
-    (**Back to root** returns). Hover a node for its full name.
-  - **List** (the only view in the terminal): an indented, coloured outline; click a node to
-    read its note, ▾ / ▸ to fold a branch.
+- **The outline pane** opens as a sidebar where the surface docks panes (turn this off with the
+  `autoOpen` option), or with `/rft`: an indented, coloured outline of the tree, the same on
+  the desktop app, VS Code and the terminal. Click a node to read its note, ▾ / ▸ to fold a
+  branch. It refreshes by itself when notes change, whoever changed them, and shows the tree
+  view's address while its server runs.
 
-  The choice is kept for the session. The pane refreshes by itself when notes change, whoever
-  changed them.
+### The tree view
+
+`/rft` also starts a small local server and prints its address, e.g.
+`http://127.0.0.1:41234/`. Open it in the **desktop app's built-in browser**: press
+**Ctrl+Shift+B** (**Cmd+Shift+B** on macOS), or click the globe icon in the side panel, then
+paste the address in its address bar. Any browser on the same machine works too.
+
+- A tidy tree, **top-down**, **left-right** or **radial** (never a force layout): circles
+  filled by status and ringed by type, arrows from parent to child.
+- An infinite canvas: drag to pan, scroll or pinch to zoom; **Fit** and **Centre on root**.
+  Labels show more of the title the closer you zoom.
+- Click a node to read its note in a side drawer; links in the note jump to their node.
+  Fold a branch with its **−** / **+** badge or a double-click; **Expand all**, **Collapse all**.
+- Hover a node to highlight its path to the root; **search** (Enter jumps to the next match);
+  click a status in the legend to dim it.
+- It follows the vault live, and keeps the zoom, layout, folds and filter between visits.
+
+The server is read-only and listens on `127.0.0.1` only, on a free port (or `webPort` in the
+config). It serves the page, the tree as JSON and the text of one note at a time, read by its
+id from inside the vault, and answers only requests for a loopback host name. It stops with
+the session or `/rft stop`; `/rft` again reuses it. On a **remote machine** (SSH, a cluster
+node), forward the port and open the address on your own machine:
+
+```bash
+ssh -L 41234:127.0.0.1:41234 user@remote
+```
+
+d3 (ISC licence, `web/vendor/LICENSE-d3.txt`) is bundled, so the page needs no network.
 
 ### Commands
 
 | command | does |
 |---|---|
-| `/rft` | open the tree pane (`/rft text` prints the tree in the transcript) |
+| `/rft` | start (or reuse) the tree view server, print its address, open the outline pane |
+| `/rft stop` | stop the tree view server |
+| `/rft text` | print the tree in the transcript |
 | `/rft-init [starting question]` | activate RFT here and create (or adopt) the vault |
-| `/rft-view` | write `vault/tree.html`, a standalone page of the tree to open in any browser or share |
+| `/rft-view` | write `vault/tree.html`: the same tree view as one standalone file, every note inside, to open anywhere or share |
 
 The plugin registers these commands when a session starts, so the desktop app's slash-command
 menu may not list them (it lists the plugin's skill, `/rft:rft-manual`): type `/rft` in full
@@ -104,11 +130,12 @@ and it runs. The terminal's typeahead lists them.
 
 ```json
 { "version": 1, "vault": "vault", "project": "my-project", "canvas": true, "mermaid": false,
-  "lastId": { "E": 12, "D": 9 } }
+  "lastId": { "E": 12, "D": 9 }, "webPort": 0 }
 ```
 
 `mermaid: true` also writes `Reasoning tree (diagram).md`, a Mermaid flowchart Obsidian draws
-natively. `lastId` keeps ids from being reused after a note is deleted.
+natively. `lastId` keeps ids from being reused after a note is deleted. `webPort` fixes the
+tree view's port (0: a free one), handy for a standing `ssh -L` forward.
 
 ### Obsidian, if you use it
 
@@ -118,16 +145,25 @@ native Obsidian canvas whose hand-moved cards keep their place.
 
 ## Development
 
-```
+```bash
 claude plugin validate .
 claude plugin test .
-claude --plugin-dir .          # a session with the plugin loaded from this folder
+python3 -m unittest discover -s tests -p "test_*.py"
+claude --plugin-dir .
 ```
 
-`hooks/register.tsx` is the hooks module (commands, tools, prompt injection, pane);
-`hooks/lib/vault.ts` the vault model, `hooks/lib/svg.ts` the tree layout and drawing,
-`hooks/lib/html.ts` the static export; `skills/rft-manual/SKILL.md` the manual; `tests/` runs on an
-in-memory vault, the pane on both the terminal and the desktop surface.
+The first two check and test the mod, the third tests the server, and the last starts a
+session with the plugin loaded from this folder.
+
+- `hooks/register.tsx`: the hooks module (commands, tools, prompt injection, the outline pane,
+  the server's lifecycle).
+- `hooks/lib/vault.ts`: the vault model; `hooks/lib/ops.ts` the operations; `hooks/lib/page.ts`
+  the standalone page.
+- `web/`: the tree view (`index.html`, `app.js`, `app.css`, vendored d3), one codebase for the
+  live view and `/rft-view`.
+- `server/rft_server.py`: the read-only local server (Python standard library).
+- `skills/rft-manual/SKILL.md`: the manual; `tests/`: the mod's tests on an in-memory vault, the
+  outline pane on every surface, and the server's tests.
 
 ## License
 
