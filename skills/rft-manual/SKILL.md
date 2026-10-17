@@ -1,5 +1,5 @@
 ---
-name: rft
+name: rft-manual
 description: Operating manual of the Reasoning Flow Tree, the tree of experiment (E..) and direction (D..) notes that records a research project's reasoning. Use in a project with .rft/config.json whenever an experiment is planned, launched or finished, an idea or question comes up (even a rejected one), an idea is dropped or moved, or the user asks about the tree, the vault or what was tried.
 ---
 

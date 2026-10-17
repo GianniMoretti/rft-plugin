@@ -6,6 +6,8 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import { CWD, D01, E02, demoFiles, paneProps, world } from './fixture'
 
 const SURFACES = ['terminal', 'desktop'] as const
+// the `name` of skills/rft-manual/SKILL.md
+const SKILL = 'rft-manual'
 const PANE = { plugin: 'rft', component: 'Pane', requestId: 'rft-tree', props: paneProps() } as const
 
 describe('activation', () => {
@@ -38,6 +40,24 @@ describe('activation', () => {
     expect(rules?.scope).toBe('session')
     expect(rules?.text).toContain('create its node first')
     expect(rules?.text).toContain(`      … ${E02}`)
+  })
+
+  test('a refused command leaves the other commands, the tools, the rules and the pane working', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, demoFiles(), { refuse: ['rft'] })
+    on('prompt.compose', () => ({ sections: [] }))
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    expect(w.commands).toEqual(['rft-init', 'rft-view'])
+    expect(w.tools).toHaveLength(5)
+    expect(w.opened).toEqual(['rft-tree'])
+    expect(w.toasts.join()).toContain('/rft')
+    const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
+    expect(res.sections.map(s => s.id)).toEqual(['rft:rules'])
+  })
+
+  test('no command takes the name of the plugin skill', async () => {
+    // a plugin skill named <x> is the command /rft:<x>; the engine refuses a command of the same name
+    expect(['rft', 'rft-init', 'rft-view']).not.toContain(SKILL)
   })
 
   test('autoOpen off keeps the pane closed', { options: { autoOpen: false } }, async ($, on) => {

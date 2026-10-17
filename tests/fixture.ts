@@ -96,18 +96,24 @@ export class MemoryFs {
   }
 }
 
-export type World = { fs: MemoryFs; tools: string[]; opened: string[]; commands: string[]; seen: string[] }
+export type World = { fs: MemoryFs; tools: string[]; opened: string[]; commands: string[]; seen: string[]; toasts: string[] }
 
 /** Answers everything the plugin asks of the session from memory. */
-export function world(on: On, files: Record<string, string>): World {
-  const w: World = { fs: new MemoryFs(files), tools: [], opened: [], commands: [], seen: [] }
+/** `refuse` names commands the engine refuses to register, as it refuses a skill's name. */
+export function world(on: On, files: Record<string, string>, opts: { refuse?: string[] } = {}): World {
+  const w: World = { fs: new MemoryFs(files), tools: [], opened: [], commands: [], seen: [], toasts: [] }
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.cwd', () => ({ value: CWD }))
   on('fs.read', (_$, e) => ({ value: w.fs.read(e.path) }))
   on('fs.write', (_$, e) => { w.fs.write(e.path, e.text); return { value: undefined } })
   on('fs.list', (_$, e) => ({ value: w.fs.list(e.path) }))
   on('fs.exists', (_$, e) => { w.seen.push(e.path); return { value: w.fs.exists(e.path) } })
-  on('command.register', (_$, e) => { w.commands.push(e.name); return { value: { command: e.name } } })
+  on('command.register', (_$, e) => {
+    if (opts.refuse?.includes(e.name)) return { deny: `"/${e.name}" refused: it is the plugin's /rft:${e.name}` }
+    w.commands.push(e.name)
+    return { value: { command: e.name } }
+  })
+  on('ui.toast', (_$, e) => { w.toasts.push(JSON.stringify(e)); return { value: undefined } })
   on('tool.register', (_$, e) => { w.tools.push(e.name); return { value: { tool: `mcp__rft__${e.name}` } } })
   on('ui.open', (_$, e) => { w.opened.push(e.id); return { value: { isPlaced: true as const } } })
   return w

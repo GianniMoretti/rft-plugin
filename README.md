@@ -56,7 +56,7 @@ they are (ids, statuses and the next free id are read from the notes).
 
 - **At session start** Claude receives short operating rules and a compact copy of the tree, so
   it knows to create an experiment's node *before* launching it, record only real results, and
-  add a direction for every new idea. The full manual is the `rft` skill.
+  add a direction for every new idea. The full manual is the `rft-manual` skill.
 - **Tools** Claude calls to keep the tree consistent:
 
   | tool | does |
@@ -114,7 +114,7 @@ claude --plugin-dir .          # a session with the plugin loaded from this fold
 
 `hooks/register.tsx` is the hooks module (commands, tools, prompt injection, pane);
 `hooks/lib/vault.ts` the vault model, `hooks/lib/svg.ts` the tree layout and drawing,
-`hooks/lib/html.ts` the static export; `skills/rft/SKILL.md` the manual; `tests/` runs on an
+`hooks/lib/html.ts` the static export; `skills/rft-manual/SKILL.md` the manual; `tests/` runs on an
 in-memory vault, the pane on both the terminal and the desktop surface.
 
 ## License

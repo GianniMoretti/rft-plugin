@@ -189,7 +189,7 @@ The reasoning of this research project is kept as a tree of Obsidian notes in \`
 - Every new idea or question, from a result, the user or a discussion, even if rejected: rft_add_node with type direction, parent = the note it comes from. Rejected ideas get status discussed; abandoned ones dropped; moved ones moved, with the reason (rft_set_status note).
 - Statuses: ${STATUSES.join(', ')}. Marks: ${LEGEND}.
 - The tools assign ids (never reused) and strip ^ # | [ ] from titles. After editing notes by hand, run rft_sync (children / up / down, 00 Index.md, the canvas) and rft_validate.
-- The rft skill is the full manual; rft_tree shows the current tree.
+- The rft-manual skill is the full manual; rft_tree shows the current tree.
 
 The tree at the start of this session:
 ${lines.join('\n')}`

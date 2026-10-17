@@ -9,7 +9,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { RftSnapshot } from '../types'
 import { addNode, exportHtml, initVault, loadActive, rulesText, setStatus, today, treeReport } from './lib/ops'
 import { treeSvg } from './lib/svg'
-import type { Io, NodeType, Tree } from './lib/vault'
+import type { Config, Io, NodeType, Tree } from './lib/vault'
 import { LEGEND, MARK, bodyOf, counts, join, readConfig, signatureOf, sync, validate } from './lib/vault'
 
 const PANE = 'rft-tree'
@@ -95,7 +95,7 @@ const TOOLS = {
 // The rules for the system prompt are fixed at activation so the prompt cache holds.
 let rules: string | null = null
 let poller: { cancel: () => void } | null = null
-let isToolsRegistered = false
+const registeredTools = new Set<string>()
 
 const EMPTY: RftSnapshot = { isActive: false, vault: '', project: '', nodes: {}, roots: [], signature: '', problems: [], error: null }
 
@@ -131,19 +131,52 @@ async function refresh($: EngineInterface, force = false): Promise<RftSnapshot |
 
 /** In a project with `.rft/config.json`: the snapshot, the rules, the tools, the poll, the pane. */
 async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> {
-  const s = await refresh($, true)
-  const config = await readConfig(ioOf($))
-  if (!s || !config) return
-  rules = rulesText(treeOf(s), config)
-  if (!isToolsRegistered) {
-    for (const [name, spec] of Object.entries(TOOLS)) {
-      await $.tool.register({ name, description: spec.description, inputSchema: spec.inputSchema as Record<string, unknown>, isDeferred: false })
-    }
-    isToolsRegistered = true
+  const failed: string[] = []
+  let s: RftSnapshot | null = null
+  let config: Config | null = null
+  try {
+    s = await refresh($, true)
+    config = await readConfig(ioOf($))
+  } catch (err) {
+    failed.push(`reading the vault (${message(err)})`)
   }
-  poller?.cancel()
-  poller = $.clock.every(POLL_MS, () => { void poll($) })
-  if (shouldOpen) void $.ui.open({ id: PANE, title: TITLE })
+  if (s && config) rules = rulesText(treeOf(s), config)
+  // each registration on its own, so one refusal leaves the rest working
+  for (const [name, spec] of Object.entries(TOOLS)) {
+    if (registeredTools.has(name)) continue
+    try {
+      await $.tool.register({ name, description: spec.description, inputSchema: spec.inputSchema as Record<string, unknown>, isDeferred: false })
+      registeredTools.add(name)
+    } catch (err) {
+      failed.push(`tool ${name} (${message(err)})`)
+    }
+  }
+  try {
+    poller?.cancel()
+    poller = $.clock.every(POLL_MS, () => { void poll($) })
+  } catch (err) {
+    failed.push(`the refresh timer (${message(err)})`)
+  }
+  if (shouldOpen) void $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
+  if (failed.length) reportFailures($, failed)
+}
+
+const message = (err: unknown) => (err instanceof Error ? err.message : String(err))
+
+function reportFailures($: EngineInterface, failed: string[]): void {
+  $.ui.toast(`rft: could not set up ${failed.join('; ')}`)
+}
+
+/** Each command on its own, so one refusal leaves the others registered. */
+async function registerCommands($: EngineInterface): Promise<void> {
+  const failed: string[] = []
+  const attempt = async (name: string, run: () => Promise<unknown>) => {
+    try { await run() } catch (err) { failed.push(`/${name} (${message(err)})`) }
+  }
+  await attempt('rft', () => $.command.register({ name: 'rft', description: 'Show the reasoning tree pane (/rft text prints it inline)', argumentHint: '[text]' }))
+  await attempt('rft-init', () => $.command.register({ name: 'rft-init', description: 'Activate the Reasoning Flow Tree in this project and create its vault', argumentHint: '[starting question]' }))
+  await attempt('rft-view', () => $.command.register({ name: 'rft-view', description: 'Write a standalone HTML view of the tree to <vault>/tree.html' }))
+  if (failed.length) reportFailures($, failed)
 }
 
 async function poll($: EngineInterface): Promise<void> {
@@ -228,14 +261,16 @@ async function flipZoom($: EngineInterface): Promise<void> {
   await update($, zoom, v => (v === 'fit' ? 'full' : 'fit'))
 }
 
+// The commands' names must not be a skill's: the plugin's skill is `rft-manual` (`/rft:rft-manual`).
+
 const NOT_ACTIVE = 'RFT is not active in this project. Run /rft-init [starting question] to set it up.'
 
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'rft', description: 'Show the reasoning tree pane (/rft text prints it inline)', argumentHint: '[text]' })
-    await $.command.register({ name: 'rft-init', description: 'Activate the Reasoning Flow Tree in this project and create its vault', argumentHint: '[starting question]' })
-    await $.command.register({ name: 'rft-view', description: 'Write a standalone HTML view of the tree to <vault>/tree.html' })
-    if (await readConfig(ioOf($))) await activate($, options.autoOpen !== false)
+    await registerCommands($)
+    let isActive = false
+    try { isActive = (await readConfig(ioOf($))) !== null } catch { /* treated as inactive */ }
+    if (isActive) await activate($, options.autoOpen !== false)
 
     return next(e)
   })
