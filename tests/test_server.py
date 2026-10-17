@@ -111,6 +111,7 @@ class ServerTest(unittest.TestCase):
     def test_only_the_page_files(self):
         self.assertEqual(self.get("/")[0], 200)
         self.assertEqual(self.get("/app.js")[0], 200)
+        self.assertEqual(self.get("/layout.js")[0], 200)
         self.assertEqual(self.get("/vendor/d3.v7.9.0.min.js")[0], 200)
         for p in ["/../server/rft_server.py", "/vendor/../../server/rft_server.py", "/%2e%2e/%2e%2e/etc/passwd",
                   "/00%20Index.md", "/vault/00%20Index.md", "/.rft/config.json", "/api", "/app.js/../index.html"]:

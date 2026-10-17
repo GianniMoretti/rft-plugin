@@ -520,6 +520,7 @@ export const register: Register = (on, options) => {
         js: await $.fs.read(join(root, ASSET_PATHS.js)),
         d3: await $.fs.read(join(root, ASSET_PATHS.d3)),
         filters: await $.fs.read(join(root, ASSET_PATHS.filters)),
+        layout: await $.fs.read(join(root, ASSET_PATHS.layout)),
       }
       const path = await exportHtml(io, loaded, assets)
       const cwd = await $.session.cwd()

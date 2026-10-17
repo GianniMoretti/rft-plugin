@@ -9,7 +9,7 @@
   const MARK = { done: '✓', running: '…', planned: '→', idea: '?', dropped: '✗', discussed: '·', moved: '↗' }
   const LABEL = { done: 'done', running: 'running', planned: 'planned', idea: 'idea', dropped: 'dropped', discussed: 'discussed, not pursued', moved: 'moved' }
   const R = 7 // node radius
-  const SPACING = { td: [150, 104], lr: [34, 280], radial: [0, 140] } // [breadth, depth] in world units
+  const SPACING = { td: [150, 104], lr: [34, 280], radial: [90, 140] } // [breadth, depth] in world units
   const LABEL_PX = 15 // label size on screen at A 100 %, whatever the zoom
   const FONT_STEPS = [0.7, 0.8, 0.9, 1, 1.1, 1.25, 1.4, 1.6, 1.8, 2]
   const POLL_MS = 2000
@@ -20,6 +20,7 @@
   let layoutKind = 'td'
   let collapsed = new Set()
   const F = window.RftFilters
+  const L = window.RftLayout
   let filters = F.empty() // the one source of truth for every filter, the legend's included
   let matchSet = new Set() // the notes that pass the filters
   let shownSet = new Set() // the notes drawn: all of them, or with "hide" the matches and their ancestors
@@ -105,8 +106,7 @@
     const offset = root.data.virtual ? 1 : 0
     const [b, d] = SPACING[layoutKind]
     if (layoutKind === 'radial') {
-      const depth = Math.max(1, root.height)
-      d3.tree().size([2 * Math.PI, depth * d]).separation((a, c) => (a.parent === c.parent ? 1 : 2) / Math.max(1, a.depth))(root)
+      L.radial(d3, root, b, d)
     } else {
       d3.tree().nodeSize([b, d]).separation((a, c) => (a.parent === c.parent ? 1 : 1.3))(root)
     }
@@ -114,11 +114,11 @@
     const point = n => {
       if (layoutKind === 'td') return [n.x, n.y - shift]
       if (layoutKind === 'lr') return [n.y - shift, n.x]
-      const a = n.x - Math.PI / 2, r = n.y
-      return [r * Math.cos(a), r * Math.sin(a)]
+      const a = n.angle - Math.PI / 2
+      return [n.radius * Math.cos(a), n.radius * Math.sin(a)]
     }
     const nodes = root.descendants().filter(n => !n.data.virtual)
-    const pos = new Map(nodes.map(n => [n.data.id, { p: point(n), angle: n.x, radius: n.y }]))
+    const pos = new Map(nodes.map(n => [n.data.id, { p: point(n), angle: n.angle, radius: n.radius }]))
     const links = root.links().filter(l => !l.source.data.virtual)
     return { nodes, links, pos }
   }
@@ -133,10 +133,9 @@
       const xe = x2 - R - 3, mx = (x1 + xe) / 2
       return `M${x1 + R},${y1}C${mx},${y1} ${mx},${y2} ${xe},${y2}`
     }
-    const shorten = (p, by) => { const len = Math.hypot(p[0], p[1]) || 1; return [p[0] * (1 - by / len), p[1] * (1 - by / len)] }
-    const a = shorten(t.p, R + 3)
-    return `M${x1},${y1}L${a[0]},${a[1]}`
+    return radialLink({ source: [s.angle, s.radius ? s.radius + R : 0], target: [t.angle, Math.max(0, t.radius - R - 3)] })
   }
+  const radialLink = d3.linkRadial().angle(e => e[0]).radius(e => e[1])
 
   // ---------------------------------------------------------------- drawing
 
@@ -207,7 +206,7 @@
     if (layoutKind === 'td') return `translate(${R + 8},${-R - 4})`
     if (layoutKind === 'lr') return `translate(${-R - 2},${-R - 8})`
     const p = positions.get(id)
-    if (!p) return 'translate(0,0)'
+    if (!p || !p.radius) return `translate(${R + 8},${-R - 4})`
     const len = Math.hypot(p.p[0], p.p[1]) || 1
     return `translate(${(-p.p[1] / len) * (R + 9)},${(p.p[0] / len) * (R + 9)})`
   }
@@ -259,8 +258,10 @@
         text.attr('x', R + 6).attr('y', size * 0.35).attr('text-anchor', 'start').attr('transform', null)
       } else {
         const p = positions.get(d.id)
-        const deg = p ? (p.angle * 180) / Math.PI : 0
-        const right = !p || p.angle < Math.PI
+        // the centre's label lies flat, the others point outward and read left to right
+        const angle = p && p.radius ? L.normalAngle(p.angle) : Math.PI / 2
+        const deg = (angle * 180) / Math.PI
+        const right = angle < Math.PI
         text.attr('text-anchor', right ? 'start' : 'end').attr('x', right ? R + 6 : -R - 6).attr('y', size * 0.35)
           .attr('transform', `rotate(${right ? deg - 90 : deg + 90})`)
       }

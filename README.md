@@ -181,8 +181,8 @@ session with the plugin loaded from this folder.
   the server's lifecycle).
 - `hooks/lib/vault.ts`: the vault model; `hooks/lib/ops.ts` the operations; `hooks/lib/page.ts`
   the standalone page.
-- `web/`: the tree view (`index.html`, `app.js`, `app.css`, `filters.js` for the pure filter
-  logic, vendored d3), one codebase for the live view and `/rft-view`.
+- `web/`: the tree view (`index.html`, `app.js`, `app.css`, `filters.js` and `layout.js` for
+  the pure filter and radial layout logic, vendored d3), one codebase for the live view and `/rft-view`.
 - `server/rft_server.py`: the read-only local server (Python standard library).
 - `skills/rft-manual/SKILL.md`: the manual; `tests/`: the mod's tests on an in-memory vault, the
   outline pane on every surface, and the server's tests.
