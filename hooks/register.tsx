@@ -20,8 +20,11 @@ const snapshot = atom({ plugin: 'rft', key: 'snapshot' } as const, null)
 const collapsed = atom({ plugin: 'rft', key: 'collapsed' } as const, [])
 const selected = atom({ plugin: 'rft', key: 'selected' } as const, null)
 const note = atom({ plugin: 'rft', key: 'note' } as const, null)
-const orientation = atom({ plugin: 'rft', key: 'orientation' } as const, 'TD')
-const zoom = atom({ plugin: 'rft', key: 'zoom' } as const, 'fit')
+// the pane is a tall, narrow sidebar: the vertical tree at a readable size, scrolled, by default
+const orientation = atom({ plugin: 'rft', key: 'orientation' } as const, 'V')
+const zoom = atom({ plugin: 'rft', key: 'zoom' } as const, 'full')
+const scale = atom({ plugin: 'rft', key: 'scale' } as const, 1)
+const focus = atom({ plugin: 'rft', key: 'focus' } as const, null)
 const viewMode = atom({ plugin: 'rft', key: 'view' } as const, null)
 
 // the size of a monospace cell on the desktop and in VS Code, in CSS pixels (an estimate:
@@ -259,16 +262,30 @@ async function foldAll($: EngineInterface, ids: string[]): Promise<void> {
   await update($, collapsed, () => ids)
 }
 
-async function flipOrientation($: EngineInterface): Promise<void> {
-  await update($, orientation, o => (o === 'TD' ? 'LR' : 'TD'))
+const LAYOUTS = ['V', 'TD', 'LR'] as const
+const LAYOUT_NAME = { V: 'Vertical', TD: 'Top-down', LR: 'Left-right' } as const
+
+async function cycleLayout($: EngineInterface): Promise<void> {
+  await update($, orientation, o => LAYOUTS[(LAYOUTS.indexOf(o) + 1) % LAYOUTS.length]!)
 }
 
 async function setView($: EngineInterface, mode: 'tree' | 'list'): Promise<void> {
   await update($, viewMode, () => mode)
 }
 
-async function flipZoom($: EngineInterface): Promise<void> {
-  await update($, zoom, v => (v === 'fit' ? 'full' : 'fit'))
+async function zoomBy($: EngineInterface, factor: number): Promise<void> {
+  // from a fitted view, start at 1:1
+  const wasFit = (await read($, zoom)) === 'fit'
+  await update($, scale, v => (wasFit ? 1 : Math.min(3, Math.max(0.4, Math.round(v * factor * 100) / 100))))
+  await update($, zoom, () => 'full')
+}
+
+async function zoomFit($: EngineInterface): Promise<void> {
+  await update($, zoom, () => 'fit')
+}
+
+async function setFocus($: EngineInterface, id: string | null): Promise<void> {
+  await update($, focus, () => id)
 }
 
 // The commands' names must not be a skill's: the plugin's skill is `rft-manual` (`/rft:rft-manual`).
@@ -379,6 +396,8 @@ export const register: Register = (on, options) => {
     const view = await read($, note)
     const orient = await read($, orientation)
     const z = await read($, zoom)
+    const sc = await read($, scale)
+    const focusId = await read($, focus)
     const cols = Math.max(24, e.props.bodyColumns || e.viewport?.columns || 60)
     const c = counts(tree)
 
@@ -440,8 +459,12 @@ export const register: Register = (on, options) => {
         <Box flexDirection="row" gap={1} flexWrap="wrap">
           {hasSvg ? <Button key="view-tree" label={mode === 'tree' ? '● Tree' : 'Tree'} onPress={() => setView($, 'tree')} /> : null}
           {hasSvg ? <Button key="view-list" label={mode === 'list' ? '● List' : 'List'} onPress={() => setView($, 'list')} /> : null}
-          {mode === 'tree' ? <Button key="orient" label={orient === 'TD' ? 'Left-right' : 'Top-down'} onPress={() => flipOrientation($)} /> : null}
-          {mode === 'tree' ? <Button key="zoom" label={z === 'fit' ? 'Actual size' : 'Fit'} onPress={() => flipZoom($)} /> : null}
+          {mode === 'tree' ? <Button key="orient" label={`Layout: ${LAYOUT_NAME[orient]}`} onPress={() => cycleLayout($)} /> : null}
+          {mode === 'tree' ? <Button key="zoom-out" label="−" onPress={() => zoomBy($, 1 / 1.25)} /> : null}
+          {mode === 'tree' ? <Button key="zoom-in" label="+" onPress={() => zoomBy($, 1.25)} /> : null}
+          {mode === 'tree' ? <Button key="zoom-fit" label={z === 'fit' ? '● Fit' : 'Fit'} onPress={() => zoomFit($)} /> : null}
+          {mode === 'tree' && sel && sel !== focusId ? <Button key="focus" label={`Focus ${sel}`} onPress={() => setFocus($, sel)} /> : null}
+          {mode === 'tree' && focusId ? <Button key="unfocus" label="Back to root" onPress={() => setFocus($, null)} /> : null}
           <Button key="fold-all" label="Fold all" onPress={() => foldAll($, foldable)} />
           <Button key="unfold-all" label="Unfold all" onPress={() => foldAll($, [])} />
         </Box>
@@ -467,13 +490,29 @@ export const register: Register = (on, options) => {
     const measuredRows = (e.props.scroll?.bodyRows ?? 0) > 0 ? e.props.scroll!.bodyRows : Math.max(0, (e.viewport?.rows ?? 0) - 6)
     const headerRows = 3 + (s.error ? 1 : 0) + (s.problems.length ? 1 : 0)
     const treeRows = measuredRows > 0 ? Math.max(8, Math.floor((measuredRows - headerRows) / (detail ? 2 : 1)) - 1) : 0
-    const natural = layoutTree(tree, folded, orient)
-    const size = z === 'fit' && measuredCols > 0 ? fitSize(natural, measuredCols * CELL_W, treeRows * CELL_H) : undefined
-    const { svg } = treeSvg(tree, { collapsed: folded, orientation: orient, selected: sel, size })
+    // focus: only the subtree of one node
+    const shownTree = focusId && tree.nodes[focusId] ? { nodes: tree.nodes, roots: [focusId] } : tree
+    const widthPx = measuredCols > 0 ? measuredCols * CELL_W - 16 : 480
+    const heightPx = treeRows * CELL_H
+    let drawing: { svg: string }
+    if (orient === 'V') {
+      // drawn at the pane's width: 1:1 (or the zoom) scrolls down; Fit shrinks the text until
+      // the whole tree is as tall as the pane
+      const one = layoutTree(shownTree, folded, 'V', { width: widthPx, scale: 1 })
+      const k = z === 'fit' ? (heightPx > 0 ? Math.max(0.35, Math.min(1, heightPx / one.height)) : 1) : sc
+      drawing = treeSvg(shownTree, { collapsed: folded, orientation: 'V', selected: sel, layout: { width: widthPx, scale: k } })
+    } else {
+      const natural = layoutTree(shownTree, folded, orient)
+      const size = z === 'fit'
+        ? (measuredCols > 0 ? fitSize(natural, widthPx, heightPx) : undefined)
+        : { width: Math.round(natural.width * sc), height: Math.round(natural.height * sc) }
+      drawing = treeSvg(shownTree, { collapsed: folded, orientation: orient, selected: sel, size: saneSize(size) })
+    }
+    const { svg } = drawing
     return (
       <Box flexDirection="column">
         {header}
-        <Text dimColor>Hover a node for its name; open notes from the List view.</Text>
+        <Text dimColor>{focusId && tree.nodes[focusId] ? `Showing ${tree.nodes[focusId]!.name} and what grows from it.` : 'Hover a node for its name; open notes from the List view, then Focus on them.'}</Text>
         {svg.length < 130000
           ? <Svg source={svg} alt={`The reasoning tree: ${c.direction ?? 0} directions, ${c.experiment ?? 0} experiments`} isInteractive />
           : <Text dimColor>The tree is too large to draw: fold some branches, or use the list.</Text>}
@@ -482,6 +521,10 @@ export const register: Register = (on, options) => {
     )
   })
 }
+
+/** A size only when both sides are finite and positive; else the drawing keeps its own. */
+const saneSize = (size: { width: number; height: number } | undefined) =>
+  size && Number.isFinite(size.width) && Number.isFinite(size.height) && size.width > 0 && size.height > 0 ? size : undefined
 
 const READ_ONLY = /^(Read|Grep|Glob|LS|WebFetch|WebSearch|ToolSearch|TodoWrite)$/
 

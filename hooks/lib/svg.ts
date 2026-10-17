@@ -1,13 +1,15 @@
-// A tidy tree layout and its SVG drawing, shared by the pane and the static HTML export.
-// Leaves are placed side by side along the breadth axis and every parent is centred over
-// its visible children; collapsed branches take the room of one node.
+// Tree layouts and their SVG drawing, shared by the pane and the static HTML export.
+// `TD` and `LR` are tidy trees: leaves side by side along the breadth axis, every parent
+// centred over its visible children. `V` is a vertical, indented tree: one node per row,
+// indented by depth with elbow connectors, as wide as it is given; it suits a tall, narrow
+// pane, growing downward at a readable size. Collapsed branches take the room of one node.
 
 import type { Tree } from './vault'
 import { MARK } from './vault'
 
-export type Orientation = 'TD' | 'LR'
+export type Orientation = 'V' | 'TD' | 'LR'
 
-export type Box = { id: string; x: number; y: number; hidden: number }
+export type Box = { id: string; x: number; y: number; w: number; h: number; hidden: number }
 
 export type Layout = {
   boxes: Box[]
@@ -16,11 +18,20 @@ export type Layout = {
   height: number
   nodeW: number
   nodeH: number
+  /** Multiplies the font sizes: the `V` layout's scale, 1 for the tidy ones. */
+  font: number
+}
+
+export type LayoutOptions = {
+  /** `V` only: the width to fill, in pixels (default 640). */
+  width?: number
+  /** `V` only: the drawing scale; 1 is 12.5 px text (default 1). */
+  scale?: number
 }
 
 const PAD = 16
 
-const SIZE: Record<Orientation, { w: number; h: number; gapBreadth: number; gapDepth: number }> = {
+const SIZE: Record<'TD' | 'LR', { w: number; h: number; gapBreadth: number; gapDepth: number }> = {
   TD: { w: 150, h: 44, gapBreadth: 12, gapDepth: 34 },
   LR: { w: 210, h: 36, gapBreadth: 8, gapDepth: 36 },
 }
@@ -40,7 +51,44 @@ const FADED = new Set(['dropped', 'discussed', 'moved'])
 const count = (tree: Tree, id: string): number =>
   tree.nodes[id]!.children.reduce((s, k) => s + 1 + count(tree, k), 0)
 
-export function layout(tree: Tree, collapsed: ReadonlySet<string>, orientation: Orientation): Layout {
+function vertical(tree: Tree, collapsed: ReadonlySet<string>, opts: LayoutOptions): Layout {
+  const sc = Math.min(4, Math.max(0.25, opts.scale ?? 1))
+  const width = Math.max(160, opts.width ?? 640)
+  const h = 26 * sc, gap = 6 * sc, pad = 8 * sc, minW = Math.min(width - 2 * pad, 220 * sc)
+  // indent in steps: a full step at a branching, a third of one for an only child, so long
+  // chains drift right slowly and stay readable
+  const CHAIN = 1 / 3
+  const level = new Map<string, number>()
+  let deepest = 0
+  const measure = (id: string, lv: number) => {
+    level.set(id, lv)
+    deepest = Math.max(deepest, lv)
+    const kids = collapsed.has(id) ? [] : tree.nodes[id]!.children
+    for (const k of kids) measure(k, lv + (kids.length > 1 ? 1 : CHAIN))
+  }
+  for (const r of tree.roots) measure(r, 0)
+  // the step shrinks until the deepest node still leaves a readable box
+  const indent = deepest ? Math.max(4 * sc, Math.min(18 * sc, (width - 2 * pad - minW) / deepest)) : 18 * sc
+  const boxes: Box[] = []
+  const edges: [string, string][] = []
+  let row = 0
+  const place = (id: string) => {
+    const open = !collapsed.has(id)
+    const x = pad + level.get(id)! * indent
+    boxes.push({ id, x, y: pad + row * (h + gap), w: Math.max(minW, width - pad - x), h, hidden: open ? 0 : count(tree, id) })
+    row += 1
+    if (open) for (const k of tree.nodes[id]!.children) { edges.push([id, k]); place(k) }
+  }
+  for (const r of tree.roots) place(r)
+  const right = Math.max(width, ...boxes.map(b => b.x + b.w + pad))
+  return {
+    boxes, edges, width: Math.ceil(right), height: Math.ceil(2 * pad + row * (h + gap) - gap),
+    nodeW: width, nodeH: h, font: sc,
+  }
+}
+
+export function layout(tree: Tree, collapsed: ReadonlySet<string>, orientation: Orientation, opts: LayoutOptions = {}): Layout {
+  if (orientation === 'V') return vertical(tree, collapsed, opts)
   const s = SIZE[orientation]
   const boxes: Box[] = []
   const edges: [string, string][] = []
@@ -67,6 +115,8 @@ export function layout(tree: Tree, collapsed: ReadonlySet<string>, orientation: 
       id,
       x: PAD + (orientation === 'TD' ? b : d),
       y: PAD + (orientation === 'TD' ? d : b),
+      w: s.w,
+      h: s.h,
       hidden: open ? 0 : count(tree, id),
     })
   }
@@ -77,7 +127,7 @@ export function layout(tree: Tree, collapsed: ReadonlySet<string>, orientation: 
     boxes, edges,
     width: Math.ceil(2 * PAD + (orientation === 'TD' ? breadth : depth)),
     height: Math.ceil(2 * PAD + (orientation === 'TD' ? depth : breadth)),
-    nodeW: s.w, nodeH: s.h,
+    nodeW: s.w, nodeH: s.h, font: 1,
   }
 }
 
@@ -98,12 +148,14 @@ export type SvgOptions = {
    * draws the SVG at the markup's size (a sandboxed frame) shows all of it.
    */
   size?: { width: number; height: number }
+  /** The `V` layout's width and scale. */
+  layout?: LayoutOptions
 }
 
 export function treeSvg(tree: Tree, opts: SvgOptions = {}): { svg: string; layout: Layout } {
   const orientation = opts.orientation ?? 'TD'
-  const L = layout(tree, opts.collapsed ?? new Set(), orientation)
-  const { nodeW: w, nodeH: h } = L
+  const L = layout(tree, opts.collapsed ?? new Set(), orientation, opts.layout)
+  const f = L.font
   const pos = new Map(L.boxes.map(b => [b.id, b]))
   const parts: string[] = [
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${L.width} ${L.height}" width="${opts.size?.width ?? L.width}" height="${opts.size?.height ?? L.height}" preserveAspectRatio="xMidYMid meet" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif">`,
@@ -111,17 +163,23 @@ export function treeSvg(tree: Tree, opts: SvgOptions = {}): { svg: string; layou
   ]
   for (const [p, c] of L.edges) {
     const a = pos.get(p)!, b = pos.get(c)!
-    if (orientation === 'TD') {
-      const x1 = a.x + w / 2, y1 = a.y + h, x2 = b.x + w / 2, y2 = b.y, my = (y1 + y2) / 2
+    if (orientation === 'V') {
+      const x1 = a.x + 9 * f, y1 = a.y + a.h
+      // under its parent: a line into the top; indented: an elbow into the left side
+      const d = b.x - a.x < 9 * f ? `M${x1},${y1} V${b.y}` : `M${x1},${y1} V${b.y + b.h / 2} H${b.x}`
+      parts.push(`<path data-edge="${esc(c)}" d="${d}"/>`)
+    } else if (orientation === 'TD') {
+      const x1 = a.x + a.w / 2, y1 = a.y + a.h, x2 = b.x + b.w / 2, y2 = b.y, my = (y1 + y2) / 2
       parts.push(`<path data-edge="${esc(c)}" d="M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}"/>`)
     } else {
-      const x1 = a.x + w, y1 = a.y + h / 2, x2 = b.x, y2 = b.y + h / 2, mx = (x1 + x2) / 2
+      const x1 = a.x + a.w, y1 = a.y + a.h / 2, x2 = b.x, y2 = b.y + b.h / 2, mx = (x1 + x2) / 2
       parts.push(`<path data-edge="${esc(c)}" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}"/>`)
     }
   }
   parts.push('</g>')
-  const chars = Math.floor((w - 14) / 6.1)
   for (const b of L.boxes) {
+    const { w, h } = b
+    const chars = Math.floor((w - 14 * f - (b.hidden ? 32 * f : 0)) / (6.4 * f))
     const n = tree.nodes[b.id]!
     const tone = TYPE_FILL[n.type] ?? TYPE_FILL.experiment!
     const stroke = STATUS_STROKE[n.status] ?? '#868e96'
@@ -129,19 +187,20 @@ export function treeSvg(tree: Tree, opts: SvgOptions = {}): { svg: string; layou
     const attrs = opts.isScripted ? ` data-id="${esc(b.id)}" style="cursor:pointer"` : ''
     parts.push(`<g${attrs}${FADED.has(n.status) ? ' opacity="0.6"' : ''}>`)
     parts.push(`<title>${esc(`${n.name} (${n.type}, ${n.status}${n.date ? ', ' + n.date : ''})`)}</title>`)
-    parts.push(`<rect x="${b.x}" y="${b.y}" width="${w}" height="${h}" rx="7" fill="${tone.fill}" stroke="${isSel ? '#1f2937' : stroke}" stroke-width="${isSel ? 3 : 1.8}"/>`)
-    parts.push(`<rect x="${b.x}" y="${b.y + 4}" width="4" height="${h - 8}" rx="2" fill="${stroke}"/>`)
+    parts.push(`<rect x="${b.x}" y="${b.y}" width="${w}" height="${h}" rx="${7 * f}" fill="${tone.fill}" stroke="${isSel ? '#1f2937' : stroke}" stroke-width="${isSel ? 3 : 1.8}"/>`)
+    parts.push(`<rect x="${b.x}" y="${b.y + 4 * f}" width="${4 * f}" height="${h - 8 * f}" rx="${2 * f}" fill="${stroke}"/>`)
     const head = `${MARK[n.status] ?? ''} ${n.id}`
     if (orientation === 'TD') {
       parts.push(`<text x="${b.x + 10}" y="${b.y + 17}" font-size="11.5" font-weight="700" fill="${tone.ink}">${esc(head)}<tspan font-weight="400" fill="${stroke}"> ${esc(n.status)}</tspan></text>`)
       parts.push(`<text x="${b.x + 10}" y="${b.y + 34}" font-size="11" fill="${tone.ink}">${esc(cut(n.title, chars))}</text>`)
     } else {
-      parts.push(`<text x="${b.x + 10}" y="${b.y + h / 2 + 4}" font-size="11.5" fill="${tone.ink}"><tspan font-weight="700">${esc(head)}</tspan> ${esc(cut(n.title, chars - head.length - 1))}</text>`)
+      const size = orientation === 'V' ? 12.5 * f : 11.5
+      parts.push(`<text x="${b.x + 10 * f}" y="${b.y + h / 2 + size * 0.35}" font-size="${size}" fill="${tone.ink}"><tspan font-weight="700">${esc(head)}</tspan> ${esc(cut(n.title, chars - head.length - 1))}</text>`)
     }
     if (b.hidden) {
-      const bx = b.x + w - 30, by = b.y + h - 15
-      parts.push(`<rect x="${bx}" y="${by}" width="26" height="12" rx="6" fill="#1f2937"/>`)
-      parts.push(`<text x="${bx + 13}" y="${by + 9.5}" font-size="9" text-anchor="middle" fill="#ffffff">+${b.hidden}</text>`)
+      const bw = 26 * f, bh = 12 * f, bx = b.x + w - bw - 4 * f, by = b.y + (orientation === 'V' ? (h - bh) / 2 : h - bh - 3 * f)
+      parts.push(`<rect x="${bx}" y="${by}" width="${bw}" height="${bh}" rx="${bh / 2}" fill="#1f2937"/>`)
+      parts.push(`<text x="${bx + bw / 2}" y="${by + bh * 0.78}" font-size="${9 * f}" text-anchor="middle" fill="#ffffff">+${b.hidden}</text>`)
     }
     parts.push('</g>')
   }

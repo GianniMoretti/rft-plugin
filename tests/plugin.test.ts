@@ -136,7 +136,7 @@ describe('pane', () => {
     await ui.unmount()
   })
 
-  test('the desktop shows the tree alone, sized to the pane, or the list; the choice is kept', async ($, on) => {
+  test('the desktop shows the tree alone, vertical and readable at the pane width, or the list', async ($, on) => {
     mock.clock(on)
     world(on, demoFiles())
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
@@ -145,15 +145,31 @@ describe('pane', () => {
     expect(svg).toBeDefined()
     expect(await ui.find({ key: 'node-E02' })).toBeUndefined()
     expect((await ui.find({ key: 'view-tree' }))?.text).toBe('● Tree')
-    // fitted into 80 columns by about 36 rows of 8 x 18 px: one side touches the box
-    const w = svgAttr(svg!, 'width'), h = svgAttr(svg!, 'height')
-    expect(w).toBeLessThanOrEqual(80 * 8)
-    expect(h).toBeLessThanOrEqual(40 * 18)
-    expect(w === 640 || h > 500).toBe(true)
+    expect((await ui.find({ key: 'orient' }))?.text).toBe('Layout: Vertical')
+    // 80 columns of 8 px, less a margin; 12.5 px text at 1:1; one row per node
+    expect(svgAttr(svg!, 'width')).toBe(80 * 8 - 16)
+    expect(String(svg!.props.source)).toContain('font-size="12.5"')
+    const h = svgAttr(svg!, 'height')
+    expect(h).toBeGreaterThan(4 * 26)
 
-    await ui.press({ key: 'zoom' })
-    expect(svgAttr((await ui.find({ type: 'Svg' }))!, 'width')).not.toBe(w)
-    await ui.press({ key: 'zoom' })
+    await ui.press({ key: 'zoom-in' })
+    expect(String((await ui.find({ type: 'Svg' }))!.props.source)).toContain('font-size="15.625"')
+    expect(svgAttr((await ui.find({ type: 'Svg' }))!, 'width')).toBe(80 * 8 - 16)
+    await ui.press({ key: 'zoom-out' })
+    await ui.press({ key: 'zoom-out' })
+    expect(String((await ui.find({ type: 'Svg' }))!.props.source)).toContain('font-size="10"')
+    await ui.press({ key: 'zoom-fit' })
+    expect((await ui.find({ key: 'zoom-fit' }))?.text).toBe('● Fit')
+    expect(svgAttr((await ui.find({ type: 'Svg' }))!, 'height')).toBeLessThanOrEqual(40 * 18)
+    await ui.press({ key: 'zoom-in' })
+    expect(String((await ui.find({ type: 'Svg' }))!.props.source)).toContain('font-size="12.5"')
+
+    await ui.press({ key: 'orient' })
+    expect((await ui.find({ key: 'orient' }))?.text).toBe('Layout: Top-down')
+    await ui.press({ key: 'orient' })
+    expect((await ui.find({ key: 'orient' }))?.text).toBe('Layout: Left-right')
+    await ui.press({ key: 'orient' })
+    expect((await ui.find({ key: 'orient' }))?.text).toBe('Layout: Vertical')
 
     await ui.press({ key: 'view-list' })
     expect(await ui.find({ type: 'Svg' })).toBeUndefined()
@@ -162,14 +178,19 @@ describe('pane', () => {
     expect((await ui.find({ key: 'note-text' }))?.text).toContain('Text of D01.')
     await ui.unmount()
 
-    // the choice is kept; back in the tree, the open note shows under it
+    // the choice is kept; back in the tree, the open note shows under it and can be focused
     const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
     expect(await again.find({ type: 'Svg' })).toBeUndefined()
     await again.press({ key: 'view-tree' })
-    const half = await again.find({ type: 'Svg' })
-    expect(half).toBeDefined()
-    expect(svgAttr(half!, 'height')).toBeLessThanOrEqual(h)
     expect((await again.find({ key: 'note-text' }))?.text).toContain('Text of D01.')
+    await again.press({ key: 'focus' })
+    const focused = String((await again.find({ type: 'Svg' }))!.props.source)
+    expect(focused).toContain('D01')
+    expect(focused).toContain('E02')
+    expect(focused).not.toContain('D00')
+    expect(await again.find({ key: 'focus' })).toBeUndefined()
+    await again.press({ key: 'unfocus' })
+    expect(String((await again.find({ type: 'Svg' }))!.props.source)).toContain('D00')
     await again.unmount()
   })
 
@@ -206,7 +227,8 @@ describe('pane', () => {
       const src = String(svg!.props.source)
       expect(src).toMatch(/viewBox="0 0 \d+ \d+"/)
       expect(src).toContain('preserveAspectRatio="xMidYMid meet"')
-      expect(svgAttr(svg!, 'width')).toBeGreaterThan(50)
+      // measured: the pane's width in px; unmeasured: a fixed sidebar width, never 0 or NaN
+      expect(svgAttr(svg!, 'width')).toBe(props.bodyColumns > 0 ? props.bodyColumns * 8 - 16 : 480)
       await ui.unmount()
     }
   })

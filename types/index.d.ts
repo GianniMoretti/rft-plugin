@@ -33,8 +33,13 @@ declare module 'claude-code' {
       collapsed: string[]
       selected: string | null
       note: RftNoteView | null
-      orientation: 'TD' | 'LR'
+      /** V: vertical indented tree; TD / LR: tidy trees. */
+      orientation: 'V' | 'TD' | 'LR'
+      /** fit: the whole tree in the pane; full: drawn at `scale`. */
       zoom: 'fit' | 'full'
+      scale: number
+      /** The node whose subtree alone is drawn; null for the whole tree. */
+      focus: string | null
       /** The pane's view; null is the surface's default (the tree where Svg draws). */
       view: 'tree' | 'list' | null
     }

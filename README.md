@@ -69,10 +69,12 @@ they are (ids, statuses and the next free id are read from the notes).
 
 - **The tree pane** opens as a sidebar where the surface docks panes (turn this off with the
   `autoOpen` option), or with `/rft`. It shows one view at a time, switched with **Tree | List**:
-  - **Tree** (the default on the desktop app, VS Code and mobile): the whole tree as a picture,
-    top-down or left-right, coloured by type and status, scaled to fill the pane (**Actual
-    size** shows it unscaled, to scroll). Hover a node for its name; open a note from the List
-    view, and it stays shown under the tree.
+  - **Tree** (the default on the desktop app, VS Code and mobile): the tree as a picture,
+    coloured by type and status. The default **Vertical** layout puts one node per row,
+    indented by depth, at the pane's width and a readable size, and scrolls down; **Layout**
+    switches to top-down or left-right. **−** / **+** zoom, **Fit** shows the whole tree at
+    once. Open a note in the List view, and **Focus** draws only that note's subtree
+    (**Back to root** returns). Hover a node for its full name.
   - **List** (the only view in the terminal): an indented, coloured outline; click a node to
     read its note, ▾ / ▸ to fold a branch.
 
