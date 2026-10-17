@@ -10,7 +10,7 @@ import type { RftSnapshot } from '../types'
 import { addNode, exportHtml, initVault, loadActive, rulesText, setStatus, today, treeReport } from './lib/ops'
 import { fitSize, layout as layoutTree, treeSvg } from './lib/svg'
 import type { Config, Io, NodeType, Tree } from './lib/vault'
-import { LEGEND, MARK, bodyOf, counts, join, readConfig, signatureOf, sync, validate, walk } from './lib/vault'
+import { LEGEND, MARK, bodyOf, counts, join, readConfig, signatureOf, sync, validate } from './lib/vault'
 
 const PANE = 'rft-tree'
 const TITLE = 'Reasoning tree'
@@ -267,11 +267,6 @@ async function setView($: EngineInterface, mode: 'tree' | 'list'): Promise<void>
   await update($, viewMode, () => mode)
 }
 
-async function closeNote($: EngineInterface): Promise<void> {
-  await update($, selected, () => null)
-  await update($, note, () => null)
-}
-
 async function flipZoom($: EngineInterface): Promise<void> {
   await update($, zoom, v => (v === 'fit' ? 'full' : 'fit'))
 }
@@ -431,19 +426,20 @@ export const register: Register = (on, options) => {
     }
 
     // the tree or the list, never both: the tree where the surface draws Svg, the list elsewhere
-    // Svg draws everywhere but the terminal; Select everywhere but the mobile app
+    // Svg draws everywhere but the terminal. The tree view keeps to the elements the desktop
+    // page is known to paint (Text, Button, Svg, Markdown, Box): no Select, no Button variant,
+    // and no width / height on the Svg, whose markup carries the size it is drawn at
     const hasSvg = e.surface !== 'terminal'
-    const hasSelect = e.surface !== 'mobile'
     const mode = hasSvg ? ((await read($, viewMode)) ?? 'tree') : 'list'
     const foldable = Object.values(tree.nodes).filter(n => n.children.length && n.parent).map(n => n.id)
     const header = (
-      <Box key="header" flexDirection="column">
+      <Box flexDirection="column">
         <Text bold>{`${s.project}: ${c.direction ?? 0} directions, ${c.experiment ?? 0} experiments`}</Text>
         {s.error ? <Text color="error">{s.error}</Text> : null}
         {s.problems.length ? <Text color="warning">{`${s.problems.length} problem(s), e.g. ${s.problems[0]}`}</Text> : null}
         <Box flexDirection="row" gap={1} flexWrap="wrap">
-          {hasSvg ? <Button key="view-tree" label="Tree" variant={mode === 'tree' ? 'primary' : 'secondary'} onPress={() => setView($, 'tree')} /> : null}
-          {hasSvg ? <Button key="view-list" label="List" variant={mode === 'list' ? 'primary' : 'secondary'} onPress={() => setView($, 'list')} /> : null}
+          {hasSvg ? <Button key="view-tree" label={mode === 'tree' ? '● Tree' : 'Tree'} onPress={() => setView($, 'tree')} /> : null}
+          {hasSvg ? <Button key="view-list" label={mode === 'list' ? '● List' : 'List'} onPress={() => setView($, 'list')} /> : null}
           {mode === 'tree' ? <Button key="orient" label={orient === 'TD' ? 'Left-right' : 'Top-down'} onPress={() => flipOrientation($)} /> : null}
           {mode === 'tree' ? <Button key="zoom" label={z === 'fit' ? 'Actual size' : 'Fit'} onPress={() => flipZoom($)} /> : null}
           <Button key="fold-all" label="Fold all" onPress={() => foldAll($, foldable)} />
@@ -469,26 +465,17 @@ export const register: Register = (on, options) => {
     // (else the whole surface's, less a margin); unmeasured, the drawing's own size
     const measuredCols = e.props.bodyColumns > 0 ? e.props.bodyColumns : (e.viewport?.columns ?? 0)
     const measuredRows = (e.props.scroll?.bodyRows ?? 0) > 0 ? e.props.scroll!.bodyRows : Math.max(0, (e.viewport?.rows ?? 0) - 6)
-    const headerRows = 2 + (s.error ? 1 : 0) + (s.problems.length ? 1 : 0) + (hasSelect ? 1 : 0)
+    const headerRows = 3 + (s.error ? 1 : 0) + (s.problems.length ? 1 : 0)
     const treeRows = measuredRows > 0 ? Math.max(8, Math.floor((measuredRows - headerRows) / (detail ? 2 : 1)) - 1) : 0
     const natural = layoutTree(tree, folded, orient)
     const size = z === 'fit' && measuredCols > 0 ? fitSize(natural, measuredCols * CELL_W, treeRows * CELL_H) : undefined
     const { svg } = treeSvg(tree, { collapsed: folded, orientation: orient, selected: sel, size })
-    const picker = hasSelect && e.surface !== 'mobile'
-      ? (() => {
-          const { Select } = ui
-          const options = [{ value: '', label: 'Open a note…' }]
-          walk(tree, n => { options.push({ value: n.id, label: `${MARK[n.status] ?? '-'} ${n.name}` }) })
-          return <Select key="pick-note" label="Note" options={options} value={sel ?? ''} onSelect={v => (v ? selectNode($, v) : closeNote($))} />
-        })()
-      : null
-
     return (
       <Box flexDirection="column">
         {header}
-        {picker}
+        <Text dimColor>Hover a node for its name; open notes from the List view.</Text>
         {svg.length < 130000
-          ? <Svg source={svg} alt={`The reasoning tree: ${c.direction ?? 0} directions, ${c.experiment ?? 0} experiments`} isInteractive {...(size ?? { width: natural.width, height: natural.height })} />
+          ? <Svg source={svg} alt={`The reasoning tree: ${c.direction ?? 0} directions, ${c.experiment ?? 0} experiments`} isInteractive />
           : <Text dimColor>The tree is too large to draw: fold some branches, or use the list.</Text>}
         {detail}
       </Box>

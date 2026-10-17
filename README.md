@@ -71,7 +71,8 @@ they are (ids, statuses and the next free id are read from the notes).
   `autoOpen` option), or with `/rft`. It shows one view at a time, switched with **Tree | List**:
   - **Tree** (the default on the desktop app, VS Code and mobile): the whole tree as a picture,
     top-down or left-right, coloured by type and status, scaled to fill the pane (**Actual
-    size** shows it unscaled, to scroll). Pick a note in the **Note** menu to read it below.
+    size** shows it unscaled, to scroll). Hover a node for its name; open a note from the List
+    view, and it stays shown under the tree.
   - **List** (the only view in the terminal): an indented, coloured outline; click a node to
     read its note, ▾ / ▸ to fold a branch.
 

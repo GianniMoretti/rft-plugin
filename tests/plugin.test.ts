@@ -6,6 +6,9 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import { CWD, D01, E02, demoFiles, paneProps, world } from './fixture'
 
 const SURFACES = ['terminal', 'desktop'] as const
+/** A size the Svg's markup declares on its root element. */
+const svgAttr = (svg: { props: Record<string, unknown> }, name: string) =>
+  Number(new RegExp(`<svg[^>]* ${name}="([\\d.]+)"`).exec(String(svg.props.source))?.[1])
 // the `name` of skills/rft-manual/SKILL.md
 const SKILL = 'rft-manual'
 const PANE = { plugin: 'rft', component: 'Pane', requestId: 'rft-tree', props: paneProps() } as const
@@ -141,20 +144,15 @@ describe('pane', () => {
     const svg = await ui.find({ type: 'Svg' })
     expect(svg).toBeDefined()
     expect(await ui.find({ key: 'node-E02' })).toBeUndefined()
+    expect((await ui.find({ key: 'view-tree' }))?.text).toBe('● Tree')
     // fitted into 80 columns by about 36 rows of 8 x 18 px: one side touches the box
-    const w = Number(svg!.props.width), h = Number(svg!.props.height)
+    const w = svgAttr(svg!, 'width'), h = svgAttr(svg!, 'height')
     expect(w).toBeLessThanOrEqual(80 * 8)
     expect(h).toBeLessThanOrEqual(40 * 18)
     expect(w === 640 || h > 500).toBe(true)
 
-    await ui.select({ key: 'pick-note', value: 'E01' })
-    expect((await ui.find({ key: 'note-text' }))?.text).toContain('Text of E01.')
-    const shrunk = await ui.find({ type: 'Svg' })
-    expect(Number(shrunk!.props.height)).toBeLessThan(h + 1)
-    await ui.press({ key: 'close-note' })
-
     await ui.press({ key: 'zoom' })
-    expect(Number((await ui.find({ type: 'Svg' }))!.props.width)).not.toBe(w)
+    expect(svgAttr((await ui.find({ type: 'Svg' }))!, 'width')).not.toBe(w)
     await ui.press({ key: 'zoom' })
 
     await ui.press({ key: 'view-list' })
@@ -164,34 +162,51 @@ describe('pane', () => {
     expect((await ui.find({ key: 'note-text' }))?.text).toContain('Text of D01.')
     await ui.unmount()
 
+    // the choice is kept; back in the tree, the open note shows under it
     const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
     expect(await again.find({ type: 'Svg' })).toBeUndefined()
     await again.press({ key: 'view-tree' })
-    expect(await again.find({ type: 'Svg' })).toBeDefined()
+    const half = await again.find({ type: 'Svg' })
+    expect(half).toBeDefined()
+    expect(svgAttr(half!, 'height')).toBeLessThanOrEqual(h)
+    expect((await again.find({ key: 'note-text' }))?.text).toContain('Text of D01.')
     await again.unmount()
   })
 
-  test('the tree draws whole whatever the desktop measures: the markup carries the drawn size', async ($, on) => {
+  test('a fresh desktop session draws the tree with only the elements the desktop page paints', async ($, on) => {
     mock.clock(on)
     world(on, demoFiles())
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    const attr = (src: string, name: string) => Number(new RegExp(`<svg[^>]* ${name}="([\\d.]+)"`).exec(src)?.[1])
-    const measured = paneProps()
-    const cases = [
-      measured,
-      { ...measured, bodyColumns: 0, scroll: { offset: 0, bodyRows: 0 } },
+    const fresh = [
+      paneProps(),
+      { ...paneProps(), bodyColumns: 0, scroll: { offset: 0, bodyRows: 0 } },
       { title: 'Reasoning tree', isFocused: false, bodyColumns: 0, placement: 'dock' as const, view: {} },
     ]
-    for (const props of cases) {
+    for (const props of fresh) {
       const ui = await $.ui.mount({ ...PANE, props: props as never, surface: 'desktop' })
+      const drawn = await ui.drawn()
+      const seen = new Set<string>()
+      const visit = (el: unknown) => {
+        if (!el || typeof el !== 'object') return
+        const node = el as { type?: string; props?: Record<string, unknown>; children?: unknown[] }
+        if (node.type) {
+          seen.add(node.type)
+          expect(node.props?.variant).toBeUndefined()
+          if (node.type === 'Svg') {
+            expect(node.props?.width).toBeUndefined()
+            expect(node.props?.height).toBeUndefined()
+          }
+        }
+        for (const k of node.children ?? []) visit(k)
+      }
+      visit(drawn)
+      expect([...seen].filter(t => !['Box', 'Text', 'Button', 'Svg', 'Markdown'].includes(t))).toEqual([])
+      expect(seen.has('Svg')).toBe(true)
       const svg = await ui.find({ type: 'Svg' })
-      expect(svg).toBeDefined()
       const src = String(svg!.props.source)
       expect(src).toMatch(/viewBox="0 0 \d+ \d+"/)
       expect(src).toContain('preserveAspectRatio="xMidYMid meet"')
-      expect(Number(svg!.props.width)).toBe(attr(src, 'width'))
-      expect(Number(svg!.props.height)).toBe(attr(src, 'height'))
-      expect(Number(svg!.props.width)).toBeGreaterThan(50)
+      expect(svgAttr(svg!, 'width')).toBeGreaterThan(50)
       await ui.unmount()
     }
   })
@@ -203,7 +218,6 @@ describe('pane', () => {
     for (const surface of ['vscode', 'mobile'] as const) {
       const ui = await $.ui.mount({ ...PANE, surface })
       expect(await ui.find({ type: 'Svg' })).toBeDefined()
-      expect((await ui.find({ key: 'pick-note' })) !== undefined).toBe(surface === 'vscode')
       await ui.unmount()
     }
   })
