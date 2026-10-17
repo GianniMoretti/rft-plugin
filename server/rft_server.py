@@ -32,6 +32,7 @@ PAGE_FILES = {
     "/index.html": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/app.css": ("app.css", "text/css; charset=utf-8"),
+    "/filters.js": ("filters.js", "text/javascript; charset=utf-8"),
     "/vendor/d3.v7.9.0.min.js": ("vendor/d3.v7.9.0.min.js", "text/javascript; charset=utf-8"),
     "/vendor/LICENSE-d3.txt": ("vendor/LICENSE-d3.txt", "text/plain; charset=utf-8"),
 }
@@ -70,6 +71,26 @@ def id_of(name: str) -> str:
 def natural_key(name: str):
     m = re.match(r"^([A-Za-z]+)(\d+)(.*)$", name)
     return (m.group(1), int(m.group(2)), m.group(3)) if m else (name, 0, "")
+
+
+STATUSES = {"planned", "running", "done", "idea", "dropped", "discussed", "moved"}
+
+
+def parse_tags(value: str | None) -> list[str]:
+    """The tags of a one-line `tags:` value: `[a, b]`, `a, b` or `#a #b`."""
+    v = (value or "").strip()
+    if v.startswith("[") and v.endswith("]"):
+        v = v[1:-1]
+    return [t.strip().strip("'\"").lstrip("#") for t in re.split(r"[,\s]+", v) if t.strip().strip("'\"").lstrip("#")]
+
+
+def topical_tags(tags: list[str], project: str) -> list[str]:
+    """The tags less the ones every note carries anyway: project, type, status."""
+    out: list[str] = []
+    for t in tags:
+        if t not in out and t != project and t not in ("experiment", "direction") and t not in STATUSES:
+            out.append(t)
+    return out
 
 
 def link_target(value: str | None) -> str | None:
@@ -122,7 +143,8 @@ class Vault:
                 ftype = fm.get("type") if fm.get("type") in ("experiment", "direction") else kind
                 nodes[nid] = {"id": nid, "name": name, "title": name[len(id_of(name)):].strip(),
                               "type": ftype, "status": fm.get("status", ""), "date": fm.get("date", ""),
-                              "parent": None, "children": [], "path": f"{sub}/{f.name}"}
+                              "parent": None, "children": [], "path": f"{sub}/{f.name}",
+                              "tags": topical_tags(parse_tags(fm.get("tags")), self.project)}
                 refs[nid] = link_target(fm.get("parent"))
         by_name = {n["name"]: n["id"] for n in nodes.values()}
         for n in nodes.values():
@@ -145,7 +167,12 @@ class Vault:
         for n in nodes.values():
             n["children"].sort(key=key)
         roots.sort(key=key)
-        return {"project": self.project, "version": sig, "nodes": list(nodes.values()), "roots": roots}
+        counts: dict[str, int] = {}
+        for n in nodes.values():
+            for t in n["tags"]:
+                counts[t] = counts.get(t, 0) + 1
+        tags = [{"tag": t, "count": c} for t, c in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+        return {"project": self.project, "version": sig, "nodes": list(nodes.values()), "roots": roots, "tags": tags}
 
     def note_path(self, nid: str) -> Path | None:
         """The note's file, only when it resolves to a markdown file inside experiments/ or directions/."""

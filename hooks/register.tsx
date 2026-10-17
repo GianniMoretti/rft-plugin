@@ -1,5 +1,5 @@
 // rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-view), the model's
-// tools (rft_add_node, rft_set_status, rft_tree, rft_validate, rft_sync), the operating rules
+// tools (rft_add_node, rft_set_status, rft_set_tags, rft_tags, rft_tree, rft_validate, rft_sync), the operating rules
 // injected into the system prompt, the outline pane, and the web view: /rft starts a local,
 // read-only server (server/rft_server.py) for the interactive tree page (web/). Everything is
 // inert in a project without `.rft/config.json`.
@@ -8,7 +8,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { RftSnapshot } from '../types'
-import { addNode, exportHtml, initVault, loadActive, rulesText, setStatus, today, treeReport } from './lib/ops'
+import { addNode, exportHtml, initVault, loadActive, rulesText, setStatus, setTags, tagsReport, today, treeReport } from './lib/ops'
 import { ASSET_PATHS } from './lib/page'
 import type { Config, Io, NodeType, Tree } from './lib/vault'
 import { LEGEND, MARK, bodyOf, counts, join, readConfig, signatureOf, sync, validate } from './lib/vault'
@@ -49,6 +49,7 @@ const TOOLS = {
         result: { type: 'string', description: 'Experiment: real results only (numbers with spread, failures, caveats).' },
         code: { type: 'string', description: 'Experiment: commit, script, results folder, machine.' },
         sections: { type: 'object', additionalProperties: { type: 'string' }, description: 'Other sections by heading, e.g. {"Status": "..."}.' },
+        tags: { type: 'array', items: { type: 'string' }, description: '1-3 short topical tags, lowercase kebab-case, reused from rft_tags when they fit (the project, type and status tags are added anyway).' },
       },
       required: ['type', 'title'],
     },
@@ -65,6 +66,22 @@ const TOOLS = {
       },
       required: ['id', 'status'],
     },
+  },
+  rft_set_tags: {
+    description:
+      'Replace the topical tags of a node (the project, type and status tags stay). Tags are made lowercase kebab-case; reuse the vocabulary rft_tags lists.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id (e.g. E12) or full name of the note.' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'The new topical tags (an empty list removes them).' },
+      },
+      required: ['id', 'tags'],
+    },
+  },
+  rft_tags: {
+    description: 'List the topical tags in use in the vault, with how many notes carry each: check it before inventing a new tag.',
+    inputSchema: { type: 'object', properties: {} },
   },
   rft_tree: {
     description: 'Show the current reasoning tree as an indented list with status marks, the whole tree or the subtree of one node.',
@@ -183,6 +200,8 @@ async function poll($: EngineInterface): Promise<void> {
   try { await refresh($) } catch { /* tried again at the next tick */ }
 }
 
+const strings = (v: unknown) => (Array.isArray(v) ? v.filter((t): t is string => typeof t === 'string') : typeof v === 'string' ? v.split(',') : [])
+
 const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : undefined)
 
 const answer = (text: string, isError = false) =>
@@ -202,10 +221,14 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       if (str(i.result)) sections.Result = String(i.result)
       const node = await addNode(io, loaded, {
         type: i.type as NodeType, title: String(i.title ?? ''), parent: str(i.parent) ?? null,
-        status: str(i.status), date: today(), sections, code: str(i.code),
+        status: str(i.status), date: today(), sections, code: str(i.code), tags: strings(i.tags),
       })
       return `${node.report}\nId: ${node.id}\nNote: ${join(loaded.config.vault, node.path)}`
     }
+    case 'rft_set_tags':
+      return setTags(io, loaded, String(i.id ?? ''), strings(i.tags))
+    case 'rft_tags':
+      return tagsReport(loaded)
     case 'rft_set_status':
       return setStatus(io, loaded, String(i.id ?? ''), String(i.status ?? ''), str(i.note))
     case 'rft_tree':
@@ -466,7 +489,8 @@ export const register: Register = (on, options) => {
       }
       $.ui.log(`rft: could not open the browser pane (${shown.why}); showing the address instead`, { to: 'debug' })
       openList()
-      return { text: `${webHelp(url)}\n(The browser pane could not be opened automatically: ${shown.why}.)` }
+      // the link leads the reply: a click opens it (the app asks where); why is in the debug log
+      return { text: webHelp(url) }
     }
     openList()
     return { text: webHelp(url) }
@@ -495,6 +519,7 @@ export const register: Register = (on, options) => {
         css: await $.fs.read(join(root, ASSET_PATHS.css)),
         js: await $.fs.read(join(root, ASSET_PATHS.js)),
         d3: await $.fs.read(join(root, ASSET_PATHS.d3)),
+        filters: await $.fs.read(join(root, ASSET_PATHS.filters)),
       }
       const path = await exportHtml(io, loaded, assets)
       const cwd = await $.session.cwd()

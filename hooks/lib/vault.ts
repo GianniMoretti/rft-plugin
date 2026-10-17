@@ -33,6 +33,8 @@ export type RftNode = {
   children: string[]
   /** Relative to the vault folder, e.g. `experiments/E01 First run.md`. */
   path: string
+  /** Topical tags: the note's tags less the project, type and status ones. */
+  tags: string[]
 }
 
 export type Tree = {
@@ -171,6 +173,42 @@ export function compareNames(a: string, b: string): number {
 
 export const idOf = (name: string) => name.split(' ')[0] ?? name
 
+// ---------------------------------------------------------------- tags
+
+/** The tags of a one-line `tags:` value: `[a, b]`, `a, b` or `#a #b`. */
+export function parseTags(value: string | undefined): string[] {
+  const v = (value ?? '').trim().replace(/^\[|\]$/g, '')
+  return v.split(/[,\s]+/).map(t => t.trim().replace(/^["']|["']$/g, '').replace(/^#/, '')).filter(Boolean)
+}
+
+/** The tags every note carries anyway: the project, its type and its status. */
+export const isReservedTag = (tag: string, project: string) =>
+  tag === project || tag === 'experiment' || tag === 'direction' || (STATUSES as readonly string[]).includes(tag)
+
+export const topicalTags = (tags: string[], project: string) => [...new Set(tags.filter(t => !isReservedTag(t, project)))]
+
+/** A topical tag as the manual wants it: lowercase kebab-case. */
+export const sanitiseTag = (tag: string) =>
+  tag.toLowerCase().replace(/^#/, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)
+
+export const isKebab = (tag: string) => /^[a-z0-9]+(-[a-z0-9]+)*$/.test(tag)
+
+/** The topical tags in use with their counts, most used first. */
+export function tagCounts(tree: Tree): { tag: string; count: number }[] {
+  const counts = new Map<string, number>()
+  for (const n of Object.values(tree.nodes)) for (const t of n.tags) counts.set(t, (counts.get(t) ?? 0) + 1)
+  return [...counts].map(([tag, count]) => ({ tag, count })).sort((a, b) => b.count - a.count || (a.tag < b.tag ? -1 : 1))
+}
+
+/** The `tags:` line: project, type, the topical tags, status (the order the notes use). */
+export const tagsLine = (project: string, type: string, topical: string[], status: string) =>
+  `[${[project, type, ...topical, status].filter(Boolean).join(', ')}]`
+
+/** Replaces a note's topical tags, keeping its project, type and status tags. */
+export function withTopicalTags(text: string, n: RftNode, project: string, tags: string[]): string {
+  return setField(text, 'tags', tagsLine(project, n.type, topicalTags(tags.map(sanitiseTag).filter(Boolean), project), n.status))
+}
+
 /**
  * Makes a title safe for Obsidian: `^` becomes "to the power", `[ ]` become `( )`,
  * `#` becomes "no.", `|` `:` `/` `\` become commas or dashes, and `* " < > ?` go.
@@ -240,6 +278,7 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
       nodes[id] = {
         id, name, title: name.slice(idOf(name).length).trim(), type: fmType,
         status: fm.status ?? '', date: fm.date ?? '', parent: null, children: [], path,
+        tags: topicalTags(parseTags(fm.tags), config.project),
       }
       texts[id] = text
       parentRef[id] = linkTarget(fm.parent)
@@ -508,6 +547,8 @@ export async function validate(io: Io, loaded: Loaded): Promise<Validation> {
     if (!(STATUSES as readonly string[]).includes(n.status)) errors.push(`${n.path}: status "${n.status}" is not one of ${STATUSES.join(', ')}`)
     if (FORBIDDEN.test(n.name)) errors.push(`${n.path}: the title contains a character that breaks links (^ # | [ ] \\ / : * " < > ?)`)
     if (!n.title) warnings.push(`${n.path}: no title after the id`)
+    const odd = n.tags.filter(t => !isKebab(t))
+    if (odd.length) warnings.push(`${n.id}: tag(s) ${odd.join(', ')} not lowercase kebab-case (rft_set_tags fixes them)`)
     if (!/^\d{4}-\d{2}-\d{2}$/.test(n.date)) warnings.push(`${n.path}: date "${n.date}" is not YYYY-MM-DD`)
     const f = derivedFields(tree, n)
     if (!sameLinks(fm.children, f.children!) || (fm.up ?? '') !== f.up || (fm.down ?? '') !== f.down) {
@@ -547,6 +588,8 @@ export type NewNode = {
   /** Section texts by heading (`What`, `Why`, `Result`, `Idea`, `Status`, ...). */
   sections?: Record<string, string>
   code?: string
+  /** Topical tags, sanitised to kebab-case. */
+  tags?: string[]
 }
 
 export function nextId(loaded: Loaded, type: NodeType): string {
@@ -565,11 +608,11 @@ export function noteText(id: string, n: NewNode, project: string, parentName: st
   const status = n.status ?? (n.type === 'experiment' ? 'planned' : 'idea')
   const s = n.sections ?? {}
   const parentLink = parentName ? `[[${parentName}]]` : '(root)'
-  const tags = [project, n.type, status].filter(Boolean).join(', ')
+  const topical = topicalTags((n.tags ?? []).map(sanitiseTag).filter(Boolean), project)
   const head = [
     '---', `id: ${id}`, `type: ${n.type}`, `status: ${status}`, `date: ${n.date}`,
     `parent: ${parentName ? `"[[${parentName}]]"` : '""'}`, 'children: []', 'up: ""', 'down: []',
-    `tags: [${tags}]`, '---', '',
+    `tags: ${tagsLine(project, n.type, topical, status)}`, '---', '',
     `# ${id} · ${n.title}`, '',
     `**Parent:** ${parentLink}  `,
     `**Status:** ${status} · **Date:** ${n.date}${n.type === 'experiment' ? '  ' : ''}`,

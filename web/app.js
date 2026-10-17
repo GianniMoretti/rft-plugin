@@ -19,7 +19,10 @@
   let byId = new Map()
   let layoutKind = 'td'
   let collapsed = new Set()
-  let hiddenStatuses = new Set()
+  const F = window.RftFilters
+  let filters = F.empty() // the one source of truth for every filter, the legend's included
+  let matchSet = new Set() // the notes that pass the filters
+  let shownSet = new Set() // the notes drawn: all of them, or with "hide" the matches and their ancestors
   let selected = null
   let matchAt = -1
   let positions = new Map()
@@ -61,14 +64,18 @@
     if (first) {
       layoutKind = store.get('layout', 'td')
       collapsed = new Set(store.get('collapsed', []))
-      hiddenStatuses = new Set(store.get('hidden', []))
+      // earlier versions kept only the legend's statuses, under `hidden`
+      filters = F.normalise(store.get('filters', null) || { hiddenStatuses: store.get('hidden', []) })
       setFont(store.get('font', 1), false)
       document.title = `${tree.project} · reasoning tree`
       document.getElementById('title').textContent = `${tree.project} — the reasoning tree`
       buildLegend()
       syncLayoutButtons()
+      togglePanel(Boolean(store.get('filtersOpen', false)))
     }
     for (const id of [...collapsed]) if (!byId.has(id)) collapsed.delete(id)
+    computeFilters()
+    buildFilterPanel()
     const c = { direction: 0, experiment: 0 }
     for (const n of tree.nodes) c[n.type] = (c[n.type] || 0) + 1
     document.getElementById('counts').textContent = `${c.direction} directions · ${c.experiment} experiments`
@@ -87,9 +94,9 @@
     const single = tree.roots.length === 1
     const top = single ? byId.get(tree.roots[0]) : { id: '__root', virtual: true, children: tree.roots }
     return d3.hierarchy(top, d => {
-      if (d.virtual) return d.children.map(id => byId.get(id))
+      if (d.virtual) return d.children.filter(id => shownSet.has(id)).map(id => byId.get(id))
       if (collapsed.has(d.id)) return null
-      return d.children.map(id => byId.get(id)).filter(Boolean)
+      return d.children.filter(id => shownSet.has(id)).map(id => byId.get(id)).filter(Boolean)
     })
   }
 
@@ -178,14 +185,14 @@
     all.select('g.fold text').text(n => (collapsed.has(n.data.id) ? `+${countBelow(n.data.id)}` : '−'))
     all.select('g.fold circle').attr('r', n => (collapsed.has(n.data.id) ? 8 : 5.5))
     all.transition().duration(dur).attr('transform', n => `translate(${pos.get(n.data.id).p})`)
-    gLinks.selectAll('path.link').attr('class', l => `link${hiddenStatuses.has(l.target.data.status) ? ' dim' : ''}`)
+    gLinks.selectAll('path.link').attr('class', l => `link${matchSet.has(l.target.data.id) ? '' : ' dim'}`)
     updateLabels()
   }
 
   function nodeClass(d) {
     let c = `node ${d.type}`
     if (d.id === selected) c += ' selected'
-    if (hiddenStatuses.has(d.status)) c += ' dim'
+    if (!matchSet.has(d.id)) c += ' dim'
     const q = searchText()
     if (q && d.name.toLowerCase().includes(q)) c += ' match'
     return c
@@ -314,7 +321,7 @@
     const n = byId.get(id)
     const drawer = document.getElementById('drawer')
     drawer.hidden = false
-    document.getElementById('drawer-meta').textContent = `${n.type} · ${MARK[n.status] || ''} ${n.status}${n.date ? ' · ' + n.date : ''}`
+    document.getElementById('drawer-meta').textContent = `${n.type} · ${MARK[n.status] || ''} ${n.status}${n.date ? ' · ' + n.date : ''}${n.tags && n.tags.length ? ' · #' + n.tags.join(' #') : ''}`
     const article = document.getElementById('note')
     article.innerHTML = '<p class="missing">Loading…</p>'
     let body = null
@@ -347,30 +354,93 @@
     if (ev.key !== 'Enter') return
     const q = searchText()
     if (!q) return
-    const hits = tree.nodes.filter(n => n.name.toLowerCase().includes(q))
+    // search works with the filters: a hidden note is not a hit
+    const hits = tree.nodes.filter(n => shownSet.has(n.id) && n.name.toLowerCase().includes(q))
     if (!hits.length) return
     matchAt = (matchAt + 1) % hits.length
     go(hits[matchAt].id)
   })
+
+  // ---------------------------------------------------------------- filters
+
+  function computeFilters() {
+    matchSet = F.matching(tree, filters)
+    shownSet = F.visible(tree, filters)
+  }
+
+  /** Every change of a filter goes through here: store it, recompute, redraw. */
+  function applyFilters(change) {
+    filters = F.normalise({ ...filters, ...change })
+    store.set('filters', filters)
+    computeFilters()
+    buildLegend()
+    buildFilterPanel()
+    render(true)
+  }
+
+  const toggled = (list, v) => (list.includes(v) ? list.filter(x => x !== v) : [...list, v])
 
   function buildLegend() {
     const box = document.getElementById('statuses')
     box.innerHTML = ''
     for (const s of STATUSES) {
       const row = document.createElement('div')
-      row.className = `row${hiddenStatuses.has(s) ? ' off' : ''}`
+      row.className = `row${filters.hiddenStatuses.includes(s) ? ' off' : ''}`
       row.innerHTML = `<span class="swatch" style="background: var(--${s})"></span>${MARK[s]} ${LABEL[s]}`
-      row.title = 'Click to dim or show this status'
-      row.addEventListener('click', () => {
-        if (hiddenStatuses.has(s)) hiddenStatuses.delete(s)
-        else hiddenStatuses.add(s)
-        store.set('hidden', [...hiddenStatuses])
-        row.classList.toggle('off', hiddenStatuses.has(s))
-        render(false)
-      })
+      row.title = 'Click to filter this status out or back in'
+      row.addEventListener('click', () => applyFilters({ hiddenStatuses: toggled(filters.hiddenStatuses, s) }))
       box.appendChild(row)
     }
   }
+
+  function buildFilterPanel() {
+    const n = F.activeCount(filters)
+    const status = document.getElementById('filter-status')
+    status.hidden = n === 0
+    document.getElementById('filter-count').textContent = `${n} filter${n === 1 ? '' : 's'} active · ${matchSet.size} of ${tree.nodes.length} notes`
+    document.getElementById('filters-toggle').textContent = n ? `Filters (${n})` : 'Filters'
+    document.querySelectorAll('input[name="fmode"]').forEach(r => { r.checked = r.value === filters.mode })
+    document.querySelectorAll('input[data-ftype]').forEach(c => { c.checked = !filters.hiddenTypes.includes(c.dataset.ftype) })
+    document.querySelectorAll('[data-tagmode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.tagmode === filters.tagMode)))
+    document.getElementById('fdate-from').value = filters.from
+    document.getElementById('fdate-to').value = filters.to
+    const sbox = document.getElementById('fstatuses')
+    sbox.innerHTML = ''
+    for (const s of STATUSES) {
+      const label = document.createElement('label')
+      label.innerHTML = `<input type="checkbox"${filters.hiddenStatuses.includes(s) ? '' : ' checked'}> <span class="swatch" style="background: var(--${s})"></span> ${LABEL[s]}`
+      label.querySelector('input').addEventListener('change', () => applyFilters({ hiddenStatuses: toggled(filters.hiddenStatuses, s) }))
+      sbox.appendChild(label)
+    }
+    const tbox = document.getElementById('ftags')
+    tbox.innerHTML = ''
+    const tags = F.tagList(tree)
+    // a selected tag no note carries any more still shows, so it can be cleared
+    for (const t of filters.tags) if (!tags.some(x => x.tag === t)) tags.push({ tag: t, count: 0 })
+    if (!tags.length) tbox.innerHTML = '<p class="muted">No topical tags in the notes yet.</p>'
+    for (const { tag, count } of tags) {
+      const label = document.createElement('label')
+      label.innerHTML = `<input type="checkbox"${filters.tags.includes(tag) ? ' checked' : ''}> ${escH(tag)} <span class="muted">${count}</span>`
+      label.querySelector('input').addEventListener('change', () => applyFilters({ tags: toggled(filters.tags, tag) }))
+      tbox.appendChild(label)
+    }
+  }
+
+  document.querySelectorAll('input[name="fmode"]').forEach(r => r.addEventListener('change', () => applyFilters({ mode: r.value })))
+  document.querySelectorAll('input[data-ftype]').forEach(c => c.addEventListener('change', () => applyFilters({ hiddenTypes: toggled(filters.hiddenTypes, c.dataset.ftype) })))
+  document.querySelectorAll('[data-tagmode]').forEach(b => b.addEventListener('click', () => applyFilters({ tagMode: b.dataset.tagmode })))
+  document.getElementById('fdate-from').addEventListener('change', ev => applyFilters({ from: ev.target.value }))
+  document.getElementById('fdate-to').addEventListener('change', ev => applyFilters({ to: ev.target.value }))
+  document.getElementById('filters-clear').addEventListener('click', () => applyFilters({ ...F.empty(), mode: filters.mode }))
+  const panel = document.getElementById('filters')
+  const togglePanel = open => {
+    panel.hidden = !open
+    document.getElementById('legend').hidden = open
+    document.getElementById('filters-toggle').setAttribute('aria-expanded', String(open))
+    store.set('filtersOpen', open)
+  }
+  document.getElementById('filters-toggle').addEventListener('click', () => togglePanel(panel.hidden))
+  document.getElementById('filters-close').addEventListener('click', () => togglePanel(false))
 
   function syncLayoutButtons() {
     document.querySelectorAll('[data-layout]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.layout === layoutKind)))

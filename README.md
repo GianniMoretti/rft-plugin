@@ -66,6 +66,8 @@ they are (ids, statuses and the next free id are read from the notes).
   |---|---|
   | `rft_add_node` | creates a note with the next free id, a sanitised title (no `^ # \| [ ]`), the template sections, and links it under its parent |
   | `rft_set_status` | changes a status (frontmatter, tag, Status line), optionally appending results or the reason |
+  | `rft_set_tags` | replaces a note's topical tags (lowercase kebab-case), keeping the project, type and status tags |
+  | `rft_tags` | lists the topical tags in use with counts, so Claude reuses them |
   | `rft_tree` | prints the tree or a subtree |
   | `rft_validate` | checks ids, types, statuses, titles, parents, broken wikilinks, derived fields |
   | `rft_sync` | regenerates children / up / down, the index tree and the canvas after hand edits |
@@ -93,11 +95,18 @@ they are (ids, statuses and the next free id are read from the notes).
   Labels show more of the title the closer you zoom.
 - Click a node to read its note in a side drawer; links in the note jump to their node.
   Fold a branch with its **−** / **+** badge or a double-click; **Expand all**, **Collapse all**.
-- Hover a node to highlight its path to the root; **search** (Enter jumps to the next match);
-  click a status in the legend to dim it.
+- Hover a node to highlight its path to the root; **search** (Enter jumps to the next match).
+- **Filters** opens a side panel: topical tags (with counts, matching **any** or **all**), type,
+  status (the same filter as clicking the legend), and a date range. Notes that do not match
+  are dimmed, keeping the tree's shape, or hidden, keeping every ancestor of a match so the tree
+  stays connected. The toolbar shows how many filters are on, with **Clear**.
 - **A−** / **A+** set the size of the labels and the note text.
-- It follows the vault live, and keeps the zoom, layout, folds, filter and text size between
+- It follows the vault live, and keeps the zoom, layout, folds, filters and text size between
   visits.
+
+Every note carries 1–3 **topical tags** besides the project, type and status ones (the manual
+asks Claude to reuse the vocabulary `rft_tags` lists); the tree's `api/tree` JSON lists them with
+their counts.
 
 The server is read-only and listens on `127.0.0.1` only, on a free port (or `webPort` in the
 config). It serves the page, the tree as JSON and the text of one note at a time, read by its
@@ -166,8 +175,8 @@ session with the plugin loaded from this folder.
   the server's lifecycle).
 - `hooks/lib/vault.ts`: the vault model; `hooks/lib/ops.ts` the operations; `hooks/lib/page.ts`
   the standalone page.
-- `web/`: the tree view (`index.html`, `app.js`, `app.css`, vendored d3), one codebase for the
-  live view and `/rft-view`.
+- `web/`: the tree view (`index.html`, `app.js`, `app.css`, `filters.js` for the pure filter
+  logic, vendored d3), one codebase for the live view and `/rft-view`.
 - `server/rft_server.py`: the read-only local server (Python standard library).
 - `skills/rft-manual/SKILL.md`: the manual; `tests/`: the mod's tests on an in-memory vault, the
   outline pane on every surface, and the server's tests.

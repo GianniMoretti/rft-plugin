@@ -3,9 +3,9 @@
 
 import { describe, expect, test } from 'claude-code/testing'
 
-import { addNode, initVault, setStatus } from '../hooks/lib/ops'
+import { addNode, initVault, setStatus, setTags, tagsReport } from '../hooks/lib/ops'
 import { staticPage } from '../hooks/lib/page'
-import { canvasJson, compactTree, front, load, readConfig, sanitiseTitle, sync, validate } from '../hooks/lib/vault'
+import { canvasJson, compactTree, front, load, parseTags, readConfig, sanitiseTag, sanitiseTitle, sync, topicalTags, validate } from '../hooks/lib/vault'
 import { D00, D01, E01, E02, MemoryFs, WEB_FILES, demoFiles } from './fixture'
 
 const loadDemo = async (fs = new MemoryFs(demoFiles())) => {
@@ -126,9 +126,44 @@ describe('vault', () => {
     expect(old.read(`vault/experiments/${E01}.md`)).toBe(files[`vault/experiments/${E01}.md`])
   })
 
+  test('topical tags: read from the frontmatter less the project, type and status tags', async () => {
+    expect(parseTags('[demo, experiment, theory, "Radial rule", done]')).toEqual(['demo', 'experiment', 'theory', 'Radial', 'rule', 'done'])
+    expect(parseTags('#theory #cluster')).toEqual(['theory', 'cluster'])
+    expect(parseTags(undefined)).toEqual([])
+    expect(topicalTags(['demo', 'experiment', 'theory', 'done', 'theory', 'running'], 'demo')).toEqual(['theory'])
+    expect(sanitiseTag(' Radial Rule! ')).toBe('radial-rule')
+    expect(sanitiseTag('#ResNet_18')).toBe('resnet-18')
+    const files = demoFiles()
+    files[`vault/experiments/${E02}.md`] = files[`vault/experiments/${E02}.md`]!.replace('tags: [demo, experiment, running]', 'tags: [demo, experiment, cluster, running]')
+    const { loaded } = await loadDemo(new MemoryFs(files))
+    expect(loaded.tree.nodes.E02!.tags).toEqual(['cluster'])
+    expect(loaded.tree.nodes.E01!.tags).toEqual([])
+  })
+
+  test('a new note carries its topical tags between type and status; set_tags replaces only those', async () => {
+    const { fs, io, loaded } = await loadDemo()
+    const n = await addNode(io, loaded, { type: 'experiment', title: 'Seed sweep', parent: 'D01', date: '2026-02-01', tags: ['Ablation', 'seeds', 'ablation'] })
+    expect(front(fs.read(`vault/${n.path}`)).tags).toBe('[demo, experiment, ablation, seeds, planned]')
+    expect(n.tags).toEqual(['ablation', 'seeds'])
+    const out = await setTags(io, await load(io, loaded.config), 'E03', ['cluster run'])
+    expect(out).toContain('tags cluster-run')
+    expect(front(fs.read(`vault/${n.path}`)).tags).toBe('[demo, experiment, cluster-run, planned]')
+    await setStatus(io, await load(io, loaded.config), 'E03', 'done')
+    expect(front(fs.read(`vault/${n.path}`)).tags).toBe('[demo, experiment, cluster-run, done]')
+    expect(tagsReport(await load(io, loaded.config))).toContain('- cluster-run (1)')
+    expect((await validate(io, await load(io, loaded.config))).warnings).toEqual([])
+  })
+
+  test('the validator warns about a tag that is not lowercase kebab-case', async () => {
+    const files = demoFiles()
+    files[`vault/experiments/${E02}.md`] = files[`vault/experiments/${E02}.md`]!.replace('tags: [demo, experiment, running]', 'tags: [demo, experiment, Big_Tag, running]')
+    const { io, loaded } = await loadDemo(new MemoryFs(files))
+    expect((await validate(io, loaded)).warnings.some(w => w.includes('Big_Tag not lowercase kebab-case'))).toBe(true)
+  })
+
   test('the static page inlines the web view and embeds the tree with every note', async () => {
     const { tree, texts } = (await loadDemo()).loaded
-    const html = staticPage({ html: WEB_FILES['web/index.html']!, css: 'a{}', js: 'go()', d3: 'd3()' }, tree, texts, 'demo', 'v1')
+    const html = staticPage({ html: WEB_FILES['web/index.html']!, css: 'a{}', js: 'go()', d3: 'd3()', filters: 'filt()' }, tree, texts, 'demo', 'v1')
     const data = JSON.parse(/window\.RFT_DATA = (.*?);<\/script>/.exec(html)![1]!)
     expect(data.tree.project).toBe('demo')
     expect(data.tree.roots).toEqual(['D00'])
@@ -136,6 +171,8 @@ describe('vault', () => {
     expect(data.bodies.E02).toContain('Text of E02.')
     expect(data.bodies.E02).not.toContain('status: running')
     expect(html).toContain('<style>a{}</style>')
+    expect(html).toContain('<script>filt()</script>')
+    expect(data.tree.tags).toEqual([])
     expect(html).not.toMatch(/src=|href="app\.css"/)
   })
 

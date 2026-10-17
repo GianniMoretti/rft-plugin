@@ -8,7 +8,7 @@ import type { Config, Io, Loaded, NodeType, RftNode, Tree } from './vault'
 import {
   CONFIG_PATH, DIRECTION_TEMPLATE, EXPERIMENT_TEMPLATE, INDEX, LEGEND, MERMAID, STATUSES, SUBDIR,
   compactTree, counts, defaultConfig, front, indexTemplate, join, load, nextId, noteText, readConfig,
-  resolveId, sanitiseTitle, sync, validate, withChildListed, withStatus, writeConfig,
+  resolveId, sanitiseTitle, sync, tagCounts, validate, withChildListed, withStatus, withTopicalTags, writeConfig,
 } from './vault'
 
 export const today = (now = new Date()) =>
@@ -105,6 +105,7 @@ export type AddInput = {
   date: string
   sections?: Record<string, string>
   code?: string
+  tags?: string[]
 }
 
 export async function addNode(io: Io, loaded: Loaded, input: AddInput): Promise<RftNode & { report: string }> {
@@ -149,6 +150,25 @@ export async function addNode(io: Io, loaded: Loaded, input: AddInput): Promise<
   }
 }
 
+export async function setTags(io: Io, loaded: Loaded, ref: string, tags: string[]): Promise<string> {
+  const id = resolveId(loaded.tree, ref)
+  if (!id) throw new RftError(`"${ref}" is not a note of the tree`)
+  const n = loaded.tree.nodes[id]!
+  const next = withTopicalTags(loaded.texts[id]!, n, loaded.config.project, tags)
+  await io.write(join(loaded.config.vault, n.path), next)
+  const fresh = await load(io, loaded.config)
+  Object.assign(loaded, fresh)
+  const now = fresh.tree.nodes[id]!.tags
+  return `${n.name}: tags ${now.length ? now.join(', ') : '(none)'}${n.tags.join() !== now.join() ? ` (were ${n.tags.join(', ') || 'none'})` : ''}.`
+}
+
+export function tagsReport(loaded: Loaded): string {
+  const list = tagCounts(loaded.tree)
+  return list.length
+    ? `Topical tags in use (reuse these before inventing new ones):\n${list.map(t => `- ${t.tag} (${t.count})`).join('\n')}`
+    : 'No topical tags yet: pick 1-3 short lowercase kebab-case ones per note.'
+}
+
 export async function setStatus(io: Io, loaded: Loaded, ref: string, status: string, note?: string): Promise<string> {
   const id = resolveId(loaded.tree, ref)
   if (!id) throw new RftError(`"${ref}" is not a note of the tree`)
@@ -188,6 +208,7 @@ The reasoning of this research project is kept as a tree of Obsidian notes in \`
 - Before launching an experiment (a training run, a grid, a numerical check, a measurement, a proof, a literature check), create its node first: rft_add_node with type experiment, parent = the direction it tests, status planned or running, and What / Why filled.
 - When it finishes or gives a partial result, write the real numbers in its note (Result, with spread over seeds and what failed; Directions found; Code / data: commit, script, results folder, machine), then rft_set_status. Record only results that were actually obtained, never expected or invented ones.
 - Every new idea or question, from a result, the user or a discussion, even if rejected: rft_add_node with type direction, parent = the note it comes from. Rejected ideas get status discussed; abandoned ones dropped; moved ones moved, with the reason (rft_set_status note).
+- Give every new note 1-3 short topical tags (lowercase kebab-case, e.g. \`theory\`, \`ablation\`), reusing the ones rft_tags lists before inventing new ones; rft_set_tags changes them. Do not retro-tag old notes unless asked.
 - Statuses: ${STATUSES.join(', ')}. Marks: ${LEGEND}.
 - The tools assign ids (never reused) and strip ^ # | [ ] from titles. After editing notes by hand, run rft_sync (children / up / down, 00 Index.md, the canvas) and rft_validate.
 - The rft-manual skill is the full manual; rft_tree shows the current tree.

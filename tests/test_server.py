@@ -17,9 +17,11 @@ import rft_server  # noqa: E402
 WEB = Path(__file__).resolve().parents[1] / "web"
 
 
-def note(nid, kind, status, parent, title):
+def note(nid, kind, status, parent, title, tags=()):
     p = f'"[[{parent}]]"' if parent else '""'
-    return f"---\nid: {nid}\ntype: {kind}\nstatus: {status}\ndate: 2026-01-01\nparent: {p}\n---\n\n# {nid} · {title}\n\nText of {nid}.\n"
+    t = ", ".join(["demo", kind, *tags, status])
+    return (f"---\nid: {nid}\ntype: {kind}\nstatus: {status}\ndate: 2026-01-01\nparent: {p}\ntags: [{t}]\n---\n\n"
+            f"# {nid} · {title}\n\nText of {nid}.\n")
 
 
 class ServerTest(unittest.TestCase):
@@ -31,8 +33,8 @@ class ServerTest(unittest.TestCase):
         (vault / "directions").mkdir(parents=True)
         (vault / "experiments").mkdir()
         (vault / "directions" / "D00 Root question.md").write_text(note("D00", "direction", "done", "", "Root question"))
-        (vault / "experiments" / "E01 First run.md").write_text(note("E01", "experiment", "running", "D00 Root question", "First run"))
-        (vault / "directions" / "D01 Next idea.md").write_text(note("D01", "direction", "idea", "E01 First run", "Next idea"))
+        (vault / "experiments" / "E01 First run.md").write_text(note("E01", "experiment", "running", "D00 Root question", "First run", ("theory", "cluster")))
+        (vault / "directions" / "D01 Next idea.md").write_text(note("D01", "direction", "idea", "E01 First run", "Next idea", ("theory",)))
         # a secret outside the vault, and a note that is a link to it
         (root / "secret.md").write_text(note("E09", "experiment", "done", "D00 Root question", "Secret"))
         os.symlink(root / "secret.md", vault / "experiments" / "E09 Linked out.md")
@@ -70,6 +72,15 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(nodes["D00"]["children"], ["E01", "E09"])
         self.assertEqual(nodes["D01"]["status"], "idea")
         self.assertTrue(tree["version"])
+        # topical tags only: the project, type and status tags are left out
+        self.assertEqual(nodes["E01"]["tags"], ["theory", "cluster"])
+        self.assertEqual(nodes["D00"]["tags"], [])
+        self.assertEqual(tree["tags"], [{"tag": "theory", "count": 2}, {"tag": "cluster", "count": 1}])
+
+    def test_tag_parsing(self):
+        self.assertEqual(rft_server.parse_tags('[demo, "theory", #cluster]'), ["demo", "theory", "cluster"])
+        self.assertEqual(rft_server.topical_tags(["demo", "experiment", "theory", "done", "theory"], "demo"), ["theory"])
+        self.assertEqual(rft_server.parse_tags(None), [])
 
     def test_version_changes_with_the_notes(self):
         before = json.loads(self.get("/api/tree")[2])["version"]

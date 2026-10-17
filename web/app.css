@@ -81,3 +81,18 @@ main { position: relative; flex: 1; min-height: 0; }
   background: var(--panel); border: 1px solid var(--line); max-width: 360px; z-index: 5; }
 @media (max-width: 640px) { #legend { display: none; } #search { min-width: 120px; flex: 1; } }
 #font-size { min-width: 3.4em; text-align: center; align-self: center; font-size: 12px; }
+#filters { position: absolute; top: 0; left: 0; bottom: 0; width: min(280px, 85vw); overflow: auto;
+  background: var(--panel); border-right: 1px solid var(--line); padding: 10px 14px 24px;
+  font-size: calc(13px * var(--font-scale)); z-index: 2; }
+#filters .fhead { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+#filters section { margin: 10px 0; }
+#filters .ftitle { font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; justify-content: space-between; }
+#filters label { display: flex; align-items: center; gap: 6px; padding: 2px 0; cursor: pointer; }
+#filters label.date { justify-content: space-between; }
+#filters input[type="date"] { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line);
+  border-radius: 6px; padding: 2px 6px; color-scheme: dark light; }
+.seg { display: inline-flex; gap: 2px; font-weight: 400; }
+.seg button { padding: 1px 7px; }
+.filter-status { align-self: center; font-size: 12px; color: var(--accent); }
+button.linkish { border: 0; background: none; color: var(--accent); padding: 0; text-decoration: underline; }
+#filters-toggle[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }

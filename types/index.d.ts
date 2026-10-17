@@ -10,6 +10,7 @@ export type RftNodeState = {
   parent: string | null
   children: string[]
   path: string
+  tags: string[]
 }
 
 /** The tree as last read from the vault; `null` until the session has looked. */

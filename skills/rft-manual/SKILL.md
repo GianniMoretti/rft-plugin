@@ -42,18 +42,31 @@ children / up / down fields are derived from their `parent:` field by the rft to
   of t", not "t^p". `rft_add_node` sanitises titles, but choose clean ones.
 - IDs are assigned by `rft_add_node` and **never reused**, even when a note is dropped.
 
+## Topical tags
+
+Besides the project, type and status tags (added by the tools), every new note gets **1–3 short
+topical tags**: what it is about, so the tree view can filter by them (`theory`, `ablation`,
+`literature`, `cluster`, `radius`).
+
+- Lowercase kebab-case: `radial-rule`, not `Radial rule` or `radial_rule` (the tools convert).
+- **Reuse the vocabulary**: call `rft_tags` first and pick existing tags when they fit; invent
+  a new one only for a genuinely new topic. Prefer a few broad tags over many narrow ones.
+- Pass them as `tags` to `rft_add_node`; change them later with `rft_set_tags` (it replaces the
+  topical tags and keeps the project, type and status ones).
+- Do not retro-tag existing notes unless the user asks.
+
 ## When to create and update nodes
 
 1. **Before launching an experiment**, create its node: `rft_add_node` with `type: experiment`,
-   `parent` = the direction it tests, `status` `planned` (or `running` if it starts now), and
-   `what` / `why` filled. Do this *before* starting the run, not after.
+   `parent` = the direction it tests, `status` `planned` (or `running` if it starts now),
+   `what` / `why` filled and its topical `tags`. Do this *before* starting the run, not after.
 2. **When it finishes or gives a partial result**: edit its note to fill **Result** (numbers with
    spread over seeds, what failed and why, caveats), **Directions found**, and **Code / data**
    (commit, script, results folder, machine); then `rft_set_status` (`done`, or keep `running`
    for partial results). The `note` argument appends to Result.
 3. **When a new idea or question comes up** (from a result, the user, a discussion), even if it
    is rejected at once: `rft_add_node` with `type: direction` and `parent` = the note it comes
-   from. A rejected idea gets status `discussed`.
+   from, and its topical `tags`. A rejected idea gets status `discussed`.
 4. **When an idea is dropped or moved**: `rft_set_status` with `dropped` or `moved` and a `note`
    saying why, or where it went.
 5. **Record real results only.** Never write expected, invented or rounded-up numbers; if a run
@@ -67,6 +80,8 @@ children / up / down fields are derived from their `parent:` field by the rft to
 |---|---|
 | `rft_add_node` | create a note (next free id, sanitised title, template sections, linked under its parent) |
 | `rft_set_status` | change a status, optionally appending real results or the reason |
+| `rft_set_tags` | replace a note's topical tags |
+| `rft_tags` | the topical tags in use, with counts: check before inventing one |
 | `rft_tree` | the current tree, or the subtree of one node (`root`, `depth`) |
 | `rft_validate` | errors (bad ids, statuses, titles, missing parents, broken links) and warnings |
 | `rft_sync` | regenerate children / up / down, the tree in `00 Index.md`, the canvas |
@@ -78,7 +93,8 @@ error. Never edit `up:` / `down:` by hand, nor the list under `## The tree` in t
 ## Note layout
 
 Frontmatter: `id`, `type` (`experiment` | `direction`), `status`, `date` (YYYY-MM-DD),
-`parent: "[[<parent name>]]"` (`""` for the root), `children`, `up`, `down`, `tags`. Body:
+`parent: "[[<parent name>]]"` (`""` for the root), `children`, `up`, `down`,
+`tags: [<project>, <type>, <topical tags...>, <status>]`. Body:
 `# <ID> · <Title>`, the Parent / Status / Date lines (and Code / data for experiments), then the
 sections — experiments: What, Why, Result, Directions found; directions: Idea, Why, Status —
 and last **Children in the tree**, a list of links to the children.

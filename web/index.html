@@ -27,6 +27,10 @@
     <span id="font-size" class="muted" title="Text size">100 %</span>
     <button id="font-up" title="Larger text">A+</button>
   </div>
+  <div class="group">
+    <button id="filters-toggle" aria-expanded="false" aria-controls="filters">Filters</button>
+    <span id="filter-status" class="filter-status" hidden><span id="filter-count"></span> · <button id="filters-clear" class="linkish">Clear</button></span>
+  </div>
   <input id="search" type="search" placeholder="Search notes (Enter: next)" autocomplete="off" spellcheck="false">
 </header>
 <main>
@@ -39,6 +43,34 @@
     <div class="row"><span class="ring ring-experiment"></span>Experiment (E..)</div>
     <div class="hint muted">Drag to pan, scroll to zoom. Click a node to read it, double-click or ± to fold.</div>
   </aside>
+  <aside id="filters" hidden aria-label="Filters">
+    <div class="fhead"><strong>Filters</strong><button id="filters-close" title="Close">✕</button></div>
+    <section>
+      <div class="ftitle">Notes that do not match are</div>
+      <label><input type="radio" name="fmode" value="dim"> dimmed (the tree keeps its shape)</label>
+      <label><input type="radio" name="fmode" value="hide"> hidden (their ancestors stay)</label>
+    </section>
+    <section>
+      <div class="ftitle">Type</div>
+      <label><input type="checkbox" data-ftype="direction"> <span class="ring ring-direction"></span> Directions (D..)</label>
+      <label><input type="checkbox" data-ftype="experiment"> <span class="ring ring-experiment"></span> Experiments (E..)</label>
+    </section>
+    <section>
+      <div class="ftitle">Status</div>
+      <div id="fstatuses"></div>
+    </section>
+    <section>
+      <div class="ftitle">Tags
+        <span class="seg" role="group" aria-label="Match"><button data-tagmode="any" title="Notes with any selected tag">any</button><button data-tagmode="all" title="Notes with every selected tag">all</button></span>
+      </div>
+      <div id="ftags"></div>
+    </section>
+    <section>
+      <div class="ftitle">Date</div>
+      <label class="date">From <input type="date" id="fdate-from"></label>
+      <label class="date">To <input type="date" id="fdate-to"></label>
+    </section>
+  </aside>
   <aside id="drawer" hidden>
     <div class="drawer-head">
       <span id="drawer-meta" class="muted"></span>
@@ -49,6 +81,7 @@
 </main>
 <div id="tooltip" hidden></div>
 <script src="vendor/d3.v7.9.0.min.js" data-rft-inline></script>
+<script src="filters.js" data-rft-inline></script>
 <script src="app.js" data-rft-inline></script>
 </body>
 </html>
