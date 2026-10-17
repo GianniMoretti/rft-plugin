@@ -4,6 +4,7 @@
   --direction: #9775fa; --experiment: #20c997;
   --done: #40c057; --running: #fd7e14; --planned: #fab005; --idea: #ffe066;
   --dropped: #fa5252; --discussed: #868e96; --moved: #4dabf7;
+  --font-scale: 1;
 }
 @media (prefers-color-scheme: light) {
   :root {
@@ -48,7 +49,7 @@ main { position: relative; flex: 1; min-height: 0; }
   stroke-linejoin: round; pointer-events: none; }
 .node .fold { cursor: pointer; }
 .node .fold circle { fill: var(--panel); stroke: var(--muted); stroke-width: 1px; }
-.node .fold text { fill: var(--fg); font-size: 10px; text-anchor: middle; dominant-baseline: central;
+.node .fold text { fill: var(--fg); font-size: 11px; text-anchor: middle; dominant-baseline: central;
   pointer-events: none; }
 .node.dim, .link.dim { opacity: 0.15; }
 .node.hl text.label { font-weight: 700; }
@@ -63,11 +64,12 @@ main { position: relative; flex: 1; min-height: 0; }
 .ring-direction { border-color: var(--direction); }
 .ring-experiment { border-color: var(--experiment); }
 .hint { margin-top: 6px; }
-#drawer { position: absolute; top: 0; right: 0; bottom: 0; width: min(460px, 92vw); overflow: auto;
-  background: var(--panel); border-left: 1px solid var(--line); padding: 10px 16px 24px; }
+#drawer { position: absolute; top: 0; right: 0; bottom: 0; width: min(calc(480px * var(--font-scale)), 92vw);
+  overflow: auto; background: var(--panel); border-left: 1px solid var(--line); padding: 10px 16px 24px;
+  font-size: calc(14.5px * var(--font-scale)); line-height: 1.55; }
 .drawer-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-#note h1 { font-size: 16px; margin: 8px 0; }
-#note h2 { font-size: 14px; margin: 14px 0 4px; }
+#note h1 { font-size: 1.25em; margin: 8px 0; }
+#note h2 { font-size: 1.08em; margin: 14px 0 4px; }
 #note a { color: var(--accent); cursor: pointer; text-decoration: none; }
 #note a:hover { text-decoration: underline; }
 #note code { background: var(--bg); padding: 0 3px; border-radius: 4px; }
@@ -75,6 +77,7 @@ main { position: relative; flex: 1; min-height: 0; }
 #note table { border-collapse: collapse; }
 #note td { border: 1px solid var(--line); padding: 2px 6px; }
 #note .missing { color: var(--muted); }
-#tooltip { position: fixed; pointer-events: none; padding: 4px 8px; border-radius: 6px; font-size: 12px;
+#tooltip { position: fixed; pointer-events: none; padding: 4px 8px; border-radius: 6px; font-size: calc(13px * var(--font-scale));
   background: var(--panel); border: 1px solid var(--line); max-width: 360px; z-index: 5; }
 @media (max-width: 640px) { #legend { display: none; } #search { min-width: 120px; flex: 1; } }
+#font-size { min-width: 3.4em; text-align: center; align-self: center; font-size: 12px; }

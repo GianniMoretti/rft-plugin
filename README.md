@@ -70,18 +70,22 @@ they are (ids, statuses and the next free id are read from the notes).
   | `rft_validate` | checks ids, types, statuses, titles, parents, broken wikilinks, derived fields |
   | `rft_sync` | regenerates children / up / down, the index tree and the canvas after hand edits |
 
-- **The outline pane** opens as a sidebar where the surface docks panes (turn this off with the
-  `autoOpen` option), or with `/rft`: an indented, coloured outline of the tree, the same on
+- **The outline pane** opens as a sidebar at session start in the terminal and VS Code where the
+  surface docks panes (turn this off with the `autoOpen` option), and with `/rft list`: an indented, coloured outline of the tree, the same on
   the desktop app, VS Code and the terminal. Click a node to read its note, ▾ / ▸ to fold a
   branch. It refreshes by itself when notes change, whoever changed them, and shows the tree
   view's address while its server runs.
 
 ### The tree view
 
-`/rft` also starts a small local server and prints its address, e.g.
-`http://127.0.0.1:41234/`. Open it in the **desktop app's built-in browser**: press
-**Ctrl+Shift+B** (**Cmd+Shift+B** on macOS), or click the globe icon in the side panel, then
-paste the address in its address bar. Any browser on the same machine works too.
+`/rft` also starts a small local server for the interactive tree view.
+
+- **On the desktop app** it opens the view in the app's built-in browser pane by itself, reusing
+  the tab already on it (if the pane is hidden, press **Ctrl+Shift+B**, **Cmd+Shift+B** on
+  macOS). If the browser pane cannot be reached, it prints the address and opens the outline
+  pane instead.
+- **In the terminal and elsewhere** it prints the address, e.g. `http://127.0.0.1:41234/`, and
+  opens the outline pane. Open the address in any browser on the same machine.
 
 - A tidy tree, **top-down**, **left-right** or **radial** (never a force layout): circles
   filled by status and ringed by type, arrows from parent to child.
@@ -91,7 +95,9 @@ paste the address in its address bar. Any browser on the same machine works too.
   Fold a branch with its **−** / **+** badge or a double-click; **Expand all**, **Collapse all**.
 - Hover a node to highlight its path to the root; **search** (Enter jumps to the next match);
   click a status in the legend to dim it.
-- It follows the vault live, and keeps the zoom, layout, folds and filter between visits.
+- **A−** / **A+** set the size of the labels and the note text.
+- It follows the vault live, and keeps the zoom, layout, folds, filter and text size between
+  visits.
 
 The server is read-only and listens on `127.0.0.1` only, on a free port (or `webPort` in the
 config). It serves the page, the tree as JSON and the text of one note at a time, read by its
@@ -109,7 +115,8 @@ d3 (ISC licence, `web/vendor/LICENSE-d3.txt`) is bundled, so the page needs no n
 
 | command | does |
 |---|---|
-| `/rft` | start (or reuse) the tree view server, print its address, open the outline pane |
+| `/rft` | start (or reuse) the tree view server and show it: in the desktop's browser pane, else print its address and open the outline pane |
+| `/rft list` | open the outline pane |
 | `/rft stop` | stop the tree view server |
 | `/rft text` | print the tree in the transcript |
 | `/rft-init [starting question]` | activate RFT here and create (or adopt) the vault |

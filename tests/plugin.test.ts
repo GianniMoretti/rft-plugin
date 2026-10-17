@@ -185,6 +185,76 @@ describe('web view', () => {
     expect(srv.state.isRunning).toBe(false)
   })
 
+  test('on the desktop /rft opens the tree view in the browser pane, not the outline pane', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, demoFiles(), { surfaces: ['desktop'] })
+    fakeServer(on)
+    const calls: { tool: string; args: Record<string, unknown> }[] = []
+    on('mcp.call', (_$, e) => {
+      calls.push({ tool: e.tool, args: e.args })
+      expect(e.server).toBe('Claude_Browser')
+      const text = e.tool === 'tabs_context'
+        ? JSON.stringify({ browserOpen: true, tabs: [{ tabId: 'tab-1', origin: 'https://example.org', isActive: true }] }) + '\nThe Browser pane is currently displayed.'
+        : 'ok'
+      return { value: { content: [{ type: 'text', text }], isError: false } }
+    })
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    expect(w.opened).toEqual([])
+    const res = await $.command.run(RUN(''))
+    expect(res.text).toContain('Tree view opened in the browser pane: http://127.0.0.1:5555/')
+    expect(calls.map(c => c.tool)).toEqual(['tabs_context', 'preview_start'])
+    expect(calls[1]!.args).toEqual({ url: 'http://127.0.0.1:5555/' })
+    expect(w.opened).toEqual([])
+    const list = await $.command.run(RUN('list'))
+    expect(list.text).toContain('Outline pane opened')
+    expect(w.opened).toEqual(['rft-tree'])
+  })
+
+  test('on the desktop a tab already on the tree view is reused, and a hidden pane is pointed out', async ($, on) => {
+    mock.clock(on)
+    world(on, demoFiles(), { surfaces: ['desktop'] })
+    fakeServer(on)
+    const calls: { tool: string; args: Record<string, unknown> }[] = []
+    on('mcp.call', (_$, e) => {
+      calls.push({ tool: e.tool, args: e.args })
+      const text = e.tool === 'tabs_context'
+        ? JSON.stringify({ browserOpen: true, tabs: [{ tabId: 'tab-7', origin: 'http://127.0.0.1:5555', isActive: false }] }, null, 2) + '\nThe Browser pane is currently hidden.'
+        : 'ok'
+      return { value: { content: [{ type: 'text', text }], isError: false } }
+    })
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const res = await $.command.run(RUN(''))
+    expect(calls.map(c => c.tool)).toEqual(['tabs_context', 'navigate', 'tabs_select'])
+    expect(calls[1]!.args).toEqual({ url: 'http://127.0.0.1:5555/', tabId: 'tab-7' })
+    expect(res.text).toContain('shown again')
+    expect(res.text).toContain('Ctrl+Shift+B')
+  })
+
+  test('on the desktop without a browser pane it falls back to the address and the outline pane', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, demoFiles(), { surfaces: ['desktop'] })
+    fakeServer(on)
+    on('mcp.call', () => { throw new Error('no MCP server named Claude_Browser') })
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const res = await $.command.run(RUN(''))
+    expect(res.text).toContain('Tree view: http://127.0.0.1:5555/')
+    expect(res.text).toContain('could not be opened automatically')
+    expect(w.opened).toEqual(['rft-tree'])
+  })
+
+  test('in the terminal /rft prints the address and opens the outline pane, without the browser', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, demoFiles(), { surfaces: ['terminal'] })
+    fakeServer(on)
+    const calls: string[] = []
+    on('mcp.call', (_$, e) => { calls.push(e.tool); return { value: { content: [], isError: false } } })
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    expect(w.opened).toEqual(['rft-tree'])
+    const res = await $.command.run(RUN(''))
+    expect(res.text).toContain('Tree view: http://127.0.0.1:5555/')
+    expect(calls).toEqual([])
+  })
+
   test('without python3 it tries python, and without either it says what is needed', async ($, on) => {
     mock.clock(on)
     world(on, demoFiles())

@@ -1,6 +1,6 @@
 {
   "name": "rft",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Reasoning Flow Tree: keep a research project's experiments and ideas as an Obsidian-compatible tree of notes, shown live as an interactive tree in the browser and an outline pane.",
   "author": { "name": "Gianni Moretti" },
   "homepage": "https://github.com/GianniMoretti/rft-plugin",
@@ -13,7 +13,7 @@
       "type": "boolean",
       "default": true,
       "title": "Open the tree pane at session start",
-      "description": "Open the tree pane at session start in projects where RFT is active (only where the surface docks it as a sidebar)."
+      "description": "Open the outline pane at session start in projects where RFT is active (only where the surface docks it as a sidebar; not on the desktop app, which shows the tree view in its browser pane)."
     }
   }
 }

@@ -9,8 +9,9 @@
   const MARK = { done: '✓', running: '…', planned: '→', idea: '?', dropped: '✗', discussed: '·', moved: '↗' }
   const LABEL = { done: 'done', running: 'running', planned: 'planned', idea: 'idea', dropped: 'dropped', discussed: 'discussed, not pursued', moved: 'moved' }
   const R = 7 // node radius
-  const SPACING = { td: [130, 96], lr: [30, 250], radial: [0, 130] } // [breadth, depth] in world units
-  const LABEL_PX = 12 // label size on screen, whatever the zoom
+  const SPACING = { td: [150, 104], lr: [34, 280], radial: [0, 140] } // [breadth, depth] in world units
+  const LABEL_PX = 15 // label size on screen at A 100 %, whatever the zoom
+  const FONT_STEPS = [0.7, 0.8, 0.9, 1, 1.1, 1.25, 1.4, 1.6, 1.8, 2]
   const POLL_MS = 2000
   const EMBED = window.RFT_DATA || null
 
@@ -23,6 +24,7 @@
   let matchAt = -1
   let positions = new Map()
   let hasView = false
+  let font = 1 // the A− / A+ scale of labels and the note drawer
 
   // ---------------------------------------------------------------- persistence
 
@@ -60,6 +62,7 @@
       layoutKind = store.get('layout', 'td')
       collapsed = new Set(store.get('collapsed', []))
       hiddenStatuses = new Set(store.get('hidden', []))
+      setFont(store.get('font', 1), false)
       document.title = `${tree.project} · reasoning tree`
       document.getElementById('title').textContent = `${tree.project} — the reasoning tree`
       buildLegend()
@@ -225,9 +228,10 @@
   }
 
   function updateLabels() {
-    const size = LABEL_PX / k
+    const px = LABEL_PX * font
+    const size = px / k
     const room = layoutKind === 'td' ? SPACING.td[0] * 1.15 : layoutKind === 'lr' ? SPACING.lr[1] - 30 : SPACING.radial[1] - 20
-    const chars = Math.floor((room * k) / (LABEL_PX * 0.56))
+    const chars = Math.floor((room * k) / (px * 0.56))
     gNodes.selectAll('g.node').each(function (n) {
       const d = n.data
       const text = d3.select(this).select('text.label')
@@ -379,6 +383,17 @@
     render(true)
     setTimeout(() => fit(true), 420)
   }))
+  function setFont(value, save = true) {
+    const v = Number(value)
+    font = FONT_STEPS.reduce((a, b) => (Math.abs(b - v) < Math.abs(a - v) ? b : a), 1)
+    document.documentElement.style.setProperty('--font-scale', String(font))
+    document.getElementById('font-size').textContent = `${Math.round(font * 100)} %`
+    if (save) store.set('font', font)
+    scheduleLabels()
+  }
+  const stepFont = d => setFont(FONT_STEPS[Math.max(0, Math.min(FONT_STEPS.length - 1, FONT_STEPS.indexOf(font) + d))])
+  document.getElementById('font-down').addEventListener('click', () => stepFont(-1))
+  document.getElementById('font-up').addEventListener('click', () => stepFont(1))
   document.getElementById('fit').addEventListener('click', () => fit(true))
   document.getElementById('centre').addEventListener('click', () => tree && tree.roots[0] && centreOn(tree.roots[0]))
   document.getElementById('expand').addEventListener('click', () => { collapsed.clear(); store.set('collapsed', []); render(true) })

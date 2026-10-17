@@ -109,7 +109,7 @@ export type World = { fs: MemoryFs; tools: string[]; opened: string[]; commands:
 
 /** Answers everything the plugin asks of the session from memory. */
 /** `refuse` names commands the engine refuses to register, as it refuses a skill's name. */
-export function world(on: On, files: Record<string, string>, opts: { refuse?: string[] } = {}): World {
+export function world(on: On, files: Record<string, string>, opts: { refuse?: string[]; surfaces?: string[] } = {}): World {
   const w: World = { fs: new MemoryFs(files), tools: [], opened: [], commands: [], seen: [], toasts: [] }
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.cwd', () => ({ value: CWD }))
@@ -123,6 +123,8 @@ export function world(on: On, files: Record<string, string>, opts: { refuse?: st
     return { value: { command: e.name } }
   })
   on('ui.toast', (_$, e) => { w.toasts.push(JSON.stringify(e)); return { value: undefined } })
+  on('session.surfaces', () => ({ value: (opts.surfaces ?? ['terminal']) as never }))
+  on('ui.log', () => ({ value: undefined }))
   on('tool.register', (_$, e) => { w.tools.push(e.name); return { value: { tool: `mcp__rft__${e.name}` } } })
   on('ui.open', (_$, e) => { w.opened.push(e.id); return { value: { isPlaced: true as const } } })
   return w

@@ -173,7 +173,7 @@ async function registerCommands($: EngineInterface): Promise<void> {
   const attempt = async (name: string, run: () => Promise<unknown>) => {
     try { await run() } catch (err) { failed.push(`/${name} (${message(err)})`) }
   }
-  await attempt('rft', () => $.command.register({ name: 'rft', description: 'Open the interactive tree view and the outline pane (/rft text prints it, /rft stop stops the server)', argumentHint: '[text|stop]' }))
+  await attempt('rft', () => $.command.register({ name: 'rft', description: 'Open the interactive tree view (/rft list: the outline pane, /rft text: print it, /rft stop: stop the server)', argumentHint: '[list|text|stop]' }))
   await attempt('rft-init', () => $.command.register({ name: 'rft-init', description: 'Activate the Reasoning Flow Tree in this project and create its vault', argumentHint: '[starting question]' }))
   await attempt('rft-view', () => $.command.register({ name: 'rft-view', description: 'Write a standalone HTML view of the tree to <vault>/tree.html' }))
   if (failed.length) reportFailures($, failed)
@@ -306,7 +306,7 @@ async function spawnServer($: EngineInterface, argv: string[]): Promise<string> 
     }
     if (server?.stop === stop) {
       server = null
-      await update($, webUrl, () => null)
+      try { await update($, webUrl, () => null) } catch { /* the session is gone */ }
     }
   })()
   const stop = () => { void child.return?.(undefined as never) }
@@ -331,6 +331,66 @@ async function stopServer($: EngineInterface): Promise<boolean> {
   return was !== null
 }
 
+// ---------------------------------------------------------------- the desktop's browser pane
+
+// the desktop app serves its built-in browser to the session as this MCP server
+const BROWSER = 'Claude_Browser'
+
+type BrowserOpen = { isOpened: true; isReused: boolean; isHidden: boolean } | { isOpened: false; why: string }
+
+const textOf = (r: { content?: readonly { type: string; text?: string }[] }) =>
+  (r.content ?? []).map(b => (b.type === 'text' ? b.text ?? '' : '')).join('\n')
+
+/** The tabs `tabs_context` lists: its JSON, then a line saying whether the pane shows. */
+function parseTabs(text: string): { tabs: { tabId: string; origin: string }[]; isHidden: boolean } {
+  let tabs: { tabId: string; origin: string }[] = []
+  try {
+    const json = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)) as { tabs?: { tabId: string; origin: string }[] }
+    tabs = (json.tabs ?? []).filter(t => typeof t.tabId === 'string' && typeof t.origin === 'string')
+  } catch { /* no tabs we can read: open a new one */ }
+  return { tabs, isHidden: /hidden|not open/i.test(text.slice(text.lastIndexOf('}') + 1)) }
+}
+
+/**
+ * Shows the tree view in the desktop's browser pane: the tab already on it when there is one,
+ * else a new tab. Resolves why not when the session has no browser pane or a call fails.
+ */
+async function openInBrowser($: EngineInterface, url: string): Promise<BrowserOpen> {
+  const origin = url.replace(/\/+$/, '')
+  try {
+    let found: { tabId: string } | undefined
+    let isHidden = false
+    try {
+      const ctx = await $.mcp.call(BROWSER, 'tabs_context', {})
+      if (!ctx.isError) {
+        const parsed = parseTabs(textOf(ctx))
+        found = parsed.tabs.find(t => t.origin.replace(/\/+$/, '') === origin)
+        isHidden = parsed.isHidden
+      }
+    } catch { /* tabs_context missing: preview_start still opens a tab */ }
+    if (found) {
+      const nav = await $.mcp.call(BROWSER, 'navigate', { url, tabId: found.tabId })
+      if (nav.isError) throw new Error(textOf(nav) || 'navigate failed')
+      const front = await $.mcp.call(BROWSER, 'tabs_select', { tabId: found.tabId })
+      if (front.isError) throw new Error(textOf(front) || 'tabs_select failed')
+      return { isOpened: true, isReused: true, isHidden }
+    }
+    const opened = await $.mcp.call(BROWSER, 'preview_start', { url })
+    if (opened.isError) throw new Error(textOf(opened) || 'preview_start failed')
+    return { isOpened: true, isReused: false, isHidden: false }
+  } catch (err) {
+    return { isOpened: false, why: message(err) }
+  }
+}
+
+async function isOnDesktop($: EngineInterface): Promise<boolean> {
+  try {
+    return (await $.session.surfaces()).includes('desktop')
+  } catch {
+    return false
+  }
+}
+
 const webHelp = (url: string) => {
   const port = /:(\d+)\//.exec(url)?.[1] ?? '<port>'
   return [
@@ -350,7 +410,8 @@ export const register: Register = (on, options) => {
     if (!server) await update($, webUrl, () => null)
     let isActive = false
     try { isActive = (await readConfig(ioOf($))) !== null } catch { /* treated as inactive */ }
-    if (isActive) await activate($, options.autoOpen !== false)
+    // the desktop shows the tree view in its browser pane (/rft); the outline opens on asking
+    if (isActive) await activate($, options.autoOpen !== false && !(await isOnDesktop($)))
 
     return next(e)
   })
@@ -378,12 +439,37 @@ export const register: Register = (on, options) => {
     const s = await refresh($, true)
     if (!s) return { text: NOT_ACTIVE }
     if (arg === 'text') return { text: treeReport(await loadActive(ioOf($))) }
-    void $.ui.open({ id: PANE, title: TITLE, focus: true }).catch(() => undefined)
+    const openList = () => { void $.ui.open({ id: PANE, title: TITLE, focus: true }).catch(() => undefined) }
+    if (arg === 'list') {
+      openList()
+      return { text: 'Outline pane opened.' }
+    }
+    let url: string
     try {
-      return { text: webHelp(await startServer($)) }
+      url = await startServer($)
     } catch (err) {
+      openList()
       return { text: `The outline is in the pane, but the tree view could not start: ${message(err)}.\n/rft-view writes a standalone vault/tree.html instead.` }
     }
+    // on the desktop the tree view opens in the app's own browser pane; elsewhere the outline
+    // pane opens and the address is printed
+    if (await isOnDesktop($)) {
+      const shown = await openInBrowser($, url)
+      if (shown.isOpened) {
+        return {
+          text: [
+            `Tree view ${shown.isReused ? 'shown again' : 'opened'} in the browser pane: ${url}`,
+            shown.isHidden ? 'The browser pane is hidden: press Ctrl+Shift+B (Cmd+Shift+B on macOS) to show it.' : '',
+            '/rft list opens the outline pane; /rft stop stops the server.',
+          ].filter(Boolean).join('\n'),
+        }
+      }
+      $.ui.log(`rft: could not open the browser pane (${shown.why}); showing the address instead`, { to: 'debug' })
+      openList()
+      return { text: `${webHelp(url)}\n(The browser pane could not be opened automatically: ${shown.why}.)` }
+    }
+    openList()
+    return { text: webHelp(url) }
   })
 
   on('command.run', { command: 'rft-init' }, async ($, e) => {
