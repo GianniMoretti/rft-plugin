@@ -1,0 +1,19 @@
+{
+  "name": "rft",
+  "version": "0.1.0",
+  "description": "Reasoning Flow Tree: keep a research project's experiments and ideas as an Obsidian-compatible tree of notes, shown live in a pane.",
+  "author": { "name": "Gianni Moretti" },
+  "homepage": "https://github.com/GianniMoretti/rft-plugin",
+  "repository": "https://github.com/GianniMoretti/rft-plugin",
+  "license": "MIT",
+  "keywords": ["research", "experiments", "obsidian", "tree", "notes"],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "autoOpen": {
+      "type": "boolean",
+      "default": true,
+      "title": "Open the tree pane at session start",
+      "description": "Open the tree pane at session start in projects where RFT is active (only where the surface docks it as a sidebar)."
+    }
+  }
+}

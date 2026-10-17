@@ -1,0 +1,13 @@
+{
+  "name": "rft-plugin",
+  "owner": { "name": "Gianni Moretti" },
+  "metadata": { "description": "Reasoning Flow Tree: a live tree of a research project's experiments and ideas." },
+  "plugins": [
+    {
+      "name": "rft",
+      "source": "./",
+      "description": "Keep a research project's experiments and ideas as an Obsidian-compatible tree of notes, shown live in a pane.",
+      "category": "productivity"
+    }
+  ]
+}
