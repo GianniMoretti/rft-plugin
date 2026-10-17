@@ -92,6 +92,12 @@ export type SvgOptions = {
   selected?: string | null
   /** Adds `data-id` and a pointer cursor on every node (the HTML export's script reads it). */
   isScripted?: boolean
+  /**
+   * The size to draw at, in pixels; the drawing is scaled into it (viewBox, proportions kept).
+   * Absent: the layout's own size. The markup carries the size itself, so a surface that
+   * draws the SVG at the markup's size (a sandboxed frame) shows all of it.
+   */
+  size?: { width: number; height: number }
 }
 
 export function treeSvg(tree: Tree, opts: SvgOptions = {}): { svg: string; layout: Layout } {
@@ -100,7 +106,7 @@ export function treeSvg(tree: Tree, opts: SvgOptions = {}): { svg: string; layou
   const { nodeW: w, nodeH: h } = L
   const pos = new Map(L.boxes.map(b => [b.id, b]))
   const parts: string[] = [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${L.width} ${L.height}" width="${L.width}" height="${L.height}" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif">`,
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${L.width} ${L.height}" width="${opts.size?.width ?? L.width}" height="${opts.size?.height ?? L.height}" preserveAspectRatio="xMidYMid meet" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif">`,
     '<g fill="none" stroke="#9aa0a6" stroke-width="1.4">',
   ]
   for (const [p, c] of L.edges) {
@@ -144,7 +150,7 @@ export function treeSvg(tree: Tree, opts: SvgOptions = {}): { svg: string; layou
 }
 
 /** The size that fits the whole layout in a box, keeping its proportions (at most twice its own). */
-export function fitSize(L: Layout, boxW: number, boxH: number, maxScale = 2): { width: number; height: number } {
-  const scale = Math.min(boxW / L.width, boxH / L.height, maxScale)
+export function fitSize(L: Layout, boxW: number, boxH?: number, maxScale = 2): { width: number; height: number } {
+  const scale = Math.min(boxW / L.width, boxH && boxH > 0 ? boxH / L.height : Infinity, maxScale)
   return { width: Math.max(1, Math.round(L.width * scale)), height: Math.max(1, Math.round(L.height * scale)) }
 }

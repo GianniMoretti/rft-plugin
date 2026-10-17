@@ -8,7 +8,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { RftSnapshot } from '../types'
 import { addNode, exportHtml, initVault, loadActive, rulesText, setStatus, today, treeReport } from './lib/ops'
-import { fitSize, treeSvg } from './lib/svg'
+import { fitSize, layout as layoutTree, treeSvg } from './lib/svg'
 import type { Config, Io, NodeType, Tree } from './lib/vault'
 import { LEGEND, MARK, bodyOf, counts, join, readConfig, signatureOf, sync, validate, walk } from './lib/vault'
 
@@ -465,13 +465,15 @@ export const register: Register = (on, options) => {
 
     // the tree fills the pane: its room in cells, less the header and an open note, in pixels
     const { Svg } = ui
-    const bodyRows = e.props.scroll?.bodyRows || e.viewport?.rows || 40
+    // fitted to what the surface measured: the body's columns, and its rows when it says
+    // (else the whole surface's, less a margin); unmeasured, the drawing's own size
+    const measuredCols = e.props.bodyColumns > 0 ? e.props.bodyColumns : (e.viewport?.columns ?? 0)
+    const measuredRows = (e.props.scroll?.bodyRows ?? 0) > 0 ? e.props.scroll!.bodyRows : Math.max(0, (e.viewport?.rows ?? 0) - 6)
     const headerRows = 2 + (s.error ? 1 : 0) + (s.problems.length ? 1 : 0) + (hasSelect ? 1 : 0)
-    const treeRows = Math.max(8, Math.floor((bodyRows - headerRows) / (detail ? 2 : 1)) - 1)
-    const { svg, layout } = treeSvg(tree, { collapsed: folded, orientation: orient, selected: sel })
-    const size = z === 'full'
-      ? { width: layout.width, height: layout.height }
-      : fitSize(layout, cols * CELL_W, treeRows * CELL_H)
+    const treeRows = measuredRows > 0 ? Math.max(8, Math.floor((measuredRows - headerRows) / (detail ? 2 : 1)) - 1) : 0
+    const natural = layoutTree(tree, folded, orient)
+    const size = z === 'fit' && measuredCols > 0 ? fitSize(natural, measuredCols * CELL_W, treeRows * CELL_H) : undefined
+    const { svg } = treeSvg(tree, { collapsed: folded, orientation: orient, selected: sel, size })
     const picker = hasSelect && e.surface !== 'mobile'
       ? (() => {
           const { Select } = ui
@@ -486,7 +488,7 @@ export const register: Register = (on, options) => {
         {header}
         {picker}
         {svg.length < 130000
-          ? <Svg source={svg} alt={`The reasoning tree: ${c.direction ?? 0} directions, ${c.experiment ?? 0} experiments`} isInteractive {...size} />
+          ? <Svg source={svg} alt={`The reasoning tree: ${c.direction ?? 0} directions, ${c.experiment ?? 0} experiments`} isInteractive {...(size ?? { width: natural.width, height: natural.height })} />
           : <Text dimColor>The tree is too large to draw: fold some branches, or use the list.</Text>}
         {detail}
       </Box>

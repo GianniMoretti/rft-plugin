@@ -171,6 +171,31 @@ describe('pane', () => {
     await again.unmount()
   })
 
+  test('the tree draws whole whatever the desktop measures: the markup carries the drawn size', async ($, on) => {
+    mock.clock(on)
+    world(on, demoFiles())
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const attr = (src: string, name: string) => Number(new RegExp(`<svg[^>]* ${name}="([\\d.]+)"`).exec(src)?.[1])
+    const measured = paneProps()
+    const cases = [
+      measured,
+      { ...measured, bodyColumns: 0, scroll: { offset: 0, bodyRows: 0 } },
+      { title: 'Reasoning tree', isFocused: false, bodyColumns: 0, placement: 'dock' as const, view: {} },
+    ]
+    for (const props of cases) {
+      const ui = await $.ui.mount({ ...PANE, props: props as never, surface: 'desktop' })
+      const svg = await ui.find({ type: 'Svg' })
+      expect(svg).toBeDefined()
+      const src = String(svg!.props.source)
+      expect(src).toMatch(/viewBox="0 0 \d+ \d+"/)
+      expect(src).toContain('preserveAspectRatio="xMidYMid meet"')
+      expect(Number(svg!.props.width)).toBe(attr(src, 'width'))
+      expect(Number(svg!.props.height)).toBe(attr(src, 'height'))
+      expect(Number(svg!.props.width)).toBeGreaterThan(50)
+      await ui.unmount()
+    }
+  })
+
   test('VS Code and the mobile app draw the tree too', async ($, on) => {
     mock.clock(on)
     world(on, demoFiles())

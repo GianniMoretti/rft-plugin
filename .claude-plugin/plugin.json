@@ -1,6 +1,6 @@
 {
   "name": "rft",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Reasoning Flow Tree: keep a research project's experiments and ideas as an Obsidian-compatible tree of notes, shown live in a pane.",
   "author": { "name": "Gianni Moretti" },
   "homepage": "https://github.com/GianniMoretti/rft-plugin",
