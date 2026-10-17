@@ -35,6 +35,8 @@ declare module 'claude-code' {
       note: RftNoteView | null
       orientation: 'TD' | 'LR'
       zoom: 'fit' | 'full'
+      /** The pane's view; null is the surface's default (the tree where Svg draws). */
+      view: 'tree' | 'list' | null
     }
   }
 }

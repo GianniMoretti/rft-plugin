@@ -68,10 +68,15 @@ they are (ids, statuses and the next free id are read from the notes).
   | `rft_sync` | regenerates children / up / down, the index tree and the canvas after hand edits |
 
 - **The tree pane** opens as a sidebar where the surface docks panes (turn this off with the
-  `autoOpen` option), or with `/rft`. On the desktop app and in VS Code it draws the tree as a
-  picture (top-down or left-right, coloured by type and status) with a clickable outline; in
-  the terminal it is an indented, coloured outline. Click a node to read its note, ▾ / ▸ to
-  fold a branch. It refreshes by itself when notes change, whoever changed them.
+  `autoOpen` option), or with `/rft`. It shows one view at a time, switched with **Tree | List**:
+  - **Tree** (the default on the desktop app, VS Code and mobile): the whole tree as a picture,
+    top-down or left-right, coloured by type and status, scaled to fill the pane (**Actual
+    size** shows it unscaled, to scroll). Pick a note in the **Note** menu to read it below.
+  - **List** (the only view in the terminal): an indented, coloured outline; click a node to
+    read its note, ▾ / ▸ to fold a branch.
+
+  The choice is kept for the session. The pane refreshes by itself when notes change, whoever
+  changed them.
 
 ### Commands
 
@@ -80,6 +85,10 @@ they are (ids, statuses and the next free id are read from the notes).
 | `/rft` | open the tree pane (`/rft text` prints the tree in the transcript) |
 | `/rft-init [starting question]` | activate RFT here and create (or adopt) the vault |
 | `/rft-view` | write `vault/tree.html`, a standalone page of the tree to open in any browser or share |
+
+The plugin registers these commands when a session starts, so the desktop app's slash-command
+menu may not list them (it lists the plugin's skill, `/rft:rft-manual`): type `/rft` in full
+and it runs. The terminal's typeahead lists them.
 
 ### Statuses
 

@@ -8,9 +8,9 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { RftSnapshot } from '../types'
 import { addNode, exportHtml, initVault, loadActive, rulesText, setStatus, today, treeReport } from './lib/ops'
-import { treeSvg } from './lib/svg'
+import { fitSize, treeSvg } from './lib/svg'
 import type { Config, Io, NodeType, Tree } from './lib/vault'
-import { LEGEND, MARK, bodyOf, counts, join, readConfig, signatureOf, sync, validate } from './lib/vault'
+import { LEGEND, MARK, bodyOf, counts, join, readConfig, signatureOf, sync, validate, walk } from './lib/vault'
 
 const PANE = 'rft-tree'
 const TITLE = 'Reasoning tree'
@@ -22,6 +22,12 @@ const selected = atom({ plugin: 'rft', key: 'selected' } as const, null)
 const note = atom({ plugin: 'rft', key: 'note' } as const, null)
 const orientation = atom({ plugin: 'rft', key: 'orientation' } as const, 'TD')
 const zoom = atom({ plugin: 'rft', key: 'zoom' } as const, 'fit')
+const viewMode = atom({ plugin: 'rft', key: 'view' } as const, null)
+
+// the size of a monospace cell on the desktop and in VS Code, in CSS pixels (an estimate:
+// the surfaces report the pane in cells)
+const CELL_W = 8
+const CELL_H = 18
 
 const ioOf = ($: EngineInterface): Io => ({
   read: path => $.fs.read(path),
@@ -257,6 +263,15 @@ async function flipOrientation($: EngineInterface): Promise<void> {
   await update($, orientation, o => (o === 'TD' ? 'LR' : 'TD'))
 }
 
+async function setView($: EngineInterface, mode: 'tree' | 'list'): Promise<void> {
+  await update($, viewMode, () => mode)
+}
+
+async function closeNote($: EngineInterface): Promise<void> {
+  await update($, selected, () => null)
+  await update($, note, () => null)
+}
+
 async function flipZoom($: EngineInterface): Promise<void> {
   await update($, zoom, v => (v === 'fit' ? 'full' : 'fit'))
 }
@@ -415,32 +430,65 @@ export const register: Register = (on, options) => {
       )
     }
 
-    let picture: JSX.Element | null = null
-    if ('Svg' in ui) {
-      const { Svg } = ui
-      const { svg, layout } = treeSvg(tree, { collapsed: folded, orientation: orient, selected: sel })
-      const size = z === 'full' ? { width: layout.width, height: layout.height } : {}
-      picture = svg.length < 130000
-        ? <Svg source={svg} alt={`The reasoning tree: ${c.direction ?? 0} directions, ${c.experiment ?? 0} experiments`} isInteractive {...size} />
-        : <Text dimColor>The tree is too large to draw: fold some branches.</Text>
-    }
+    // the tree or the list, never both: the tree where the surface draws Svg, the list elsewhere
+    // Svg draws everywhere but the terminal; Select everywhere but the mobile app
+    const hasSvg = e.surface !== 'terminal'
+    const hasSelect = e.surface !== 'mobile'
+    const mode = hasSvg ? ((await read($, viewMode)) ?? 'tree') : 'list'
     const foldable = Object.values(tree.nodes).filter(n => n.children.length && n.parent).map(n => n.id)
-
-    return (
-      <Box flexDirection="column">
+    const header = (
+      <Box key="header" flexDirection="column">
         <Text bold>{`${s.project}: ${c.direction ?? 0} directions, ${c.experiment ?? 0} experiments`}</Text>
-        <Text dimColor>{LEGEND}</Text>
         {s.error ? <Text color="error">{s.error}</Text> : null}
         {s.problems.length ? <Text color="warning">{`${s.problems.length} problem(s), e.g. ${s.problems[0]}`}</Text> : null}
-        <Box flexDirection="row" gap={1} flexWrap="wrap" marginTop={1}>
-          {picture ? <Button key="orient" label={orient === 'TD' ? 'Left-right' : 'Top-down'} onPress={() => flipOrientation($)} /> : null}
-          {picture ? <Button key="zoom" label={z === 'fit' ? 'Actual size' : 'Fit'} onPress={() => flipZoom($)} /> : null}
+        <Box flexDirection="row" gap={1} flexWrap="wrap">
+          {hasSvg ? <Button key="view-tree" label="Tree" variant={mode === 'tree' ? 'primary' : 'secondary'} onPress={() => setView($, 'tree')} /> : null}
+          {hasSvg ? <Button key="view-list" label="List" variant={mode === 'list' ? 'primary' : 'secondary'} onPress={() => setView($, 'list')} /> : null}
+          {mode === 'tree' ? <Button key="orient" label={orient === 'TD' ? 'Left-right' : 'Top-down'} onPress={() => flipOrientation($)} /> : null}
+          {mode === 'tree' ? <Button key="zoom" label={z === 'fit' ? 'Actual size' : 'Fit'} onPress={() => flipZoom($)} /> : null}
           <Button key="fold-all" label="Fold all" onPress={() => foldAll($, foldable)} />
           <Button key="unfold-all" label="Unfold all" onPress={() => foldAll($, [])} />
         </Box>
-        {picture}
+      </Box>
+    )
+
+    if (mode === 'list' || e.surface === 'terminal') {
+      return (
+        <Box flexDirection="column">
+          {header}
+          <Text dimColor>{LEGEND}</Text>
+          {detail}
+          <Box key="outline" flexDirection="column" marginTop={1}>{rows}</Box>
+        </Box>
+      )
+    }
+
+    // the tree fills the pane: its room in cells, less the header and an open note, in pixels
+    const { Svg } = ui
+    const bodyRows = e.props.scroll?.bodyRows || e.viewport?.rows || 40
+    const headerRows = 2 + (s.error ? 1 : 0) + (s.problems.length ? 1 : 0) + (hasSelect ? 1 : 0)
+    const treeRows = Math.max(8, Math.floor((bodyRows - headerRows) / (detail ? 2 : 1)) - 1)
+    const { svg, layout } = treeSvg(tree, { collapsed: folded, orientation: orient, selected: sel })
+    const size = z === 'full'
+      ? { width: layout.width, height: layout.height }
+      : fitSize(layout, cols * CELL_W, treeRows * CELL_H)
+    const picker = hasSelect && e.surface !== 'mobile'
+      ? (() => {
+          const { Select } = ui
+          const options = [{ value: '', label: 'Open a note…' }]
+          walk(tree, n => { options.push({ value: n.id, label: `${MARK[n.status] ?? '-'} ${n.name}` }) })
+          return <Select key="pick-note" label="Note" options={options} value={sel ?? ''} onSelect={v => (v ? selectNode($, v) : closeNote($))} />
+        })()
+      : null
+
+    return (
+      <Box flexDirection="column">
+        {header}
+        {picker}
+        {svg.length < 130000
+          ? <Svg source={svg} alt={`The reasoning tree: ${c.direction ?? 0} directions, ${c.experiment ?? 0} experiments`} isInteractive {...size} />
+          : <Text dimColor>The tree is too large to draw: fold some branches, or use the list.</Text>}
         {detail}
-        <Box key="outline" flexDirection="column" marginTop={1}>{rows}</Box>
       </Box>
     )
   })

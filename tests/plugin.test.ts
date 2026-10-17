@@ -111,32 +111,82 @@ describe('commands', () => {
 })
 
 describe('pane', () => {
-  test('draws the tree, selects a note, folds a branch, follows vault changes', async ($, on) => {
+  test('the terminal shows the list: select a note, fold a branch, no tree toggle', async ($, on) => {
+    mock.clock(on)
+    world(on, demoFiles())
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ text: /demo: 2 directions, 2 experiments/ })).toBeDefined()
+    expect(await ui.find({ key: 'view-tree' })).toBeUndefined()
+    expect(await ui.find({ key: 'node-E02' })).toBeDefined()
+    await ui.press({ key: 'node-D01' })
+    expect((await ui.find({ key: 'note-text' }))?.text).toContain('Text of D01.')
+    await ui.press({ key: 'down-E02' })
+    expect((await ui.find({ key: 'note-text' }))?.text).toContain('Text of E02.')
+    await ui.press({ key: 'close-note' })
+    expect(await ui.find({ key: 'note-text' })).toBeUndefined()
+    await ui.press({ key: 'fold-D01' })
+    expect(await ui.find({ key: 'node-E02' })).toBeUndefined()
+    expect(await ui.find({ text: /\+1/ })).toBeDefined()
+    await ui.press({ key: 'unfold-all' })
+    expect(await ui.find({ key: 'node-E02' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('the desktop shows the tree alone, sized to the pane, or the list; the choice is kept', async ($, on) => {
+    mock.clock(on)
+    world(on, demoFiles())
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+    const svg = await ui.find({ type: 'Svg' })
+    expect(svg).toBeDefined()
+    expect(await ui.find({ key: 'node-E02' })).toBeUndefined()
+    // fitted into 80 columns by about 36 rows of 8 x 18 px: one side touches the box
+    const w = Number(svg!.props.width), h = Number(svg!.props.height)
+    expect(w).toBeLessThanOrEqual(80 * 8)
+    expect(h).toBeLessThanOrEqual(40 * 18)
+    expect(w === 640 || h > 500).toBe(true)
+
+    await ui.select({ key: 'pick-note', value: 'E01' })
+    expect((await ui.find({ key: 'note-text' }))?.text).toContain('Text of E01.')
+    const shrunk = await ui.find({ type: 'Svg' })
+    expect(Number(shrunk!.props.height)).toBeLessThan(h + 1)
+    await ui.press({ key: 'close-note' })
+
+    await ui.press({ key: 'zoom' })
+    expect(Number((await ui.find({ type: 'Svg' }))!.props.width)).not.toBe(w)
+    await ui.press({ key: 'zoom' })
+
+    await ui.press({ key: 'view-list' })
+    expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+    expect(await ui.find({ key: 'node-E02' })).toBeDefined()
+    await ui.press({ key: 'node-D01' })
+    expect((await ui.find({ key: 'note-text' }))?.text).toContain('Text of D01.')
+    await ui.unmount()
+
+    const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
+    expect(await again.find({ type: 'Svg' })).toBeUndefined()
+    await again.press({ key: 'view-tree' })
+    expect(await again.find({ type: 'Svg' })).toBeDefined()
+    await again.unmount()
+  })
+
+  test('VS Code and the mobile app draw the tree too', async ($, on) => {
+    mock.clock(on)
+    world(on, demoFiles())
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    for (const surface of ['vscode', 'mobile'] as const) {
+      const ui = await $.ui.mount({ ...PANE, surface })
+      expect(await ui.find({ type: 'Svg' })).toBeDefined()
+      expect((await ui.find({ key: 'pick-note' })) !== undefined).toBe(surface === 'vscode')
+      await ui.unmount()
+    }
+  })
+
+  test('the pane follows vault changes on both surfaces', async ($, on) => {
     const clock = mock.clock(on)
     const w = world(on, demoFiles())
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    for (const surface of SURFACES) {
-      const ui = await $.ui.mount({ ...PANE, surface })
-      expect(await ui.find({ text: /demo: 2 directions, 2 experiments/ })).toBeDefined()
-      expect(await ui.find({ key: 'node-E02' })).toBeDefined()
-      expect((await ui.find({ type: 'Svg' })) !== undefined).toBe(surface === 'desktop')
-
-      await ui.press({ key: 'node-D01' })
-      expect((await ui.find({ key: 'note-text' }))?.text).toContain('Text of D01.')
-      expect(await ui.find({ key: 'up-E01' })).toBeDefined()
-      await ui.press({ key: 'down-E02' })
-      expect((await ui.find({ key: 'note-text' }))?.text).toContain('Text of E02.')
-      await ui.press({ key: 'close-note' })
-      expect(await ui.find({ key: 'note-text' })).toBeUndefined()
-
-      await ui.press({ key: 'fold-D01' })
-      expect(await ui.find({ key: 'node-E02' })).toBeUndefined()
-      expect(await ui.find({ text: /\+1/ })).toBeDefined()
-      await ui.press({ key: 'unfold-all' })
-      expect(await ui.find({ key: 'node-E02' })).toBeDefined()
-      await ui.unmount()
-    }
-
     // a note written by another tool (or by hand) shows up at the next poll
     const files = demoFiles()
     w.fs.write('vault/directions/D02 New idea.md', files[`vault/directions/${D01}.md`]!
@@ -144,9 +194,10 @@ describe('pane', () => {
     await clock.advance(5000)
     for (const surface of SURFACES) {
       const ui = await $.ui.mount({ ...PANE, surface })
-      expect(await ui.find({ key: 'node-D02' })).toBeDefined()
+      expect(await ui.find({ text: /3 directions/ })).toBeDefined()
+      if (surface === 'terminal') expect(await ui.find({ key: 'node-D02' })).toBeDefined()
+      else expect(String((await ui.find({ type: 'Svg' }))!.props.source)).toContain('D02')
       await ui.unmount()
     }
   })
 })
-

@@ -142,3 +142,9 @@ export function treeSvg(tree: Tree, opts: SvgOptions = {}): { svg: string; layou
   parts.push('</svg>')
   return { svg: parts.join(''), layout: L }
 }
+
+/** The size that fits the whole layout in a box, keeping its proportions (at most twice its own). */
+export function fitSize(L: Layout, boxW: number, boxH: number, maxScale = 2): { width: number; height: number } {
+  const scale = Math.min(boxW / L.width, boxH / L.height, maxScale)
+  return { width: Math.max(1, Math.round(L.width * scale)), height: Math.max(1, Math.round(L.height * scale)) }
+}
