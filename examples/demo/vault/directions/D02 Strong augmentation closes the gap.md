@@ -8,6 +8,8 @@ children: ["[[E03 RandAugment magnitude sweep with long training]]"]
 up: "[[E02 Baseline on CIFAR-10 subsets of 1k, 5k and 10k images]]"
 down: ["[[E03 RandAugment magnitude sweep with long training]]"]
 tags: [small-data-regularisation, direction, augmentation, done]
+concept: "Strong augmentation"
+concept_summary: "Whether heavy augmentation alone closes the small-data gap"
 ---
 
 # D02 · Strong augmentation closes the gap

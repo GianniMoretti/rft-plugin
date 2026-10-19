@@ -1,6 +1,6 @@
 ---
 name: rft-manual
-description: Operating manual of the Reasoning Flow Tree, the tree of experiment (E..) and direction (D..) notes that records a research project's reasoning. Use in a project with .rft/config.json whenever an experiment is planned, launched or finished, an idea or question comes up (even a rejected one), an idea is dropped or moved, or the user asks about the tree, the vault or what was tried.
+description: Operating manual of the Reasoning Flow Tree, the tree of experiment (E..) and direction (D..) notes that records a research project's reasoning, grouped into concepts (lines of research). Use in a project with .rft/config.json whenever an experiment is planned, launched or finished, an idea or question comes up (even a rejected one), an idea is dropped or moved, a new line of research opens (propose a concept), or the user asks about the tree, the vault, its concepts or what was tried.
 ---
 
 # Reasoning Flow Tree (rft)
@@ -55,6 +55,28 @@ topical tags**: what it is about, so the tree view can filter by them (`theory`,
   topical tags and keeps the project, type and status ones).
 - Do not retro-tag existing notes unless the user asks.
 
+## Concepts
+
+Concepts split the tree into **lines of research**. A note with `concept: "<name>"` (and an
+optional `concept_summary: "<one line>"`) in its frontmatter starts a concept: it and its whole
+subtree belong to it, until a descendant starts a sub-concept. Concepts nest; notes with no
+concept above them belong to the project itself. Concepts are explicit, never inferred:
+
+- **Propose, then apply.** When a direction opens a new line of research (not a single
+  experiment), propose a concept to the user: the note it starts at, a short name and a
+  one-line summary. Call `rft_set_concept` only after they confirm. Never set, rename or remove
+  a concept silently.
+- **Names** are short and readable, in words as in a heading: `Strong augmentation`, not
+  `strong-augmentation` and not the title of one experiment. No `^ # | [ ]`. Avoid reusing a
+  name.
+- Start a concept at the direction that opened the line, usually; nest at most two or three
+  levels, and leave shared setup (the starting question, baselines everyone builds on) in the
+  project root when it is not a line of its own.
+- `rft_concepts` shows the concept tree; `rft_set_concept(id, name, summary?)` sets or renames
+  one, and `name: null` removes it. `/rft-concepts suggest` asks you to propose a full split:
+  answer with a short table (start note, name, summary, what stays in the root) and wait for
+  the user's yes before applying anything.
+
 ## When to create and update nodes
 
 1. **Before launching an experiment**, create its node: `rft_add_node` with `type: experiment`,
@@ -82,6 +104,8 @@ topical tags**: what it is about, so the tree view can filter by them (`theory`,
 | `rft_set_status` | change a status, optionally appending real results or the reason |
 | `rft_set_tags` | replace a note's topical tags |
 | `rft_tags` | the topical tags in use, with counts: check before inventing one |
+| `rft_set_concept` | set, rename or remove (name null) the concept a note starts, after the user confirms |
+| `rft_concepts` | the concept tree: names, start notes, counts, statuses |
 | `rft_tree` | the current tree, or the subtree of one node (`root`, `depth`) |
 | `rft_validate` | errors (bad ids, statuses, titles, missing parents, broken links) and warnings |
 | `rft_sync` | regenerate children / up / down, the tree in `00 Index.md`, the canvas |
@@ -94,7 +118,8 @@ error. Never edit `up:` / `down:` by hand, nor the list under `## The tree` in t
 
 Frontmatter: `id`, `type` (`experiment` | `direction`), `status`, `date` (YYYY-MM-DD),
 `parent: "[[<parent name>]]"` (`""` for the root), `children`, `up`, `down`,
-`tags: [<project>, <type>, <topical tags...>, <status>]`. Body:
+`tags: [<project>, <type>, <topical tags...>, <status>]`, and on a note that starts a
+concept `concept: "<name>"` and `concept_summary: "<one line>"`. Body:
 `# <ID> · <Title>`, the Parent / Status / Date lines (and Code / data for experiments), then the
 sections — experiments: What, Why, Result, Directions found; directions: Idea, Why, Status —
 and last **Children in the tree**, a list of links to the children.

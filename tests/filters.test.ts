@@ -75,7 +75,7 @@ describe('filters', () => {
   test('several kinds count once each; normalise drops what is not a filter', () => {
     expect(F.activeCount(f({ tags: ['a', 'b'], hiddenTypes: ['direction'], from: '2026-01-01', to: '2026-02-01' }))).toBe(3)
     const back = F.normalise({ mode: 'weird', tags: ['a', 3, 'a'], tagMode: 'x', hiddenTypes: ['person'], from: 'yesterday' })
-    expect(back).toEqual({ mode: 'dim', tags: ['a'], tagMode: 'any', hiddenTypes: [], hiddenStatuses: [], from: '', to: '' })
+    expect(back).toEqual({ mode: 'dim', tags: ['a'], tagMode: 'any', hiddenTypes: [], hiddenStatuses: [], from: '', to: '', concepts: [] })
   })
 
   test('the tag list counts the notes, most used first, or takes the server one', () => {

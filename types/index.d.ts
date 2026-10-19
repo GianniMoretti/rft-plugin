@@ -11,6 +11,20 @@ export type RftNodeState = {
   children: string[]
   path: string
   tags: string[]
+  concept: string
+}
+
+export type RftConceptState = {
+  id: string
+  name: string
+  summary: string
+  root: string | null
+  parent: string | null
+  children: string[]
+  depth: number
+  count: number
+  total: number
+  statuses: Record<string, number>
 }
 
 /** The tree as last read from the vault; `null` until the session has looked. */
@@ -20,6 +34,7 @@ export type RftSnapshot = {
   project: string
   nodes: Record<string, RftNodeState>
   roots: string[]
+  concepts: Record<string, RftConceptState>
   signature: string
   problems: string[]
   error: string | null

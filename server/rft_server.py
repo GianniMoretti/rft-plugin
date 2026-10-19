@@ -34,6 +34,7 @@ PAGE_FILES = {
     "/app.css": ("app.css", "text/css; charset=utf-8"),
     "/filters.js": ("filters.js", "text/javascript; charset=utf-8"),
     "/layout.js": ("layout.js", "text/javascript; charset=utf-8"),
+    "/concepts.js": ("concepts.js", "text/javascript; charset=utf-8"),
     "/vendor/d3.v7.9.0.min.js": ("vendor/d3.v7.9.0.min.js", "text/javascript; charset=utf-8"),
     "/vendor/LICENSE-d3.txt": ("vendor/LICENSE-d3.txt", "text/plain; charset=utf-8"),
 }
@@ -94,6 +95,55 @@ def topical_tags(tags: list[str], project: str) -> list[str]:
     return out
 
 
+ROOT_CONCEPT = "root"
+
+
+def unquote(value: str | None) -> str:
+    v = (value or "").strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+        v = v[1:-1]
+    return v.strip()
+
+
+def compute_concepts(nodes: dict[str, dict], roots: list[str], project: str,
+                     decl: dict[str, tuple[str, str]]) -> list[dict]:
+    """Concepts, inherited down the tree: a note belongs to its nearest ancestor (or itself)
+    declaring `concept:`, else to the project root concept. Sets each node's `concept` and
+    returns the concepts depth first, the root concept first."""
+    def make(cid, name, summary, root, parent, depth):
+        return {"id": cid, "name": name, "summary": summary, "root": root, "parent": parent, "children": [],
+                "depth": depth, "count": 0, "total": 0, "statuses": {}}
+
+    concepts = {ROOT_CONCEPT: make(ROOT_CONCEPT, project, "", None, None, 0)}
+    stack = [(r, ROOT_CONCEPT) for r in reversed(roots)]
+    while stack:
+        nid, current = stack.pop()
+        n = nodes.get(nid)
+        if n is None:
+            continue
+        if nid in decl:
+            name, summary = decl[nid]
+            concepts[nid] = make(nid, name, summary, nid, current, concepts[current]["depth"] + 1)
+            concepts[current]["children"].append(nid)
+            current = nid
+        n["concept"] = current
+        c = concepts[current]
+        c["count"] += 1
+        c["statuses"][n["status"]] = c["statuses"].get(n["status"], 0) + 1
+        stack.extend((k, current) for k in reversed(n["children"]))
+
+    order: list[dict] = []
+
+    def total(cid):
+        c = concepts[cid]
+        order.append(c)
+        c["total"] = c["count"] + sum(total(k) for k in c["children"])
+        return c["total"]
+
+    total(ROOT_CONCEPT)
+    return order
+
+
 def link_target(value: str | None) -> str | None:
     m = re.search(r"\[\[([^\]|#]+)", value or "")
     return m.group(1).strip() if m else None
@@ -130,6 +180,7 @@ class Vault:
     def _load(self, sig: str) -> dict:
         nodes: dict[str, dict] = {}
         refs: dict[str, str | None] = {}
+        decl: dict[str, tuple[str, str]] = {}
         for sub, kind in SUBDIRS.items():
             d = self.root / sub
             if not d.is_dir():
@@ -145,8 +196,12 @@ class Vault:
                 nodes[nid] = {"id": nid, "name": name, "title": name[len(id_of(name)):].strip(),
                               "type": ftype, "status": fm.get("status", ""), "date": fm.get("date", ""),
                               "parent": None, "children": [], "path": f"{sub}/{f.name}",
-                              "tags": topical_tags(parse_tags(fm.get("tags")), self.project)}
+                              "tags": topical_tags(parse_tags(fm.get("tags")), self.project),
+                              "concept": ROOT_CONCEPT}
                 refs[nid] = link_target(fm.get("parent"))
+                cname = unquote(fm.get("concept"))
+                if cname:
+                    decl[nid] = (cname, unquote(fm.get("concept_summary")))
         by_name = {n["name"]: n["id"] for n in nodes.values()}
         for n in nodes.values():
             ref = refs.get(n["id"])
@@ -173,7 +228,9 @@ class Vault:
             for t in n["tags"]:
                 counts[t] = counts.get(t, 0) + 1
         tags = [{"tag": t, "count": c} for t, c in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
-        return {"project": self.project, "version": sig, "nodes": list(nodes.values()), "roots": roots, "tags": tags}
+        concepts = compute_concepts(nodes, roots, self.project, decl)
+        return {"project": self.project, "version": sig, "nodes": list(nodes.values()), "roots": roots, "tags": tags,
+                "concepts": concepts}
 
     def note_path(self, nid: str) -> Path | None:
         """The note's file, only when it resolves to a markdown file inside experiments/ or directions/."""

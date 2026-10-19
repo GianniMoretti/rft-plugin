@@ -8,6 +8,8 @@ interactive tree (pan, zoom, click a node to read it) in a browser.
 - **Experiments (E..)**: something run or computed that produced a result.
 - **Directions (D..)**: ideas, questions, hypotheses, including the ones rejected, so the tree
   also says why a path was not taken. **D00** is the starting question.
+- **Concepts**: named lines of research. A note can start one, and its subtree belongs to it
+  until a sub-concept starts. Claude proposes them; you confirm.
 
 The notes are plain, Obsidian-compatible markdown in your repository (`vault/` by default) and
 are the source of truth. You never need Obsidian open.
@@ -17,6 +19,10 @@ are the source of truth. You never need Obsidian open.
 | Click a node to read its note | Filter by tag, type, status or date |
 |---|---|
 | ![A note open in the side drawer](docs/screenshots/note.png) | ![The filters panel, with the augmentation tag selected and the other notes dimmed](docs/screenshots/filters.png) |
+
+| Concepts as regions | Concepts as coloured arrows | The concept tree |
+|---|---|---|
+| ![Soft regions behind each concept, sub-concepts nested inside](docs/screenshots/regions.png) | ![Links coloured by concept, with a name badge at each concept's start](docs/screenshots/arrows.png) | ![A tree of the concepts, sized by note count, with a status bar each](docs/screenshots/concept-tree.png) |
 
 _The screenshots show the fictional project in [`examples/demo`](examples/demo): `cd` into it and
 run `/rft` to try the view without setting anything up._
@@ -63,9 +69,10 @@ they are (ids, statuses and the next free id are read from the notes).
 
 ### What changes once it is active
 
-- **At session start** Claude receives short operating rules and a compact copy of the tree, so
-  it knows to create an experiment's node *before* launching it, record only real results, and
-  add a direction for every new idea. The full manual is the `rft-manual` skill.
+- **At session start** Claude receives short operating rules and a compact copy of the tree
+  (grouped by concept once there are concepts), so it knows to create an experiment's node
+  *before* launching it, record only real results, add a direction for every new idea, and
+  propose a concept when a new line of research opens. The full manual is the `rft-manual` skill.
 - **Tools** Claude calls to keep the tree consistent:
 
   | tool | does |
@@ -74,6 +81,8 @@ they are (ids, statuses and the next free id are read from the notes).
   | `rft_set_status` | changes a status (frontmatter, tag, Status line), optionally appending results or the reason |
   | `rft_set_tags` | replaces a note's topical tags (lowercase kebab-case), keeping the project, type and status tags |
   | `rft_tags` | lists the topical tags in use with counts, so Claude reuses them |
+  | `rft_set_concept` | sets, renames or removes (name null) the concept a note starts, once you confirm it |
+  | `rft_concepts` | prints the concept tree: names, start notes, counts and statuses |
   | `rft_tree` | prints the tree or a subtree |
   | `rft_validate` | checks ids, types, statuses, titles, parents, broken wikilinks, derived fields |
   | `rft_sync` | regenerates children / up / down, the index tree and the canvas after hand edits |
@@ -110,6 +119,42 @@ they are (ids, statuses and the next free id are read from the notes).
 - It follows the vault live, and keeps the zoom, layout, folds, filters and text size between
   visits.
 
+### Concepts
+
+A **concept** is a line of research: the note that starts it (usually the direction that opened
+the line) and its whole subtree, until a descendant starts a sub-concept. Concepts nest; notes
+with no concept above them belong to the project itself. They live in the starting note's
+frontmatter:
+
+```yaml
+concept: "Strong augmentation"
+concept_summary: "Whether heavy augmentation alone closes the small-data gap"
+```
+
+Concepts are explicit. Claude proposes one when a direction opens a new line of research, and
+applies it with `rft_set_concept` only after you say yes. `/rft-concepts suggest` asks Claude for
+a full split of the existing tree, as a table to confirm or change; `/rft-concepts` prints the
+concept tree.
+
+In the tree view, **Concepts: Off / Regions / Arrows** switches the overlay:
+
+- **Regions**: a soft region behind each concept, bordered in its colour, its name on top;
+  sub-concepts are nested, lighter regions. They follow the layout (top-down, left-right,
+  radial), folded branches and hidden filters.
+- **Arrows**: links coloured by the concept of the note they lead to, and a name badge at each
+  concept's start.
+- Concept colours are a palette of their own, apart from the status colours; a concept legend
+  shows while the overlay is on.
+- **Concept tree** shows a tree of the concepts: each sized by its notes, with a bar of their
+  statuses. Click one to go back to the reasoning tree on its start note, its region briefly
+  highlighted; **focus** shows only that concept's subtree.
+- **Focus** is also reachable from the legend, a badge, and the concept path at the top of the
+  note drawer; a breadcrumb (project › concept › sub-concept) leads back up.
+- Concepts are also a filter in **Filters**.
+
+A link can open the view in a given state, e.g. `?layout=lr&concepts=regions`,
+`?view=concepts`, or `?focus=D02&note=E05`.
+
 Every note carries 1–3 **topical tags** besides the project, type and status ones (the manual
 asks Claude to reuse the vocabulary `rft_tags` lists); the tree's `api/tree` JSON lists them with
 their counts.
@@ -135,6 +180,8 @@ d3 (ISC licence, `web/vendor/LICENSE-d3.txt`) is bundled, so the page needs no n
 | `/rft stop` | stop the tree view server |
 | `/rft text` | print the tree in the transcript |
 | `/rft-init [starting question]` | activate RFT here and create (or adopt) the vault |
+| `/rft-concepts` | print the concept tree |
+| `/rft-concepts suggest` | ask Claude to propose a concept split; nothing changes until you confirm |
 | `/rft-view` | write `vault/tree.html`: the same tree view as one standalone file, every note inside, to open anywhere or share |
 
 The plugin registers these commands when a session starts, so the desktop app's slash-command
@@ -181,8 +228,9 @@ session with the plugin loaded from this folder.
   the server's lifecycle).
 - `hooks/lib/vault.ts`: the vault model; `hooks/lib/ops.ts` the operations; `hooks/lib/page.ts`
   the standalone page.
-- `web/`: the tree view (`index.html`, `app.js`, `app.css`, `filters.js` and `layout.js` for
-  the pure filter and radial layout logic, vendored d3), one codebase for the live view and `/rft-view`.
+- `web/`: the tree view (`index.html`, `app.js`, `app.css`; `filters.js`, `layout.js` and
+  `concepts.js` hold the pure filter, radial layout and concept logic; vendored d3), one
+  codebase for the live view and `/rft-view`.
 - `server/rft_server.py`: the read-only local server (Python standard library).
 - `skills/rft-manual/SKILL.md`: the manual; `tests/`: the mod's tests on an in-memory vault, the
   outline pane on every surface, and the server's tests.

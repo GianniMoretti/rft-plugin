@@ -17,10 +17,11 @@ import rft_server  # noqa: E402
 WEB = Path(__file__).resolve().parents[1] / "web"
 
 
-def note(nid, kind, status, parent, title, tags=()):
+def note(nid, kind, status, parent, title, tags=(), concept=None):
     p = f'"[[{parent}]]"' if parent else '""'
     t = ", ".join(["demo", kind, *tags, status])
-    return (f"---\nid: {nid}\ntype: {kind}\nstatus: {status}\ndate: 2026-01-01\nparent: {p}\ntags: [{t}]\n---\n\n"
+    c = f'concept: "{concept}"\nconcept_summary: "About {concept}"\n' if concept else ""
+    return (f"---\nid: {nid}\ntype: {kind}\nstatus: {status}\ndate: 2026-01-01\nparent: {p}\ntags: [{t}]\n{c}---\n\n"
             f"# {nid} · {title}\n\nText of {nid}.\n")
 
 
@@ -33,7 +34,7 @@ class ServerTest(unittest.TestCase):
         (vault / "directions").mkdir(parents=True)
         (vault / "experiments").mkdir()
         (vault / "directions" / "D00 Root question.md").write_text(note("D00", "direction", "done", "", "Root question"))
-        (vault / "experiments" / "E01 First run.md").write_text(note("E01", "experiment", "running", "D00 Root question", "First run", ("theory", "cluster")))
+        (vault / "experiments" / "E01 First run.md").write_text(note("E01", "experiment", "running", "D00 Root question", "First run", ("theory", "cluster"), "Runs"))
         (vault / "directions" / "D01 Next idea.md").write_text(note("D01", "direction", "idea", "E01 First run", "Next idea", ("theory",)))
         # a secret outside the vault, and a note that is a link to it
         (root / "secret.md").write_text(note("E09", "experiment", "done", "D00 Root question", "Secret"))
@@ -76,6 +77,17 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(nodes["E01"]["tags"], ["theory", "cluster"])
         self.assertEqual(nodes["D00"]["tags"], [])
         self.assertEqual(tree["tags"], [{"tag": "theory", "count": 2}, {"tag": "cluster", "count": 1}])
+
+    def test_concept_tree(self):
+        tree = json.loads(self.get("/api/tree")[2])
+        nodes = {n["id"]: n for n in tree["nodes"]}
+        # E01 starts "Runs"; D01 below it inherits it; D00 stays in the project root concept
+        self.assertEqual((nodes["D00"]["concept"], nodes["E01"]["concept"], nodes["D01"]["concept"]), ("root", "E01", "E01"))
+        root, runs = tree["concepts"]
+        self.assertEqual((root["id"], root["name"], root["root"], root["children"]), ("root", "demo", None, ["E01"]))
+        self.assertEqual((runs["name"], runs["summary"], runs["root"], runs["parent"]), ("Runs", "About Runs", "E01", "root"))
+        self.assertEqual((runs["count"], runs["total"], runs["statuses"]), (2, 2, {"running": 1, "idea": 1}))
+        self.assertEqual(root["total"], 4)
 
     def test_tag_parsing(self):
         self.assertEqual(rft_server.parse_tags('[demo, "theory", #cluster]'), ["demo", "theory", "cluster"])

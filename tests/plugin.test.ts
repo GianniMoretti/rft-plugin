@@ -17,7 +17,7 @@ describe('activation', () => {
     const w = world(on, {})
     on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.commands).toEqual(['rft', 'rft-init', 'rft-view'])
+    expect(w.commands).toEqual(['rft', 'rft-init', 'rft-concepts', 'rft-view'])
     expect(w.tools).toEqual([])
     expect(w.opened).toEqual([])
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
@@ -34,7 +34,7 @@ describe('activation', () => {
     const w = world(on, demoFiles())
     on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.tools).toEqual(['rft_add_node', 'rft_set_status', 'rft_set_tags', 'rft_tags', 'rft_tree', 'rft_validate', 'rft_sync'])
+    expect(w.tools).toEqual(['rft_add_node', 'rft_set_status', 'rft_set_tags', 'rft_set_concept', 'rft_concepts', 'rft_tags', 'rft_tree', 'rft_validate', 'rft_sync'])
     expect(w.opened).toEqual(['rft-tree'])
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
     const rules = res.sections.find(s => s.id === 'rft:rules')
@@ -48,8 +48,8 @@ describe('activation', () => {
     const w = world(on, demoFiles(), { refuse: ['rft'] })
     on('prompt.compose', () => ({ sections: [] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.commands).toEqual(['rft-init', 'rft-view'])
-    expect(w.tools).toHaveLength(7)
+    expect(w.commands).toEqual(['rft-init', 'rft-concepts', 'rft-view'])
+    expect(w.tools).toHaveLength(9)
     expect(w.opened).toEqual(['rft-tree'])
     expect(w.toasts.join()).toContain('/rft')
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
@@ -58,7 +58,7 @@ describe('activation', () => {
 
   test('no command takes the name of the plugin skill', async () => {
     // a plugin skill named <x> is the command /rft:<x>; the engine refuses a command of the same name
-    expect(['rft', 'rft-init', 'rft-view']).not.toContain(SKILL)
+    expect(['rft', 'rft-init', 'rft-concepts', 'rft-view']).not.toContain(SKILL)
   })
 
   test('autoOpen off keeps the pane closed', { options: { autoOpen: false } }, async ($, on) => {
@@ -94,6 +94,58 @@ describe('tools', () => {
     expect(check.text).toMatch(/^OK: no errors/)
     const bad = await $.tool.call({ tool: 'mcp__rft__rft_add_node', type: 'direction', title: 'Orphan', parent: 'X9' } as never)
     expect(bad.isError).toBe(true)
+  })
+})
+
+describe('concepts', () => {
+  test('rft_set_concept and rft_concepts through tool calls', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, demoFiles())
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const set = await $.tool.call({ tool: 'mcp__rft__rft_set_concept', id: 'D01', name: 'Variants', summary: 'Better variants of the check' } as never)
+    expect(set.isError).toBeUndefined()
+    expect(set.text).toContain('now starts the concept "Variants"')
+    expect(w.fs.read(`vault/directions/${D01}.md`)).toContain('concept: "Variants"\nconcept_summary: "Better variants of the check"')
+    const tree = await $.tool.call({ tool: 'mcp__rft__rft_concepts' } as never)
+    expect(tree.text).toContain('- Variants [@D01] 2 note(s)')
+    const bad = await $.tool.call({ tool: 'mcp__rft__rft_set_concept', id: 'D01', name: 'A | B' } as never)
+    expect(bad.isError).toBe(true)
+    const off = await $.tool.call({ tool: 'mcp__rft__rft_set_concept', id: 'D01', name: null } as never)
+    expect(off.text).toContain('no longer starts')
+    expect(w.fs.read(`vault/directions/${D01}.md`)).not.toContain('concept:')
+  })
+
+  test('/rft-concepts prints the concept tree; suggest asks Claude for a proposal and applies nothing', async ($, on) => {
+    const clock = mock.clock(on)
+    const w = world(on, demoFiles())
+    const prompts: string[] = []
+    on('prompt.submit', (_$, e) => { prompts.push(String(e.text)); return { text: e.text } as never })
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const run = (args: string) => $.command.run({ command: 'rft-concepts', args, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } } as never)
+    const plain = await run('')
+    expect(plain.text).toContain('No concepts yet')
+    const before = w.fs.read(`vault/directions/${D01}.md`)
+    const suggest = await run('suggest')
+    expect(suggest.text).toContain('nothing changes until you confirm it')
+    expect(prompts).toEqual([])
+    // the prompt is submitted by the session's poller, outside the command's dispatch
+    await clock.advance(5000)
+    expect(prompts).toHaveLength(1)
+    expect(prompts[0]).toContain('Do not call rft_set_concept until I say yes')
+    expect(w.fs.read(`vault/directions/${D01}.md`)).toBe(before)
+  })
+
+  test('the session rules ask Claude to propose concepts, and group the tree by concept', async ($, on) => {
+    mock.clock(on)
+    const files = demoFiles()
+    files[`vault/directions/${D01}.md`] = files[`vault/directions/${D01}.md`]!.replace(/^(tags: .*)$/m, '$1\nconcept: "Variants"')
+    world(on, files)
+    on('prompt.compose', () => ({ sections: [] }))
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
+    const rules = res.sections.find(x => x.id === 'rft:rules')!.text
+    expect(rules).toContain('PROPOSE a short concept name')
+    expect(rules).toContain('## demo › Variants (from D01)')
   })
 })
 

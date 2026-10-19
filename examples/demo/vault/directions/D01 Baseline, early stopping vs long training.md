@@ -8,6 +8,8 @@ children: ["[[E02 Baseline on CIFAR-10 subsets of 1k, 5k and 10k images]]"]
 up: "[[E01 Literature check on augmentation and training length]]"
 down: ["[[E02 Baseline on CIFAR-10 subsets of 1k, 5k and 10k images]]"]
 tags: [small-data-regularisation, direction, baseline, done]
+concept: "Baselines"
+concept_summary: "How far early stopping and long training go on 1k to 10k images"
 ---
 
 # D01 · Baseline, early stopping vs long training

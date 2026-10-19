@@ -27,20 +27,33 @@
     <span id="font-size" class="muted" title="Text size">100 %</span>
     <button id="font-up" title="Larger text">A+</button>
   </div>
+  <div class="group" role="group" aria-label="Concepts">
+    <span class="muted seg-label">Concepts</span>
+    <button data-cmode="off" aria-pressed="true" title="No concept overlay">Off</button>
+    <button data-cmode="regions" aria-pressed="false" title="Soft regions behind each concept">Regions</button>
+    <button data-cmode="arrows" aria-pressed="false" title="Links coloured by concept">Arrows</button>
+    <button id="view-toggle" aria-pressed="false" title="A tree whose nodes are the concepts">Concept tree</button>
+  </div>
   <div class="group">
     <button id="filters-toggle" aria-expanded="false" aria-controls="filters">Filters</button>
     <span id="filter-status" class="filter-status" hidden><span id="filter-count"></span> · <button id="filters-clear" class="linkish">Clear</button></span>
   </div>
   <input id="search" type="search" placeholder="Search notes (Enter: next)" autocomplete="off" spellcheck="false">
 </header>
+<nav id="crumbs" hidden aria-label="Concept focus"></nav>
 <main>
-  <svg id="canvas" aria-label="The reasoning tree"><defs><marker id="arrow" viewBox="0 -4 8 8" refX="8" refY="0" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,-4L8,0L0,4Z"></path></marker></defs><g id="viewport"><g id="links"></g><g id="nodes"></g></g></svg>
+  <svg id="canvas" aria-label="The reasoning tree"><defs><marker id="arrow" viewBox="0 -4 8 8" refX="8" refY="0" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,-4L8,0L0,4Z"></path></marker></defs><g id="viewport"><g id="regions"></g><g id="links"></g><g id="nodes"></g><g id="badges"></g></g></svg>
+  <svg id="concept-canvas" hidden aria-label="The concept tree"><g id="cviewport"></g></svg>
   <aside id="legend" aria-label="Legend and filter">
     <div class="legend-title">Status <span class="muted">(click to filter)</span></div>
     <div id="statuses"></div>
     <div class="legend-title">Type</div>
     <div class="row"><span class="ring ring-direction"></span>Direction (D..)</div>
     <div class="row"><span class="ring ring-experiment"></span>Experiment (E..)</div>
+    <div id="concept-legend" hidden>
+      <div class="legend-title">Concepts <span class="muted">(click to focus)</span></div>
+      <div id="concepts-list"></div>
+    </div>
     <div class="hint muted">Drag to pan, scroll to zoom. Click a node to read it, double-click or ± to fold.</div>
   </aside>
   <aside id="filters" hidden aria-label="Filters">
@@ -59,6 +72,10 @@
       <div class="ftitle">Status</div>
       <div id="fstatuses"></div>
     </section>
+    <section id="fconcepts-section">
+      <div class="ftitle">Concepts</div>
+      <div id="fconcepts"></div>
+    </section>
     <section>
       <div class="ftitle">Tags
         <span class="seg" role="group" aria-label="Match"><button data-tagmode="any" title="Notes with any selected tag">any</button><button data-tagmode="all" title="Notes with every selected tag">all</button></span>
@@ -72,6 +89,7 @@
     </section>
   </aside>
   <aside id="drawer" hidden>
+    <div id="drawer-concept" class="drawer-concept"></div>
     <div class="drawer-head">
       <span id="drawer-meta" class="muted"></span>
       <button id="drawer-close" title="Close">✕</button>
@@ -83,6 +101,7 @@
 <script src="vendor/d3.v7.9.0.min.js" data-rft-inline></script>
 <script src="filters.js" data-rft-inline></script>
 <script src="layout.js" data-rft-inline></script>
+<script src="concepts.js" data-rft-inline></script>
 <script src="app.js" data-rft-inline></script>
 </body>
 </html>

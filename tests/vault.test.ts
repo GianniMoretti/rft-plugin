@@ -163,7 +163,7 @@ describe('vault', () => {
 
   test('the static page inlines the web view and embeds the tree with every note', async () => {
     const { tree, texts } = (await loadDemo()).loaded
-    const html = staticPage({ html: WEB_FILES['web/index.html']!, css: 'a{}', js: 'go()', d3: 'd3()', filters: 'filt()', layout: 'lay()' }, tree, texts, 'demo', 'v1')
+    const html = staticPage({ html: WEB_FILES['web/index.html']!, css: 'a{}', js: 'go()', d3: 'd3()', filters: 'filt()', layout: 'lay()', concepts: 'con()' }, tree, texts, 'demo', 'v1')
     const data = JSON.parse(/window\.RFT_DATA = (.*?);<\/script>/.exec(html)![1]!)
     expect(data.tree.project).toBe('demo')
     expect(data.tree.roots).toEqual(['D00'])

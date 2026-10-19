@@ -3,9 +3,9 @@
 // codebase serves both the live view and this export.
 
 import type { Tree } from './vault'
-import { bodyOf, tagCounts } from './vault'
+import { bodyOf, conceptOrder, tagCounts } from './vault'
 
-export type PageAssets = { html: string; css: string; js: string; d3: string; filters: string; layout: string }
+export type PageAssets = { html: string; css: string; js: string; d3: string; filters: string; layout: string; concepts: string }
 
 export const ASSET_PATHS = {
   html: 'web/index.html',
@@ -13,12 +13,14 @@ export const ASSET_PATHS = {
   js: 'web/app.js',
   filters: 'web/filters.js',
   layout: 'web/layout.js',
+  concepts: 'web/concepts.js',
   d3: 'web/vendor/d3.v7.9.0.min.js',
 } as const
 
 /** The tree as the server's `api/tree` answers it. */
 export const treeJson = (tree: Tree, project: string, version: string) => ({
   project, version, nodes: Object.values(tree.nodes), roots: tree.roots, tags: tagCounts(tree),
+  concepts: conceptOrder(tree.concepts ?? {}),
 })
 
 const script = (code: string) => `<script>${code.replace(/<\/script/gi, '<\\/script')}</script>`
@@ -33,5 +35,6 @@ export function staticPage(a: PageAssets, tree: Tree, texts: Record<string, stri
     .replace(/<script src="vendor\/d3[^"]*" data-rft-inline><\/script>/, () => script(a.d3))
     .replace(/<script src="filters\.js" data-rft-inline><\/script>/, () => script(a.filters))
     .replace(/<script src="layout\.js" data-rft-inline><\/script>/, () => script(a.layout))
+    .replace(/<script src="concepts\.js" data-rft-inline><\/script>/, () => script(a.concepts))
     .replace(/<script src="app\.js" data-rft-inline><\/script>/, () => script(`window.RFT_DATA = ${data};`) + script(a.js))
 }

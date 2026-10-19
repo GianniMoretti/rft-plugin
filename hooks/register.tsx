@@ -8,7 +8,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { RftSnapshot } from '../types'
-import { addNode, exportHtml, initVault, loadActive, rulesText, setStatus, setTags, tagsReport, today, treeReport } from './lib/ops'
+import { addNode, conceptsReport, exportHtml, initVault, loadActive, rulesText, setConcept, setStatus, setTags, tagsReport, today, treeReport } from './lib/ops'
 import { ASSET_PATHS } from './lib/page'
 import type { Config, Io, NodeType, Tree } from './lib/vault'
 import { LEGEND, MARK, bodyOf, counts, join, readConfig, signatureOf, sync, validate } from './lib/vault'
@@ -30,7 +30,7 @@ const ioOf = ($: EngineInterface): Io => ({
   exists: path => $.fs.exists(path),
 })
 
-const treeOf = (s: RftSnapshot): Tree => ({ nodes: s.nodes, roots: s.roots })
+const treeOf = (s: RftSnapshot): Tree => ({ nodes: s.nodes, roots: s.roots, concepts: s.concepts })
 
 const TOOLS = {
   rft_add_node: {
@@ -79,6 +79,23 @@ const TOOLS = {
       required: ['id', 'tags'],
     },
   },
+  rft_set_concept: {
+    description:
+      'Make a note the start of a concept (a line of research: the note and its subtree, until a sub-concept starts), rename it, or remove it with name null. Only after the user has confirmed the concept: propose first, never apply silently.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id (e.g. D04) or full name of the note that starts the concept, usually a direction.' },
+        name: { type: ['string', 'null'], description: 'A short name for the line of research (not one experiment); null removes the concept.' },
+        summary: { type: 'string', description: 'Optional one-line summary; an empty string removes it.' },
+      },
+      required: ['id', 'name'],
+    },
+  },
+  rft_concepts: {
+    description: 'Show the concept tree: every concept with its starting note, note count, status counts and summary.',
+    inputSchema: { type: 'object', properties: {} },
+  },
   rft_tags: {
     description: 'List the topical tags in use in the vault, with how many notes carry each: check it before inventing a new tag.',
     inputSchema: { type: 'object', properties: {} },
@@ -112,9 +129,11 @@ const TOOLS = {
 // The rules for the system prompt are fixed at activation so the prompt cache holds.
 let rules: string | null = null
 let poller: { cancel: () => void } | null = null
+// a prompt a command wants Claude to answer, submitted by the poller
+let pendingPrompt: string | null = null
 const registeredTools = new Set<string>()
 
-const EMPTY: RftSnapshot = { isActive: false, vault: '', project: '', nodes: {}, roots: [], signature: '', problems: [], error: null }
+const EMPTY: RftSnapshot = { isActive: false, vault: '', project: '', nodes: {}, roots: [], concepts: {}, signature: '', problems: [], error: null }
 
 /** Re-reads the vault into the snapshot when its notes changed (or always, with `force`). */
 async function refresh($: EngineInterface, force = false): Promise<RftSnapshot | null> {
@@ -130,7 +149,7 @@ async function refresh($: EngineInterface, force = false): Promise<RftSnapshot |
     const loaded = await loadActive(io)
     const next: RftSnapshot = {
       isActive: true, vault: config.vault, project: config.project, nodes: loaded.tree.nodes,
-      roots: loaded.tree.roots, signature: loaded.signature, problems: loaded.problems, error: null,
+      roots: loaded.tree.roots, concepts: loaded.tree.concepts ?? {}, signature: loaded.signature, problems: loaded.problems, error: null,
     }
     await update($, snapshot, () => next)
     const shown = await read($, note)
@@ -192,11 +211,13 @@ async function registerCommands($: EngineInterface): Promise<void> {
   }
   await attempt('rft', () => $.command.register({ name: 'rft', description: 'Open the interactive tree view (/rft list: the outline pane, /rft text: print it, /rft stop: stop the server)', argumentHint: '[list|text|stop]' }))
   await attempt('rft-init', () => $.command.register({ name: 'rft-init', description: 'Activate the Reasoning Flow Tree in this project and create its vault', argumentHint: '[starting question]' }))
+  await attempt('rft-concepts', () => $.command.register({ name: 'rft-concepts', description: 'Print the concept tree (/rft-concepts suggest: ask Claude to propose a concept split)', argumentHint: '[suggest]' }))
   await attempt('rft-view', () => $.command.register({ name: 'rft-view', description: 'Write a standalone HTML view of the tree to <vault>/tree.html' }))
   if (failed.length) reportFailures($, failed)
 }
 
 async function poll($: EngineInterface): Promise<void> {
+  void submitPending($)
   try { await refresh($) } catch { /* tried again at the next tick */ }
 }
 
@@ -227,6 +248,10 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
     }
     case 'rft_set_tags':
       return setTags(io, loaded, String(i.id ?? ''), strings(i.tags))
+    case 'rft_set_concept':
+      return setConcept(io, loaded, String(i.id ?? ''), typeof i.name === 'string' ? i.name : null, typeof i.summary === 'string' ? i.summary : undefined)
+    case 'rft_concepts':
+      return conceptsReport(loaded)
     case 'rft_tags':
       return tagsReport(loaded)
     case 'rft_set_status':
@@ -424,6 +449,20 @@ const webHelp = (url: string) => {
   ].join('\n')
 }
 
+/** Submits a prompt a command queued; called from the poller, outside any command's dispatch. */
+async function submitPending($: EngineInterface): Promise<void> {
+  const text = pendingPrompt
+  if (!text) return
+  pendingPrompt = null
+  try {
+    await $.prompt.submit({ text })
+  } catch (err) {
+    $.ui.toast(`rft: could not ask Claude (${message(err)}); ask it yourself, e.g. "propose concepts for the tree"`)
+  }
+}
+
+const SUGGEST_CONCEPTS = `Propose a split of the reasoning tree into concepts (rft-manual skill, "Concepts"). Read the current tree with rft_tree and rft_concepts. Suggest 2 to 6 concepts, nested at most two levels: for each, the note that starts it (usually the direction that opened that line of research), a short readable name for the line of research, in words as in a heading (e.g. "Strong augmentation", not a tag like strong-augmentation; never a single experiment), and a one-line summary; say which notes stay in the project root and why. Present the proposal as a short table and ask me to confirm or change it. Do not call rft_set_concept until I say yes.`
+
 const NOT_ACTIVE = 'RFT is not active in this project. Run /rft-init [starting question] to set it up.'
 
 export const register: Register = (on, options) => {
@@ -509,6 +548,19 @@ export const register: Register = (on, options) => {
     return { text: res.text, context }
   })
 
+  on('command.run', { command: 'rft-concepts' }, async ($, e) => {
+    try {
+      const loaded = await loadActive(ioOf($))
+      if (e.args.trim() !== 'suggest') return { text: conceptsReport(loaded) }
+      // a prompt cannot be submitted from the command's own hook (the turn would wait on it), and a
+      // timer started here ends with it: the session's poller submits it at its next tick
+      pendingPrompt = SUGGEST_CONCEPTS
+      return { text: `${conceptsReport(loaded)}\n\nClaude will propose a concept split in a moment; nothing changes until you confirm it.` }
+    } catch (err) {
+      return { text: message(err) }
+    }
+  })
+
   on('command.run', { command: 'rft-view' }, async $ => {
     try {
       const io = ioOf($)
@@ -521,6 +573,7 @@ export const register: Register = (on, options) => {
         d3: await $.fs.read(join(root, ASSET_PATHS.d3)),
         filters: await $.fs.read(join(root, ASSET_PATHS.filters)),
         layout: await $.fs.read(join(root, ASSET_PATHS.layout)),
+        concepts: await $.fs.read(join(root, ASSET_PATHS.concepts)),
       }
       const path = await exportHtml(io, loaded, assets)
       const cwd = await $.session.cwd()

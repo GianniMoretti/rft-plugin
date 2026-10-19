@@ -29,6 +29,11 @@
   let positions = new Map()
   let hasView = false
   let font = 1 // the A− / A+ scale of labels and the note drawer
+  const C = window.RftConcepts
+  let concepts = new Map() // the concepts by id, `root` the project
+  let conceptMode = 'off' // off | regions | arrows
+  let view = 'tree' // tree: the reasoning tree; concepts: the concept tree
+  let focus = null // the concept whose subtree alone is drawn, or null
 
   // ---------------------------------------------------------------- persistence
 
@@ -62,21 +67,40 @@
     const first = tree === null
     tree = next
     byId = new Map(tree.nodes.map(n => [n.id, n]))
+    concepts = C.annotate(tree)
     if (first) {
+      conceptMode = ['off', 'regions', 'arrows'].includes(store.get('conceptMode', 'off')) ? store.get('conceptMode', 'off') : 'off'
+      view = store.get('pageView', 'tree') === 'concepts' ? 'concepts' : 'tree'
+      focus = store.get('focus', null)
+      // a link can say how to open: ?layout=lr&concepts=regions&view=concepts&focus=D02&filter=hide
+      const q = new URLSearchParams(location.search)
+      if (['td', 'lr', 'radial'].includes(q.get('layout'))) store.set('layout', q.get('layout'))
+      if (['off', 'regions', 'arrows'].includes(q.get('concepts'))) conceptMode = q.get('concepts')
+      if (['tree', 'concepts'].includes(q.get('view'))) view = q.get('view')
+      if (q.has('focus')) focus = q.get('focus') || null
+      if (q.has('note')) selected = q.get('note')
+      buildArrowMarkers()
       layoutKind = store.get('layout', 'td')
       collapsed = new Set(store.get('collapsed', []))
       // earlier versions kept only the legend's statuses, under `hidden`
       filters = F.normalise(store.get('filters', null) || { hiddenStatuses: store.get('hidden', []) })
-      setFont(store.get('font', 1), false)
+      const fq = new URLSearchParams(location.search)
+      if (fq.has('tags')) filters = F.normalise({ ...filters, tags: fq.get('tags').split(',').filter(Boolean) })
+      if (fq.has('hide')) filters = F.normalise({ ...filters, mode: 'hide' })
+      setFont(new URLSearchParams(location.search).get('font') || store.get('font', 1), false)
       document.title = `${tree.project} · reasoning tree`
       document.getElementById('title').textContent = `${tree.project} — the reasoning tree`
       buildLegend()
       syncLayoutButtons()
-      togglePanel(Boolean(store.get('filtersOpen', false)))
+      togglePanel(new URLSearchParams(location.search).get('panel') === 'filters' || Boolean(store.get('filtersOpen', false)))
     }
     for (const id of [...collapsed]) if (!byId.has(id)) collapsed.delete(id)
+    if (focus && (!concepts.has(focus) || !byId.has(concepts.get(focus).root))) focus = null
     computeFilters()
     buildFilterPanel()
+    buildConceptLegend()
+    buildCrumbs()
+    syncConceptButtons()
     const c = { direction: 0, experiment: 0 }
     for (const n of tree.nodes) c[n.type] = (c[n.type] || 0) + 1
     document.getElementById('counts').textContent = `${c.direction} directions · ${c.experiment} experiments`
@@ -92,8 +116,8 @@
   // ---------------------------------------------------------------- layout
 
   function hierarchy() {
-    const single = tree.roots.length === 1
-    const top = single ? byId.get(tree.roots[0]) : { id: '__root', virtual: true, children: tree.roots }
+    const single = tree.roots.length === 1 || focus
+    const top = focus ? byId.get(concepts.get(focus).root) : single ? byId.get(tree.roots[0]) : { id: '__root', virtual: true, children: tree.roots }
     return d3.hierarchy(top, d => {
       if (d.virtual) return d.children.filter(id => shownSet.has(id)).map(id => byId.get(id))
       if (collapsed.has(d.id)) return null
@@ -185,6 +209,7 @@
     all.select('g.fold circle').attr('r', n => (collapsed.has(n.data.id) ? 8 : 5.5))
     all.transition().duration(dur).attr('transform', n => `translate(${pos.get(n.data.id).p})`)
     gLinks.selectAll('path.link').attr('class', l => `link${matchSet.has(l.target.data.id) ? '' : ' dim'}`)
+    drawConcepts(pos, dur)
     updateLabels()
   }
 
@@ -234,6 +259,10 @@
   }
 
   function updateLabels() {
+    // concept names keep their size on screen, like the labels
+    d3.selectAll('#badges .badge').attr('transform', function () {
+      return `translate(${this.dataset.x},${this.dataset.y}) scale(${font / k})`
+    })
     const px = LABEL_PX * font
     const size = px / k
     const room = layoutKind === 'td' ? SPACING.td[0] * 1.15 : layoutKind === 'lr' ? SPACING.lr[1] - 30 : SPACING.radial[1] - 20
@@ -322,6 +351,7 @@
     const n = byId.get(id)
     const drawer = document.getElementById('drawer')
     drawer.hidden = false
+    renderConceptPath(document.getElementById('drawer-concept'), n.concept, 'Focus on this concept')
     document.getElementById('drawer-meta').textContent = `${n.type} · ${MARK[n.status] || ''} ${n.status}${n.date ? ' · ' + n.date : ''}${n.tags && n.tags.length ? ' · #' + n.tags.join(' #') : ''}`
     const article = document.getElementById('note')
     article.innerHTML = '<p class="missing">Loading…</p>'
@@ -367,6 +397,13 @@
   function computeFilters() {
     matchSet = F.matching(tree, filters)
     shownSet = F.visible(tree, filters)
+    if (focus) {
+      // focus on a concept: its subtree alone, its root always drawn
+      const top = concepts.get(focus).root
+      const sub = C.subtree(tree, top)
+      shownSet = new Set([...shownSet].filter(id => sub.has(id)))
+      shownSet.add(top)
+    }
   }
 
   /** Every change of a filter goes through here: store it, recompute, redraw. */
@@ -412,6 +449,17 @@
       label.innerHTML = `<input type="checkbox"${filters.hiddenStatuses.includes(s) ? '' : ' checked'}> <span class="swatch" style="background: var(--${s})"></span> ${LABEL[s]}`
       label.querySelector('input').addEventListener('change', () => applyFilters({ hiddenStatuses: toggled(filters.hiddenStatuses, s) }))
       sbox.appendChild(label)
+    }
+    const cbox = document.getElementById('fconcepts')
+    cbox.innerHTML = ''
+    const listed = C.ordered(concepts).filter(c => c.id !== C.ROOT)
+    document.getElementById('fconcepts-section').hidden = !listed.length
+    for (const c of listed) {
+      const label = document.createElement('label')
+      label.style.paddingLeft = `${(c.depth - 1) * 14}px`
+      label.innerHTML = `<input type="checkbox"${filters.concepts.includes(c.id) ? ' checked' : ''}> <span class="swatch" style="background: ${C.colourOf(concepts, c.id)}"></span> ${escH(c.name)} <span class="muted">${c.total}</span>`
+      label.querySelector('input').addEventListener('change', () => applyFilters({ concepts: toggled(filters.concepts, c.id) }))
+      cbox.appendChild(label)
     }
     const tbox = document.getElementById('ftags')
     tbox.innerHTML = ''
@@ -466,7 +514,8 @@
   document.getElementById('font-down').addEventListener('click', () => stepFont(-1))
   document.getElementById('font-up').addEventListener('click', () => stepFont(1))
   document.getElementById('fit').addEventListener('click', () => fit(true))
-  document.getElementById('centre').addEventListener('click', () => tree && tree.roots[0] && centreOn(tree.roots[0]))
+  const topId = () => (focus ? concepts.get(focus).root : tree.roots[0])
+  document.getElementById('centre').addEventListener('click', () => tree && topId() && centreOn(topId()))
   document.getElementById('expand').addEventListener('click', () => { collapsed.clear(); store.set('collapsed', []); render(true) })
   document.getElementById('collapse').addEventListener('click', () => {
     collapsed = new Set(tree.nodes.filter(n => n.parent && n.children.length).map(n => n.id))
@@ -483,6 +532,259 @@
     if (a) { ev.preventDefault(); go(a.dataset.go) }
   })
   window.addEventListener('resize', () => scheduleLabels())
+
+  // ---------------------------------------------------------------- concepts
+
+  function buildArrowMarkers() {
+    const defs = svg.select('defs')
+    C.PALETTE.forEach((colour, i) => {
+      if (!defs.select(`#arrow-c${i}`).empty()) return
+      defs.append('marker').attr('id', `arrow-c${i}`).attr('viewBox', '0 -4 8 8').attr('refX', 8).attr('refY', 0)
+        .attr('markerWidth', 7).attr('markerHeight', 7).attr('orient', 'auto')
+        .append('path').attr('d', 'M0,-4L8,0L0,4Z').attr('fill', colour)
+    })
+  }
+
+  // the room a node takes in a region, in world units (its circle and its label), grown by `g`
+  function nodeShape(sel, p, g = 0) {
+    const [x, y] = p.p
+    if (layoutKind === 'td') {
+      const w = SPACING.td[0] * 0.92
+      return sel.append('rect').attr('x', x - w / 2 - g).attr('y', y - 24 - g).attr('width', w + 2 * g).attr('height', 82 + 2 * g).attr('rx', 22 + g)
+    }
+    if (layoutKind === 'lr') {
+      return sel.append('rect').attr('x', x - 22 - g).attr('y', y - 17 - g).attr('width', SPACING.lr[1] - 16 + 2 * g).attr('height', 34 + 2 * g).attr('rx', 17 + g)
+    }
+    return sel.append('circle').attr('cx', x).attr('cy', y).attr('r', 34 + g)
+  }
+
+  /**
+   * One concept's region: its drawn notes and links as one soft shape with its name on top. Three
+   * layers, each a group of opaque shapes faded as a whole so overlaps never darken: a border in
+   * the concept's colour, the background over its inside, then a light tint. Drawn outer
+   * concepts first, a sub-concept shows as a lighter region with its own border inside its parent.
+   */
+  function drawRegion(c, pos, className) {
+    const drawn = new Set(pos.keys())
+    const { nodes, links } = C.region(tree, c.id, drawn)
+    if (!nodes.length) return
+    const colour = C.colourOf(concepts, c.id)
+    const band = layoutKind === 'lr' ? 34 : layoutKind === 'td' ? 60 : 56
+    const BORDER = 2.5
+    const holder = d3.select('#regions').append('g').attr('class', className).attr('data-concept', c.id)
+    const layer = (fill, opacity, grow) => {
+      const g = holder.append('g').attr('fill', fill).attr('stroke', fill).attr('opacity', opacity)
+      for (const [a, b] of links) {
+        g.append('path').attr('d', linkPath(pos.get(a), pos.get(b))).attr('fill', 'none').attr('stroke-width', band + 2 * grow)
+          .attr('stroke-linecap', 'round').attr('stroke-linejoin', 'round')
+      }
+      for (const id of nodes) nodeShape(g, pos.get(id), grow).attr('stroke', 'none')
+    }
+    layer(colour, 0.7, BORDER)
+    layer('var(--bg)', 1, 0)
+    layer(colour, Math.max(0.08, 0.17 - 0.03 * (c.depth - 1)), 0)
+    namePill(c, pos.get(drawn.has(c.root) ? c.root : nodes[0]), `${className}-label`, true)
+  }
+
+  /**
+   * A concept's name as a pill in its colour, above everything, its size constant on screen:
+   * at the top-left corner of the region (`atEdge`), or centred above the concept's root note.
+   */
+  function namePill(c, p, className, atEdge) {
+    if (!p) return
+    const [x, y] = p.p
+    let at
+    if (!atEdge) at = layoutKind === 'lr' ? [x - 12, y - 26] : [x, y - 30]
+    else if (layoutKind === 'td') at = [x - SPACING.td[0] * 0.46, y - 26]
+    else if (layoutKind === 'lr') at = [x - 22, y - 19]
+    else at = [x, y - 36]
+    const left = atEdge && layoutKind !== 'radial'
+    const pill = d3.select('#badges').append('g').attr('class', `badge ${className}`).attr('data-x', at[0]).attr('data-y', at[1])
+      .attr('data-concept', c.id).on('click', ev => { ev.stopPropagation(); setFocus(c.id) })
+    const text = pill.append('text').attr('text-anchor', left ? 'start' : 'middle').attr('x', left ? 8 : 0).attr('y', left ? -5 : 4)
+      .attr('font-size', 11.5).text(c.name)
+    const w = Math.max(40, text.node().getComputedTextLength() + 16)
+    pill.insert('rect', 'text').attr('x', left ? 0 : -w / 2).attr('y', left ? -19 : -10).attr('width', w).attr('height', 19).attr('rx', 9.5)
+      .attr('fill', C.colourOf(concepts, c.id))
+    pill.append('title').text(`${c.name}${c.summary ? ' — ' + c.summary : ''} (click to focus)`)
+  }
+
+  function drawConcepts(pos) {
+    d3.select('#regions').selectAll('*').remove()
+    d3.select('#badges').selectAll('*').remove()
+    const list = C.ordered(concepts).filter(c => c.id !== C.ROOT)
+    // in focus, the concepts enclosing the focused one would cover all of it: left out
+    const drawnConcepts = focus ? list.filter(c => C.pathOf(concepts, c.id).includes(focus)) : list
+    if (conceptMode === 'regions') for (const c of drawnConcepts) drawRegion(c, pos, 'region')
+    const colourIndex = new Map(list.map((c, i) => [c.id, i % C.PALETTE.length]))
+    gLinks.selectAll('path.link')
+      .style('stroke', l => (conceptMode === 'arrows' && colourIndex.has(l.target.data.concept) ? C.PALETTE[colourIndex.get(l.target.data.concept)] : null))
+      .attr('marker-end', l => (conceptMode === 'arrows' && colourIndex.has(l.target.data.concept) ? `url(#arrow-c${colourIndex.get(l.target.data.concept)})` : 'url(#arrow)'))
+    if (conceptMode === 'arrows') for (const c of drawnConcepts) namePill(c, pos.get(c.root), 'name', false)
+  }
+
+  /** A short highlight of a concept's region, whatever the concept mode. */
+  function flashConcept(id) {
+    const c = concepts.get(id)
+    if (!c || id === C.ROOT) return
+    d3.selectAll('#regions .flash, #badges .flash-label').remove()
+    drawRegion(c, positions, 'flash')
+    updateLabels()
+    setTimeout(() => d3.selectAll('#regions .flash, #badges .flash-label').remove(), 1900)
+  }
+
+  function setMode(mode) {
+    conceptMode = mode
+    store.set('conceptMode', mode)
+    syncConceptButtons()
+    buildConceptLegend()
+    drawConcepts(positions)
+    updateLabels()
+  }
+
+  function setFocus(id) {
+    focus = id && id !== C.ROOT && concepts.has(id) ? id : null
+    store.set('focus', focus)
+    if (view !== 'tree') setView('tree')
+    computeFilters()
+    buildCrumbs()
+    render(true)
+    setTimeout(() => fit(true), 420)
+  }
+
+  function syncConceptButtons() {
+    document.querySelectorAll('[data-cmode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.cmode === conceptMode)))
+    const t = document.getElementById('view-toggle')
+    t.setAttribute('aria-pressed', String(view === 'concepts'))
+    t.textContent = view === 'concepts' ? 'Reasoning tree' : 'Concept tree'
+  }
+
+  /** The concept path of `id` as links that focus on each concept. */
+  function renderConceptPath(box, id, title) {
+    box.innerHTML = ''
+    const path = C.pathOf(concepts, concepts.has(id) ? id : C.ROOT)
+    path.forEach((cid, i) => {
+      if (i) box.append(' › ')
+      const a = document.createElement('a')
+      a.textContent = concepts.get(cid).name
+      a.title = cid === C.ROOT ? 'Show the whole tree' : title
+      const colour = C.colourOf(concepts, cid)
+      if (colour) a.style.color = colour
+      a.addEventListener('click', ev => { ev.preventDefault(); setFocus(cid === C.ROOT ? null : cid) })
+      box.appendChild(a)
+    })
+  }
+
+  function buildCrumbs() {
+    const nav = document.getElementById('crumbs')
+    nav.hidden = !focus
+    if (!focus) return
+    nav.innerHTML = '<span class="muted">Focus:</span> '
+    const path = document.createElement('span')
+    renderConceptPath(path, focus, 'Focus on this concept')
+    nav.appendChild(path)
+    const all = document.createElement('button')
+    all.className = 'linkish'
+    all.textContent = 'Show the whole tree'
+    all.addEventListener('click', () => setFocus(null))
+    nav.append(' · ', all)
+  }
+
+  function buildConceptLegend() {
+    const list = C.ordered(concepts).filter(c => c.id !== C.ROOT)
+    const box = document.getElementById('concept-legend')
+    box.hidden = conceptMode === 'off' || !list.length
+    const rows = document.getElementById('concepts-list')
+    rows.innerHTML = ''
+    for (const c of list) {
+      const row = document.createElement('div')
+      row.className = `row${focus === c.id ? ' on' : ''}`
+      row.style.paddingLeft = `${(c.depth - 1) * 12}px`
+      row.innerHTML = `<span class="swatch" style="background: ${C.colourOf(concepts, c.id)}"></span>${escH(c.name)} <span class="muted">${c.total}</span>`
+      row.title = `${c.summary || c.name} — click to focus`
+      row.addEventListener('click', () => setFocus(focus === c.id ? null : c.id))
+      rows.appendChild(row)
+    }
+  }
+
+  // ---------------------------------------------------------------- the concept tree
+
+  const csvg = d3.select('#concept-canvas')
+  const cviewport = d3.select('#cviewport')
+  const czoom = d3.zoom().scaleExtent([0.1, 4]).on('zoom', ev => cviewport.attr('transform', ev.transform))
+  csvg.call(czoom).on('dblclick.zoom', null)
+
+  function setView(v) {
+    view = v
+    store.set('pageView', v)
+    // SVG elements have no `hidden` property: the attribute itself
+    document.getElementById('canvas').toggleAttribute('hidden', v !== 'tree')
+    document.getElementById('concept-canvas').toggleAttribute('hidden', v !== 'concepts')
+    syncConceptButtons()
+    if (v === 'concepts') drawConceptTree()
+  }
+
+  function drawConceptTree() {
+    cviewport.selectAll('*').remove()
+    const top = d3.hierarchy(concepts.get(C.ROOT), c => c.children.map(id => concepts.get(id)).filter(Boolean))
+    d3.tree().nodeSize([240, 230])(top)
+    const radius = c => 12 + 4.5 * Math.sqrt(c.total)
+    // a link leaves below the parent's name, count, bar and focus line, and enters the child's circle
+    const BLOCK = 84
+    cviewport.append('g').selectAll('path').data(top.links()).join('path').attr('class', 'clink')
+      .attr('d', l => d3.linkVertical()({ source: [l.source.x, l.source.y + radius(l.source.data) + BLOCK], target: [l.target.x, l.target.y - radius(l.target.data) - 4] }))
+    const node = cviewport.append('g').selectAll('g').data(top.descendants()).join('g')
+      .attr('class', 'cnode').attr('transform', n => `translate(${n.x},${n.y})`)
+      .on('click', (ev, n) => { ev.stopPropagation(); openConcept(n.data.id) })
+    node.append('title').text(n => `${n.data.name}${n.data.summary ? ' — ' + n.data.summary : ''}`)
+    node.append('circle').attr('r', n => radius(n.data))
+      .attr('fill', n => C.colourOf(concepts, n.data.id) || 'var(--panel)')
+      .attr('stroke', n => (n.data.id === C.ROOT ? 'var(--muted)' : 'none'))
+    node.append('text').attr('class', 'cname').attr('y', n => radius(n.data) + 20).attr('text-anchor', 'middle').text(n => n.data.name)
+    node.append('text').attr('class', 'ccount muted').attr('y', n => radius(n.data) + 38).attr('text-anchor', 'middle')
+      .text(n => `${n.data.total} note${n.data.total === 1 ? '' : 's'}${n.data.total > n.data.count ? ` (${n.data.count} own)` : ''}`)
+    // the stacked bar of statuses, the concept with its sub-concepts
+    const BAR = 130
+    node.each(function (n) {
+      const counts = C.totalStatuses(concepts, n.data.id)
+      const total = STATUSES.reduce((a, st) => a + (counts[st] || 0), 0) || 1
+      const g = d3.select(this).append('g').attr('transform', `translate(${-BAR / 2},${radius(n.data) + 48})`)
+      let x = 0
+      for (const st of STATUSES) {
+        const w = ((counts[st] || 0) / total) * BAR
+        if (!w) continue
+        g.append('rect').attr('x', x).attr('width', w).attr('height', 9).attr('fill', `var(--${st})`)
+          .append('title').text(`${counts[st]} ${LABEL[st]}`)
+        x += w
+      }
+      g.append('rect').attr('width', BAR).attr('height', 9).attr('rx', 2).attr('class', 'cbar-frame')
+    })
+    const focusBtn = node.filter(n => n.data.id !== C.ROOT).append('text').attr('class', 'cfocus')
+      .attr('y', n => radius(n.data) + 76).attr('text-anchor', 'middle').text('focus ⤢')
+      .on('click', (ev, n) => { ev.stopPropagation(); setFocus(n.data.id) })
+    focusBtn.append('title').text('Show only this concept in the reasoning tree')
+    requestAnimationFrame(() => {
+      const box = cviewport.node().getBBox()
+      const w = csvg.node().clientWidth, h = csvg.node().clientHeight
+      if (!box.width || !w || !h) return
+      const s = Math.max(0.2, Math.min(1.4, 0.88 * Math.min(w / box.width, h / box.height)))
+      csvg.call(czoom.transform, d3.zoomIdentity.translate(w / 2, h / 2).scale(s).translate(-(box.x + box.width / 2), -(box.y + box.height / 2)))
+    })
+  }
+
+  /** From the concept tree to the reasoning tree, centred on the concept's root note. */
+  function openConcept(id) {
+    const c = concepts.get(id)
+    setView('tree')
+    if (focus && id !== focus && !C.pathOf(concepts, id).includes(focus)) setFocus(null)
+    const target = c && c.root ? c.root : tree.roots[0]
+    reveal(target)
+    centreOn(target)
+    setTimeout(() => flashConcept(id), 450)
+  }
+
+  document.querySelectorAll('[data-cmode]').forEach(b => b.addEventListener('click', () => setMode(b.dataset.cmode)))
+  document.getElementById('view-toggle').addEventListener('click', () => setView(view === 'concepts' ? 'tree' : 'concepts'))
 
   // ---------------------------------------------------------------- markdown (the subset notes use)
 
@@ -551,6 +853,7 @@
     const w = svg.node().clientWidth, h = svg.node().clientHeight
     const box = gNodes.node().getBBox()
     if ((!w || !h || !box.width) && tries < 20) { requestAnimationFrame(() => initialView(tries + 1)); return }
+    if (new URLSearchParams(location.search).has('fit')) { fit(false); return }
     const v = store.get('view', null)
     if (v && Number.isFinite(v.k) && Number.isFinite(v.x) && Number.isFinite(v.y)) {
       svg.call(zoom.transform, d3.zoomIdentity.translate(v.x, v.y).scale(v.k))
@@ -573,6 +876,8 @@
     render(false)
     hasView = true
     requestAnimationFrame(() => initialView())
+    if (view === 'concepts') setView('concepts')
+    if (selected && byId.has(selected)) select(selected)
   }
 
   const live = document.getElementById('live')
@@ -591,7 +896,7 @@
         if (!tree || next.version !== tree.version) {
           setTree(next)
           if (!hasView) first()
-          else render(true)
+          else { render(true); if (view === 'concepts') drawConceptTree() }
           if (selected && byId.has(selected)) select(selected)
         }
       } catch (e) {

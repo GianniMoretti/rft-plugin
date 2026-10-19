@@ -35,11 +35,40 @@ export type RftNode = {
   path: string
   /** Topical tags: the note's tags less the project, type and status ones. */
   tags: string[]
+  /** The id of its concept: the nearest ancestor (or itself) declaring one, else `root`. */
+  concept: string
 }
 
 export type Tree = {
   nodes: Record<string, RftNode>
   roots: string[]
+  /** The concepts by id: `root` (the project) and one per note that declares `concept:`. */
+  concepts?: Record<string, Concept>
+}
+
+/** The id of the implicit concept every note belongs to without a concept ancestor. */
+export const ROOT_CONCEPT = 'root'
+
+/**
+ * A line of research: the subtree of the note that declares it (`concept:` in its
+ * frontmatter), less the subtrees of the sub-concepts declared below it.
+ */
+export type Concept = {
+  /** The declaring note's id; `root` for the project. */
+  id: string
+  name: string
+  summary: string
+  /** The declaring note; null for the project root concept. */
+  root: string | null
+  parent: string | null
+  children: string[]
+  depth: number
+  /** The notes of this concept itself, without its sub-concepts. */
+  count: number
+  /** With its sub-concepts. */
+  total: number
+  /** Status counts of its own notes. */
+  statuses: Record<string, number>
 }
 
 export type Config = {
@@ -279,6 +308,7 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
         id, name, title: name.slice(idOf(name).length).trim(), type: fmType,
         status: fm.status ?? '', date: fm.date ?? '', parent: null, children: [], path,
         tags: topicalTags(parseTags(fm.tags), config.project),
+        concept: ROOT_CONCEPT,
       }
       texts[id] = text
       parentRef[id] = linkTarget(fm.parent)
@@ -316,7 +346,83 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
   const byNameCmp = (a: string, b: string) => compareNames(nodes[a]!.name, nodes[b]!.name)
   for (const n of Object.values(nodes)) n.children.sort(byNameCmp)
   roots.sort(byNameCmp)
-  return { config, tree: { nodes, roots }, texts, problems, signature: await signatureOf(io, config.vault) }
+  const tree: Tree = { nodes, roots }
+  tree.concepts = computeConcepts(tree, config.project, conceptDeclarations(texts))
+  return { config, tree, texts, problems, signature: await signatureOf(io, config.vault) }
+}
+
+// ---------------------------------------------------------------- concepts
+
+/** A frontmatter value without the quotes YAML allows around it. */
+export const unquote = (v: string | undefined) => (v ?? '').trim().replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1').trim()
+
+/** The notes that declare a concept: `concept:` (and `concept_summary:`) in the frontmatter. */
+export function conceptDeclarations(texts: Record<string, string>): Record<string, { name: string; summary: string }> {
+  const out: Record<string, { name: string; summary: string }> = {}
+  for (const [id, text] of Object.entries(texts)) {
+    const fm = front(text)
+    const name = unquote(fm.concept)
+    if (name) out[id] = { name, summary: unquote(fm.concept_summary) }
+  }
+  return out
+}
+
+/**
+ * Concept membership, inherited down the tree: every note belongs to its nearest ancestor (or
+ * itself) declaring a concept, else to the project root concept. Sets `concept` on every node.
+ */
+export function computeConcepts(tree: Tree, project: string, decl: Record<string, { name: string; summary: string }>): Record<string, Concept> {
+  const make = (id: string, name: string, summary: string, root: string | null, parent: string | null, depth: number): Concept =>
+    ({ id, name, summary, root, parent, children: [], depth, count: 0, total: 0, statuses: {} })
+  const concepts: Record<string, Concept> = { [ROOT_CONCEPT]: make(ROOT_CONCEPT, project, '', null, null, 0) }
+  const visit = (id: string, current: string) => {
+    const n = tree.nodes[id]
+    if (!n) return
+    const d = decl[id]
+    if (d) {
+      concepts[id] = make(id, d.name, d.summary, id, current, concepts[current]!.depth + 1)
+      concepts[current]!.children.push(id)
+      current = id
+    }
+    n.concept = current
+    const c = concepts[current]!
+    c.count += 1
+    c.statuses[n.status] = (c.statuses[n.status] ?? 0) + 1
+    for (const k of n.children) visit(k, current)
+  }
+  for (const r of tree.roots) visit(r, ROOT_CONCEPT)
+  const total = (id: string): number => {
+    const c = concepts[id]!
+    c.total = c.count + c.children.reduce((s, k) => s + total(k), 0)
+    return c.total
+  }
+  total(ROOT_CONCEPT)
+  return concepts
+}
+
+/** The concept ids from the project root down to `id`. */
+export function conceptPath(concepts: Record<string, Concept>, id: string): string[] {
+  const out: string[] = []
+  for (let c: Concept | undefined = concepts[id]; c; c = c.parent ? concepts[c.parent] : undefined) out.unshift(c.id)
+  return out
+}
+
+/** The concepts in tree order (depth first from the root concept). */
+export function conceptOrder(concepts: Record<string, Concept>): Concept[] {
+  const out: Concept[] = []
+  const go = (id: string) => { const c = concepts[id]; if (!c) return; out.push(c); c.children.forEach(go) }
+  go(ROOT_CONCEPT)
+  return out
+}
+
+export const statusSummary = (statuses: Record<string, number>) =>
+  STATUSES.filter(st => statuses[st]).map(st => `${MARK[st]}${statuses[st]}`).join(' ')
+
+/** Removes a one-line frontmatter field, if present. */
+export function removeField(text: string, key: string): string {
+  const parts = split(text)
+  if (!parts) return text
+  return joinNote(parts.head.filter(l => !l.startsWith(key + ':')), parts.body)
 }
 
 // ---------------------------------------------------------------- tree text
@@ -547,6 +653,11 @@ export async function validate(io: Io, loaded: Loaded): Promise<Validation> {
     if (!(STATUSES as readonly string[]).includes(n.status)) errors.push(`${n.path}: status "${n.status}" is not one of ${STATUSES.join(', ')}`)
     if (FORBIDDEN.test(n.name)) errors.push(`${n.path}: the title contains a character that breaks links (^ # | [ ] \\ / : * " < > ?)`)
     if (!n.title) warnings.push(`${n.path}: no title after the id`)
+    if (fm.concept !== undefined) {
+      const cname = unquote(fm.concept)
+      if (!cname) errors.push(`${n.id}: \`concept:\` is empty (give the concept a name, or remove the field)`)
+      else if (/[\^#|[\]]/.test(cname)) errors.push(`${n.id}: concept name "${cname}" contains ^ # | [ or ]`)
+    } else if (fm.concept_summary !== undefined) warnings.push(`${n.id}: concept_summary without concept`)
     const odd = n.tags.filter(t => !isKebab(t))
     if (odd.length) warnings.push(`${n.id}: tag(s) ${odd.join(', ')} not lowercase kebab-case (rft_set_tags fixes them)`)
     if (!/^\d{4}-\d{2}-\d{2}$/.test(n.date)) warnings.push(`${n.path}: date "${n.date}" is not YYYY-MM-DD`)
@@ -558,6 +669,13 @@ export async function validate(io: Io, loaded: Loaded): Promise<Validation> {
     const listed = new Set(linksIn(section?.[1]))
     const missing = n.children.filter(k => !listed.has(tree.nodes[k]!.name))
     if (missing.length) warnings.push(`${n.id}: "Children in the tree" does not list ${missing.join(', ')} (rft_sync adds them)`)
+  }
+  const seenNames = new Map<string, string>()
+  for (const c of Object.values(tree.concepts ?? {})) {
+    const key = c.name.toLowerCase()
+    const other = seenNames.get(key)
+    if (other !== undefined) warnings.push(`concept name "${c.name}" is used twice (${other} and ${c.root ?? 'the project'})`)
+    else seenNames.set(key, c.root ?? 'the project')
   }
   const linkSources = files.filter(f => f.endsWith('.md') && !f.startsWith('templates/'))
   for (const f of linkSources) {

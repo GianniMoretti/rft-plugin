@@ -7,8 +7,9 @@ import { staticPage } from './page'
 import type { Config, Io, Loaded, NodeType, RftNode, Tree } from './vault'
 import {
   CONFIG_PATH, DIRECTION_TEMPLATE, EXPERIMENT_TEMPLATE, INDEX, LEGEND, MERMAID, STATUSES, SUBDIR,
-  compactTree, counts, defaultConfig, front, indexTemplate, join, load, nextId, noteText, readConfig,
-  resolveId, sanitiseTitle, sync, tagCounts, validate, withChildListed, withStatus, withTopicalTags, writeConfig,
+  MARK, ROOT_CONCEPT, compactTree, conceptOrder, conceptPath, counts, defaultConfig, front, indexTemplate, join, load,
+  nextId, noteText, readConfig, removeField, resolveId, sanitiseTitle, setField, statusSummary, sync, tagCounts,
+  validate, withChildListed, withStatus, withTopicalTags, writeConfig,
 } from './vault'
 
 export const today = (now = new Date()) =>
@@ -162,6 +163,92 @@ export async function setTags(io: Io, loaded: Loaded, ref: string, tags: string[
   return `${n.name}: tags ${now.length ? now.join(', ') : '(none)'}${n.tags.join() !== now.join() ? ` (were ${n.tags.join(', ') || 'none'})` : ''}.`
 }
 
+// ---------------------------------------------------------------- concepts
+
+/** Concept names name a line of research: short, and free of what breaks Obsidian links. */
+export function checkConceptName(name: string): string {
+  const n = name.trim().replace(/\s+/g, ' ')
+  if (!n) throw new RftError('the concept name is empty')
+  if (/[\^#|[\]]/.test(n)) throw new RftError('a concept name cannot contain ^ # | [ or ]')
+  if (n.length > 60) throw new RftError('keep the concept name short (60 characters at most): it names a line of research')
+  return n
+}
+
+/** Sets, renames or (with a null or empty name) removes the concept a note declares. */
+export async function setConcept(io: Io, loaded: Loaded, ref: string, name: string | null, summary?: string): Promise<string> {
+  const id = resolveId(loaded.tree, ref)
+  if (!id) throw new RftError(`"${ref}" is not a note of the tree`)
+  const n = loaded.tree.nodes[id]!
+  const was = loaded.tree.concepts?.[id]
+  let text = loaded.texts[id]!
+  let said: string
+  if (name === null || !name.trim()) {
+    if (!was) return `${n.name} declares no concept: nothing to remove.`
+    text = removeField(removeField(text, 'concept'), 'concept_summary')
+    said = `${n.name} no longer starts the concept "${was.name}": its notes now belong to the enclosing concept.`
+  } else {
+    const clean = checkConceptName(name)
+    text = setField(text, 'concept', JSON.stringify(clean), 'tags')
+    if (summary !== undefined) {
+      const one = summary.trim().replace(/\s+/g, ' ')
+      text = one ? setField(text, 'concept_summary', JSON.stringify(one), 'concept') : removeField(text, 'concept_summary')
+    }
+    said = was
+      ? `${n.name}: concept "${was.name}" ${was.name === clean ? 'kept' : `renamed to "${clean}"`}${summary !== undefined ? ', summary updated' : ''}.`
+      : `${n.name} now starts the concept "${clean}".`
+  }
+  await io.write(join(loaded.config.vault, n.path), text)
+  const fresh = await load(io, loaded.config)
+  Object.assign(loaded, fresh)
+  const c = fresh.tree.concepts?.[id]
+  return c ? `${said} It holds ${c.count} note(s) (${c.total} with its sub-concepts).` : said
+}
+
+/** The concept tree as compact text. */
+export function conceptsReport(loaded: Loaded): string {
+  const concepts = loaded.tree.concepts ?? {}
+  const lines = conceptOrder(concepts).map(c => {
+    const where = c.root ? `@${c.root}` : 'project root'
+    const sub = c.total > c.count ? ` (+${c.total - c.count} in sub-concepts)` : ''
+    const stats = statusSummary(c.statuses)
+    return `${'  '.repeat(c.depth)}- ${c.name} [${where}] ${c.count} note(s)${sub}${stats ? ` ${stats}` : ''}${c.summary ? ` — ${c.summary}` : ''}`
+  })
+  const declared = lines.length - 1
+  return `${declared ? `${declared} concept(s)` : 'No concepts yet: every note is in the project root concept'}. Marks: ${LEGEND}.\n${lines.join('\n')}`
+}
+
+/**
+ * The tree for the session-start context: grouped by concept when there are concepts (a
+ * header per concept, its own notes one per line), else the indented tree.
+ */
+export function groupedTree(tree: Tree): string {
+  const concepts = tree.concepts ?? {}
+  if (Object.keys(concepts).length <= 1) return compactTree(tree)
+  const own: Record<string, string[]> = {}
+  const walk = (id: string) => {
+    const n = tree.nodes[id]
+    if (!n) return
+    ;(own[n.concept] ??= []).push(id)
+    n.children.forEach(walk)
+  }
+  tree.roots.forEach(walk)
+  const out: string[] = []
+  for (const c of conceptOrder(concepts)) {
+    const path = conceptPath(concepts, c.id).map(id => concepts[id]!.name).join(' › ')
+    const notes = own[c.id] ?? []
+    if (!notes.length && c.id === ROOT_CONCEPT) continue
+    out.push(`## ${path}${c.root ? ` (from ${c.root})` : ''}${c.summary ? ` — ${c.summary}` : ''}`)
+    let prev: string | null = null
+    for (const id of notes) {
+      const n = tree.nodes[id]!
+      // the parent is said when it is not the note on the line above
+      out.push(`${MARK[n.status] ?? '-'} ${n.name}${n.parent && n.parent !== prev ? ` ← ${n.parent}` : ''}`)
+      prev = id
+    }
+  }
+  return out.join('\n')
+}
+
 export function tagsReport(loaded: Loaded): string {
   const list = tagCounts(loaded.tree)
   return list.length
@@ -199,7 +286,7 @@ export function treeReport(loaded: Loaded, opts: { root?: string; depth?: number
 const MAX_LINES = 160
 
 export function rulesText(tree: Tree, config: Config): string {
-  let lines = compactTree(tree).split('\n')
+  let lines = groupedTree(tree).split('\n')
   if (lines.length > MAX_LINES) lines = [...lines.slice(0, MAX_LINES), `… ${lines.length - MAX_LINES} more (rft_tree shows them)`]
   return `# Reasoning Flow Tree (rft) is active in this project
 
@@ -211,9 +298,10 @@ The reasoning of this research project is kept as a tree of Obsidian notes in \`
 - Give every new note 1-3 short topical tags (lowercase kebab-case, e.g. \`theory\`, \`ablation\`), reusing the ones rft_tags lists before inventing new ones; rft_set_tags changes them. Do not retro-tag old notes unless asked.
 - Statuses: ${STATUSES.join(', ')}. Marks: ${LEGEND}.
 - The tools assign ids (never reused) and strip ^ # | [ ] from titles. After editing notes by hand, run rft_sync (children / up / down, 00 Index.md, the canvas) and rft_validate.
+- Concepts group the tree into lines of research: a note with \`concept:\` starts one, its subtree inherits it until a sub-concept starts. When a direction opens a new line of research, PROPOSE a short concept name to the user; apply it with rft_set_concept only after they confirm, never silently. rft_concepts shows the concept tree.
 - The rft-manual skill is the full manual; rft_tree shows the current tree.
 
-The tree at the start of this session:
+The tree at the start of this session${Object.keys(tree.concepts ?? {}).length > 1 ? ', by concept (← parent, when not the line above)' : ''}:
 ${lines.join('\n')}`
 }
 

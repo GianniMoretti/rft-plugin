@@ -8,6 +8,8 @@ children: ["[[E04 Distance of augmented samples to the training set]]"]
 up: "[[E03 RandAugment magnitude sweep with long training]]"
 down: ["[[E04 Distance of augmented samples to the training set]]"]
 tags: [small-data-regularisation, direction, augmentation, analysis, running]
+concept: "Why it fails at 1k"
+concept_summary: "What breaks augmentation on the smallest subset"
 ---
 
 # D03 · Why augmentation fails at 1k images

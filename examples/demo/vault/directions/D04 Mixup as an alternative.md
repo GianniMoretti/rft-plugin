@@ -8,6 +8,8 @@ children: ["[[E05 Mixup and CutMix at 1k images]]"]
 up: "[[E03 RandAugment magnitude sweep with long training]]"
 down: ["[[E05 Mixup and CutMix at 1k images]]"]
 tags: [small-data-regularisation, direction, mixup, done]
+concept: "Mix-based augmentation"
+concept_summary: "Mixup and CutMix as the augmentation"
 ---
 
 # D04 · Mixup as an alternative

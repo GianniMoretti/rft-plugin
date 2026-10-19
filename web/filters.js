@@ -8,7 +8,7 @@
   const strings = v => (Array.isArray(v) ? [...new Set(v.filter(x => typeof x === 'string' && x))] : [])
 
   /** No filter: every note matches. */
-  const empty = () => ({ mode: 'dim', tags: [], tagMode: 'any', hiddenTypes: [], hiddenStatuses: [], from: '', to: '' })
+  const empty = () => ({ mode: 'dim', tags: [], tagMode: 'any', hiddenTypes: [], hiddenStatuses: [], from: '', to: '', concepts: [] })
 
   /** A filter state read back from storage, every field checked. */
   function normalise(f) {
@@ -21,12 +21,14 @@
       hiddenStatuses: strings(v.hiddenStatuses),
       from: isDate(v.from) ? v.from : '',
       to: isDate(v.to) ? v.to : '',
+      concepts: strings(v.concepts),
     }
   }
 
-  /** How many kinds of filter are set: tags, type, status, date range. */
+  /** How many kinds of filter are set: tags, type, status, date range, concepts. */
   const activeCount = f =>
-    (f.tags.length ? 1 : 0) + (f.hiddenTypes.length ? 1 : 0) + (f.hiddenStatuses.length ? 1 : 0) + (f.from || f.to ? 1 : 0)
+    (f.tags.length ? 1 : 0) + (f.hiddenTypes.length ? 1 : 0) + (f.hiddenStatuses.length ? 1 : 0) + (f.from || f.to ? 1 : 0) +
+    (f.concepts && f.concepts.length ? 1 : 0)
 
   /** Whether one note passes every filter that is set. */
   function matches(node, f) {
@@ -36,6 +38,11 @@
       const own = new Set(node.tags || [])
       const ok = f.tagMode === 'all' ? f.tags.every(t => own.has(t)) : f.tags.some(t => own.has(t))
       if (!ok) return false
+    }
+    if (f.concepts && f.concepts.length) {
+      // a note is in a concept when the concept is on its path (its own or an enclosing one)
+      const path = node.conceptPath || (node.concept ? [node.concept] : [])
+      if (!f.concepts.some(c => path.includes(c))) return false
     }
     if (f.from || f.to) {
       if (!isDate(node.date)) return false
