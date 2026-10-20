@@ -92,9 +92,25 @@
     <div id="drawer-concept" class="drawer-concept"></div>
     <div class="drawer-head">
       <span id="drawer-meta" class="muted"></span>
-      <button id="drawer-close" title="Close">✕</button>
+      <span class="drawer-actions">
+        <button id="drawer-edit" hidden title="Edit the note's text (Ctrl+S saves, Esc cancels)">Edit</button>
+        <button id="drawer-close" title="Close">✕</button>
+      </span>
     </div>
+    <p id="edit-nokey" class="edit-nokey" hidden>To edit, open the address <code>/rft</code> printed (it ends in
+      <code>?token=…</code>) once: this browser then remembers its key.</p>
     <article id="note"></article>
+    <div id="editor" hidden>
+      <textarea id="note-text" aria-label="The note's text, in markdown"></textarea>
+      <div class="editor-bar">
+        <button id="note-save" class="primary" title="Write it to the note's file (Ctrl+S)">Save</button>
+        <button id="note-cancel" title="Drop the changes (Esc)">Cancel</button>
+        <button id="note-overwrite" hidden title="Save your text over the newer one">Overwrite</button>
+        <button id="note-reload" hidden title="Drop your text and edit the newer one">Reload</button>
+        <span id="editor-msg" class="muted" role="status"></span>
+      </div>
+      <div class="muted editor-hint">The text below the frontmatter: status, parent and tags change through Claude.</div>
+    </div>
   </aside>
 </main>
 <div id="tooltip" hidden></div>

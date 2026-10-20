@@ -177,6 +177,9 @@ describe('commands', () => {
   })
 })
 
+/** The address the server child prints: with the key for writes, as the real one does. */
+const ADDRESS = 'http://127.0.0.1:5555/?token=k3y'
+
 /** The server child: says where it listens, then runs until the plugin ends the loop. */
 function fakeServer(on: On, opts: { fail?: string[] } = {}) {
   const seen: string[][] = []
@@ -186,7 +189,7 @@ function fakeServer(on: On, opts: { fail?: string[] } = {}) {
     if (opts.fail?.includes(e.argv[0]!)) throw new Error(`ENOENT: ${e.argv[0]}`)
     state.isRunning = true
     try {
-      yield { stream: 'stdout' as const, text: 'RFT_SERVER_URL http://127.0.0.1:5555/\n' }
+      yield { stream: 'stdout' as const, text: `RFT_SERVER_URL ${ADDRESS}\n` }
       // runs until the plugin ends the loop, which aborts this dispatch
       await new Promise(resolve => next.signal.addEventListener('abort', resolve))
       return { value: { code: null, signal: 'SIGTERM' } }
@@ -200,13 +203,13 @@ function fakeServer(on: On, opts: { fail?: string[] } = {}) {
 const RUN = (args: string) => ({ command: 'rft', args, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } }) as never
 
 describe('web view', () => {
-  test('/rft starts the read-only server once, prints how to open it, and the pane shows the URL', async ($, on) => {
+  test('/rft starts the server once, prints how to open it, and the pane shows the URL', async ($, on) => {
     mock.clock(on)
     world(on, demoFiles())
     const srv = fakeServer(on)
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
     const first = await $.command.run(RUN(''))
-    expect(first.text).toContain('Tree view: http://127.0.0.1:5555/')
+    expect(first.text).toContain(`Tree view: ${ADDRESS}`)
     expect(first.text).toContain('Ctrl+Shift+B')
     expect(first.text).toContain('ssh -L 5555:127.0.0.1:5555')
     expect(srv.seen).toHaveLength(1)
@@ -219,7 +222,7 @@ describe('web view', () => {
     expect(srv.seen).toHaveLength(1)
     for (const surface of SURFACES) {
       const ui = await $.ui.mount({ ...PANE, surface })
-      expect((await ui.find({ type: 'Text', text: /^Tree view: / }))?.text).toBe('Tree view: http://127.0.0.1:5555/')
+      expect((await ui.find({ type: 'Text', text: /^Tree view: / }))?.text).toBe(`Tree view: ${ADDRESS}`)
       await ui.unmount()
     }
     expect(srv.state.isRunning).toBe(true)
@@ -260,9 +263,9 @@ describe('web view', () => {
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
     expect(w.opened).toEqual([])
     const res = await $.command.run(RUN(''))
-    expect(res.text).toContain('Tree view opened in the browser pane: http://127.0.0.1:5555/')
+    expect(res.text).toContain(`Tree view opened in the browser pane: ${ADDRESS}`)
     expect(calls.map(c => c.tool)).toEqual(['tabs_context', 'preview_start'])
-    expect(calls[1]!.args).toEqual({ url: 'http://127.0.0.1:5555/' })
+    expect(calls[1]!.args).toEqual({ url: ADDRESS })
     expect(w.opened).toEqual([])
     const list = await $.command.run(RUN('list'))
     expect(list.text).toContain('Outline pane opened')
@@ -284,7 +287,7 @@ describe('web view', () => {
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
     const res = await $.command.run(RUN(''))
     expect(calls.map(c => c.tool)).toEqual(['tabs_context', 'navigate', 'tabs_select'])
-    expect(calls[1]!.args).toEqual({ url: 'http://127.0.0.1:5555/', tabId: 'tab-7' })
+    expect(calls[1]!.args).toEqual({ url: ADDRESS, tabId: 'tab-7' })
     expect(res.text).toContain('shown again')
     expect(res.text).toContain('Ctrl+Shift+B')
   })
@@ -297,7 +300,7 @@ describe('web view', () => {
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
     const res = await $.command.run(RUN(''))
     expect(res.text).toContain('Tree view: http://127.0.0.1:5555/')
-    expect(res.text!.split('\n')[0]).toBe('Tree view: http://127.0.0.1:5555/')
+    expect(res.text!.split('\n')[0]).toBe(`Tree view: ${ADDRESS}`)
     expect(w.opened).toEqual(['rft-tree'])
   })
 

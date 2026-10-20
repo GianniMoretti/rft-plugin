@@ -1,7 +1,8 @@
 // The rft web view: the reasoning tree as a tidy tree on an infinite canvas (d3), with notes in
 // a side drawer. It runs in two ways: served by server/rft_server.py, where it polls
-// `api/tree` and reads notes from `api/note`; or inlined into a standalone tree.html by
-// /rft-view, where `window.RFT_DATA` holds the tree and every note's text.
+// `api/tree`, reads notes from `api/note` and writes a note's edited text back to it; or
+// inlined into a standalone tree.html by /rft-view, where `window.RFT_DATA` holds the tree and
+// every note's text, and nothing is edited.
 (function () {
   'use strict'
 
@@ -14,6 +15,7 @@
   const FONT_STEPS = [0.7, 0.8, 0.9, 1, 1.1, 1.25, 1.4, 1.6, 1.8, 2]
   const POLL_MS = 2000
   const EMBED = window.RFT_DATA || null
+  const TOKEN = EMBED ? '' : new URLSearchParams(location.search).get('token') || '' // the key for writes, when the address carries it
 
   let tree = null
   let byId = new Map()
@@ -34,6 +36,9 @@
   let conceptMode = 'off' // off | regions | arrows
   let view = 'tree' // tree: the reasoning tree; concepts: the concept tree
   let focus = null // the concept whose subtree alone is drawn, or null
+  let shown = null // the note in the drawer as last read: { id, body, version }
+  let editing = null // while a note's text is edited: { id, version, lead, text (as opened), newer (on a conflict) }
+  let saving = false
 
   // ---------------------------------------------------------------- persistence
 
@@ -346,7 +351,10 @@
   }
 
   async function select(id) {
+    // the note being edited stays as it is; another one only once its changes are saved or dropped
+    if (editing && (editing.id === id || !leaveEditor())) return
     selected = id
+    showEditButton()
     gNodes.selectAll('g.node').attr('class', n => nodeClass(n.data))
     const n = byId.get(id)
     const drawer = document.getElementById('drawer')
@@ -355,23 +363,139 @@
     document.getElementById('drawer-meta').textContent = `${n.type} · ${MARK[n.status] || ''} ${n.status}${n.date ? ' · ' + n.date : ''}${n.tags && n.tags.length ? ' · #' + n.tags.join(' #') : ''}`
     const article = document.getElementById('note')
     article.innerHTML = '<p class="missing">Loading…</p>'
-    let body = null
+    let body = null, version = null
     try {
       if (EMBED) body = EMBED.bodies ? EMBED.bodies[id] : null
       else {
         const res = await fetch(`api/note?id=${encodeURIComponent(id)}`, { cache: 'no-store' })
-        if (res.ok) body = (await res.json()).body
+        if (res.ok) ({ body, version } = await res.json())
       }
     } catch (e) { body = null }
-    if (selected !== id) return
+    if (selected !== id || editing) return
+    shown = body == null ? null : { id, body, version }
+    showEditButton()
     article.innerHTML = body == null ? '<p class="missing">The note could not be read.</p>' : markdown(body)
   }
 
   function go(id) {
+    if (editing && editing.id !== id && !leaveEditor()) return
     reveal(id)
     select(id)
     centreOn(id)
   }
+
+  // ---------------------------------------------------------------- editing a note's text
+
+  const drawer = document.getElementById('drawer')
+  const article = document.getElementById('note')
+  const editBtn = document.getElementById('drawer-edit')
+  const editor = document.getElementById('editor')
+  const textBox = document.getElementById('note-text')
+  const editorMsg = document.getElementById('editor-msg')
+  const noKey = document.getElementById('edit-nokey')
+  const isDirty = () => editing != null && textBox.value !== editing.text
+  // the key from the address, else the one this browser kept from an earlier visit with it
+  const editKey = () => TOKEN || store.get('key', '')
+
+  function showEditButton() {
+    editBtn.hidden = Boolean(EMBED) || editing != null || !shown || shown.id !== selected
+    if (editBtn.hidden) noKey.hidden = true
+  }
+
+  function setEditorMsg(text, isError = false, isConflict = false) {
+    editorMsg.textContent = text
+    editorMsg.classList.toggle('error', isError)
+    document.getElementById('note-overwrite').hidden = !isConflict
+    document.getElementById('note-reload').hidden = !isConflict
+  }
+
+  function openEditor(note) {
+    if (!note || note.id !== selected) return
+    const lead = /^\n*/.exec(note.body)[0] // the blank line under the frontmatter is kept, not shown
+    editing = { id: note.id, version: note.version, lead, text: note.body.slice(lead.length), newer: null }
+    textBox.value = editing.text
+    textBox.readOnly = false
+    noKey.hidden = true
+    setEditorMsg('')
+    article.hidden = true
+    editor.hidden = false
+    drawer.classList.add('editing')
+    showEditButton()
+    textBox.focus()
+    textBox.setSelectionRange(0, 0)
+    textBox.scrollTop = 0
+  }
+
+  function closeEditor() {
+    editing = null
+    editor.hidden = true
+    article.hidden = false
+    drawer.classList.remove('editing')
+    showEditButton()
+  }
+
+  /** Closes the editor, asking first when it holds changes; false when the user keeps them. */
+  function leaveEditor() {
+    if (!editing) return true
+    if (isDirty() && !window.confirm(`Drop your changes to ${editing.id}?`)) return false
+    closeEditor()
+    return true
+  }
+
+  /** Writes the text to the note; refused when the file changed since it was read, unless `force`. */
+  async function save(force = false) {
+    if (!editing || saving) return
+    const { id } = editing
+    const body = editing.lead + textBox.value
+    saving = true
+    textBox.readOnly = true
+    setEditorMsg('Saving…')
+    try {
+      const res = await fetch(`api/note?id=${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'X-RFT-Token': editKey() },
+        body: JSON.stringify(force ? { body, force: true } : { body, version: editing.version }),
+      })
+      const reply = await res.json().catch(() => ({}))
+      if (!editing || editing.id !== id) return
+      if (res.ok) {
+        closeEditor()
+        select(id)
+      } else if (res.status === 409) {
+        editing.newer = { id, body: reply.body, version: reply.version }
+        setEditorMsg('Not saved: the note changed since you opened it (Claude or another editor).', true, true)
+      } else setEditorMsg(`Not saved: ${reply.error || `the server answered ${res.status}`}.`, true)
+    } catch (e) {
+      if (editing) setEditorMsg('Not saved: the server is not answering.', true)
+    } finally {
+      saving = false
+      textBox.readOnly = false
+    }
+  }
+
+  editBtn.addEventListener('click', () => {
+    if (editKey()) openEditor(shown)
+    else noKey.hidden = false
+  })
+  document.getElementById('note-save').addEventListener('click', () => save())
+  document.getElementById('note-cancel').addEventListener('click', () => leaveEditor())
+  document.getElementById('note-overwrite').addEventListener('click', () => save(true))
+  document.getElementById('note-reload').addEventListener('click', () => {
+    if (!editing || !editing.newer) return
+    shown = editing.newer
+    article.innerHTML = markdown(shown.body)
+    openEditor(shown)
+  })
+  textBox.addEventListener('keydown', ev => {
+    if (ev.key === 'Escape') { ev.preventDefault(); leaveEditor() }
+  })
+  document.addEventListener('keydown', ev => {
+    if (editing && (ev.ctrlKey || ev.metaKey) && !ev.altKey && ev.key.toLowerCase() === 's') { ev.preventDefault(); save() }
+  })
+  window.addEventListener('beforeunload', ev => {
+    if (isDirty()) { ev.preventDefault(); ev.returnValue = '' }
+  })
 
   // ---------------------------------------------------------------- search, filter, legend
 
@@ -523,6 +647,7 @@
     render(true)
   })
   document.getElementById('drawer-close').addEventListener('click', () => {
+    if (!leaveEditor()) return
     document.getElementById('drawer').hidden = true
     selected = null
     gNodes.selectAll('g.node').attr('class', n => nodeClass(n.data))
@@ -873,6 +998,7 @@
   }
 
   function first() {
+    if (TOKEN) store.set('key', TOKEN)
     render(false)
     hasView = true
     requestAnimationFrame(() => initialView())

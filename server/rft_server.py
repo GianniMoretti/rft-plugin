@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
-"""The rft web view's server: read-only, local, standard library only.
+"""The rft web view's server: local, standard library only.
 
-Serves the page (web/), the tree of the vault as JSON, and the text of one note at a time.
-It binds 127.0.0.1 only, answers GET and HEAD only, takes requests only for a loopback host
-name (so a web page elsewhere cannot reach it through DNS rebinding), serves nothing but an
-allow-list of page files, and reads a note only by its id, from a markdown file that resolves
-inside the vault's experiments/ or directions/ folder.
+Serves the page (web/), the tree of the vault as JSON, and the text of one note at a time, and
+writes one thing: the body of a note, its frontmatter kept as it is. It binds 127.0.0.1 only,
+takes requests only for a loopback host name (so a web page elsewhere cannot reach it through
+DNS rebinding), serves nothing but an allow-list of page files, and reads or writes a note only
+by its id, in a markdown file that resolves inside the vault's experiments/ or directions/
+folder. A write (PUT api/note) must also come from the page itself (its Origin) and carry the
+vault's key, which is in the address the server prints, so neither another web page nor another
+user of the machine can change a note. The key is kept in the user's cache, readable by them
+alone, so it stays the same across restarts.
 
     python3 rft_server.py --vault /abs/project/vault --web /abs/plugin/web [--port 0] [--project NAME]
 
-It prints `RFT_SERVER_URL http://127.0.0.1:<port>/` once listening, and exits when its parent
-process goes away (or, with --watch-stdin, closes its stdin).
+It prints `RFT_SERVER_URL http://127.0.0.1:<port>/?token=<key>` once listening, and exits when
+its parent process goes away (or, with --watch-stdin, closes its stdin).
 """
 from __future__ import annotations
 
@@ -20,6 +24,8 @@ import http.server
 import json
 import os
 import re
+import secrets
+import stat
 import sys
 import threading
 import time
@@ -40,6 +46,7 @@ PAGE_FILES = {
 }
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 ID_RE = re.compile(r"^[ED]\d+$")
+MAX_NOTE_BYTES = 2_000_000
 
 
 # ------------------------------------------------------------------ the vault
@@ -55,15 +62,24 @@ def front(text: str) -> dict[str, str]:
     return out
 
 
-def body_of(text: str) -> str:
+def split_note(text: str) -> tuple[str, str]:
+    """The frontmatter, through its closing `---` line, and the body, with LF newlines."""
     t = text.replace("\r\n", "\n")
     if not t.startswith("---\n"):
-        return t
+        return "", t
     end = t.find("\n---", 4)
     if end < 0:
-        return t
+        return "", t
     nl = t.find("\n", end + 4)
-    return "" if nl < 0 else t[nl + 1:]
+    return (t + "\n", "") if nl < 0 else (t[:nl + 1], t[nl + 1:])
+
+
+def body_of(text: str) -> str:
+    return split_note(text)[1]
+
+
+def version_of(data: bytes) -> str:
+    return hashlib.sha1(data).hexdigest()[:16]
 
 
 def id_of(name: str) -> str:
@@ -156,6 +172,7 @@ class Vault:
         self.root = root.resolve()
         self.project = project
         self._lock = threading.Lock()
+        self._write_lock = threading.Lock()
         self._sig: str | None = None
         self._tree: dict | None = None
 
@@ -248,13 +265,48 @@ class Vault:
         path = self.note_path(nid)
         if path is None:
             return None
-        text = path.read_text(encoding="utf-8", errors="replace")
-        return {"id": nid, "name": path.name[:-3], "body": body_of(text)}
+        data = path.read_bytes()
+        return {"id": nid, "name": path.name[:-3], "body": body_of(data.decode("utf-8", errors="replace")),
+                "version": version_of(data)}
+
+    def write_body(self, nid: str, body: str, version: str | None) -> tuple[int, dict]:
+        """Replaces a note's body, keeping its frontmatter byte for byte. Refused, with the note as
+        it is now, when the file changed since `version` (None: write anyway)."""
+        path = self.note_path(nid)
+        if path is None:
+            return 404, {"error": "no such note"}
+        with self._write_lock:
+            data = path.read_bytes()
+            if version is not None and version != version_of(data):
+                return 409, {"error": "the note changed since it was opened", "id": nid,
+                             "body": body_of(data.decode("utf-8", errors="replace")), "version": version_of(data)}
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError:
+                return 422, {"error": "the note is not UTF-8 text; edit it in an editor"}
+            head, _ = split_note(text)
+            body = body.replace("\r\n", "\n")
+            if body and not body.endswith("\n"):
+                body += "\n"
+            new = head + body
+            if "\r\n" in text:
+                new = new.replace("\n", "\r\n")
+            out = new.encode("utf-8")
+            # a new file renamed over the note: a reader never sees half of it
+            tmp = path.with_name(f".{path.name}.rft-tmp")
+            try:
+                tmp.write_bytes(out)
+                os.chmod(tmp, stat.S_IMODE(path.stat().st_mode))
+                os.replace(tmp, path)
+            finally:
+                tmp.unlink(missing_ok=True)
+        return 200, {"id": nid, "version": version_of(out)}
 
 
 # ------------------------------------------------------------------ http
 
-def make_handler(vault: Vault, web: Path):
+def make_handler(vault: Vault, web: Path, token: str | None = None):
+    """The request handler; without a `token` it never writes."""
     web = web.resolve()
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -311,9 +363,69 @@ def make_handler(vault: Vault, web: Path):
         def _refuse(self):
             self._send(405, b"read-only", "text/plain")
 
-        do_POST = do_PUT = do_DELETE = do_PATCH = _refuse
+        def _may_write(self) -> bool:
+            """The page itself asks: its own origin, and the key from the address the server printed."""
+            origin = (self.headers.get("Origin") or "").strip().lower()
+            host = (self.headers.get("Host") or "").strip().lower()
+            key = self.headers.get("X-RFT-Token") or ""
+            return bool(token) and origin == f"http://{host}" and secrets.compare_digest(key, token)
+
+        def do_PUT(self):
+            """PUT api/note?id=<id> {"body": "...", "version": "<as read>"} or {"body": "...", "force": true}."""
+            if not self._host_ok():
+                return self._send(403, b"forbidden host", "text/plain")
+            url = urlsplit(self.path)
+            if url.path != "/api/note" or not token:
+                return self._refuse()
+            if not self._may_write():
+                return self._json(403, {"error": "the key is missing or out of date: open the address /rft printed"})
+            if not (self.headers.get("Content-Type") or "").lower().startswith("application/json"):
+                return self._json(415, {"error": "send JSON"})
+            try:
+                length = int(self.headers.get("Content-Length") or "")
+            except ValueError:
+                return self._json(411, {"error": "no length"})
+            if not 0 <= length <= MAX_NOTE_BYTES:
+                return self._json(413, {"error": "the note is too large"})
+            try:
+                req = json.loads(self.rfile.read(length))
+            except ValueError:
+                return self._json(400, {"error": "not JSON"})
+            if not isinstance(req, dict) or not isinstance(req.get("body"), str):
+                return self._json(400, {"error": "expected {body, version} or {body, force: true}"})
+            force = req.get("force") is True
+            version = None if force else req.get("version")
+            if not force and not isinstance(version, str):
+                return self._json(400, {"error": "expected {body, version} or {body, force: true}"})
+            nid = (parse_qs(url.query).get("id") or [""])[0]
+            return self._json(*vault.write_body(nid, req["body"], version))
+
+        do_POST = do_DELETE = do_PATCH = _refuse
 
     return Handler
+
+
+def vault_key(vault: Path) -> str:
+    """The key for writes to this vault, kept in the user's cache readable by them alone (XDG_CACHE_HOME,
+    else ~/.cache), so an address with it, or a browser that remembers it, still works after a restart."""
+    keys = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "rft" / "keys"
+    path = keys / hashlib.sha1(str(vault.resolve()).encode()).hexdigest()[:16]
+    try:
+        if path.stat().st_mode & 0o077 == 0:
+            key = path.read_text().strip()
+            if re.fullmatch(r"[\w-]{16,}", key):
+                return key
+    except OSError:
+        pass
+    key = secrets.token_urlsafe(12)
+    try:
+        keys.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path.unlink(missing_ok=True)
+        with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:
+            f.write(key)
+    except OSError:
+        pass  # a key for this run only
+    return key
 
 
 def watch_parent(server, watch_stdin: bool):
@@ -349,11 +461,12 @@ def main(argv=None):
     ap.add_argument("--watch-stdin", action="store_true", help="also exit when stdin is closed")
     a = ap.parse_args(argv)
     vault = Vault(Path(a.vault), a.project)
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", a.port), make_handler(vault, Path(a.web)))
+    token = vault_key(Path(a.vault))
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", a.port), make_handler(vault, Path(a.web), token))
     server.daemon_threads = True
     if not a.no_watch:
         watch_parent(server, a.watch_stdin)
-    print(f"RFT_SERVER_URL http://127.0.0.1:{server.server_address[1]}/", flush=True)
+    print(f"RFT_SERVER_URL http://127.0.0.1:{server.server_address[1]}/?token={token}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
