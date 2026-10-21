@@ -6,10 +6,10 @@ import type { PageAssets } from './page'
 import { staticPage } from './page'
 import type { Config, Io, Loaded, NodeType, RftNode, Tree } from './vault'
 import {
-  CONFIG_PATH, DIRECTION_TEMPLATE, EXPERIMENT_TEMPLATE, INDEX, LEGEND, MERMAID, STATUSES, SUBDIR,
-  MARK, ROOT_CONCEPT, compactTree, conceptOrder, conceptPath, counts, defaultConfig, front, indexTemplate, join, load,
-  nextId, noteText, readConfig, removeField, resolveId, sanitiseTitle, setField, statusSummary, sync, tagCounts,
-  validate, withChildListed, withStatus, withTopicalTags, writeConfig,
+  CONFIG_PATH, ID_RE, INDEX, LEGEND, MERMAID, NODE_TYPES, STATUSES, SUBDIR, TEMPLATES, TYPES,
+  MARK, ROOT_CONCEPT, compactTree, conceptOrder, conceptPath, counts, countsLine, defaultConfig, front, idOf, indexTemplate,
+  isNodeType, join, load, nextId, noteText, orList, readConfig, removeField, resolveId, sanitiseTitle, setField, statusSummary,
+  sync, tagCounts, validate, withChildListed, withStatus, withTopicalTags, writeConfig,
 } from './vault'
 
 export const today = (now = new Date()) =>
@@ -50,8 +50,7 @@ export async function initVault(io: Io, opts: { project: string; question: strin
     await io.write(join(v, rel), text)
     written.push(rel)
   }
-  await ensure('templates/_experiment.md', EXPERIMENT_TEMPLATE(opts.project))
-  await ensure('templates/_direction.md', DIRECTION_TEMPLATE(opts.project))
+  for (const t of NODE_TYPES) await ensure(`templates/_${t}.md`, TEMPLATES[t](opts.project))
   if (hasNotes) {
     config.mermaid = await io.exists(join(v, MERMAID))
     const loaded = await load(io, config)
@@ -59,13 +58,13 @@ export async function initVault(io: Io, opts: { project: string; question: strin
     const tally = new Map<string, number>()
     for (const text of Object.values(loaded.texts)) {
       const first = front(text).tags?.replace(/^\[/, '').split(',')[0]?.trim()
-      if (first && !['experiment', 'direction'].includes(first)) tally.set(first, (tally.get(first) ?? 0) + 1)
+      if (first && !isNodeType(first)) tally.set(first, (tally.get(first) ?? 0) + 1)
     }
     const common = [...tally].sort((a, b) => b[1] - a[1])[0]
     if (common) config.project = common[0]
     for (const id of Object.keys(loaded.tree.nodes)) {
-      const m = /^([ED])(\d+)$/.exec(id)
-      if (m) config.lastId[m[1] as 'E' | 'D'] = Math.max(config.lastId[m[1] as 'E' | 'D'], Number(m[2]))
+      const m = ID_RE.exec(id)
+      if (m) config.lastId[m[1]!] = Math.max(config.lastId[m[1]!] ?? 0, Number(m[2]))
     }
     await writeConfig(io, config)
     const c = counts(loaded.tree)
@@ -74,7 +73,7 @@ export async function initVault(io: Io, opts: { project: string; question: strin
       isAdopted: true,
       config,
       text:
-        `RFT is now active. Adopted the existing vault ${v}/ (${c.direction} directions, ${c.experiment} experiments)` +
+        `RFT is now active. Adopted the existing vault ${v}/ (${countsLine(c)})` +
         (written.length ? `; added ${written.join(', ')}` : '') +
         `. Validation: ${check.errors.length} errors, ${check.warnings.length} warnings` +
         (check.errors.length + check.warnings.length ? ' (ask Claude to run rft_validate, then rft_sync).' : '.'),
@@ -111,10 +110,10 @@ export type AddInput = {
 
 export async function addNode(io: Io, loaded: Loaded, input: AddInput): Promise<RftNode & { report: string }> {
   const { tree, config } = loaded
-  if (input.type !== 'experiment' && input.type !== 'direction') throw new RftError('type must be "experiment" or "direction"')
+  if (!isNodeType(input.type)) throw new RftError(`type must be ${orList(NODE_TYPES.map(t => `"${t}"`))}`)
   const title = sanitiseTitle(input.title ?? '')
   if (!title) throw new RftError('the title is empty once the characters that break links are removed')
-  const status = input.status ?? (input.type === 'experiment' ? 'planned' : 'idea')
+  const status = input.status ?? TYPES[input.type].status
   if (!(STATUSES as readonly string[]).includes(status)) throw new RftError(`status must be one of ${STATUSES.join(', ')}`)
   const isEmpty = Object.keys(tree.nodes).length === 0
   let parent: string | null = null
@@ -128,15 +127,15 @@ export async function addNode(io: Io, loaded: Loaded, input: AddInput): Promise<
   }
   // another session on the same tree may have added notes since `loaded` was read
   const onDisk = await readConfig(io)
-  if (onDisk) for (const p of ['E', 'D'] as const) config.lastId[p] = Math.max(config.lastId[p], onDisk.lastId[p])
+  if (onDisk) for (const [p, last] of Object.entries(onDisk.lastId)) config.lastId[p] = Math.max(config.lastId[p] ?? 0, last)
   const id = nextId(loaded, input.type, await idsIn(io, join(config.vault, SUBDIR[input.type])))
   const name = `${id} ${title}`
   const path = `${SUBDIR[input.type]}/${name}.md`
   const parentName = parent ? tree.nodes[parent]!.name : null
   const text = noteText(id, { ...input, title, status }, config.project, parentName)
   await io.write(join(config.vault, path), text)
-  const prefix = id[0] as 'E' | 'D'
-  config.lastId[prefix] = Math.max(config.lastId[prefix], Number(id.slice(1)))
+  const prefix = TYPES[input.type].prefix
+  config.lastId[prefix] = Math.max(config.lastId[prefix] ?? 0, Number(id.slice(1)))
   await writeConfig(io, config)
   if (parent) {
     const p = tree.nodes[parent]!
@@ -157,7 +156,7 @@ export async function addNode(io: Io, loaded: Loaded, input: AddInput): Promise<
 /** The ids of the notes in a folder of the vault, as it is on disk now. */
 async function idsIn(io: Io, dir: string): Promise<string[]> {
   if (!(await io.exists(dir))) return []
-  return (await io.list(dir)).map(f => /^([ED]\d+) /.exec(f.name)?.[1]).filter((id): id is string => !!id)
+  return (await io.list(dir)).map(f => idOf(f.name)).filter(id => ID_RE.test(id))
 }
 
 export async function setTags(io: Io, loaded: Loaded, ref: string, tags: string[]): Promise<string> {
@@ -288,7 +287,7 @@ export function treeReport(loaded: Loaded, opts: { root?: string; depth?: number
   if (opts.root && !root) throw new RftError(`"${opts.root}" is not a note of the tree`)
   const body = compactTree(tree, { root: root ?? undefined, depth: opts.depth, withStatus: false })
   return [
-    `${config.project}: ${c.direction} directions, ${c.experiment} experiments in ${opts.vault ?? config.vault}/. Marks: ${LEGEND}.`,
+    `${config.project}: ${countsLine(c)} in ${opts.vault ?? config.vault}/. Marks: ${LEGEND}.`,
     body || '(empty tree)',
   ].join('\n')
 }

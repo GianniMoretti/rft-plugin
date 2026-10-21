@@ -40,7 +40,9 @@ import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+# the node types by folder (ID_RE below has their id letters), as TYPES in hooks/lib/vault.ts has them
 SUBDIRS = {"experiments": "experiment", "directions": "direction"}
+TYPES = tuple(SUBDIRS.values())
 PAGE_FILES = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/index.html": ("index.html", "text/html; charset=utf-8"),
@@ -117,7 +119,7 @@ def topical_tags(tags: list[str], project: str) -> list[str]:
     """The tags less the ones every note carries anyway: project, type, status."""
     out: list[str] = []
     for t in tags:
-        if t not in out and t != project and t not in ("experiment", "direction") and t not in STATUSES:
+        if t not in out and t != project and t not in TYPES and t not in STATUSES:
             out.append(t)
     return out
 
@@ -223,7 +225,7 @@ class Vault:
                 nid = fm.get("id") or id_of(name)
                 if nid in nodes:
                     continue
-                ftype = fm.get("type") if fm.get("type") in ("experiment", "direction") else kind
+                ftype = fm.get("type") if fm.get("type") in TYPES else kind
                 nodes[nid] = {"id": nid, "name": name, "title": name[len(id_of(name)):].strip(),
                               "type": ftype, "status": fm.get("status", ""), "date": fm.get("date", ""),
                               "parent": None, "children": [], "path": f"{sub}/{f.name}",
@@ -319,8 +321,8 @@ class Vault:
     def add_node(self, parent: str, kind: str, title: str, ask) -> tuple[int, dict]:
         """A new note under `parent`, made by the session: `ask` hands it the request, and the
         answer is the note's id once it is on disk. One request at a time, so each finds its own."""
-        if kind not in ("experiment", "direction"):
-            return 400, {"error": "type must be experiment or direction"}
+        if kind not in TYPES:
+            return 400, {"error": f"type must be one of {', '.join(TYPES)}"}
         if not re.search(r"\w", title):
             return 400, {"error": "the title needs a letter or a digit"}
         with self._add_lock:

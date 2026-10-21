@@ -13,7 +13,7 @@ import type { RftSnapshot } from '../types'
 import { addNode, conceptsReport, exportHtml, initVault, loadActive, rulesText, setConcept, setStatus, setTags, tagsReport, today, treeReport } from './lib/ops'
 import { ASSET_PATHS } from './lib/page'
 import type { Config, Io, NodeType, Tree } from './lib/vault'
-import { LEGEND, MARK, bodyOf, counts, isAbsolute, join, locate, readConfig, resolvePath, rooted, signatureOf, sync, validate } from './lib/vault'
+import { LEGEND, MARK, NODE_TYPES, bodyOf, counts, countsLine, isAbsolute, join, locate, readConfig, resolvePath, rooted, signatureOf, sync, validate } from './lib/vault'
 
 const PANE = 'rft-tree'
 const TITLE = 'Reasoning tree'
@@ -66,7 +66,7 @@ const TOOLS = {
     inputSchema: {
       type: 'object',
       properties: {
-        type: { type: 'string', enum: ['experiment', 'direction'] },
+        type: { type: 'string', enum: NODE_TYPES },
         title: { type: 'string', description: 'Short title, no id (the id is assigned). Avoid ^ # | [ ].' },
         parent: { type: 'string', description: 'Id (e.g. D03) or full name of the parent note; omit only for the root D00 of an empty tree.' },
         status: { type: 'string', enum: ['planned', 'running', 'done', 'idea', 'dropped', 'discussed', 'moved'], description: 'Default: planned for experiments, idea for directions.' },
@@ -764,7 +764,7 @@ export const register: Register = (on, options) => {
 
     return (
       <Box flexDirection="column">
-        <Text bold>{`${s.project}: ${c.direction ?? 0} directions, ${c.experiment ?? 0} experiments`}</Text>
+        <Text bold>{`${s.project}: ${countsLine(c)}`}</Text>
         {url
           ? <Text color="claude">{`Tree view: ${url}`}</Text>
           : <Text dimColor>Run /rft for the interactive tree view in a browser.</Text>}
