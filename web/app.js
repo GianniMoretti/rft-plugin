@@ -1,6 +1,7 @@
 // The rft web view: the reasoning tree as a tidy tree on an infinite canvas (d3), with notes in
 // a side drawer. It runs in two ways: served by server/rft_server.py, where it polls
-// `api/tree`, reads notes from `api/note` and writes a note's edited text back to it; or
+// `api/tree`, reads notes from `api/note` and writes a note's edited text back to it, and asks
+// `api/node` for a new note under the one shown; or
 // inlined into a standalone tree.html by /rft-view, where `window.RFT_DATA` holds the tree and
 // every note's text, and nothing is edited.
 (function () {
@@ -39,6 +40,7 @@
   let shown = null // the note in the drawer as last read: { id, body, version }
   let editing = null // while a note's text is edited: { id, version, lead, text (as opened), newer (on a conflict) }
   let saving = false
+  let adding = false
 
   // ---------------------------------------------------------------- persistence
 
@@ -353,6 +355,7 @@
   async function select(id) {
     // the note being edited stays as it is; another one only once its changes are saved or dropped
     if (editing && (editing.id === id || !leaveEditor())) return
+    if (id !== selected) closeAdder()
     selected = id
     showEditButton()
     gNodes.selectAll('g.node').attr('class', n => nodeClass(n.data))
@@ -400,6 +403,7 @@
   function showEditButton() {
     editBtn.hidden = Boolean(EMBED) || editing != null || !shown || shown.id !== selected
     if (editBtn.hidden) noKey.hidden = true
+    addBtn.hidden = Boolean(EMBED) || editing != null || !byId.has(selected)
   }
 
   function setEditorMsg(text, isError = false, isConflict = false) {
@@ -413,6 +417,7 @@
     if (!note || note.id !== selected) return
     const lead = /^\n*/.exec(note.body)[0] // the blank line under the frontmatter is kept, not shown
     editing = { id: note.id, version: note.version, lead, text: note.body.slice(lead.length), newer: null }
+    closeAdder()
     textBox.value = editing.text
     textBox.readOnly = false
     noKey.hidden = true
@@ -495,6 +500,74 @@
   })
   window.addEventListener('beforeunload', ev => {
     if (isDirty()) { ev.preventDefault(); ev.returnValue = '' }
+  })
+
+  // ---------------------------------------------------------------- adding a note under the one shown
+
+  const addBtn = document.getElementById('drawer-add')
+  const adder = document.getElementById('adder')
+  const addType = document.getElementById('add-type')
+  const addTitle = document.getElementById('add-title')
+  const addMsg = document.getElementById('add-msg')
+
+  function setAddMsg(text, isError = false) {
+    addMsg.textContent = text
+    addMsg.classList.toggle('error', isError)
+  }
+
+  function openAdder() {
+    if (!editKey()) { noKey.hidden = false; return }
+    // an experiment tests a direction, a direction comes out of an experiment: the other type first
+    addType.value = byId.get(selected).type === 'direction' ? 'experiment' : 'direction'
+    addTitle.value = ''
+    setAddMsg('')
+    adder.hidden = false
+    addTitle.focus()
+  }
+
+  function closeAdder() {
+    adder.hidden = true
+  }
+
+  /** Asks the server for a note under the one shown (the session makes it), then opens it in the editor. */
+  async function addChild() {
+    const parent = selected
+    const title = addTitle.value.trim()
+    if (!parent || adding) return
+    if (!title) { setAddMsg('Give the note a title.', true); return }
+    adding = true
+    addTitle.readOnly = true
+    setAddMsg('Adding…')
+    try {
+      const res = await fetch('api/node', {
+        method: 'POST',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'X-RFT-Token': editKey() },
+        body: JSON.stringify({ parent, type: addType.value, title }),
+      })
+      const reply = await res.json().catch(() => ({}))
+      if (!res.ok) { setAddMsg(`Not added: ${reply.error || `the server answered ${res.status}`}.`, true); return }
+      closeAdder()
+      await poll()
+      // the user may have moved on meanwhile
+      if (selected !== parent || editing || !byId.has(reply.id)) return
+      reveal(reply.id)
+      centreOn(reply.id)
+      await select(reply.id)
+      openEditor(shown)
+    } catch (e) {
+      setAddMsg('Not added: the server is not answering.', true)
+    } finally {
+      adding = false
+      addTitle.readOnly = false
+    }
+  }
+
+  addBtn.addEventListener('click', () => (adder.hidden ? openAdder() : closeAdder()))
+  adder.addEventListener('submit', ev => { ev.preventDefault(); addChild() })
+  document.getElementById('add-cancel').addEventListener('click', () => closeAdder())
+  adder.addEventListener('keydown', ev => {
+    if (ev.key === 'Escape') { ev.preventDefault(); closeAdder() }
   })
 
   // ---------------------------------------------------------------- search, filter, legend
@@ -648,6 +721,7 @@
   })
   document.getElementById('drawer-close').addEventListener('click', () => {
     if (!leaveEditor()) return
+    closeAdder()
     document.getElementById('drawer').hidden = true
     selected = null
     gNodes.selectAll('g.node').attr('class', n => nodeClass(n.data))
@@ -1007,29 +1081,32 @@
   }
 
   const live = document.getElementById('live')
+
+  /** Reads the tree from the server, and redraws when it changed. */
+  async function poll() {
+    try {
+      const res = await fetch('api/tree', { cache: 'no-store' })
+      if (!res.ok) throw new Error(String(res.status))
+      const next = await res.json()
+      live.className = 'live on'
+      live.title = 'Live: follows the vault'
+      if (!tree || next.version !== tree.version) {
+        setTree(next)
+        if (!hasView) first()
+        else { render(true); if (view === 'concepts') drawConceptTree() }
+        if (selected && byId.has(selected)) select(selected)
+      }
+    } catch (e) {
+      live.className = 'live off'
+      live.title = 'The server is not answering (session ended or /rft stop?)'
+    }
+  }
+
   if (EMBED) {
     live.hidden = true
     setTree(EMBED.tree)
     first()
   } else {
-    const poll = async () => {
-      try {
-        const res = await fetch('api/tree', { cache: 'no-store' })
-        if (!res.ok) throw new Error(String(res.status))
-        const next = await res.json()
-        live.className = 'live on'
-        live.title = 'Live: follows the vault'
-        if (!tree || next.version !== tree.version) {
-          setTree(next)
-          if (!hasView) first()
-          else { render(true); if (view === 'concepts') drawConceptTree() }
-          if (selected && byId.has(selected)) select(selected)
-        }
-      } catch (e) {
-        live.className = 'live off'
-        live.title = 'The server is not answering (session ended or /rft stop?)'
-      }
-    }
     poll()
     setInterval(poll, POLL_MS)
   }

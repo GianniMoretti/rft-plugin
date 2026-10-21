@@ -1,7 +1,8 @@
 // rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-view), the model's
 // tools (rft_add_node, rft_set_status, rft_set_tags, rft_tags, rft_tree, rft_validate, rft_sync), the operating rules
 // injected into the system prompt, the outline pane, and the web view: /rft starts a local
-// server (server/rft_server.py) for the interactive tree page (web/). Everything is
+// server (server/rft_server.py) for the interactive tree page (web/), and makes the notes that
+// page adds (addFromView). Everything is
 // inert without `.rft/config.json` in the session's folder or a folder above it; that config
 // may be a link (`{"tree": "../notes"}`) to a tree kept elsewhere.
 
@@ -370,14 +371,19 @@ async function spawnServer($: EngineInterface, argv: string[]): Promise<string> 
   // the loop is the child's life: it runs on after this call returns, until the child exits,
   // `stop` ends it, or the module unloads
   void (async () => {
-    let out = ''
+    let line = ''
     let err = ''
     try {
       for await (const chunk of child) {
         if (chunk.stream === 'stdout') {
-          out += chunk.text
-          const m = /RFT_SERVER_URL (\S+)/.exec(out)
-          if (m) found(m[1]!)
+          // whole lines: the address once, then a line for each note the tree view adds
+          const lines = (line + chunk.text).split('\n')
+          line = lines.pop()!
+          for (const l of lines) {
+            const m = /RFT_SERVER_URL (\S+)/.exec(l)
+            if (m) found(m[1]!)
+            else if (l.startsWith(ADD_NODE)) void addFromView($, l.slice(ADD_NODE.length))
+          }
         } else err += chunk.text
       }
       failed(new Error(err.trim().split('\n').pop() || 'the server exited'))
@@ -400,6 +406,22 @@ async function spawnServer($: EngineInterface, argv: string[]): Promise<string> 
   } catch (err) {
     stop()
     throw err
+  }
+}
+
+const ADD_NODE = 'RFT_ADD_NODE '
+
+/**
+ * A note the tree view adds (POST api/node, relayed by the server): made by rft_add_node's code
+ * with the type, parent and title alone, so its status is the default, and no model turn is spent.
+ */
+async function addFromView($: EngineInterface, request: string): Promise<void> {
+  try {
+    const r = JSON.parse(request) as Record<string, unknown>
+    await runTool($, 'rft_add_node', { type: r.type, parent: r.parent, title: r.title })
+    await refresh($, true)
+  } catch (err) {
+    $.ui.toast(`rft: the tree view could not add a note (${message(err)})`)
   }
 }
 

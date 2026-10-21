@@ -2,14 +2,17 @@
 """The rft web view's server: local, standard library only.
 
 Serves the page (web/), the tree of the vault as JSON, and the text of one note at a time, and
-writes one thing: the body of a note, its frontmatter kept as it is. It binds 127.0.0.1 only,
-takes requests only for a loopback host name (so a web page elsewhere cannot reach it through
-DNS rebinding), serves nothing but an allow-list of page files, and reads or writes a note only
-by its id, in a markdown file that resolves inside the vault's experiments/ or directions/
-folder. A write (PUT api/note) must also come from the page itself (its Origin) and carry the
-vault's key, which is in the address the server prints, so neither another web page nor another
-user of the machine can change a note. The key is kept in the user's cache, readable by them
-alone, so it stays the same across restarts.
+writes one thing: the body of a note, its frontmatter kept as it is. A new note it never writes
+itself: it asks the session that runs it, with a line `RFT_ADD_NODE {"parent", "type", "title"}`
+on stdout, and the plugin makes it as the rft_add_node tool does (no model turn), then answers
+the new id once the note is on disk. It binds 127.0.0.1 only, takes requests only for a loopback
+host name (so a web page elsewhere cannot reach it through DNS rebinding), serves nothing but an
+allow-list of page files, and reads or writes a note only by its id, in a markdown file that
+resolves inside the vault's experiments/ or directions/ folder. A write (PUT api/note, POST
+api/node) must also come from the page itself (its Origin) and carry the vault's key, which is
+in the address the server prints, so neither another web page nor another user of the machine
+can change a note. The key is kept in the user's cache, readable by them alone, so it stays the
+same across restarts.
 
     python3 rft_server.py --vault /abs/project/vault --web /abs/plugin/web [--port 0] [--project NAME]
 
@@ -52,6 +55,9 @@ PAGE_FILES = {
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 ID_RE = re.compile(r"^[ED]\d+$")
 MAX_NOTE_BYTES = 2_000_000
+MAX_NODE_BYTES = 10_000
+NODE_WAIT_S = 10.0  # how long a new note may take the session to make
+SETTLE_S = 0.3  # how long the notes stay as they are before a new one counts as made
 
 
 # ------------------------------------------------------------------ the vault
@@ -180,6 +186,7 @@ class Vault:
         self.ident = hashlib.sha256(str(self.root).encode()).hexdigest()[:16]
         self._lock = threading.Lock()
         self._write_lock = threading.Lock()
+        self._add_lock = threading.Lock()
         self._sig: str | None = None
         self._tree: dict | None = None
 
@@ -309,11 +316,49 @@ class Vault:
                 tmp.unlink(missing_ok=True)
         return 200, {"id": nid, "version": version_of(out)}
 
+    def add_node(self, parent: str, kind: str, title: str, ask) -> tuple[int, dict]:
+        """A new note under `parent`, made by the session: `ask` hands it the request, and the
+        answer is the note's id once it is on disk. One request at a time, so each finds its own."""
+        if kind not in ("experiment", "direction"):
+            return 400, {"error": "type must be experiment or direction"}
+        if not re.search(r"\w", title):
+            return 400, {"error": "the title needs a letter or a digit"}
+        with self._add_lock:
+            before = {n["id"] for n in self.tree()["nodes"]}
+            if parent not in before:
+                return 404, {"error": "no such parent note"}
+            try:
+                ask({"parent": parent, "type": kind, "title": title})
+            except (OSError, ValueError):
+                return 503, {"error": "the Claude Code session that ran /rft is gone"}
+            deadline = time.monotonic() + NODE_WAIT_S
+            while time.monotonic() < deadline:
+                time.sleep(0.1)
+                new = [n for n in self.tree()["nodes"]
+                       if n["id"] not in before and n["parent"] == parent and n["type"] == kind]
+                if new:
+                    n = next((n for n in new if n["title"] == " ".join(title.split())), new[0])
+                    # the session goes on to write the notes' derived fields, the new one's `up:` too:
+                    # answered once the notes are quiet, so the page opens the note as it then stays
+                    sig, quiet = self.signature(), time.monotonic()
+                    while time.monotonic() - quiet < SETTLE_S and time.monotonic() < deadline:
+                        time.sleep(0.1)
+                        if (now := self.signature()) != sig:
+                            sig, quiet = now, time.monotonic()
+                    return 201, {"id": n["id"], "name": n["name"]}
+        return 504, {"error": f"the Claude Code session did not add the note within {NODE_WAIT_S:g} s; "
+                              "it may still appear (is the session that ran /rft still open?)"}
+
+
+def ask_session(request: dict) -> None:
+    """Hands a request to the plugin, which reads this process's stdout line by line."""
+    print(f"RFT_ADD_NODE {json.dumps(request)}", flush=True)
+
 
 # ------------------------------------------------------------------ http
 
-def make_handler(vault: Vault, web: Path, token: str | None = None):
-    """The request handler; without a `token` it never writes."""
+def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_session):
+    """The request handler; without a `token` it never writes. `ask` hands a new note to the session."""
     web = web.resolve()
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -379,12 +424,12 @@ def make_handler(vault: Vault, web: Path, token: str | None = None):
             key = self.headers.get("X-RFT-Token") or ""
             return bool(token) and origin == f"http://{host}" and secrets.compare_digest(key, token)
 
-        def do_PUT(self):
-            """PUT api/note?id=<id> {"body": "...", "version": "<as read>"} or {"body": "...", "force": true}."""
+        def _write_request(self, route: str, limit: int):
+            """The URL and JSON object of a write to `route` from the page itself; None once refused."""
             if not self._host_ok():
                 return self._send(403, b"forbidden host", "text/plain")
             url = urlsplit(self.path)
-            if url.path != "/api/note" or not token:
+            if url.path != route or not token:
                 return self._refuse()
             if not self._may_write():
                 return self._json(403, {"error": "the key is missing or out of date: open the address /rft printed"})
@@ -394,13 +439,23 @@ def make_handler(vault: Vault, web: Path, token: str | None = None):
                 length = int(self.headers.get("Content-Length") or "")
             except ValueError:
                 return self._json(411, {"error": "no length"})
-            if not 0 <= length <= MAX_NOTE_BYTES:
-                return self._json(413, {"error": "the note is too large"})
+            if not 0 <= length <= limit:
+                return self._json(413, {"error": "the request is too large"})
             try:
                 req = json.loads(self.rfile.read(length))
             except ValueError:
                 return self._json(400, {"error": "not JSON"})
-            if not isinstance(req, dict) or not isinstance(req.get("body"), str):
+            if not isinstance(req, dict):
+                return self._json(400, {"error": "expected a JSON object"})
+            return url, req
+
+        def do_PUT(self):
+            """PUT api/note?id=<id> {"body": "...", "version": "<as read>"} or {"body": "...", "force": true}."""
+            got = self._write_request("/api/note", MAX_NOTE_BYTES)
+            if got is None:
+                return
+            url, req = got
+            if not isinstance(req.get("body"), str):
                 return self._json(400, {"error": "expected {body, version} or {body, force: true}"})
             force = req.get("force") is True
             version = None if force else req.get("version")
@@ -409,7 +464,18 @@ def make_handler(vault: Vault, web: Path, token: str | None = None):
             nid = (parse_qs(url.query).get("id") or [""])[0]
             return self._json(*vault.write_body(nid, req["body"], version))
 
-        do_POST = do_DELETE = do_PATCH = _refuse
+        def do_POST(self):
+            """POST api/node {"parent": "<id>", "type": "experiment" | "direction", "title": "..."}:
+            a new note under `parent`, with the default status, made by the session."""
+            got = self._write_request("/api/node", MAX_NODE_BYTES)
+            if got is None:
+                return
+            _, req = got
+            if not all(isinstance(req.get(k), str) for k in ("parent", "type", "title")):
+                return self._json(400, {"error": "expected {parent, type, title}"})
+            return self._json(*vault.add_node(req["parent"], req["type"], req["title"].strip(), ask))
+
+        do_DELETE = do_PATCH = _refuse
 
     return Handler
 

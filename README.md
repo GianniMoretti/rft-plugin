@@ -140,6 +140,12 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   overwritten silently: you choose **Overwrite** or **Reload**. Leaving a note with unsaved
   changes asks first.
   Fold a branch with its **−** / **+** badge or a double-click; **Expand all**, **Collapse all**.
+- **+ Child** in the drawer adds a direction or an experiment under the note shown: choose the
+  type (the other one than the note's comes first), type a title, **Add** or Enter. The note is
+  made as Claude's `rft_add_node` makes it (the next free id, the title cleaned, the template,
+  the default status, linked under its parent, the index and canvas regenerated), by the plugin
+  in the session that ran `/rft`, so it costs no model turn and no tokens; it then opens in
+  **Edit**.
 - Hover a node to highlight its path to the root; **search** (Enter jumps to the next match).
 - **Filters** opens a side panel: topical tags (with counts, matching **any** or **all**), type,
   status (the same filter as clicking the legend), and a date range. Notes that do not match
@@ -192,9 +198,10 @@ their counts.
 The server listens on `127.0.0.1` only, on a free port (or `webPort` in the config). It serves
 the page, the tree as JSON and the text of one note at a time, read by its id from inside the
 vault, and answers only requests for a loopback host name. It writes one thing, a note's text
-from **Edit**, its frontmatter kept as it is, and only for the page itself carrying the
-project's key, which the address `/rft` prints holds (`?token=…`): neither another web page nor
-another user of the machine can change a note. Open that address once and the browser
+from **Edit**, its frontmatter kept as it is; a new note from **+ Child** it asks the session
+that started it to make (a line on its output, which the plugin reads). It does either only for
+the page itself carrying the project's key, which the address `/rft` prints holds (`?token=…`):
+neither another web page nor another user of the machine can change or add a note. Open that address once and the browser
 remembers the key, which stays the same across restarts (kept, readable by you alone, in
 `~/.cache/rft/keys/`), so the plain address or a bookmark can edit too. It stops with
 the session or `/rft stop`; `/rft` again reuses it. Sessions on the same tree with the same

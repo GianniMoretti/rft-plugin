@@ -139,4 +139,5 @@ gets a direction node.
 `/rft` starts the interactive tree view (a local page; the user opens its address in a
 browser) and the outline pane; `/rft text` prints the tree; `/rft-view` writes a standalone
 `<vault>/tree.html`; Obsidian shows `Reasoning tree.canvas`. The user can edit a note's text
-(not its frontmatter) in the tree view, so re-read a note before changing it.
+(not its frontmatter) and add notes, with their default status, in the tree view, so re-read a
+note before changing it, and the tree (`rft_tree`) before relying on the copy you were given.

@@ -4,7 +4,8 @@
 import type { On } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { CWD, D01, E02, WEB_FILES, demoAt, demoFiles, paneProps, world } from './fixture'
+import { addNode, loadActive, today } from '../hooks/lib/ops'
+import { CWD, D01, E02, MemoryFs, WEB_FILES, demoAt, demoFiles, paneProps, world } from './fixture'
 
 const SURFACES = ['terminal', 'desktop'] as const
 // the `name` of skills/rft-manual/SKILL.md
@@ -180,10 +181,12 @@ describe('commands', () => {
 /** The address the server child prints: with the key for writes, as the real one does. */
 const ADDRESS = 'http://127.0.0.1:5555/?token=k3y'
 
-/** The server child: says where it listens, then runs until the plugin ends the loop. */
+/** The server child: says where it listens, prints what the test hands `print`, and runs until the plugin ends the loop. */
 function fakeServer(on: On, opts: { fail?: string[] } = {}) {
   const seen: string[][] = []
   const state = { isRunning: false }
+  const queued: string[] = []
+  let wake = () => undefined as void
   on('process.spawn', async function* (_$: unknown, e: { argv: readonly string[] }, next: { signal: AbortSignal }) {
     seen.push([...e.argv])
     if (opts.fail?.includes(e.argv[0]!)) throw new Error(`ENOENT: ${e.argv[0]}`)
@@ -191,14 +194,26 @@ function fakeServer(on: On, opts: { fail?: string[] } = {}) {
     try {
       yield { stream: 'stdout' as const, text: `RFT_SERVER_URL ${ADDRESS}\n` }
       // runs until the plugin ends the loop, which aborts this dispatch
-      await new Promise(resolve => next.signal.addEventListener('abort', resolve))
+      const aborted = new Promise<boolean>(resolve => next.signal.addEventListener('abort', () => resolve(true)))
+      for (;;) {
+        while (queued.length) yield { stream: 'stdout' as const, text: queued.shift()! }
+        if (await Promise.race([aborted, new Promise<boolean>(resolve => { wake = () => resolve(false) })])) break
+      }
       return { value: { code: null, signal: 'SIGTERM' } }
     } finally {
       state.isRunning = false
     }
   })
-  return { seen, state }
+  const print = (text: string) => { queued.push(text); wake() }
+  return { seen, state, print }
 }
+
+/** Waits, a few milliseconds at a time, until `cond` holds: the plugin reads the server's output on its own. */
+async function until(cond: () => boolean) {
+  for (let i = 0; i < 200 && !cond(); i++) await new Promise(resolve => setTimeout(resolve, 5))
+}
+
+const texts = (fs: MemoryFs) => Object.fromEntries([...fs.files].map(([k, f]) => [k, f.text]))
 
 const RUN = (args: string) => ({ command: 'rft', args, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } }) as never
 
@@ -326,6 +341,44 @@ describe('web view', () => {
     expect(srv.seen.map(a => a[0])).toEqual(['python3', 'python'])
     expect(res.text).toContain('needs Python 3 on PATH')
     expect(res.text).toContain('/rft-view')
+  })
+
+  test('a note the tree view adds is the one rft_add_node makes, byte for byte, with no model turn', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, demoFiles())
+    const srv = fakeServer(on)
+    const prompts: string[] = []
+    on('prompt.submit', (_$, e) => { prompts.push(String(e.text)); return { text: e.text } as never })
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    await $.command.run(RUN(''))
+    const title = 'Seeds: 3 | 5 [fast]'
+    // the reference: rft_add_node's own code on a copy of the project
+    const ref = new MemoryFs(demoFiles())
+    await addNode(ref.io(), await loadActive(ref.io()), { type: 'experiment', title, parent: 'D01', date: today() })
+    // the server's line, cut in two as a pipe may deliver it
+    const line = `RFT_ADD_NODE ${JSON.stringify({ parent: 'D01', type: 'experiment', title })}\n`
+    srv.print(line.slice(0, 30))
+    srv.print(line.slice(30))
+    const path = 'vault/experiments/E03 Seeds, 3, 5 (fast).md'
+    await until(() => w.fs.exists(path))
+    expect(w.fs.read(path)).toContain('status: planned')
+    expect(texts(w.fs)).toEqual(texts(ref))
+    expect(prompts).toEqual([])
+    expect(w.toasts).toEqual([])
+  })
+
+  test('a note the tree view cannot add is reported in the session, and nothing is written', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, demoFiles())
+    const srv = fakeServer(on)
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    await $.command.run(RUN(''))
+    const before = texts(w.fs)
+    srv.print(`RFT_ADD_NODE ${JSON.stringify({ parent: 'D42', type: 'direction', title: 'Orphan' })}\n`)
+    await until(() => w.toasts.length > 0)
+    expect(w.toasts.join()).toContain('the tree view could not add a note')
+    expect(w.toasts.join()).toContain('D42')
+    expect(texts(w.fs)).toEqual(before)
   })
 
   test('/rft outside an RFT project starts nothing', async ($, on) => {
