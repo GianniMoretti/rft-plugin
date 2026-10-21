@@ -101,7 +101,7 @@ they are (ids, statuses and the next free id are read from the notes).
   the tab already on it. When the plugin cannot reach the browser pane (the usual case today),
   it prints the address and opens the outline pane: click the address and choose to open it in
   the app.
-- **In the terminal and elsewhere** it prints the address, e.g. `http://127.0.0.1:41234/`, and
+- **In the terminal and elsewhere** it prints the address, e.g. `http://127.0.0.1:41234/?token=…`, and
   opens the outline pane. Open the address in any browser on the same machine.
 
 - A tidy tree, **top-down**, **left-right** or **radial** (never a force layout): circles
@@ -109,6 +109,11 @@ they are (ids, statuses and the next free id are read from the notes).
 - An infinite canvas: drag to pan, scroll or pinch to zoom; **Fit** and **Centre on root**.
   Labels show more of the title the closer you zoom.
 - Click a node to read its note in a side drawer; links in the note jump to their node.
+- **Edit** in the drawer changes the note's text: the markdown below the frontmatter (status,
+  parent and tags stay with Claude's tools). **Save** or Ctrl/Cmd+S writes the file, **Cancel**
+  or Esc drops the changes. A note that changed meanwhile (Claude, another editor) is never
+  overwritten silently: you choose **Overwrite** or **Reload**. Leaving a note with unsaved
+  changes asks first.
   Fold a branch with its **−** / **+** badge or a double-click; **Expand all**, **Collapse all**.
 - Hover a node to highlight its path to the root; **search** (Enter jumps to the next match).
 - **Filters** opens a side panel: topical tags (with counts, matching **any** or **all**), type,
@@ -159,9 +164,14 @@ Every note carries 1–3 **topical tags** besides the project, type and status o
 asks Claude to reuse the vocabulary `rft_tags` lists); the tree's `api/tree` JSON lists them with
 their counts.
 
-The server is read-only and listens on `127.0.0.1` only, on a free port (or `webPort` in the
-config). It serves the page, the tree as JSON and the text of one note at a time, read by its
-id from inside the vault, and answers only requests for a loopback host name. It stops with
+The server listens on `127.0.0.1` only, on a free port (or `webPort` in the config). It serves
+the page, the tree as JSON and the text of one note at a time, read by its id from inside the
+vault, and answers only requests for a loopback host name. It writes one thing, a note's text
+from **Edit**, its frontmatter kept as it is, and only for the page itself carrying the
+project's key, which the address `/rft` prints holds (`?token=…`): neither another web page nor
+another user of the machine can change a note. Open that address once and the browser
+remembers the key, which stays the same across restarts (kept, readable by you alone, in
+`~/.cache/rft/keys/`), so the plain address or a bookmark can edit too. It stops with
 the session or `/rft stop`; `/rft` again reuses it. On a **remote machine** (SSH, a cluster
 node), forward the port and open the address on your own machine:
 
@@ -231,7 +241,7 @@ session with the plugin loaded from this folder.
 - `web/`: the tree view (`index.html`, `app.js`, `app.css`; `filters.js`, `layout.js` and
   `concepts.js` hold the pure filter, radial layout and concept logic; vendored d3), one
   codebase for the live view and `/rft-view`.
-- `server/rft_server.py`: the read-only local server (Python standard library).
+- `server/rft_server.py`: the local server (Python standard library).
 - `skills/rft-manual/SKILL.md`: the manual; `tests/`: the mod's tests on an in-memory vault, the
   outline pane on every surface, and the server's tests.
 

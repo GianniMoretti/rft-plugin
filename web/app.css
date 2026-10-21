@@ -68,6 +68,19 @@ main { position: relative; flex: 1; min-height: 0; }
   overflow: auto; background: var(--panel); border-left: 1px solid var(--line); padding: 10px 16px 24px;
   font-size: calc(14.5px * var(--font-scale)); line-height: 1.55; }
 .drawer-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.drawer-actions { display: flex; gap: 4px; flex: none; }
+button.primary { border-color: var(--accent); color: var(--accent); }
+#drawer.editing:not([hidden]) { display: flex; flex-direction: column; overflow: hidden; }
+#editor { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+#editor[hidden] { display: none; }
+#note-text { flex: 1; min-height: 12em; width: 100%; resize: none; padding: 8px 10px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--fg); tab-size: 4;
+  font: calc(13.5px * var(--font-scale))/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+#note-text:focus { outline: none; border-color: var(--accent); }
+.editor-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+#editor-msg.error { color: var(--dropped); }
+.edit-nokey { margin: 8px 0; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--planned); }
+.editor-hint { font-size: 0.85em; }
 #note h1 { font-size: 1.25em; margin: 8px 0; }
 #note h2 { font-size: 1.08em; margin: 14px 0 4px; }
 #note a { color: var(--accent); cursor: pointer; text-decoration: none; }

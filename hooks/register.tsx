@@ -1,7 +1,7 @@
 // rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-view), the model's
 // tools (rft_add_node, rft_set_status, rft_set_tags, rft_tags, rft_tree, rft_validate, rft_sync), the operating rules
-// injected into the system prompt, the outline pane, and the web view: /rft starts a local,
-// read-only server (server/rft_server.py) for the interactive tree page (web/). Everything is
+// injected into the system prompt, the outline pane, and the web view: /rft starts a local
+// server (server/rft_server.py) for the interactive tree page (web/). Everything is
 // inert in a project without `.rft/config.json`.
 
 import { atom, read, update } from 'claude-code'
@@ -404,7 +404,8 @@ function parseTabs(text: string): { tabs: { tabId: string; origin: string }[]; i
  * else a new tab. Resolves why not when the session has no browser pane or a call fails.
  */
 async function openInBrowser($: EngineInterface, url: string): Promise<BrowserOpen> {
-  const origin = url.replace(/\/+$/, '')
+  // the address carries the server's key (?token=); a tab is matched on scheme, host and port
+  const origin = /^[a-z]+:\/\/[^/?#]+/i.exec(url)?.[0] ?? url
   try {
     let found: { tabId: string } | undefined
     let isHidden = false
