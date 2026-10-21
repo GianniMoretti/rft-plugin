@@ -8,11 +8,11 @@ on stdout, and the plugin makes it as the rft_add_node tool does (no model turn)
 the new id once the note is on disk. It binds 127.0.0.1 only, takes requests only for a loopback
 host name (so a web page elsewhere cannot reach it through DNS rebinding), serves nothing but an
 allow-list of page files, and reads or writes a note only by its id, in a markdown file that
-resolves inside the vault's experiments/ or directions/ folder. A write (PUT api/note, POST
-api/node) must also come from the page itself (its Origin) and carry the vault's key, which is
-in the address the server prints, so neither another web page nor another user of the machine
-can change a note. The key is kept in the user's cache, readable by them alone, so it stays the
-same across restarts.
+resolves inside one of the vault's note folders (experiments/, directions/, references/,
+theory/). A write (PUT api/note, POST api/node) must also come from the page itself (its
+Origin) and carry the vault's key, which is in the address the server prints, so neither
+another web page nor another user of the machine can change a note. The key is kept in the
+user's cache, readable by them alone, so it stays the same across restarts.
 
     python3 rft_server.py --vault /abs/project/vault --web /abs/plugin/web [--port 0] [--project NAME]
 
@@ -40,7 +40,9 @@ import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-SUBDIRS = {"experiments": "experiment", "directions": "direction"}
+# the node types by folder (ID_RE below has their id letters), as TYPES in hooks/lib/vault.ts has them
+SUBDIRS = {"experiments": "experiment", "directions": "direction", "references": "reference", "theory": "theory"}
+TYPES = tuple(SUBDIRS.values())
 PAGE_FILES = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/index.html": ("index.html", "text/html; charset=utf-8"),
@@ -53,7 +55,7 @@ PAGE_FILES = {
     "/vendor/LICENSE-d3.txt": ("vendor/LICENSE-d3.txt", "text/plain; charset=utf-8"),
 }
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
-ID_RE = re.compile(r"^[ED]\d+$")
+ID_RE = re.compile(r"^[EDRT]\d+$")
 MAX_NOTE_BYTES = 2_000_000
 MAX_NODE_BYTES = 10_000
 NODE_WAIT_S = 10.0  # how long a new note may take the session to make
@@ -113,11 +115,11 @@ def parse_tags(value: str | None) -> list[str]:
     return [t.strip().strip("'\"").lstrip("#") for t in re.split(r"[,\s]+", v) if t.strip().strip("'\"").lstrip("#")]
 
 
-def topical_tags(tags: list[str], project: str) -> list[str]:
-    """The tags less the ones every note carries anyway: project, type, status."""
+def topical_tags(tags: list[str], project: str, kind: str) -> list[str]:
+    """The tags less the ones every note carries anyway: project, its own type, status."""
     out: list[str] = []
     for t in tags:
-        if t not in out and t != project and t not in ("experiment", "direction") and t not in STATUSES:
+        if t not in out and t != project and t != kind and t not in STATUSES:
             out.append(t)
     return out
 
@@ -223,11 +225,11 @@ class Vault:
                 nid = fm.get("id") or id_of(name)
                 if nid in nodes:
                     continue
-                ftype = fm.get("type") if fm.get("type") in ("experiment", "direction") else kind
+                ftype = fm.get("type") if fm.get("type") in TYPES else kind
                 nodes[nid] = {"id": nid, "name": name, "title": name[len(id_of(name)):].strip(),
                               "type": ftype, "status": fm.get("status", ""), "date": fm.get("date", ""),
                               "parent": None, "children": [], "path": f"{sub}/{f.name}",
-                              "tags": topical_tags(parse_tags(fm.get("tags")), self.project),
+                              "tags": topical_tags(parse_tags(fm.get("tags")), self.project, ftype),
                               "concept": ROOT_CONCEPT}
                 refs[nid] = link_target(fm.get("parent"))
                 cname = unquote(fm.get("concept"))
@@ -264,7 +266,7 @@ class Vault:
                 "concepts": concepts}
 
     def note_path(self, nid: str) -> Path | None:
-        """The note's file, only when it resolves to a markdown file inside experiments/ or directions/."""
+        """The note's file, only when it resolves to a markdown file inside a note folder (SUBDIRS)."""
         if not ID_RE.match(nid or ""):
             return None
         node = next((n for n in self.tree()["nodes"] if n["id"] == nid), None)
@@ -319,8 +321,8 @@ class Vault:
     def add_node(self, parent: str, kind: str, title: str, ask) -> tuple[int, dict]:
         """A new note under `parent`, made by the session: `ask` hands it the request, and the
         answer is the note's id once it is on disk. One request at a time, so each finds its own."""
-        if kind not in ("experiment", "direction"):
-            return 400, {"error": "type must be experiment or direction"}
+        if kind not in TYPES:
+            return 400, {"error": f"type must be one of {', '.join(TYPES)}"}
         if not re.search(r"\w", title):
             return 400, {"error": "the title needs a letter or a digit"}
         with self._add_lock:
@@ -465,7 +467,7 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             return self._json(*vault.write_body(nid, req["body"], version))
 
         def do_POST(self):
-            """POST api/node {"parent": "<id>", "type": "experiment" | "direction", "title": "..."}:
+            """POST api/node {"parent": "<id>", "type": one of TYPES, "title": "..."}:
             a new note under `parent`, with the default status, made by the session."""
             got = self._write_request("/api/node", MAX_NODE_BYTES)
             if got is None:

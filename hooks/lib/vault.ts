@@ -6,7 +6,47 @@
 // Every file access goes through `Io`, so the same code runs on the engine's `$.fs` and on
 // an in-memory vault in tests.
 
-export type NodeType = 'experiment' | 'direction'
+/**
+ * Everything that differs between node types: the id letter, the folder, the default status,
+ * the sections of a new note, the section a status note goes to, and the colours of the canvas
+ * card (an Obsidian preset) and the Mermaid box (a class and its style).
+ */
+export const TYPES = {
+  experiment: {
+    prefix: 'E', dir: 'experiments', plural: 'experiments', status: 'planned', code: true,
+    sections: ['What', 'Why', 'Result', 'Directions found'], noteIn: 'Result',
+    canvas: '5', mermaid: ['exp', 'fill:#d5f2ec,stroke:#12a594,color:#0f3a33'],
+  },
+  direction: {
+    prefix: 'D', dir: 'directions', plural: 'directions', status: 'idea', code: false,
+    sections: ['Idea', 'Why', 'Status'], noteIn: 'Status',
+    canvas: '6', mermaid: ['dir', 'fill:#e9ddf7,stroke:#8e4ec6,color:#2b1a40'],
+  },
+  reference: {
+    prefix: 'R', dir: 'references', plural: 'references', status: 'planned', code: false,
+    sections: ['Source', 'Summary', 'Method', 'Key results', 'Relevance', 'Directions found'], noteIn: 'Relevance',
+    canvas: '#d6336c', mermaid: ['ref', 'fill:#fde2ec,stroke:#d6336c,color:#4a0d26'],
+  },
+  theory: {
+    prefix: 'T', dir: 'theory', plural: 'theory notes', status: 'idea', code: false,
+    sections: ['Statement', 'Builds on', 'Explanation', 'Open questions', 'Status'], noteIn: 'Status',
+    canvas: '#3b5bdb', mermaid: ['thy', 'fill:#dde4ff,stroke:#3b5bdb,color:#14215c'],
+  },
+} as const
+
+export type NodeType = keyof typeof TYPES
+export type Prefix = (typeof TYPES)[NodeType]['prefix']
+
+export const NODE_TYPES = Object.keys(TYPES) as NodeType[]
+
+export const isNodeType = (t: unknown): t is NodeType => (NODE_TYPES as unknown[]).includes(t)
+
+/** An id: a type's letter and a number, the two captured. */
+export const ID_RE = new RegExp(`^([${NODE_TYPES.map(t => TYPES[t].prefix).join('')}])(\\d+)$`)
+
+/** `a or b`, `a, b or c`. */
+export const orList = (items: string[]) =>
+  items.length > 1 ? `${items.slice(0, -1).join(', ')} or ${items[items.length - 1]}` : items.join('')
 
 export const STATUSES = ['planned', 'running', 'done', 'idea', 'dropped', 'discussed', 'moved'] as const
 export type Status = (typeof STATUSES)[number]
@@ -77,7 +117,8 @@ export type Config = {
   project: string
   canvas: boolean
   mermaid: boolean
-  lastId: { E: number; D: number }
+  /** The last id given per type letter: ids are never reused. */
+  lastId: Record<string, number>
   /** The web view's port; 0 or absent: a free one. */
   webPort?: number
 }
@@ -90,8 +131,8 @@ export type Io = {
 }
 
 export const CONFIG_PATH = '.rft/config.json'
-export const SUBDIR: Record<NodeType, string> = { experiment: 'experiments', direction: 'directions' }
-export const PREFIX: Record<NodeType, 'E' | 'D'> = { experiment: 'E', direction: 'D' }
+export const SUBDIR = Object.fromEntries(NODE_TYPES.map(t => [t, TYPES[t].dir])) as Record<NodeType, string>
+export const PREFIX = Object.fromEntries(NODE_TYPES.map(t => [t, TYPES[t].prefix])) as Record<NodeType, Prefix>
 export const INDEX = '00 Index.md'
 export const CANVAS = 'Reasoning tree.canvas'
 export const MERMAID = 'Reasoning tree (diagram).md'
@@ -102,7 +143,8 @@ export const join = (...parts: string[]) =>
 // ---------------------------------------------------------------- config
 
 export const defaultConfig = (project: string): Config => ({
-  version: 1, vault: 'vault', project, canvas: true, mermaid: false, lastId: { E: 0, D: 0 },
+  version: 1, vault: 'vault', project, canvas: true, mermaid: false,
+  lastId: Object.fromEntries(NODE_TYPES.map(t => [TYPES[t].prefix, 0])),
 })
 
 export async function readConfig(io: Io): Promise<Config | null> {
@@ -270,11 +312,15 @@ export function parseTags(value: string | undefined): string[] {
   return v.split(/[,\s]+/).map(t => t.trim().replace(/^["']|["']$/g, '').replace(/^#/, '')).filter(Boolean)
 }
 
-/** The tags every note carries anyway: the project, its type and its status. */
-export const isReservedTag = (tag: string, project: string) =>
-  tag === project || tag === 'experiment' || tag === 'direction' || (STATUSES as readonly string[]).includes(tag)
+/**
+ * The tags every note carries anyway: the project, its own type and its status. Another type's
+ * name is a topical tag like any other (a direction may be tagged `theory`).
+ */
+export const isReservedTag = (tag: string, project: string, type: string) =>
+  tag === project || tag === type || (STATUSES as readonly string[]).includes(tag)
 
-export const topicalTags = (tags: string[], project: string) => [...new Set(tags.filter(t => !isReservedTag(t, project)))]
+export const topicalTags = (tags: string[], project: string, type: string) =>
+  [...new Set(tags.filter(t => !isReservedTag(t, project, type)))]
 
 /** A topical tag as the manual wants it: lowercase kebab-case. */
 export const sanitiseTag = (tag: string) =>
@@ -295,7 +341,7 @@ export const tagsLine = (project: string, type: string, topical: string[], statu
 
 /** Replaces a note's topical tags, keeping its project, type and status tags. */
 export function withTopicalTags(text: string, n: RftNode, project: string, tags: string[]): string {
-  return setField(text, 'tags', tagsLine(project, n.type, topicalTags(tags.map(sanitiseTag).filter(Boolean), project), n.status))
+  return setField(text, 'tags', tagsLine(project, n.type, topicalTags(tags.map(sanitiseTag).filter(Boolean), project, n.type), n.status))
 }
 
 /**
@@ -317,7 +363,7 @@ export function sanitiseTitle(title: string): string {
     .trim()
 }
 
-export const formatId = (prefix: 'E' | 'D', n: number) => `${prefix}${String(n).padStart(2, '0')}`
+export const formatId = (prefix: Prefix, n: number) => `${prefix}${String(n).padStart(2, '0')}`
 
 // ---------------------------------------------------------------- loading
 
@@ -363,11 +409,11 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
         problems.push(`duplicate id ${id}: ${nodes[id]!.path} and ${path}`)
         continue
       }
-      const fmType = fm.type === 'experiment' || fm.type === 'direction' ? fm.type : type
+      const fmType = isNodeType(fm.type) ? fm.type : type
       nodes[id] = {
         id, name, title: name.slice(idOf(name).length).trim(), type: fmType,
         status: fm.status ?? '', date: fm.date ?? '', parent: null, children: [], path,
-        tags: topicalTags(parseTags(fm.tags), config.project),
+        tags: topicalTags(parseTags(fm.tags), config.project, fmType),
         concept: ROOT_CONCEPT,
       }
       texts[id] = text
@@ -517,13 +563,17 @@ export function compactTree(tree: Tree, opts: { root?: string; depth?: number; w
 }
 
 export function counts(tree: Tree): Record<string, number> {
-  const out: Record<string, number> = { experiment: 0, direction: 0 }
+  const out: Record<string, number> = Object.fromEntries(NODE_TYPES.map(t => [t, 0]))
   for (const n of Object.values(tree.nodes)) {
     out[n.type] = (out[n.type] ?? 0) + 1
     out[n.status] = (out[n.status] ?? 0) + 1
   }
   return out
 }
+
+/** `3 directions, 5 experiments`: the note count of every type, by id letter as notes sort. */
+export const countsLine = (c: Record<string, number>) =>
+  [...NODE_TYPES].sort((a, b) => (TYPES[a].prefix < TYPES[b].prefix ? -1 : 1)).map(t => `${c[t] ?? 0} ${TYPES[t].plural}`).join(', ')
 
 // ---------------------------------------------------------------- derived files
 
@@ -570,7 +620,6 @@ export function withIndexTree(index: string, tree: Tree): string {
 
 type CanvasNode = { id: string; type: string; text: string; x: number; y: number; width: number; height: number; color: string }
 const CW = 300, CH = 110, CGX = 40, CGY = 70
-const TYPE_COLOR: Record<string, string> = { direction: '6', experiment: '5' }
 const STATUS_COLOR: Record<string, string> = { running: '2', planned: '3', idea: '3', dropped: '1', discussed: '1' }
 
 /** The Obsidian canvas: parents centred over their children; moved cards keep their place. */
@@ -599,7 +648,7 @@ export function canvasJson(tree: Tree, previous?: string, relayout = false): str
   for (const [id, [px, py]] of pos) {
     const n = tree.nodes[id]!
     const [x, y, w, h] = old.get(id) ?? [px, py, CW, CH]
-    const color = STATUS_COLOR[n.status] ?? TYPE_COLOR[n.type] ?? '0'
+    const color = STATUS_COLOR[n.status] ?? TYPES[n.type]?.canvas ?? '0'
     const text = `**${id}** · ${MARK[n.status] ?? ''} ${n.status}\n\n[[${n.name}|${n.title}]]`
     nodes.push({ id, type: 'text', text, x: Math.trunc(x), y: Math.trunc(y), width: w, height: h, color })
     if (n.parent) edges.push({ id: `${n.parent}-${id}`, fromNode: n.parent, fromSide: 'bottom', toNode: id, toSide: 'top' })
@@ -614,14 +663,13 @@ export function mermaidNote(tree: Tree): string {
   for (const r of tree.roots) post(r)
   const cls = (n: RftNode) =>
     ({ running: 'run', planned: 'todo', idea: 'todo', dropped: 'drop', discussed: 'drop', moved: 'drop' } as Record<string, string>)[n.status] ??
-    (n.type === 'direction' ? 'dir' : 'exp')
+    (TYPES[n.type]?.mermaid[0] ?? 'dir')
   const lines = ['flowchart TD']
   for (const id of ids) lines.push(`    ${id}["${tree.nodes[id]!.name.replace(/"/g, "'")}"]:::${cls(tree.nodes[id]!)}`)
   for (const id of ids) if (tree.nodes[id]!.parent) lines.push(`    ${tree.nodes[id]!.parent} --> ${id}`)
   if (ids.length) lines.push(`    class ${ids.join(',')} internal-link`)
   lines.push(
-    '    classDef dir fill:#e9ddf7,stroke:#8e4ec6,color:#2b1a40',
-    '    classDef exp fill:#d5f2ec,stroke:#12a594,color:#0f3a33',
+    ...NODE_TYPES.map(t => `    classDef ${TYPES[t].mermaid[0]} ${TYPES[t].mermaid[1]}`),
     '    classDef run fill:#ffe1cc,stroke:#f76b15,color:#4a2104',
     '    classDef todo fill:#fff3c4,stroke:#c9a300,color:#3d3200',
     '    classDef drop fill:#f3f3f3,stroke:#999999,color:#555555',
@@ -629,7 +677,7 @@ export function mermaidNote(tree: Tree): string {
   return (
     '# Reasoning tree (diagram)\n\n' +
     'Generated by the rft plugin from the `parent:` fields: do not edit. Purple = direction, ' +
-    'green = experiment, orange = running, yellow = idea / planned, grey = dropped, discussed ' +
+    'green = experiment, pink = reference, blue = theory, orange = running, yellow = idea / planned, grey = dropped, discussed ' +
     'or moved. Click a box to open the note. Open in reading view.\n\n' +
     '```mermaid\n' + lines.join('\n') + '\n```\n'
   )
@@ -706,9 +754,9 @@ export async function validate(io: Io, loaded: Loaded): Promise<Validation> {
     const fm = front(text)
     if (!fm.id) errors.push(`${n.path}: no id in the frontmatter`)
     else if (fm.id !== idOf(n.name)) errors.push(`${n.path}: frontmatter id ${fm.id} does not match the file name`)
-    if (!/^[ED]\d+$/.test(n.id)) errors.push(`${n.path}: id ${n.id} is not E<number> or D<number>`)
+    if (!ID_RE.test(n.id)) errors.push(`${n.path}: id ${n.id} is not ${orList(NODE_TYPES.map(t => `${TYPES[t].prefix}<number>`))}`)
     else if (n.id[0] !== PREFIX[n.type]) errors.push(`${n.path}: id ${n.id} does not match type ${n.type}`)
-    if (fm.type !== 'experiment' && fm.type !== 'direction') errors.push(`${n.path}: type "${fm.type ?? ''}" is not experiment or direction`)
+    if (!isNodeType(fm.type)) errors.push(`${n.path}: type "${fm.type ?? ''}" is not ${orList(NODE_TYPES)}`)
     if (!SUBDIR[n.type] || !n.path.startsWith(SUBDIR[n.type] + '/')) warnings.push(`${n.path}: a ${n.type} note outside ${SUBDIR[n.type]}/`)
     if (!(STATUSES as readonly string[]).includes(n.status)) errors.push(`${n.path}: status "${n.status}" is not one of ${STATUSES.join(', ')}`)
     if (FORBIDDEN.test(n.name)) errors.push(`${n.path}: the title contains a character that breaks links (^ # | [ ] \\ / : * " < > ?)`)
@@ -776,7 +824,7 @@ export function nextId(loaded: Loaded, type: NodeType, taken: string[] = []): st
   const ids = [...Object.keys(loaded.tree.nodes), ...taken]
   let max = loaded.config.lastId[prefix] ?? 0
   for (const id of ids) {
-    const m = /^([ED])(\d+)$/.exec(id)
+    const m = ID_RE.exec(id)
     if (m && m[1] === prefix) max = Math.max(max, Number(m[2]))
   }
   // D00 is the root: an empty vault's first direction is D00, every other id starts at 01
@@ -785,22 +833,21 @@ export function nextId(loaded: Loaded, type: NodeType, taken: string[] = []): st
 }
 
 export function noteText(id: string, n: NewNode, project: string, parentName: string | null): string {
-  const status = n.status ?? (n.type === 'experiment' ? 'planned' : 'idea')
+  const t = TYPES[n.type]
+  const status = n.status ?? t.status
   const s = n.sections ?? {}
   const parentLink = parentName ? `[[${parentName}]]` : '(root)'
-  const topical = topicalTags((n.tags ?? []).map(sanitiseTag).filter(Boolean), project)
+  const topical = topicalTags((n.tags ?? []).map(sanitiseTag).filter(Boolean), project, n.type)
   const head = [
     '---', `id: ${id}`, `type: ${n.type}`, `status: ${status}`, `date: ${n.date}`,
     `parent: ${parentName ? `"[[${parentName}]]"` : '""'}`, 'children: []', 'up: ""', 'down: []',
     `tags: ${tagsLine(project, n.type, topical, status)}`, '---', '',
     `# ${id} · ${n.title}`, '',
     `**Parent:** ${parentLink}  `,
-    `**Status:** ${status} · **Date:** ${n.date}${n.type === 'experiment' ? '  ' : ''}`,
+    `**Status:** ${status} · **Date:** ${n.date}${t.code ? '  ' : ''}`,
   ]
-  if (n.type === 'experiment') head.push(`**Code / data:** ${s['Code / data'] ?? n.code ?? 'commit, script, results folder, machine'}`)
-  const order = n.type === 'experiment'
-    ? ['What', 'Why', 'Result', 'Directions found']
-    : ['Idea', 'Why', 'Status']
+  if (t.code) head.push(`**Code / data:** ${s['Code / data'] ?? n.code ?? 'commit, script, results folder, machine'}`)
+  const order: readonly string[] = t.sections
   const extra = Object.keys(s).filter(k => !order.includes(k) && k !== 'Code / data' && k !== 'Children in the tree')
   const blocks = [...order, ...extra].map(k => `## ${k}\n${(s[k] ?? '').trim()}${s[k]?.trim() ? '\n' : ''}`)
   return head.join('\n') + '\n\n' + blocks.join('\n') + '\n## Children in the tree\n'
@@ -839,7 +886,7 @@ export function withStatus(text: string, n: RftNode, status: string, note?: stri
   }
   out = out.replace(/(\*\*Status:\*\*\s*)[a-z]+/, `$1${status}`)
   if (note?.trim()) {
-    const heading = n.type === 'experiment' ? '## Result' : '## Status'
+    const heading = `## ${TYPES[n.type]?.noteIn ?? 'Status'}`
     const at = out.indexOf(heading + '\n')
     if (at < 0) out = out.replace(/\n*$/, '\n\n') + `${heading}\n${note.trim()}\n`
     else {
@@ -862,8 +909,8 @@ type: index
 
 # ${project} — the reasoning tree
 
-One note per experiment (E..) and per direction (D..); each links to its parent and lists its
-children. Legend: ${LEGEND}.
+One note per experiment (E..), direction (D..), reference (R..) and theory note (T..); each links
+to its parent and lists its children. Legend: ${LEGEND}.
 
 ## The tree
 
@@ -933,3 +980,79 @@ Decided / planned / why dropped or not pursued / where it was moved.
 
 ## Children in the tree
 `
+
+export const REFERENCE_TEMPLATE = (project: string) => `---
+id: R__
+type: reference
+status: planned
+date: YYYY-MM-DD
+parent: "[[D__ title]]"
+children: []
+tags: [${project}, reference]
+---
+
+# R__ · Title
+
+**Parent:** [[D__ title]]
+**Status:** planned · **Date:** YYYY-MM-DD
+
+## Source
+Authors, title, venue, year; a link that can be checked (DOI, arXiv id or URL); PDF or BibTeX key.
+
+## Summary
+What the paper, method or review claims, in a few sentences.
+
+## Method
+How they get there: model, data, setup; for a review, how it organises the field.
+
+## Key results
+Findings and numbers as the source reports them, with where (table, figure, section).
+
+## Relevance
+My reading: what it means for this project, what to trust, what is missing.
+
+## Directions found
+
+## Children in the tree
+`
+
+export const THEORY_TEMPLATE = (project: string) => `---
+id: T__
+type: theory
+status: idea
+date: YYYY-MM-DD
+parent: "[[E__ title]]"
+children: []
+tags: [${project}, theory]
+---
+
+# T__ · Title
+
+**Parent:** [[E__ title]]
+**Status:** idea · **Date:** YYYY-MM-DD
+
+## Statement
+The definition, method, taxonomy or claim, stated precisely.
+
+## Builds on
+The directions, experiments and references it rests on, linked, and what it takes from each.
+
+## Explanation
+Derivation, intuition, examples and counter-examples.
+
+## Open questions
+What is not settled yet.
+
+## Status
+Draft / settled / why dropped or refuted.
+
+## Children in the tree
+`
+
+/** The template of each type, written to `templates/_<type>.md` when a vault is set up. */
+export const TEMPLATES: Record<NodeType, (project: string) => string> = {
+  experiment: EXPERIMENT_TEMPLATE,
+  direction: DIRECTION_TEMPLATE,
+  reference: REFERENCE_TEMPLATE,
+  theory: THEORY_TEMPLATE,
+}

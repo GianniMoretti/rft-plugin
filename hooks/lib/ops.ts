@@ -6,10 +6,10 @@ import type { PageAssets } from './page'
 import { staticPage } from './page'
 import type { Config, Io, Loaded, NodeType, RftNode, Tree } from './vault'
 import {
-  CONFIG_PATH, DIRECTION_TEMPLATE, EXPERIMENT_TEMPLATE, INDEX, LEGEND, MERMAID, STATUSES, SUBDIR,
-  MARK, ROOT_CONCEPT, compactTree, conceptOrder, conceptPath, counts, defaultConfig, front, indexTemplate, join, load,
-  nextId, noteText, readConfig, removeField, resolveId, sanitiseTitle, setField, statusSummary, sync, tagCounts,
-  validate, withChildListed, withStatus, withTopicalTags, writeConfig,
+  CONFIG_PATH, ID_RE, INDEX, LEGEND, MERMAID, NODE_TYPES, STATUSES, SUBDIR, TEMPLATES, TYPES,
+  MARK, ROOT_CONCEPT, compactTree, conceptOrder, conceptPath, counts, countsLine, defaultConfig, front, idOf, indexTemplate,
+  isNodeType, join, load, nextId, noteText, orList, readConfig, removeField, resolveId, sanitiseTitle, setField, statusSummary,
+  sync, tagCounts, validate, withChildListed, withStatus, withTopicalTags, writeConfig,
 } from './vault'
 
 export const today = (now = new Date()) =>
@@ -50,8 +50,7 @@ export async function initVault(io: Io, opts: { project: string; question: strin
     await io.write(join(v, rel), text)
     written.push(rel)
   }
-  await ensure('templates/_experiment.md', EXPERIMENT_TEMPLATE(opts.project))
-  await ensure('templates/_direction.md', DIRECTION_TEMPLATE(opts.project))
+  for (const t of NODE_TYPES) await ensure(`templates/_${t}.md`, TEMPLATES[t](opts.project))
   if (hasNotes) {
     config.mermaid = await io.exists(join(v, MERMAID))
     const loaded = await load(io, config)
@@ -59,13 +58,13 @@ export async function initVault(io: Io, opts: { project: string; question: strin
     const tally = new Map<string, number>()
     for (const text of Object.values(loaded.texts)) {
       const first = front(text).tags?.replace(/^\[/, '').split(',')[0]?.trim()
-      if (first && !['experiment', 'direction'].includes(first)) tally.set(first, (tally.get(first) ?? 0) + 1)
+      if (first && !isNodeType(first)) tally.set(first, (tally.get(first) ?? 0) + 1)
     }
     const common = [...tally].sort((a, b) => b[1] - a[1])[0]
     if (common) config.project = common[0]
     for (const id of Object.keys(loaded.tree.nodes)) {
-      const m = /^([ED])(\d+)$/.exec(id)
-      if (m) config.lastId[m[1] as 'E' | 'D'] = Math.max(config.lastId[m[1] as 'E' | 'D'], Number(m[2]))
+      const m = ID_RE.exec(id)
+      if (m) config.lastId[m[1]!] = Math.max(config.lastId[m[1]!] ?? 0, Number(m[2]))
     }
     await writeConfig(io, config)
     const c = counts(loaded.tree)
@@ -74,7 +73,7 @@ export async function initVault(io: Io, opts: { project: string; question: strin
       isAdopted: true,
       config,
       text:
-        `RFT is now active. Adopted the existing vault ${v}/ (${c.direction} directions, ${c.experiment} experiments)` +
+        `RFT is now active. Adopted the existing vault ${v}/ (${countsLine(c)})` +
         (written.length ? `; added ${written.join(', ')}` : '') +
         `. Validation: ${check.errors.length} errors, ${check.warnings.length} warnings` +
         (check.errors.length + check.warnings.length ? ' (ask Claude to run rft_validate, then rft_sync).' : '.'),
@@ -111,10 +110,10 @@ export type AddInput = {
 
 export async function addNode(io: Io, loaded: Loaded, input: AddInput): Promise<RftNode & { report: string }> {
   const { tree, config } = loaded
-  if (input.type !== 'experiment' && input.type !== 'direction') throw new RftError('type must be "experiment" or "direction"')
+  if (!isNodeType(input.type)) throw new RftError(`type must be ${orList(NODE_TYPES.map(t => `"${t}"`))}`)
   const title = sanitiseTitle(input.title ?? '')
   if (!title) throw new RftError('the title is empty once the characters that break links are removed')
-  const status = input.status ?? (input.type === 'experiment' ? 'planned' : 'idea')
+  const status = input.status ?? TYPES[input.type].status
   if (!(STATUSES as readonly string[]).includes(status)) throw new RftError(`status must be one of ${STATUSES.join(', ')}`)
   const isEmpty = Object.keys(tree.nodes).length === 0
   let parent: string | null = null
@@ -128,15 +127,15 @@ export async function addNode(io: Io, loaded: Loaded, input: AddInput): Promise<
   }
   // another session on the same tree may have added notes since `loaded` was read
   const onDisk = await readConfig(io)
-  if (onDisk) for (const p of ['E', 'D'] as const) config.lastId[p] = Math.max(config.lastId[p], onDisk.lastId[p])
+  if (onDisk) for (const [p, last] of Object.entries(onDisk.lastId)) config.lastId[p] = Math.max(config.lastId[p] ?? 0, last)
   const id = nextId(loaded, input.type, await idsIn(io, join(config.vault, SUBDIR[input.type])))
   const name = `${id} ${title}`
   const path = `${SUBDIR[input.type]}/${name}.md`
   const parentName = parent ? tree.nodes[parent]!.name : null
   const text = noteText(id, { ...input, title, status }, config.project, parentName)
   await io.write(join(config.vault, path), text)
-  const prefix = id[0] as 'E' | 'D'
-  config.lastId[prefix] = Math.max(config.lastId[prefix], Number(id.slice(1)))
+  const prefix = TYPES[input.type].prefix
+  config.lastId[prefix] = Math.max(config.lastId[prefix] ?? 0, Number(id.slice(1)))
   await writeConfig(io, config)
   if (parent) {
     const p = tree.nodes[parent]!
@@ -157,7 +156,7 @@ export async function addNode(io: Io, loaded: Loaded, input: AddInput): Promise<
 /** The ids of the notes in a folder of the vault, as it is on disk now. */
 async function idsIn(io: Io, dir: string): Promise<string[]> {
   if (!(await io.exists(dir))) return []
-  return (await io.list(dir)).map(f => /^([ED]\d+) /.exec(f.name)?.[1]).filter((id): id is string => !!id)
+  return (await io.list(dir)).map(f => idOf(f.name)).filter(id => ID_RE.test(id))
 }
 
 export async function setTags(io: Io, loaded: Loaded, ref: string, tags: string[]): Promise<string> {
@@ -288,7 +287,7 @@ export function treeReport(loaded: Loaded, opts: { root?: string; depth?: number
   if (opts.root && !root) throw new RftError(`"${opts.root}" is not a note of the tree`)
   const body = compactTree(tree, { root: root ?? undefined, depth: opts.depth, withStatus: false })
   return [
-    `${config.project}: ${c.direction} directions, ${c.experiment} experiments in ${opts.vault ?? config.vault}/. Marks: ${LEGEND}.`,
+    `${config.project}: ${countsLine(c)} in ${opts.vault ?? config.vault}/. Marks: ${LEGEND}.`,
     body || '(empty tree)',
   ].join('\n')
 }
@@ -301,12 +300,14 @@ export function rulesText(tree: Tree, config: Config, vault = config.vault): str
   if (lines.length > MAX_LINES) lines = [...lines.slice(0, MAX_LINES), `… ${lines.length - MAX_LINES} more (rft_tree shows them)`]
   return `# Reasoning Flow Tree (rft) is active in this project
 
-The reasoning of this research project is kept as a tree of Obsidian notes in \`${vault}/\`: one note per experiment (E.., something run or computed) and per direction (D.., an idea, question or hypothesis, rejected ones included), each with exactly one parent; D00 is the starting question. The notes are the source of truth. Keep the tree up to date as you work, with the rft tools:
+The reasoning of this research project is kept as a tree of Obsidian notes in \`${vault}/\`: one note per experiment (E.., something run or computed), per direction (D.., an idea, question or hypothesis, rejected ones included), per reference (R.., a paper, method or literature review that was read: its summary and your comments) and per theory note (T.., the project's own definitions, methods, taxonomies and arguments, built on the other notes), each with exactly one parent; D00 is the starting question. The notes are the source of truth. Keep the tree up to date as you work, with the rft tools:
 
-- Before launching an experiment (a training run, a grid, a numerical check, a measurement, a proof, a literature check), create its node first: rft_add_node with type experiment, parent = the direction it tests, status planned or running, and What / Why filled.
+- Before launching an experiment (a training run, a grid, a numerical check, a measurement, a literature search for a yes or no answer), create its node first: rft_add_node with type experiment, parent = the direction it tests, status planned or running, and What / Why filled.
 - When it finishes or gives a partial result, write the real numbers in its note (Result, with spread over seeds and what failed; Directions found; Code / data: commit, script, results folder, machine), then rft_set_status. Record only results that were actually obtained, never expected or invented ones.
-- Every new idea or question, from a result, the user or a discussion, even if rejected: rft_add_node with type direction, parent = the note it comes from. Rejected ideas get status discussed; abandoned ones dropped; moved ones moved, with the reason (rft_set_status note).
-- Give every new note 1-3 short topical tags (lowercase kebab-case, e.g. \`theory\`, \`ablation\`), reusing the ones rft_tags lists before inventing new ones; rft_set_tags changes them. Do not retro-tag old notes unless asked.
+- Every new idea or question, from a result, a reference, the user or a discussion, even if rejected: rft_add_node with type direction, parent = the note it comes from. Rejected ideas get status discussed; abandoned ones dropped; moved ones moved, with the reason (rft_set_status note).
+- A paper, method or literature review that was read: rft_add_node with type reference, parent = the note that led to it (a review may hold one reference per key paper). Fill Source with a link that can be checked (DOI, arXiv id or URL), Summary, Method, Key results as the source reports them (and where), and your reading under Relevance. Only sources actually read: never invent a citation, or a result the source does not report. Status planned = to read, running = reading, done = summarised, dropped = not relevant.
+- A definition, method, taxonomy, proof or argument of the project's own: rft_add_node with type theory, parent = the note it builds on most, every other note it builds on linked under Builds on. Status idea = draft, running = being worked out, done = settled, dropped = refuted.
+- Give every new note 1-3 short topical tags (lowercase kebab-case, e.g. \`ablation\`, \`optimisation\`), reusing the ones rft_tags lists before inventing new ones; rft_set_tags changes them. Do not retro-tag old notes unless asked.
 - Statuses: ${STATUSES.join(', ')}. Marks: ${LEGEND}.
 - The tools assign ids (never reused) and strip ^ # | [ ] from titles. After editing notes by hand, run rft_sync (children / up / down, 00 Index.md, the canvas) and rft_validate.
 - Concepts group the tree into lines of research: a note with \`concept:\` starts one, its subtree inherits it until a sub-concept starts. When a direction opens a new line of research, PROPOSE a short concept name to the user; apply it with rft_set_concept only after they confirm, never silently. rft_concepts shows the concept tree.

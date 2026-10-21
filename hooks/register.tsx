@@ -13,7 +13,7 @@ import type { RftSnapshot } from '../types'
 import { addNode, conceptsReport, exportHtml, initVault, loadActive, rulesText, setConcept, setStatus, setTags, tagsReport, today, treeReport } from './lib/ops'
 import { ASSET_PATHS } from './lib/page'
 import type { Config, Io, NodeType, Tree } from './lib/vault'
-import { LEGEND, MARK, bodyOf, counts, isAbsolute, join, locate, readConfig, resolvePath, rooted, signatureOf, sync, validate } from './lib/vault'
+import { LEGEND, MARK, NODE_TYPES, bodyOf, counts, countsLine, isAbsolute, join, locate, readConfig, resolvePath, rooted, signatureOf, sync, validate } from './lib/vault'
 
 const PANE = 'rft-tree'
 const TITLE = 'Reasoning tree'
@@ -62,20 +62,20 @@ const treeOf = (s: RftSnapshot): Tree => ({ nodes: s.nodes, roots: s.roots, conc
 const TOOLS = {
   rft_add_node: {
     description:
-      'Add a node to the reasoning tree: an experiment (something run or computed) or a direction (an idea, question or hypothesis, rejected ones included). Assigns the next free id, sanitises the title, writes the note from the template, links it under its parent and regenerates the index and canvas. Create an experiment BEFORE launching it (status planned or running).',
+      'Add a node to the reasoning tree: an experiment (something run or computed), a direction (an idea, question or hypothesis, rejected ones included), a reference (a paper, method or literature review that was read, summarised and commented, with a source that can be checked) or a theory note (a definition, method, taxonomy or argument of the project\'s own, built on the other notes). Assigns the next free id, sanitises the title, writes the note from the template, links it under its parent and regenerates the index and canvas. Create an experiment BEFORE launching it (status planned or running).',
     inputSchema: {
       type: 'object',
       properties: {
-        type: { type: 'string', enum: ['experiment', 'direction'] },
+        type: { type: 'string', enum: NODE_TYPES },
         title: { type: 'string', description: 'Short title, no id (the id is assigned). Avoid ^ # | [ ].' },
         parent: { type: 'string', description: 'Id (e.g. D03) or full name of the parent note; omit only for the root D00 of an empty tree.' },
-        status: { type: 'string', enum: ['planned', 'running', 'done', 'idea', 'dropped', 'discussed', 'moved'], description: 'Default: planned for experiments, idea for directions.' },
+        status: { type: 'string', enum: ['planned', 'running', 'done', 'idea', 'dropped', 'discussed', 'moved'], description: 'Default: planned for experiments and references, idea for directions and theory notes.' },
         what: { type: 'string', description: 'Experiment: what is run or computed (model, data, arms, seeds, where).' },
         why: { type: 'string', description: 'Why: which direction it tests and what is expected, or where the idea comes from.' },
         idea: { type: 'string', description: 'Direction: the idea or question in a few sentences.' },
         result: { type: 'string', description: 'Experiment: real results only (numbers with spread, failures, caveats).' },
         code: { type: 'string', description: 'Experiment: commit, script, results folder, machine.' },
-        sections: { type: 'object', additionalProperties: { type: 'string' }, description: 'Other sections by heading, e.g. {"Status": "..."}.' },
+        sections: { type: 'object', additionalProperties: { type: 'string' }, description: 'Other sections by heading, e.g. {"Status": "..."}. A reference has Source, Summary, Method, Key results, Relevance; a theory note Statement, Builds on, Explanation, Open questions.' },
         tags: { type: 'array', items: { type: 'string' }, description: '1-3 short topical tags, lowercase kebab-case, reused from rft_tags when they fit (the project, type and status tags are added anyway).' },
       },
       required: ['type', 'title'],
@@ -83,7 +83,7 @@ const TOOLS = {
   },
   rft_set_status: {
     description:
-      'Change the status of a node (frontmatter, tag and the Status line) and optionally append a note: for an experiment to its Result section, for a direction to its Status section (say why it was dropped or where it was moved). Regenerates the index and canvas.',
+      'Change the status of a node (frontmatter, tag and the Status line) and optionally append a note: for an experiment to its Result section, for a reference to its Relevance section, for a direction or a theory note to its Status section (say why it was dropped or where it was moved). Regenerates the index and canvas.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -227,6 +227,19 @@ async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> 
   }
   if (shouldOpen) void $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
   if (failed.length) reportFailures($, failed)
+}
+
+/** A session's start, past the commands: the tree when there is one, else why its link leads nowhere. */
+async function start($: EngineInterface, shouldOpen: boolean): Promise<void> {
+  let isActive = false
+  try {
+    const h = await locateHere($)
+    if (h && 'problem' in h) {
+      await update($, snapshot, () => ({ ...EMPTY, error: h.problem }))
+      $.ui.toast(`rft: ${h.problem}`)
+    } else if (h) isActive = (await readConfig(h.io)) !== null
+  } catch { /* treated as inactive */ }
+  if (isActive) await activate($, shouldOpen)
 }
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err))
@@ -525,16 +538,17 @@ export const register: Register = (on, options) => {
     await registerCommands($)
     // a server of an earlier load of this module died with it
     if (!server) await update($, webUrl, () => null)
-    let isActive = false
-    try {
-      const h = await locateHere($)
-      if (h && 'problem' in h) {
-        await update($, snapshot, () => ({ ...EMPTY, error: h.problem }))
-        $.ui.toast(`rft: ${h.problem}`)
-      } else if (h) isActive = (await readConfig(h.io)) !== null
-    } catch { /* treated as inactive */ }
     // the desktop shows the tree view in its browser pane (/rft); the outline opens on asking
-    if (isActive) await activate($, options.autoOpen !== false && !(await isOnDesktop($)))
+    await start($, options.autoOpen !== false && !(await isOnDesktop($)))
+
+    return next(e)
+  })
+
+  // a /clear (or /resume) ends the session and goes on in a fresh one with no session.start: its
+  // state starts empty and session.end stopped the poll, so the tree is taken up again here; the
+  // commands, the tools and an open pane are still there
+  on('classic.SessionStart', async ($, e, next) => {
+    if (e.source === 'clear' || e.source === 'resume') await start($, false)
 
     return next(e)
   })
@@ -750,7 +764,7 @@ export const register: Register = (on, options) => {
 
     return (
       <Box flexDirection="column">
-        <Text bold>{`${s.project}: ${c.direction ?? 0} directions, ${c.experiment ?? 0} experiments`}</Text>
+        <Text bold>{`${s.project}: ${countsLine(c)}`}</Text>
         {url
           ? <Text color="claude">{`Tree view: ${url}`}</Text>
           : <Text dimColor>Run /rft for the interactive tree view in a browser.</Text>}

@@ -50,6 +50,8 @@
     <div class="legend-title">Type</div>
     <div class="row"><span class="ring ring-direction"></span>Direction (D..)</div>
     <div class="row"><span class="ring ring-experiment"></span>Experiment (E..)</div>
+    <div class="row"><span class="ring ring-reference"></span>Reference (R..)</div>
+    <div class="row"><span class="ring ring-theory"></span>Theory (T..)</div>
     <div id="concept-legend" hidden>
       <div class="legend-title">Concepts <span class="muted">(click to focus)</span></div>
       <div id="concepts-list"></div>
@@ -67,6 +69,8 @@
       <div class="ftitle">Type</div>
       <label><input type="checkbox" data-ftype="direction"> <span class="ring ring-direction"></span> Directions (D..)</label>
       <label><input type="checkbox" data-ftype="experiment"> <span class="ring ring-experiment"></span> Experiments (E..)</label>
+      <label><input type="checkbox" data-ftype="reference"> <span class="ring ring-reference"></span> References (R..)</label>
+      <label><input type="checkbox" data-ftype="theory"> <span class="ring ring-theory"></span> Theory (T..)</label>
     </section>
     <section>
       <div class="ftitle">Status</div>
@@ -93,7 +97,7 @@
     <div class="drawer-head">
       <span id="drawer-meta" class="muted"></span>
       <span class="drawer-actions">
-        <button id="drawer-add" hidden title="Add a direction or an experiment under this note">+ Child</button>
+        <button id="drawer-add" hidden title="Add a direction, an experiment, a reference or a theory note under this note">+ Child</button>
         <button id="drawer-edit" hidden title="Edit the note's text (Ctrl+S saves, Esc cancels)">Edit</button>
         <button id="drawer-close" title="Close">✕</button>
       </span>
@@ -105,6 +109,8 @@
         <select id="add-type" aria-label="The new note's type">
           <option value="direction">Direction</option>
           <option value="experiment">Experiment</option>
+          <option value="reference">Reference</option>
+          <option value="theory">Theory</option>
         </select>
         <input id="add-title" type="text" autocomplete="off" placeholder="Title" aria-label="The new note's title">
       </div>

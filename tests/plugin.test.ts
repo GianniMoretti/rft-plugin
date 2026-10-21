@@ -465,12 +465,12 @@ describe('linked trees', () => {
     expect(w.tools).toHaveLength(9)
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
     expect(res.sections.find(s => s.id === 'rft:rules')?.text).toContain(`notes in \`${TREE}/vault/\``)
-    expect((await $.tool.call({ tool: 'mcp__rft__rft_tree' } as never)).text).toContain(`experiments in ${TREE}/vault/.`)
+    expect((await $.tool.call({ tool: 'mcp__rft__rft_tree' } as never)).text).toContain(`theory notes in ${TREE}/vault/.`)
     const added = await $.tool.call({ tool: 'mcp__rft__rft_add_node', type: 'experiment', title: 'Seed sweep', parent: 'D01' } as never)
     expect(added.text).toContain('Id: E03')
     expect(added.text).toContain(`Note: ${TREE}/vault/experiments/E03 Seed sweep.md`)
     expect(w.fs.exists(`${TREE}/vault/experiments/E03 Seed sweep.md`)).toBe(true)
-    expect(JSON.parse(w.fs.read(`${TREE}/.rft/config.json`)).lastId).toEqual({ E: 3, D: 1 })
+    expect(JSON.parse(w.fs.read(`${TREE}/.rft/config.json`)).lastId).toEqual({ E: 3, D: 1, R: 0, T: 0 })
     expect([...w.fs.files.keys()].filter(k => k.startsWith('/phd/code/'))).toEqual([LINK])
     expect(JSON.parse(w.fs.read(LINK))).toEqual({ tree: '../flow-notes' })
     await $.command.run(RUN(''))
@@ -528,6 +528,24 @@ describe('linked trees', () => {
     await ui.unmount()
     expect((await $.command.run(INIT('Q'))).text).toContain('does not start a second tree')
     expect([...w.fs.files.keys()]).toEqual([LINK])
+  })
+
+  test('after a /clear the pane still shows the linked tree and follows it', async ($, on) => {
+    const clock = mock.clock(on)
+    const w = world(on, linked(), { cwd: REPO })
+    on('session.end', () => ({ sessionId: 'test' }) as never)
+    on('classic.SessionStart', () => ({}) as never)
+    await $.session.start({ cwd: REPO, source: 'startup' } as never)
+    // a /clear ends the session and goes on in a fresh one, with no session.start
+    await $.session.end({ reason: 'clear' } as never)
+    await $.classic.SessionStart({ source: 'clear' } as never)
+    w.fs.write(`${TREE}/vault/directions/D02 New idea.md`, demoFiles()[`vault/directions/${D01}.md`]!
+      .replace('id: D01', 'id: D02').replace('"[[E01 First check]]"', `"[[${E02}]]"`))
+    await clock.advance(5000)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ text: /not active/ })).toBeUndefined()
+    expect(await ui.find({ text: /3 directions/ })).toBeDefined()
+    await ui.unmount()
   })
 
   test('/rft-init in a linked folder starts no second tree and says which tree the folder uses', async ($, on) => {
