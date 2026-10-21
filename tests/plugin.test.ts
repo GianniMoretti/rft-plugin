@@ -263,6 +263,27 @@ describe('web view', () => {
     expect(srv.state.isRunning).toBe(false)
   })
 
+  test('a /clear keeps the server, and the fresh session shows and reuses it', async ($, on) => {
+    mock.clock(on)
+    world(on, demoFiles())
+    const srv = fakeServer(on)
+    on('session.end', () => ({ sessionId: 'test' }) as never)
+    on('classic.SessionStart', () => ({}) as never)
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    await $.command.run(RUN(''))
+    await $.session.end({ reason: 'clear' } as never)
+    await $.classic.SessionStart({ source: 'clear' } as never)
+    expect(srv.state.isRunning).toBe(true)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect((await ui.find({ type: 'Text', text: /^Tree view: / }))?.text).toBe(`Tree view: ${ADDRESS}`)
+    await ui.unmount()
+    const again = await $.command.run(RUN(''))
+    expect(again.text).toContain(`Tree view: ${ADDRESS}`)
+    expect(srv.seen).toHaveLength(1)
+    await $.session.end({ reason: 'prompt_input_exit' } as never)
+    expect(srv.state.isRunning).toBe(false)
+  })
+
   test('on the desktop /rft opens the tree view in the browser pane, not the outline pane', async ($, on) => {
     mock.clock(on)
     const w = world(on, demoFiles(), { surfaces: ['desktop'] })

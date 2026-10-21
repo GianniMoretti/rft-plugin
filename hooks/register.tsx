@@ -349,7 +349,8 @@ async function foldAll($: EngineInterface, ids: string[]): Promise<void> {
 
 // ---------------------------------------------------------------- the web view's server
 
-// the running server, one per session; a reload of the module kills the child with it
+// the running server, one per session and kept across a /clear; a reload of the module kills the
+// child with it
 let server: { url: string; stop: () => void } | null = null
 
 /** Starts the web view's server, or answers the running one's URL. */
@@ -546,17 +547,21 @@ export const register: Register = (on, options) => {
 
   // a /clear (or /resume) ends the session and goes on in a fresh one with no session.start: its
   // state starts empty and session.end stopped the poll, so the tree is taken up again here; the
-  // commands, the tools and an open pane are still there
+  // commands, the tools, an open pane and, after a /clear, the tree view's server are still there
   on('classic.SessionStart', async ($, e, next) => {
     if (e.source === 'clear' || e.source === 'resume') await start($, false)
+    const url = server?.url
+    if (e.source === 'clear' && url) await update($, webUrl, () => url)
 
     return next(e)
   })
 
+  // a /clear goes on in the same folder, so the tree view's server, and a browser tab on it, live
+  // on; any other end stops it (a resume may go on in another folder)
   on('session.end', async ($, e, next) => {
     poller?.cancel()
     poller = null
-    await stopServer($)
+    if (e.reason !== 'clear') await stopServer($)
 
     return next(e)
   })
