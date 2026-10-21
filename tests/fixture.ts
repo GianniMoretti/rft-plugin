@@ -37,7 +37,7 @@ export const E02 = 'E02 Variant run'
 
 /** Stand-ins for the web view's files, with the markers the static export inlines. */
 export const WEB_FILES: Record<string, string> = {
-  'web/index.html': '<!doctype html><html><head><link rel="stylesheet" href="app.css" data-rft-inline></head><body>' +
+  'web/index.html': '<!doctype html><html><head><script src="theme.js" data-rft-inline></script><link rel="stylesheet" href="app.css" data-rft-inline></head><body>' +
     '<script src="vendor/d3.v7.9.0.min.js" data-rft-inline></script><script src="filters.js" data-rft-inline></script>' +
     '<script src="layout.js" data-rft-inline></script><script src="concepts.js" data-rft-inline></script>' +
     '<script src="app.js" data-rft-inline></script></body></html>',
@@ -47,6 +47,7 @@ export const WEB_FILES: Record<string, string> = {
   'web/filters.js': '/* filters */',
   'web/layout.js': '/* layout */',
   'web/concepts.js': '/* concepts */',
+  'web/theme.js': '/* theme */',
 }
 
 export function demoFiles(): Record<string, string> {

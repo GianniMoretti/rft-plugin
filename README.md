@@ -156,6 +156,8 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   are dimmed, keeping the tree's shape, or hidden, keeping every ancestor of a match so the tree
   stays connected. The toolbar shows how many filters are on, with **Clear**.
 - **A−** / **A+** set the size of the labels and the note text.
+- The sun / moon button switches between light and dark. Until it is used the view follows the
+  system's theme; then it keeps the choice, for every project.
 - It follows the vault live, and keeps the zoom, layout, folds, filters and text size between
   visits.
 
@@ -279,8 +281,8 @@ session with the plugin loaded from this folder.
 - `hooks/lib/vault.ts`: the vault model; `hooks/lib/ops.ts` the operations; `hooks/lib/page.ts`
   the standalone page.
 - `web/`: the tree view (`index.html`, `app.js`, `app.css`; `filters.js`, `layout.js` and
-  `concepts.js` hold the pure filter, radial layout and concept logic; vendored d3), one
-  codebase for the live view and `/rft-view`.
+  `concepts.js` hold the pure filter, radial layout and concept logic; `theme.js` the light and dark
+  themes; vendored d3), one codebase for the live view and `/rft-view`.
 - `server/rft_server.py`: the local server (Python standard library).
 - `skills/rft-manual/SKILL.md`: the manual; `tests/`: the mod's tests on an in-memory vault, the
   outline pane on every surface, and the server's tests.

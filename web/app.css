@@ -1,20 +1,21 @@
 :root {
-  --bg: #0f1115; --panel: #171a21; --fg: #e6e8ee; --muted: #8b93a3; --line: #2a2f3a;
-  --link: #4a5263; --link-hl: #e6e8ee; --accent: #9775fa; --label-halo: #0f1115;
-  --direction: #9775fa; --experiment: #20c997; --reference: #f06595; --theory: #5c7cfa;
-  --done: #40c057; --running: #fd7e14; --planned: #fab005; --idea: #ffe066;
-  --dropped: #fa5252; --discussed: #868e96; --moved: #4dabf7;
+  /* each colour as light-dark(light, dark); color-scheme picks the side: the system's, or the one
+     theme.js sets as data-theme */
+  color-scheme: light dark;
+  --bg: light-dark(#fbfbfd, #0f1115); --panel: light-dark(#ffffff, #171a21);
+  --fg: light-dark(#1f2328, #e6e8ee); --muted: light-dark(#656d76, #8b93a3);
+  --line: light-dark(#d8dde4, #2a2f3a); --link: light-dark(#b7bec9, #4a5263);
+  --link-hl: light-dark(#1f2328, #e6e8ee); --accent: light-dark(#7048e8, #9775fa);
+  --label-halo: light-dark(#fbfbfd, #0f1115); --direction: light-dark(#7048e8, #9775fa);
+  --experiment: light-dark(#0ca678, #20c997); --reference: light-dark(#d6336c, #f06595);
+  --theory: light-dark(#3b5bdb, #5c7cfa); --done: light-dark(#2f9e44, #40c057);
+  --running: light-dark(#e8590c, #fd7e14); --planned: light-dark(#e8a400, #fab005);
+  --idea: light-dark(#f2c94c, #ffe066); --dropped: light-dark(#e03131, #fa5252); --discussed: #868e96;
+  --moved: light-dark(#1c7ed6, #4dabf7);
   --font-scale: 1;
 }
-@media (prefers-color-scheme: light) {
-  :root {
-    --bg: #fbfbfd; --panel: #ffffff; --fg: #1f2328; --muted: #656d76; --line: #d8dde4;
-    --link: #b7bec9; --link-hl: #1f2328; --accent: #7048e8; --label-halo: #fbfbfd;
-    --direction: #7048e8; --experiment: #0ca678; --reference: #d6336c; --theory: #3b5bdb;
-    --done: #2f9e44; --running: #e8590c; --planned: #e8a400; --idea: #f2c94c;
-    --dropped: #e03131; --discussed: #868e96; --moved: #1c7ed6;
-  }
-}
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
   font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -105,6 +106,9 @@ button.primary { border-color: var(--accent); color: var(--accent); }
 #tooltip { position: fixed; pointer-events: none; padding: 4px 8px; border-radius: 6px; font-size: calc(13px * var(--font-scale));
   background: var(--panel); border: 1px solid var(--line); max-width: 360px; z-index: 5; }
 @media (max-width: 640px) { #legend { display: none; } #search { min-width: 120px; flex: 1; } }
+#theme { display: inline-flex; align-items: center; padding: 3px 6px; }
+#theme svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+:root[data-theme="dark"] #theme .moon, :root:not([data-theme="dark"]) #theme .sun { display: none; }
 #font-size { min-width: 3.4em; text-align: center; align-self: center; font-size: 12px; }
 #filters { position: absolute; top: 0; left: 0; bottom: 0; width: min(280px, 85vw); overflow: auto;
   background: var(--panel); border-right: 1px solid var(--line); padding: 10px 14px 24px;
@@ -115,7 +119,7 @@ button.primary { border-color: var(--accent); color: var(--accent); }
 #filters label { display: flex; align-items: center; gap: 6px; padding: 2px 0; cursor: pointer; }
 #filters label.date { justify-content: space-between; }
 #filters input[type="date"] { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line);
-  border-radius: 6px; padding: 2px 6px; color-scheme: dark light; }
+  border-radius: 6px; padding: 2px 6px; }
 .seg { display: inline-flex; gap: 2px; font-weight: 400; }
 .seg button { padding: 1px 7px; }
 .filter-status { align-self: center; font-size: 12px; color: var(--accent); }

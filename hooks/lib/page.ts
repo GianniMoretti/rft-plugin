@@ -5,7 +5,7 @@
 import type { Tree } from './vault'
 import { bodyOf, conceptOrder, tagCounts } from './vault'
 
-export type PageAssets = { html: string; css: string; js: string; d3: string; filters: string; layout: string; concepts: string }
+export type PageAssets = { html: string; css: string; js: string; d3: string; filters: string; layout: string; concepts: string; theme: string }
 
 export const ASSET_PATHS = {
   html: 'web/index.html',
@@ -14,6 +14,7 @@ export const ASSET_PATHS = {
   filters: 'web/filters.js',
   layout: 'web/layout.js',
   concepts: 'web/concepts.js',
+  theme: 'web/theme.js',
   d3: 'web/vendor/d3.v7.9.0.min.js',
 } as const
 
@@ -31,6 +32,7 @@ export function staticPage(a: PageAssets, tree: Tree, texts: Record<string, stri
   const data = JSON.stringify({ tree: treeJson(tree, project, version), bodies }).replace(/</g, '\\u003c')
   // function replacements: the inlined code may hold `$&` and the like
   return a.html
+    .replace(/<script src="theme\.js" data-rft-inline><\/script>/, () => script(a.theme))
     .replace(/<link rel="stylesheet" href="app\.css" data-rft-inline>/, () => `<style>${a.css}</style>`)
     .replace(/<script src="vendor\/d3[^"]*" data-rft-inline><\/script>/, () => script(a.d3))
     .replace(/<script src="filters\.js" data-rft-inline><\/script>/, () => script(a.filters))
