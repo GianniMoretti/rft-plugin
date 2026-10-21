@@ -1,8 +1,10 @@
 // rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-view), the model's
 // tools (rft_add_node, rft_set_status, rft_set_tags, rft_tags, rft_tree, rft_validate, rft_sync), the operating rules
 // injected into the system prompt, the outline pane, and the web view: /rft starts a local
-// server (server/rft_server.py) for the interactive tree page (web/). Everything is
-// inert in a project without `.rft/config.json`.
+// server (server/rft_server.py) for the interactive tree page (web/), and makes the notes that
+// page adds (addFromView). Everything is
+// inert without `.rft/config.json` in the session's folder or a folder above it; that config
+// may be a link (`{"tree": "../notes"}`) to a tree kept elsewhere.
 
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
@@ -11,7 +13,7 @@ import type { RftSnapshot } from '../types'
 import { addNode, conceptsReport, exportHtml, initVault, loadActive, rulesText, setConcept, setStatus, setTags, tagsReport, today, treeReport } from './lib/ops'
 import { ASSET_PATHS } from './lib/page'
 import type { Config, Io, NodeType, Tree } from './lib/vault'
-import { LEGEND, MARK, bodyOf, counts, join, readConfig, signatureOf, sync, validate } from './lib/vault'
+import { LEGEND, MARK, bodyOf, counts, isAbsolute, join, locate, readConfig, resolvePath, rooted, signatureOf, sync, validate } from './lib/vault'
 
 const PANE = 'rft-tree'
 const TITLE = 'Reasoning tree'
@@ -29,6 +31,31 @@ const ioOf = ($: EngineInterface): Io => ({
   list: path => $.fs.list(path),
   exists: path => $.fs.exists(path),
 })
+
+/** The tree a session works on: its files and folder, the link that led there, the session's folder. */
+type Here = { io: Io; root: string; link: string | null; cwd: string }
+
+/** This session's tree, from its folder up and through a link; why a link leads nowhere; or null. */
+async function locateHere($: EngineInterface): Promise<Here | { problem: string } | null> {
+  const cwd = resolvePath(await $.session.cwd(), '.')
+  const found = await locate(ioOf($), cwd)
+  if (!found) return null
+  if (found.root === null) return { problem: found.problem }
+  return { io: rooted(ioOf($), found.root), root: found.root, link: found.link, cwd }
+}
+
+/** This session's tree; throws, with the reason, when there is none to work on. */
+async function mustHere($: EngineInterface): Promise<Here> {
+  const h = await locateHere($)
+  if (!h) throw new Error(NOT_ACTIVE)
+  if ('problem' in h) throw new Error(h.problem)
+  return h
+}
+
+const vaultOf = (h: Here, config: Config) => (isAbsolute(config.vault) ? config.vault : join(h.root, config.vault))
+
+/** The vault as the session is told about it: as configured when the tree is in its own folder. */
+const shownVault = (h: Here, config: Config) => (h.root === h.cwd ? config.vault : vaultOf(h, config))
 
 const treeOf = (s: RftSnapshot): Tree => ({ nodes: s.nodes, roots: s.roots, concepts: s.concepts })
 
@@ -137,18 +164,21 @@ const EMPTY: RftSnapshot = { isActive: false, vault: '', project: '', nodes: {},
 
 /** Re-reads the vault into the snapshot when its notes changed (or always, with `force`). */
 async function refresh($: EngineInterface, force = false): Promise<RftSnapshot | null> {
-  const io = ioOf($)
-  const config = await readConfig(io)
+  const h = await locateHere($)
   const prev = await read($, snapshot)
-  if (!config) {
-    if (prev?.isActive !== false) await update($, snapshot, () => EMPTY)
+  const config = h && !('problem' in h) ? await readConfig(h.io) : null
+  if (!h || 'problem' in h || !config) {
+    const why = h && 'problem' in h ? h.problem : null
+    if (prev?.isActive !== false || prev.error !== why) await update($, snapshot, () => ({ ...EMPTY, error: why }))
     return null
   }
+  const io = h.io
+  const vault = vaultOf(h, config)
   if (!force && prev?.isActive && !prev.error && prev.signature === (await signatureOf(io, config.vault))) return prev
   try {
     const loaded = await loadActive(io)
     const next: RftSnapshot = {
-      isActive: true, vault: config.vault, project: config.project, nodes: loaded.tree.nodes,
+      isActive: true, vault, project: config.project, nodes: loaded.tree.nodes,
       roots: loaded.tree.roots, concepts: loaded.tree.concepts ?? {}, signature: loaded.signature, problems: loaded.problems, error: null,
     }
     await update($, snapshot, () => next)
@@ -160,7 +190,7 @@ async function refresh($: EngineInterface, force = false): Promise<RftSnapshot |
     return next
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    await update($, snapshot, s => ({ ...(s ?? EMPTY), isActive: true, vault: config.vault, project: config.project, error: message }))
+    await update($, snapshot, s => ({ ...(s ?? EMPTY), isActive: true, vault, project: config.project, error: message }))
     return null
   }
 }
@@ -170,13 +200,15 @@ async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> 
   const failed: string[] = []
   let s: RftSnapshot | null = null
   let config: Config | null = null
+  let h: Here | null = null
   try {
     s = await refresh($, true)
-    config = await readConfig(ioOf($))
+    h = await mustHere($)
+    config = await readConfig(h.io)
   } catch (err) {
     failed.push(`reading the vault (${message(err)})`)
   }
-  if (s && config) rules = rulesText(treeOf(s), config)
+  if (s && config && h) rules = rulesText(treeOf(s), config, shownVault(h, config))
   // each registration on its own, so one refusal leaves the rest working
   for (const [name, spec] of Object.entries(TOOLS)) {
     if (registeredTools.has(name)) continue
@@ -230,7 +262,8 @@ const answer = (text: string, isError = false) =>
 
 /** Runs one of the rft tools; its text is the tool's result. */
 async function runTool($: EngineInterface, name: string, i: Record<string, unknown>): Promise<string> {
-  const io = ioOf($)
+  const h = await mustHere($)
+  const io = h.io
   const loaded = await loadActive(io)
   switch (name) {
     case 'rft_add_node': {
@@ -244,7 +277,7 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
         type: i.type as NodeType, title: String(i.title ?? ''), parent: str(i.parent) ?? null,
         status: str(i.status), date: today(), sections, code: str(i.code), tags: strings(i.tags),
       })
-      return `${node.report}\nId: ${node.id}\nNote: ${join(loaded.config.vault, node.path)}`
+      return `${node.report}\nId: ${node.id}\nNote: ${join(shownVault(h, loaded.config), node.path)}`
     }
     case 'rft_set_tags':
       return setTags(io, loaded, String(i.id ?? ''), strings(i.tags))
@@ -257,7 +290,7 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
     case 'rft_set_status':
       return setStatus(io, loaded, String(i.id ?? ''), String(i.status ?? ''), str(i.note))
     case 'rft_tree':
-      return treeReport(loaded, { root: str(i.root), depth: typeof i.depth === 'number' ? i.depth : undefined })
+      return treeReport(loaded, { root: str(i.root), depth: typeof i.depth === 'number' ? i.depth : undefined, vault: shownVault(h, loaded.config) })
     case 'rft_validate': {
       const v = await validate(io, loaded)
       const lines = [v.errors.length
@@ -309,10 +342,10 @@ let server: { url: string; stop: () => void } | null = null
 /** Starts the web view's server, or answers the running one's URL. */
 async function startServer($: EngineInterface): Promise<string> {
   if (server) return server.url
-  const config = await readConfig(ioOf($))
+  const h = await mustHere($)
+  const config = await readConfig(h.io)
   if (!config) throw new Error(NOT_ACTIVE)
-  const cwd = await $.session.cwd()
-  const vault = /^([A-Za-z]:)?[\\/]/.test(config.vault) ? config.vault : join(cwd, config.vault)
+  const vault = vaultOf(h, config)
   const root = $.plugin.root
   const args = [
     join(root, 'server/rft_server.py'), '--vault', vault, '--web', join(root, 'web'),
@@ -338,14 +371,19 @@ async function spawnServer($: EngineInterface, argv: string[]): Promise<string> 
   // the loop is the child's life: it runs on after this call returns, until the child exits,
   // `stop` ends it, or the module unloads
   void (async () => {
-    let out = ''
+    let line = ''
     let err = ''
     try {
       for await (const chunk of child) {
         if (chunk.stream === 'stdout') {
-          out += chunk.text
-          const m = /RFT_SERVER_URL (\S+)/.exec(out)
-          if (m) found(m[1]!)
+          // whole lines: the address once, then a line for each note the tree view adds
+          const lines = (line + chunk.text).split('\n')
+          line = lines.pop()!
+          for (const l of lines) {
+            const m = /RFT_SERVER_URL (\S+)/.exec(l)
+            if (m) found(m[1]!)
+            else if (l.startsWith(ADD_NODE)) void addFromView($, l.slice(ADD_NODE.length))
+          }
         } else err += chunk.text
       }
       failed(new Error(err.trim().split('\n').pop() || 'the server exited'))
@@ -368,6 +406,22 @@ async function spawnServer($: EngineInterface, argv: string[]): Promise<string> 
   } catch (err) {
     stop()
     throw err
+  }
+}
+
+const ADD_NODE = 'RFT_ADD_NODE '
+
+/**
+ * A note the tree view adds (POST api/node, relayed by the server): made by rft_add_node's code
+ * with the type, parent and title alone, so its status is the default, and no model turn is spent.
+ */
+async function addFromView($: EngineInterface, request: string): Promise<void> {
+  try {
+    const r = JSON.parse(request) as Record<string, unknown>
+    await runTool($, 'rft_add_node', { type: r.type, parent: r.parent, title: r.title })
+    await refresh($, true)
+  } catch (err) {
+    $.ui.toast(`rft: the tree view could not add a note (${message(err)})`)
   }
 }
 
@@ -472,7 +526,13 @@ export const register: Register = (on, options) => {
     // a server of an earlier load of this module died with it
     if (!server) await update($, webUrl, () => null)
     let isActive = false
-    try { isActive = (await readConfig(ioOf($))) !== null } catch { /* treated as inactive */ }
+    try {
+      const h = await locateHere($)
+      if (h && 'problem' in h) {
+        await update($, snapshot, () => ({ ...EMPTY, error: h.problem }))
+        $.ui.toast(`rft: ${h.problem}`)
+      } else if (h) isActive = (await readConfig(h.io)) !== null
+    } catch { /* treated as inactive */ }
     // the desktop shows the tree view in its browser pane (/rft); the outline opens on asking
     if (isActive) await activate($, options.autoOpen !== false && !(await isOnDesktop($)))
 
@@ -500,8 +560,15 @@ export const register: Register = (on, options) => {
     const arg = e.args.trim()
     if (arg === 'stop') return { text: (await stopServer($)) ? 'The tree view server is stopped.' : 'The tree view server was not running.' }
     const s = await refresh($, true)
-    if (!s) return { text: NOT_ACTIVE }
-    if (arg === 'text') return { text: treeReport(await loadActive(ioOf($))) }
+    if (!s) {
+      const was = await read($, snapshot)
+      return { text: !was?.isActive && was?.error ? was.error : NOT_ACTIVE }
+    }
+    if (arg === 'text') {
+      const h = await mustHere($)
+      const loaded = await loadActive(h.io)
+      return { text: treeReport(loaded, { vault: shownVault(h, loaded.config) }) }
+    }
     const openList = () => { void $.ui.open({ id: PANE, title: TITLE, focus: true }).catch(() => undefined) }
     if (arg === 'list') {
       openList()
@@ -537,10 +604,16 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: 'rft-init' }, async ($, e) => {
-    const cwd = await $.session.cwd()
+    const cwd = resolvePath(await $.session.cwd(), '.')
+    // a folder that already works on a tree, its own, an enclosing one or a linked one, gets no second
+    const h = await locateHere($)
+    if (h && 'problem' in h) return { text: `${h.problem}. Fix or remove that link: /rft-init does not start a second tree under it.` }
+    if (h && h.root !== cwd) {
+      return { text: `RFT is already active here: this folder works on the reasoning tree in ${h.root}${h.link ? ` (linked by ${h.link})` : ''}. /rft-init does not start a second tree under it.` }
+    }
     const project = cwd.split(/[\\/]/).filter(Boolean).pop() ?? 'project'
     const question = e.args.trim()
-    const res = await initVault(ioOf($), { project, question, date: today() })
+    const res = await initVault(rooted(ioOf($), cwd), { project, question, date: today() })
     await activate($, true)
     const context = !res.isAdopted && !question
       ? ['The rft vault was created with a placeholder root note D00. Ask the user for the starting question of the project and write it into the Idea and Why sections of D00.']
@@ -551,7 +624,7 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'rft-concepts' }, async ($, e) => {
     try {
-      const loaded = await loadActive(ioOf($))
+      const loaded = await loadActive((await mustHere($)).io)
       if (e.args.trim() !== 'suggest') return { text: conceptsReport(loaded) }
       // a prompt cannot be submitted from the command's own hook (the turn would wait on it), and a
       // timer started here ends with it: the session's poller submits it at its next tick
@@ -564,7 +637,8 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'rft-view' }, async $ => {
     try {
-      const io = ioOf($)
+      const h = await mustHere($)
+      const io = h.io
       const loaded = await loadActive(io)
       const root = $.plugin.root
       const assets = {
@@ -577,9 +651,8 @@ export const register: Register = (on, options) => {
         concepts: await $.fs.read(join(root, ASSET_PATHS.concepts)),
       }
       const path = await exportHtml(io, loaded, assets)
-      const cwd = await $.session.cwd()
 
-      return { text: `Wrote ${path} (${Object.keys(loaded.tree.nodes).length} notes): open file://${join(cwd, path)} in a browser.` }
+      return { text: `Wrote ${path} (${Object.keys(loaded.tree.nodes).length} notes): open file://${isAbsolute(path) ? path : join(h.root, path)} in a browser.` }
     } catch (err) {
       return { text: err instanceof Error ? err.message : String(err) }
     }
@@ -617,7 +690,7 @@ export const register: Register = (on, options) => {
       return (
         <Box flexDirection="column">
           <Text bold>Reasoning Flow Tree</Text>
-          <Text dimColor>{NOT_ACTIVE}</Text>
+          {s?.error ? <Text color="error">{s.error}</Text> : <Text dimColor>{NOT_ACTIVE}</Text>}
         </Box>
       )
     }

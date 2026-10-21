@@ -4,7 +4,8 @@
 import type { On } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { CWD, D01, E02, WEB_FILES, demoFiles, paneProps, world } from './fixture'
+import { addNode, loadActive, today } from '../hooks/lib/ops'
+import { CWD, D01, E02, MemoryFs, WEB_FILES, demoAt, demoFiles, paneProps, world } from './fixture'
 
 const SURFACES = ['terminal', 'desktop'] as const
 // the `name` of skills/rft-manual/SKILL.md
@@ -180,10 +181,12 @@ describe('commands', () => {
 /** The address the server child prints: with the key for writes, as the real one does. */
 const ADDRESS = 'http://127.0.0.1:5555/?token=k3y'
 
-/** The server child: says where it listens, then runs until the plugin ends the loop. */
+/** The server child: says where it listens, prints what the test hands `print`, and runs until the plugin ends the loop. */
 function fakeServer(on: On, opts: { fail?: string[] } = {}) {
   const seen: string[][] = []
   const state = { isRunning: false }
+  const queued: string[] = []
+  let wake = () => undefined as void
   on('process.spawn', async function* (_$: unknown, e: { argv: readonly string[] }, next: { signal: AbortSignal }) {
     seen.push([...e.argv])
     if (opts.fail?.includes(e.argv[0]!)) throw new Error(`ENOENT: ${e.argv[0]}`)
@@ -191,14 +194,26 @@ function fakeServer(on: On, opts: { fail?: string[] } = {}) {
     try {
       yield { stream: 'stdout' as const, text: `RFT_SERVER_URL ${ADDRESS}\n` }
       // runs until the plugin ends the loop, which aborts this dispatch
-      await new Promise(resolve => next.signal.addEventListener('abort', resolve))
+      const aborted = new Promise<boolean>(resolve => next.signal.addEventListener('abort', () => resolve(true)))
+      for (;;) {
+        while (queued.length) yield { stream: 'stdout' as const, text: queued.shift()! }
+        if (await Promise.race([aborted, new Promise<boolean>(resolve => { wake = () => resolve(false) })])) break
+      }
       return { value: { code: null, signal: 'SIGTERM' } }
     } finally {
       state.isRunning = false
     }
   })
-  return { seen, state }
+  const print = (text: string) => { queued.push(text); wake() }
+  return { seen, state, print }
 }
+
+/** Waits, a few milliseconds at a time, until `cond` holds: the plugin reads the server's output on its own. */
+async function until(cond: () => boolean) {
+  for (let i = 0; i < 200 && !cond(); i++) await new Promise(resolve => setTimeout(resolve, 5))
+}
+
+const texts = (fs: MemoryFs) => Object.fromEntries([...fs.files].map(([k, f]) => [k, f.text]))
 
 const RUN = (args: string) => ({ command: 'rft', args, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } }) as never
 
@@ -328,6 +343,44 @@ describe('web view', () => {
     expect(res.text).toContain('/rft-view')
   })
 
+  test('a note the tree view adds is the one rft_add_node makes, byte for byte, with no model turn', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, demoFiles())
+    const srv = fakeServer(on)
+    const prompts: string[] = []
+    on('prompt.submit', (_$, e) => { prompts.push(String(e.text)); return { text: e.text } as never })
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    await $.command.run(RUN(''))
+    const title = 'Seeds: 3 | 5 [fast]'
+    // the reference: rft_add_node's own code on a copy of the project
+    const ref = new MemoryFs(demoFiles())
+    await addNode(ref.io(), await loadActive(ref.io()), { type: 'experiment', title, parent: 'D01', date: today() })
+    // the server's line, cut in two as a pipe may deliver it
+    const line = `RFT_ADD_NODE ${JSON.stringify({ parent: 'D01', type: 'experiment', title })}\n`
+    srv.print(line.slice(0, 30))
+    srv.print(line.slice(30))
+    const path = 'vault/experiments/E03 Seeds, 3, 5 (fast).md'
+    await until(() => w.fs.exists(path))
+    expect(w.fs.read(path)).toContain('status: planned')
+    expect(texts(w.fs)).toEqual(texts(ref))
+    expect(prompts).toEqual([])
+    expect(w.toasts).toEqual([])
+  })
+
+  test('a note the tree view cannot add is reported in the session, and nothing is written', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, demoFiles())
+    const srv = fakeServer(on)
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    await $.command.run(RUN(''))
+    const before = texts(w.fs)
+    srv.print(`RFT_ADD_NODE ${JSON.stringify({ parent: 'D42', type: 'direction', title: 'Orphan' })}\n`)
+    await until(() => w.toasts.length > 0)
+    expect(w.toasts.join()).toContain('the tree view could not add a note')
+    expect(w.toasts.join()).toContain('D42')
+    expect(texts(w.fs)).toEqual(before)
+  })
+
   test('/rft outside an RFT project starts nothing', async ($, on) => {
     mock.clock(on)
     world(on, {})
@@ -392,5 +445,97 @@ describe('pane', () => {
       expect(await ui.find({ key: 'node-D02' })).toBeDefined()
       await ui.unmount()
     }
+  })
+})
+
+// a tree kept apart from the code: the notes in /phd/flow-notes, the repos below /phd/code linked to it
+const TREE = '/phd/flow-notes'
+const REPO = '/phd/code/disentanglement/dedino'
+const LINK = '/phd/code/.rft/config.json'
+const linked = (extra: Record<string, string> = {}) => demoAt(TREE, { [LINK]: JSON.stringify({ tree: '../flow-notes' }), ...extra })
+const INIT = (args: string) => ({ command: 'rft-init', args, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } }) as never
+
+describe('linked trees', () => {
+  test('a session in a repo below a link works on the tree it links to, and writes nothing beside the code', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, linked(), { cwd: REPO })
+    const srv = fakeServer(on)
+    on('prompt.compose', () => ({ sections: [] }))
+    await $.session.start({ cwd: REPO, source: 'startup' } as never)
+    expect(w.tools).toHaveLength(9)
+    const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
+    expect(res.sections.find(s => s.id === 'rft:rules')?.text).toContain(`notes in \`${TREE}/vault/\``)
+    expect((await $.tool.call({ tool: 'mcp__rft__rft_tree' } as never)).text).toContain(`experiments in ${TREE}/vault/.`)
+    const added = await $.tool.call({ tool: 'mcp__rft__rft_add_node', type: 'experiment', title: 'Seed sweep', parent: 'D01' } as never)
+    expect(added.text).toContain('Id: E03')
+    expect(added.text).toContain(`Note: ${TREE}/vault/experiments/E03 Seed sweep.md`)
+    expect(w.fs.exists(`${TREE}/vault/experiments/E03 Seed sweep.md`)).toBe(true)
+    expect(JSON.parse(w.fs.read(`${TREE}/.rft/config.json`)).lastId).toEqual({ E: 3, D: 1 })
+    expect([...w.fs.files.keys()].filter(k => k.startsWith('/phd/code/'))).toEqual([LINK])
+    expect(JSON.parse(w.fs.read(LINK))).toEqual({ tree: '../flow-notes' })
+    await $.command.run(RUN(''))
+    expect(srv.seen[0]!.slice(2, 4)).toEqual(['--vault', `${TREE}/vault`])
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'node-D01' })
+    expect((await ui.find({ key: 'note-text' }))?.text).toContain('Text of D01.')
+    await ui.unmount()
+  })
+
+  test('a session in the tree\'s own folder is told the vault as configured, as before', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, linked(), { cwd: TREE })
+    on('prompt.compose', () => ({ sections: [] }))
+    await $.session.start({ cwd: TREE, source: 'startup' } as never)
+    const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
+    expect(res.sections.find(s => s.id === 'rft:rules')?.text).toContain('notes in `vault/`')
+    const added = await $.tool.call({ tool: 'mcp__rft__rft_add_node', type: 'direction', title: 'Next', parent: 'E02' } as never)
+    expect(added.text).toContain('Note: vault/directions/D02 Next.md')
+    expect(w.fs.exists(`${TREE}/vault/directions/D02 Next.md`)).toBe(true)
+  })
+
+  test('a session in a folder below a tree works on that tree', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, linked(), { cwd: `${TREE}/analysis` })
+    await $.session.start({ cwd: `${TREE}/analysis`, source: 'startup' } as never)
+    expect(w.tools).toHaveLength(9)
+    const tree = await $.tool.call({ tool: 'mcp__rft__rft_tree' } as never)
+    expect(tree.text).toMatch(/^demo: 2 directions, 2 experiments/)
+  })
+
+  test('the nearest tree wins: a repo with its own tree below a link keeps its own', async ($, on) => {
+    mock.clock(on)
+    const own = Object.fromEntries(Object.entries(demoAt(REPO)).map(([k, v]) => [k, v.replace('"project":"demo"', '"project":"own"')]))
+    const w = world(on, linked(own), { cwd: REPO })
+    await $.session.start({ cwd: REPO, source: 'startup' } as never)
+    const tree = await $.tool.call({ tool: 'mcp__rft__rft_tree' } as never)
+    expect(tree.text).toMatch(/^own: /)
+    await $.tool.call({ tool: 'mcp__rft__rft_add_node', type: 'experiment', title: 'Local run', parent: 'D01' } as never)
+    expect(w.fs.exists(`${REPO}/vault/experiments/E03 Local run.md`)).toBe(true)
+    expect(w.fs.exists(`${TREE}/vault/experiments/E03 Local run.md`)).toBe(false)
+  })
+
+  test('a link to a folder with no tree leaves RFT off, says why, and /rft-init starts nothing', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, { [LINK]: JSON.stringify({ tree: '../flow-note' }) }, { cwd: REPO })
+    const srv = fakeServer(on)
+    await $.session.start({ cwd: REPO, source: 'startup' } as never)
+    expect(w.tools).toEqual([])
+    expect(w.toasts.join()).toContain(`${LINK} links to /phd/flow-note, which holds no reasoning tree`)
+    expect((await $.command.run(RUN(''))).text).toContain('which holds no reasoning tree')
+    expect(srv.seen).toHaveLength(0)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ text: /which holds no reasoning tree/ })).toBeDefined()
+    await ui.unmount()
+    expect((await $.command.run(INIT('Q'))).text).toContain('does not start a second tree')
+    expect([...w.fs.files.keys()]).toEqual([LINK])
+  })
+
+  test('/rft-init in a linked folder starts no second tree and says which tree the folder uses', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, linked(), { cwd: REPO })
+    await $.session.start({ cwd: REPO, source: 'startup' } as never)
+    const res = await $.command.run(INIT('Another question'))
+    expect(res.text).toContain(`works on the reasoning tree in ${TREE} (linked by ${LINK})`)
+    expect([...w.fs.files.keys()].filter(k => k.startsWith('/phd/code/'))).toEqual([LINK])
   })
 })

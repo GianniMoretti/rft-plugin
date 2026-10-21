@@ -78,7 +78,15 @@ button.primary { border-color: var(--accent); color: var(--accent); }
   font: calc(13.5px * var(--font-scale))/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 #note-text:focus { outline: none; border-color: var(--accent); }
 .editor-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-#editor-msg.error { color: var(--dropped); }
+#editor-msg.error, #add-msg.error { color: var(--dropped); }
+.adder { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; padding: 8px 10px; border-radius: 6px;
+  border: 1px solid var(--line); }
+.adder[hidden] { display: none; }
+.adder-row { display: flex; gap: 6px; }
+.adder select, .adder input { font: inherit; font-size: 13px; color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
+.adder input { flex: 1; min-width: 0; }
+.adder input:focus, .adder select:focus { outline: none; border-color: var(--accent); }
 .edit-nokey { margin: 8px 0; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--planned); }
 .editor-hint { font-size: 0.85em; }
 #note h1 { font-size: 1.25em; margin: 8px 0; }

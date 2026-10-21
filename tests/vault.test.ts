@@ -5,7 +5,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { addNode, initVault, setStatus, setTags, tagsReport } from '../hooks/lib/ops'
 import { staticPage } from '../hooks/lib/page'
-import { canvasJson, compactTree, front, load, parseTags, readConfig, sanitiseTag, sanitiseTitle, sync, topicalTags, validate } from '../hooks/lib/vault'
+import { canvasJson, compactTree, front, load, locate, parseTags, readConfig, resolvePath, sanitiseTag, sanitiseTitle, sync, topicalTags, validate } from '../hooks/lib/vault'
 import { D00, D01, E01, E02, MemoryFs, WEB_FILES, demoFiles } from './fixture'
 
 const loadDemo = async (fs = new MemoryFs(demoFiles())) => {
@@ -177,4 +177,49 @@ describe('vault', () => {
     expect(html).not.toMatch(/src=|href="app\.css"/)
   })
 
+})
+
+describe('where the tree is', () => {
+  test('paths resolve from a base, with . and .., on either separator', () => {
+    expect(resolvePath('/phd/code', '../flow-notes')).toBe('/phd/flow-notes')
+    expect(resolvePath('/phd/code/', './a/../b')).toBe('/phd/code/b')
+    expect(resolvePath('/phd', '/abs/x')).toBe('/abs/x')
+    expect(resolvePath('/', '..')).toBe('/')
+    expect(resolvePath('C:\\Users\\me\\code', '..\\notes')).toBe('C:/Users/me/notes')
+  })
+
+  test('the nearest config from the folder up, followed through one link', async () => {
+    const tree = JSON.stringify({ version: 1, vault: 'vault', project: 'p' })
+    const io = new MemoryFs({
+      '/phd/flow-notes/.rft/config.json': tree,
+      '/phd/code/.rft/config.json': JSON.stringify({ tree: '../flow-notes' }),
+      '/phd/code/own/.rft/config.json': tree,
+      '/phd/code/abs/.rft/config.json': JSON.stringify({ tree: '/phd/flow-notes' }),
+      '/phd/code/bad/.rft/config.json': JSON.stringify({ tree: '../nowhere' }),
+      '/phd/code/chain/.rft/config.json': JSON.stringify({ tree: '..' }),
+    }, true).io()
+    expect(await locate(io, '/phd/flow-notes')).toEqual({ root: '/phd/flow-notes', link: null })
+    expect(await locate(io, '/phd/flow-notes/vault/experiments/')).toEqual({ root: '/phd/flow-notes', link: null })
+    expect(await locate(io, '/phd/code/disentanglement/dedino')).toEqual({ root: '/phd/flow-notes', link: '/phd/code/.rft/config.json' })
+    expect(await locate(io, '/phd/code/own/sub')).toEqual({ root: '/phd/code/own', link: null })
+    expect(await locate(io, '/phd/code/abs')).toEqual({ root: '/phd/flow-notes', link: '/phd/code/abs/.rft/config.json' })
+    expect(await locate(io, '/phd/code/bad')).toEqual({
+      root: null, link: '/phd/code/bad/.rft/config.json',
+      problem: '/phd/code/bad/.rft/config.json links to /phd/code/nowhere, which holds no reasoning tree (no .rft/config.json)',
+    })
+    expect(await locate(io, '/phd/code/chain')).toMatchObject({ root: null, problem: expect.stringContaining('which is itself a link') })
+    expect(await locate(io, '/elsewhere/repo')).toBeNull()
+  })
+
+  test('a note another session added since the vault was read keeps its id, and so does its counter', async () => {
+    const { fs, io, loaded } = await loadDemo()
+    // after this session read the vault, another one added E03 and took directions up to D05
+    fs.write('vault/experiments/E03 Other session.md', demoFiles()[`vault/experiments/${E02}.md`]!.replace('id: E02', 'id: E03'))
+    fs.write('.rft/config.json', JSON.stringify({ ...JSON.parse(fs.read('.rft/config.json')), lastId: { E: 2, D: 5 } }))
+    const node = await addNode(io, loaded, { type: 'experiment', title: 'Mine', parent: 'D01', date: '2026-01-02' })
+    expect(node.id).toBe('E04')
+    expect(JSON.parse(fs.read('.rft/config.json')).lastId).toEqual({ E: 4, D: 5 })
+    const next = await addNode(io, loaded, { type: 'direction', title: 'Then', parent: 'E04', date: '2026-01-02' })
+    expect(next.id).toBe('D06')
+  })
 })

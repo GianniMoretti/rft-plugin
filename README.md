@@ -67,6 +67,31 @@ vault/
 If `vault/experiments` or `vault/directions` already hold notes, `/rft-init` adopts them as
 they are (ids, statuses and the next free id are read from the notes).
 
+### The notes in one folder, the code in others
+
+A session works on the tree of the nearest `.rft/config.json`: in its own folder, else in the
+closest folder above it, so the tree is active in every subfolder of the project. When the code
+lives apart from the notes, link to the tree instead of starting a second one: a
+`.rft/config.json` holding only
+
+```json
+{ "tree": "../notes" }
+```
+
+makes every session in that folder, or below it, work on the tree in `../notes` (relative to
+the folder that holds `.rft/`, or absolute). With the notes in `phd/notes/` and the repositories
+under `phd/code/`, one link in `phd/code/.rft/config.json` serves them all: Claude adds and
+updates notes in `phd/notes/`, and nothing is written beside the code.
+
+- The nearest config wins: a repository with its own tree below a link keeps its own.
+- A link points at the tree's own folder, not at another link; one that leads nowhere leaves
+  RFT off and says why, at session start, in the pane and on `/rft`.
+- `/rft-init` starts no second tree in a folder that already works on one.
+- Claude's own Read and Edit tools ask before touching files outside the session's folder;
+  start the session with `--add-dir <the tree's folder>` to let them read notes freely.
+- Sessions in different repositories can add notes to the same tree: ids are taken from the
+  notes and the config as they are on disk at that moment.
+
 ### What changes once it is active
 
 - **At session start** Claude receives short operating rules and a compact copy of the tree
@@ -115,6 +140,12 @@ they are (ids, statuses and the next free id are read from the notes).
   overwritten silently: you choose **Overwrite** or **Reload**. Leaving a note with unsaved
   changes asks first.
   Fold a branch with its **−** / **+** badge or a double-click; **Expand all**, **Collapse all**.
+- **+ Child** in the drawer adds a direction or an experiment under the note shown: choose the
+  type (the other one than the note's comes first), type a title, **Add** or Enter. The note is
+  made as Claude's `rft_add_node` makes it (the next free id, the title cleaned, the template,
+  the default status, linked under its parent, the index and canvas regenerated), by the plugin
+  in the session that ran `/rft`, so it costs no model turn and no tokens; it then opens in
+  **Edit**.
 - Hover a node to highlight its path to the root; **search** (Enter jumps to the next match).
 - **Filters** opens a side panel: topical tags (with counts, matching **any** or **all**), type,
   status (the same filter as clicking the legend), and a date range. Notes that do not match
@@ -167,12 +198,16 @@ their counts.
 The server listens on `127.0.0.1` only, on a free port (or `webPort` in the config). It serves
 the page, the tree as JSON and the text of one note at a time, read by its id from inside the
 vault, and answers only requests for a loopback host name. It writes one thing, a note's text
-from **Edit**, its frontmatter kept as it is, and only for the page itself carrying the
-project's key, which the address `/rft` prints holds (`?token=…`): neither another web page nor
-another user of the machine can change a note. Open that address once and the browser
+from **Edit**, its frontmatter kept as it is; a new note from **+ Child** it asks the session
+that started it to make (a line on its output, which the plugin reads). It does either only for
+the page itself carrying the project's key, which the address `/rft` prints holds (`?token=…`):
+neither another web page nor another user of the machine can change or add a note. Open that address once and the browser
 remembers the key, which stays the same across restarts (kept, readable by you alone, in
 `~/.cache/rft/keys/`), so the plain address or a bookmark can edit too. It stops with
-the session or `/rft stop`; `/rft` again reuses it. On a **remote machine** (SSH, a cluster
+the session or `/rft stop`; `/rft` again reuses it. Sessions on the same tree with the same
+`webPort` share one address, key included: a second session's `/rft` prints it, and its server
+takes the port over when the first session ends; a port held by anything else gets a free one
+instead. On a **remote machine** (SSH, a cluster
 node), forward the port and open the address on your own machine:
 
 ```bash
@@ -214,7 +249,8 @@ and it runs. The terminal's typeahead lists them.
 
 `mermaid: true` also writes `Reasoning tree (diagram).md`, a Mermaid flowchart Obsidian draws
 natively. `lastId` keeps ids from being reused after a note is deleted. `webPort` fixes the
-tree view's port (0: a free one), handy for a standing `ssh -L` forward.
+tree view's port (0: a free one), handy for a standing `ssh -L` forward. A config that holds
+only `tree` is a link to a tree in another folder (see above).
 
 ### Obsidian, if you use it
 

@@ -93,12 +93,27 @@
     <div class="drawer-head">
       <span id="drawer-meta" class="muted"></span>
       <span class="drawer-actions">
+        <button id="drawer-add" hidden title="Add a direction or an experiment under this note">+ Child</button>
         <button id="drawer-edit" hidden title="Edit the note's text (Ctrl+S saves, Esc cancels)">Edit</button>
         <button id="drawer-close" title="Close">✕</button>
       </span>
     </div>
-    <p id="edit-nokey" class="edit-nokey" hidden>To edit, open the address <code>/rft</code> printed (it ends in
+    <p id="edit-nokey" class="edit-nokey" hidden>To edit or add notes, open the address <code>/rft</code> printed (it ends in
       <code>?token=…</code>) once: this browser then remembers its key.</p>
+    <form id="adder" class="adder" hidden>
+      <div class="adder-row">
+        <select id="add-type" aria-label="The new note's type">
+          <option value="direction">Direction</option>
+          <option value="experiment">Experiment</option>
+        </select>
+        <input id="add-title" type="text" autocomplete="off" placeholder="Title" aria-label="The new note's title">
+      </div>
+      <div class="editor-bar">
+        <button id="add-ok" type="submit" class="primary" title="Add the note under this one (Enter)">Add</button>
+        <button id="add-cancel" type="button" title="Esc">Cancel</button>
+        <span id="add-msg" class="muted" role="status"></span>
+      </div>
+    </form>
     <article id="note"></article>
     <div id="editor" hidden>
       <textarea id="note-text" aria-label="The note's text, in markdown"></textarea>

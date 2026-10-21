@@ -126,7 +126,10 @@ export async function addNode(io: Io, loaded: Loaded, input: AddInput): Promise<
   } else if (input.type !== 'direction') {
     throw new RftError('the root of the tree must be a direction (D00, the starting question)')
   }
-  const id = nextId(loaded, input.type)
+  // another session on the same tree may have added notes since `loaded` was read
+  const onDisk = await readConfig(io)
+  if (onDisk) for (const p of ['E', 'D'] as const) config.lastId[p] = Math.max(config.lastId[p], onDisk.lastId[p])
+  const id = nextId(loaded, input.type, await idsIn(io, join(config.vault, SUBDIR[input.type])))
   const name = `${id} ${title}`
   const path = `${SUBDIR[input.type]}/${name}.md`
   const parentName = parent ? tree.nodes[parent]!.name : null
@@ -149,6 +152,12 @@ export async function addNode(io: Io, loaded: Loaded, input: AddInput): Promise<
     ...node,
     report: `Created ${path}${parent ? ` under ${parentName}` : ' as the root'} (status ${status}). Updated ${report.changed.length} derived file(s).`,
   }
+}
+
+/** The ids of the notes in a folder of the vault, as it is on disk now. */
+async function idsIn(io: Io, dir: string): Promise<string[]> {
+  if (!(await io.exists(dir))) return []
+  return (await io.list(dir)).map(f => /^([ED]\d+) /.exec(f.name)?.[1]).filter((id): id is string => !!id)
 }
 
 export async function setTags(io: Io, loaded: Loaded, ref: string, tags: string[]): Promise<string> {
@@ -271,26 +280,28 @@ export async function setStatus(io: Io, loaded: Loaded, ref: string, status: str
 
 // ---------------------------------------------------------------- text for the model
 
-export function treeReport(loaded: Loaded, opts: { root?: string; depth?: number } = {}): string {
+/** `vault`: where the notes are as the session sees them, as in `rulesText`. */
+export function treeReport(loaded: Loaded, opts: { root?: string; depth?: number; vault?: string } = {}): string {
   const { tree, config } = loaded
   const c = counts(tree)
   const root = opts.root ? resolveId(tree, opts.root) : undefined
   if (opts.root && !root) throw new RftError(`"${opts.root}" is not a note of the tree`)
   const body = compactTree(tree, { root: root ?? undefined, depth: opts.depth, withStatus: false })
   return [
-    `${config.project}: ${c.direction} directions, ${c.experiment} experiments in ${config.vault}/. Marks: ${LEGEND}.`,
+    `${config.project}: ${c.direction} directions, ${c.experiment} experiments in ${opts.vault ?? config.vault}/. Marks: ${LEGEND}.`,
     body || '(empty tree)',
   ].join('\n')
 }
 
 const MAX_LINES = 160
 
-export function rulesText(tree: Tree, config: Config): string {
+/** `vault`: where the notes are as the session sees them, when the tree is not in its folder. */
+export function rulesText(tree: Tree, config: Config, vault = config.vault): string {
   let lines = groupedTree(tree).split('\n')
   if (lines.length > MAX_LINES) lines = [...lines.slice(0, MAX_LINES), `… ${lines.length - MAX_LINES} more (rft_tree shows them)`]
   return `# Reasoning Flow Tree (rft) is active in this project
 
-The reasoning of this research project is kept as a tree of Obsidian notes in \`${config.vault}/\`: one note per experiment (E.., something run or computed) and per direction (D.., an idea, question or hypothesis, rejected ones included), each with exactly one parent; D00 is the starting question. The notes are the source of truth. Keep the tree up to date as you work, with the rft tools:
+The reasoning of this research project is kept as a tree of Obsidian notes in \`${vault}/\`: one note per experiment (E.., something run or computed) and per direction (D.., an idea, question or hypothesis, rejected ones included), each with exactly one parent; D00 is the starting question. The notes are the source of truth. Keep the tree up to date as you work, with the rft tools:
 
 - Before launching an experiment (a training run, a grid, a numerical check, a measurement, a proof, a literature check), create its node first: rft_add_node with type experiment, parent = the direction it tests, status planned or running, and What / Why filled.
 - When it finishes or gives a partial result, write the real numbers in its note (Result, with spread over seeds and what failed; Directions found; Code / data: commit, script, results folder, machine), then rft_set_status. Record only results that were actually obtained, never expected or invented ones.
