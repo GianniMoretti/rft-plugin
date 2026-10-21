@@ -30,6 +30,7 @@ export type RftConceptState = {
 /** The tree as last read from the vault; `null` until the session has looked. */
 export type RftSnapshot = {
   isActive: boolean
+  /** The vault's folder, absolute: the tree may be outside the session's folder. */
   vault: string
   project: string
   nodes: Record<string, RftNodeState>

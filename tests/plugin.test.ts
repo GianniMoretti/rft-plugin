@@ -4,7 +4,7 @@
 import type { On } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { CWD, D01, E02, WEB_FILES, demoFiles, paneProps, world } from './fixture'
+import { CWD, D01, E02, WEB_FILES, demoAt, demoFiles, paneProps, world } from './fixture'
 
 const SURFACES = ['terminal', 'desktop'] as const
 // the `name` of skills/rft-manual/SKILL.md
@@ -392,5 +392,97 @@ describe('pane', () => {
       expect(await ui.find({ key: 'node-D02' })).toBeDefined()
       await ui.unmount()
     }
+  })
+})
+
+// a tree kept apart from the code: the notes in /phd/flow-notes, the repos below /phd/code linked to it
+const TREE = '/phd/flow-notes'
+const REPO = '/phd/code/disentanglement/dedino'
+const LINK = '/phd/code/.rft/config.json'
+const linked = (extra: Record<string, string> = {}) => demoAt(TREE, { [LINK]: JSON.stringify({ tree: '../flow-notes' }), ...extra })
+const INIT = (args: string) => ({ command: 'rft-init', args, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } }) as never
+
+describe('linked trees', () => {
+  test('a session in a repo below a link works on the tree it links to, and writes nothing beside the code', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, linked(), { cwd: REPO })
+    const srv = fakeServer(on)
+    on('prompt.compose', () => ({ sections: [] }))
+    await $.session.start({ cwd: REPO, source: 'startup' } as never)
+    expect(w.tools).toHaveLength(9)
+    const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
+    expect(res.sections.find(s => s.id === 'rft:rules')?.text).toContain(`notes in \`${TREE}/vault/\``)
+    expect((await $.tool.call({ tool: 'mcp__rft__rft_tree' } as never)).text).toContain(`experiments in ${TREE}/vault/.`)
+    const added = await $.tool.call({ tool: 'mcp__rft__rft_add_node', type: 'experiment', title: 'Seed sweep', parent: 'D01' } as never)
+    expect(added.text).toContain('Id: E03')
+    expect(added.text).toContain(`Note: ${TREE}/vault/experiments/E03 Seed sweep.md`)
+    expect(w.fs.exists(`${TREE}/vault/experiments/E03 Seed sweep.md`)).toBe(true)
+    expect(JSON.parse(w.fs.read(`${TREE}/.rft/config.json`)).lastId).toEqual({ E: 3, D: 1 })
+    expect([...w.fs.files.keys()].filter(k => k.startsWith('/phd/code/'))).toEqual([LINK])
+    expect(JSON.parse(w.fs.read(LINK))).toEqual({ tree: '../flow-notes' })
+    await $.command.run(RUN(''))
+    expect(srv.seen[0]!.slice(2, 4)).toEqual(['--vault', `${TREE}/vault`])
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'node-D01' })
+    expect((await ui.find({ key: 'note-text' }))?.text).toContain('Text of D01.')
+    await ui.unmount()
+  })
+
+  test('a session in the tree\'s own folder is told the vault as configured, as before', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, linked(), { cwd: TREE })
+    on('prompt.compose', () => ({ sections: [] }))
+    await $.session.start({ cwd: TREE, source: 'startup' } as never)
+    const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
+    expect(res.sections.find(s => s.id === 'rft:rules')?.text).toContain('notes in `vault/`')
+    const added = await $.tool.call({ tool: 'mcp__rft__rft_add_node', type: 'direction', title: 'Next', parent: 'E02' } as never)
+    expect(added.text).toContain('Note: vault/directions/D02 Next.md')
+    expect(w.fs.exists(`${TREE}/vault/directions/D02 Next.md`)).toBe(true)
+  })
+
+  test('a session in a folder below a tree works on that tree', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, linked(), { cwd: `${TREE}/analysis` })
+    await $.session.start({ cwd: `${TREE}/analysis`, source: 'startup' } as never)
+    expect(w.tools).toHaveLength(9)
+    const tree = await $.tool.call({ tool: 'mcp__rft__rft_tree' } as never)
+    expect(tree.text).toMatch(/^demo: 2 directions, 2 experiments/)
+  })
+
+  test('the nearest tree wins: a repo with its own tree below a link keeps its own', async ($, on) => {
+    mock.clock(on)
+    const own = Object.fromEntries(Object.entries(demoAt(REPO)).map(([k, v]) => [k, v.replace('"project":"demo"', '"project":"own"')]))
+    const w = world(on, linked(own), { cwd: REPO })
+    await $.session.start({ cwd: REPO, source: 'startup' } as never)
+    const tree = await $.tool.call({ tool: 'mcp__rft__rft_tree' } as never)
+    expect(tree.text).toMatch(/^own: /)
+    await $.tool.call({ tool: 'mcp__rft__rft_add_node', type: 'experiment', title: 'Local run', parent: 'D01' } as never)
+    expect(w.fs.exists(`${REPO}/vault/experiments/E03 Local run.md`)).toBe(true)
+    expect(w.fs.exists(`${TREE}/vault/experiments/E03 Local run.md`)).toBe(false)
+  })
+
+  test('a link to a folder with no tree leaves RFT off, says why, and /rft-init starts nothing', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, { [LINK]: JSON.stringify({ tree: '../flow-note' }) }, { cwd: REPO })
+    const srv = fakeServer(on)
+    await $.session.start({ cwd: REPO, source: 'startup' } as never)
+    expect(w.tools).toEqual([])
+    expect(w.toasts.join()).toContain(`${LINK} links to /phd/flow-note, which holds no reasoning tree`)
+    expect((await $.command.run(RUN(''))).text).toContain('which holds no reasoning tree')
+    expect(srv.seen).toHaveLength(0)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ text: /which holds no reasoning tree/ })).toBeDefined()
+    await ui.unmount()
+    expect((await $.command.run(INIT('Q'))).text).toContain('does not start a second tree')
+    expect([...w.fs.files.keys()]).toEqual([LINK])
+  })
+
+  test('/rft-init in a linked folder starts no second tree and says which tree the folder uses', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, linked(), { cwd: REPO })
+    await $.session.start({ cwd: REPO, source: 'startup' } as never)
+    const res = await $.command.run(INIT('Another question'))
+    expect(res.text).toContain(`works on the reasoning tree in ${TREE} (linked by ${LINK})`)
+    expect([...w.fs.files.keys()].filter(k => k.startsWith('/phd/code/'))).toEqual([LINK])
   })
 })

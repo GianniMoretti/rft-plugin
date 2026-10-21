@@ -14,12 +14,17 @@ alone, so it stays the same across restarts.
     python3 rft_server.py --vault /abs/project/vault --web /abs/plugin/web [--port 0] [--project NAME]
 
 It prints `RFT_SERVER_URL http://127.0.0.1:<port>/?token=<key>` once listening, and exits when
-its parent process goes away (or, with --watch-stdin, closes its stdin).
+its parent process goes away (or, with --watch-stdin, closes its stdin). When a fixed --port is
+held by another session's server for the same vault, it prints that address, whose key is the
+same, and takes the port over once that server stops; when something else holds it, it serves
+on a free port instead.
 """
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
+import http.client
 import http.server
 import json
 import os
@@ -171,6 +176,8 @@ class Vault:
     def __init__(self, root: Path, project: str):
         self.root = root.resolve()
         self.project = project
+        # tells two servers of the same vault apart from others, without saying where it is
+        self.ident = hashlib.sha256(str(self.root).encode()).hexdigest()[:16]
         self._lock = threading.Lock()
         self._write_lock = threading.Lock()
         self._sig: str | None = None
@@ -354,6 +361,8 @@ def make_handler(vault: Vault, web: Path, token: str | None = None):
                 return self._send(200, path.read_bytes(), ctype, head_only)
             if route == "/api/tree":
                 return self._json(200, vault.tree(), head_only)
+            if route == "/api/id":
+                return self._json(200, {"vault": vault.ident}, head_only)
             if route == "/api/note":
                 nid = (parse_qs(url.query).get("id") or [""])[0]
                 note = vault.note(nid)
@@ -428,6 +437,35 @@ def vault_key(vault: Path) -> str:
     return key
 
 
+def bind(port: int, handler):
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
+    server.daemon_threads = True
+    return server
+
+
+def vault_on(port: int) -> str | None:
+    """The vault id of the rft server listening on `port`, or None when it is not one."""
+    try:
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+        c.request("GET", "/api/id")
+        r = c.getresponse()
+        body = r.read()
+        c.close()
+        return json.loads(body).get("vault") if r.status == 200 else None
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def take_over(port: int, handler, every: float = 1.0):
+    """Binds `port` as soon as it is free: when the session that serves it there ends."""
+    while True:
+        time.sleep(every)
+        try:
+            return bind(port, handler)
+        except OSError:
+            pass
+
+
 def watch_parent(server, watch_stdin: bool):
     """Exit when the parent dies (we are re-parented), and with --watch-stdin when it closes our stdin."""
     parent = os.getppid()
@@ -462,11 +500,29 @@ def main(argv=None):
     a = ap.parse_args(argv)
     vault = Vault(Path(a.vault), a.project)
     token = vault_key(Path(a.vault))
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", a.port), make_handler(vault, Path(a.web), token))
-    server.daemon_threads = True
+    handler = make_handler(vault, Path(a.web), token)
     if not a.no_watch:
-        watch_parent(server, a.watch_stdin)
-    print(f"RFT_SERVER_URL http://127.0.0.1:{server.server_address[1]}/?token={token}", flush=True)
+        watch_parent(None, a.watch_stdin)
+
+    def announce(port: int):
+        print(f"RFT_SERVER_URL http://127.0.0.1:{port}/?token={token}", flush=True)
+
+    try:
+        server = bind(a.port, handler)
+    except OSError as err:
+        if not a.port or err.errno != errno.EADDRINUSE:
+            raise
+        if vault_on(a.port) == vault.ident:
+            # another session serves this vault there, with the same key: its address is ours, and
+            # its port once it stops
+            announce(a.port)
+            server = take_over(a.port, handler)
+        else:
+            print(f"rft: port {a.port} is taken, serving on a free port", file=sys.stderr, flush=True)
+            server = bind(0, handler)
+            announce(server.server_address[1])
+    else:
+        announce(server.server_address[1])
     try:
         server.serve_forever()
     except KeyboardInterrupt:

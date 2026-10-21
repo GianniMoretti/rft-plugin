@@ -6,11 +6,14 @@ and their safety.
 import http.client
 import json
 import os
+import queue
 import re
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -287,6 +290,96 @@ class ServerTest(unittest.TestCase):
 
     def test_binds_loopback(self):
         self.assertEqual(self.server.server_address[0], "127.0.0.1")
+
+
+def free_port():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def fetch(port, path):
+    """(status, JSON body) of a GET on 127.0.0.1:port, or (None, None) when nothing answers."""
+    try:
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+        c.request("GET", path)
+        r = c.getresponse()
+        status, body = r.status, r.read()
+        c.close()
+        return status, json.loads(body)
+    except OSError:
+        return None, None
+
+
+class SharedPortTest(unittest.TestCase):
+    """Two sessions with the same fixed port: the second shares the first's server, then takes it over."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.procs = []
+        self.vaults = {}
+        for project in ("one", "two"):
+            vault = Path(self.tmp.name) / project / "vault"
+            (vault / "directions").mkdir(parents=True)
+            (vault / "directions" / "D00 Root.md").write_text(note("D00", "direction", "idea", "", "Root"))
+            self.vaults[project] = vault
+
+    def tearDown(self):
+        for p in self.procs:
+            p.kill()
+            p.wait()
+            p.stdout.close()
+            p.stderr.close()
+        self.tmp.cleanup()
+
+    def start(self, project, port):
+        """Starts a server for `project`'s vault on `port`, its keys in a cache of the test's own;
+        returns it, and the port and key of the address it prints."""
+        p = subprocess.Popen(
+            [sys.executable, str(SERVER), "--vault", str(self.vaults[project]), "--web", str(WEB),
+             "--port", str(port), "--project", project, "--no-watch"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env={**os.environ, "XDG_CACHE_HOME": str(Path(self.tmp.name) / "cache")})
+        self.procs.append(p)
+        lines = queue.Queue()
+        threading.Thread(target=lambda: lines.put(p.stdout.readline()), daemon=True).start()
+        m = re.fullmatch(r"RFT_SERVER_URL http://127\.0\.0\.1:(\d+)/\?token=([\w-]{16})", lines.get(timeout=10).strip())
+        self.assertIsNotNone(m)
+        return p, int(m.group(1)), m.group(2)
+
+    def test_the_same_vault_shares_the_port_and_takes_it_over(self):
+        port = free_port()
+        first, at, key = self.start("one", port)
+        self.assertEqual(at, port)
+        second, at, same = self.start("one", port)
+        # the shared address is the first server's, key included
+        self.assertEqual((at, same), (port, key))
+        self.assertIsNone(second.poll())
+        first.kill()
+        first.wait()
+        deadline = time.time() + 10
+        status, tree = fetch(port, "/api/tree")
+        while status != 200 and time.time() < deadline:
+            time.sleep(0.2)
+            status, tree = fetch(port, "/api/tree")
+        self.assertEqual(status, 200)
+        self.assertEqual(tree["project"], "one")
+
+    def test_another_vault_on_the_port_gets_a_free_one(self):
+        port = free_port()
+        self.start("one", port)
+        _, at, _ = self.start("two", port)
+        self.assertNotEqual(at, port)
+        self.assertEqual(fetch(at, "/api/tree")[1]["project"], "two")
+        self.assertEqual(fetch(port, "/api/tree")[1]["project"], "one")
+
+    def test_the_vault_id_is_a_hash_of_its_folder(self):
+        port = free_port()
+        self.start("one", port)
+        status, body = fetch(port, "/api/id")
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {"vault": rft_server.Vault(self.vaults["one"], "one").ident})
+        self.assertRegex(body["vault"], r"^[0-9a-f]{16}$")
 
 
 if __name__ == "__main__":

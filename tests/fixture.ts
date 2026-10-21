@@ -60,14 +60,22 @@ export function demoFiles(): Record<string, string> {
   }
 }
 
+/** The demo project kept in the folder `at`, keyed by absolute path, with `extra` files beside it. */
+export const demoAt = (at: string, extra: Record<string, string> = {}): Record<string, string> => ({
+  ...Object.fromEntries(Object.entries(demoFiles()).map(([k, v]) => [`${at}/${k}`, v])),
+  ...extra,
+})
+
 /** A file map with directory listing, as `$.fs` would see a folder tree. */
 export class MemoryFs {
   files: Map<string, { text: string; mtimeMs: number }>
   private clock = 1
-  constructor(files: Record<string, string>) {
+  /** `byPath`: the files are keyed by absolute path, as the plugin asks for them once it has located the tree. */
+  constructor(files: Record<string, string>, private byPath = false) {
     this.files = new Map(Object.entries(files).map(([k, v]) => [k, { text: v, mtimeMs: 1 }]))
   }
   norm(p: string) {
+    if (this.byPath) return p
     // the engine resolves relative paths against the test session's folder
     return p.replace(/^\/.*?\/(?=(\.rft|vault|web|server)(\/|$))/, '').replace(/^\.\//, '')
   }
@@ -114,10 +122,11 @@ export type World = { fs: MemoryFs; tools: string[]; opened: string[]; commands:
 
 /** Answers everything the plugin asks of the session from memory. */
 /** `refuse` names commands the engine refuses to register, as it refuses a skill's name. */
-export function world(on: On, files: Record<string, string>, opts: { refuse?: string[]; surfaces?: string[] } = {}): World {
-  const w: World = { fs: new MemoryFs(files), tools: [], opened: [], commands: [], seen: [], toasts: [] }
+/** `cwd`: the session's folder, in a world keyed by absolute path (see `MemoryFs`). */
+export function world(on: On, files: Record<string, string>, opts: { refuse?: string[]; surfaces?: string[]; cwd?: string } = {}): World {
+  const w: World = { fs: new MemoryFs(files, opts.cwd !== undefined), tools: [], opened: [], commands: [], seen: [], toasts: [] }
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
-  on('session.cwd', () => ({ value: CWD }))
+  on('session.cwd', () => ({ value: opts.cwd ?? CWD }))
   on('fs.read', (_$, e) => ({ value: w.fs.read(e.path) }))
   on('fs.write', (_$, e) => { w.fs.write(e.path, e.text); return { value: undefined } })
   on('fs.list', (_$, e) => ({ value: w.fs.list(e.path) }))

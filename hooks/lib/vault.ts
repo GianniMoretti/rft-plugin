@@ -120,6 +120,66 @@ export async function readConfig(io: Io): Promise<Config | null> {
 export const writeConfig = (io: Io, config: Config) =>
   io.write(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n')
 
+// ---------------------------------------------------------------- where the tree is
+
+export const isAbsolute = (path: string) => /^([A-Za-z]:)?[\\/]/.test(path)
+
+/** `rel` from `base` as an absolute path with `/` separators, `.` and `..` resolved. */
+export function resolvePath(base: string, rel: string): string {
+  const full = isAbsolute(rel) ? rel : `${base}/${rel}`
+  const drive = /^[A-Za-z]:/.exec(full)?.[0] ?? ''
+  const parts: string[] = []
+  for (const part of full.slice(drive.length).split(/[\\/]+/)) {
+    if (part === '..') parts.pop()
+    else if (part && part !== '.') parts.push(part)
+  }
+  return `${drive}/${parts.join('/')}`
+}
+
+/** The same files with relative paths taken from `root` instead of the session's folder. */
+export const rooted = (io: Io, root: string): Io => {
+  const at = (path: string) => (isAbsolute(path) ? path : join(root, path))
+  return {
+    read: path => io.read(at(path)),
+    write: (path, text) => io.write(at(path), text),
+    list: path => io.list(at(path)),
+    exists: path => io.exists(at(path)),
+  }
+}
+
+/** A tree's root folder, and the link that led to it; or, root null, why the link leads nowhere. */
+export type Located = { root: string; link: string | null } | { root: null; link: string; problem: string }
+
+/** The target of a config that is a link to a tree elsewhere (`{"tree": "../notes"}`), else null. */
+async function linkIn(io: Io, path: string): Promise<string | null> {
+  try {
+    const tree = (JSON.parse(await io.read(path)) as { tree?: unknown }).tree
+    return typeof tree === 'string' && tree.trim() ? tree.trim() : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The tree a session in `cwd` works on: the nearest folder, from `cwd` up, with `.rft/config.json`.
+ * A config that is a link leads to the tree's own folder, one step only. Null when there is none.
+ */
+export async function locate(io: Io, cwd: string): Promise<Located | null> {
+  for (let dir = resolvePath(cwd, '.'); ; dir = resolvePath(dir, '..')) {
+    const file = join(dir, CONFIG_PATH)
+    if (await io.exists(file)) {
+      const target = await linkIn(io, file)
+      if (target === null) return { root: dir, link: null }
+      const root = resolvePath(dir, target)
+      const there = join(root, CONFIG_PATH)
+      if (!(await io.exists(there))) return { root: null, link: file, problem: `${file} links to ${root}, which holds no reasoning tree (no ${CONFIG_PATH})` }
+      if ((await linkIn(io, there)) !== null) return { root: null, link: file, problem: `${file} links to ${root}, which is itself a link: point it at the tree's own folder` }
+      return { root, link: file }
+    }
+    if (resolvePath(dir, '..') === dir) return null
+  }
+}
+
 // ---------------------------------------------------------------- frontmatter
 
 const normalise = (text: string) => text.replace(/\r\n/g, '\n')
@@ -710,15 +770,17 @@ export type NewNode = {
   tags?: string[]
 }
 
-export function nextId(loaded: Loaded, type: NodeType): string {
+/** `taken`: ids in use beyond the loaded ones, e.g. notes another session added since. */
+export function nextId(loaded: Loaded, type: NodeType, taken: string[] = []): string {
   const prefix = PREFIX[type]
+  const ids = [...Object.keys(loaded.tree.nodes), ...taken]
   let max = loaded.config.lastId[prefix] ?? 0
-  for (const id of Object.keys(loaded.tree.nodes)) {
+  for (const id of ids) {
     const m = /^([ED])(\d+)$/.exec(id)
     if (m && m[1] === prefix) max = Math.max(max, Number(m[2]))
   }
   // D00 is the root: an empty vault's first direction is D00, every other id starts at 01
-  const isEmpty = type === 'direction' && !Object.keys(loaded.tree.nodes).some(id => id.startsWith('D'))
+  const isEmpty = type === 'direction' && !ids.some(id => id.startsWith('D'))
   return formatId(prefix, isEmpty && max === 0 ? 0 : max + 1)
 }
 

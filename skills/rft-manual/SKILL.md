@@ -6,7 +6,9 @@ description: Operating manual of the Reasoning Flow Tree, the tree of experiment
 # Reasoning Flow Tree (rft)
 
 The project's reasoning lives in an Obsidian-compatible vault (by default `vault/`, see
-`.rft/config.json`): **one markdown note per experiment and per direction**, linked parent →
+`.rft/config.json`, which may sit in a folder above the session's or link to a tree kept
+elsewhere; the session rules give the vault's path): **one markdown note per experiment and
+per direction**, linked parent →
 children as a tree. The notes are the source of truth; the index, the canvas and the
 children / up / down fields are derived from their `parent:` field by the rft tools.
 
