@@ -4,6 +4,7 @@
 (function (root) {
   'use strict'
 
+  const TYPES = ['direction', 'experiment', 'reference', 'theory']
   const isDate = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)
   const strings = v => (Array.isArray(v) ? [...new Set(v.filter(x => typeof x === 'string' && x))] : [])
 
@@ -17,7 +18,7 @@
       mode: v.mode === 'hide' ? 'hide' : 'dim',
       tags: strings(v.tags),
       tagMode: v.tagMode === 'all' ? 'all' : 'any',
-      hiddenTypes: strings(v.hiddenTypes).filter(t => t === 'experiment' || t === 'direction'),
+      hiddenTypes: strings(v.hiddenTypes).filter(t => TYPES.includes(t)),
       hiddenStatuses: strings(v.hiddenStatuses),
       from: isDate(v.from) ? v.from : '',
       to: isDate(v.to) ? v.to : '',

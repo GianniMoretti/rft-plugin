@@ -1,28 +1,36 @@
 ---
 name: rft-manual
-description: Operating manual of the Reasoning Flow Tree, the tree of experiment (E..) and direction (D..) notes that records a research project's reasoning, grouped into concepts (lines of research). Use in a project with .rft/config.json whenever an experiment is planned, launched or finished, an idea or question comes up (even a rejected one), an idea is dropped or moved, a new line of research opens (propose a concept), or the user asks about the tree, the vault, its concepts or what was tried.
+description: Operating manual of the Reasoning Flow Tree, the tree of experiment (E..), direction (D..), reference (R..) and theory (T..) notes that records a research project's reasoning, grouped into concepts (lines of research). Use in a project with .rft/config.json whenever an experiment is planned, launched or finished, an idea or question comes up (even a rejected one), a paper or literature review is read, a definition, method or taxonomy is written down, an idea is dropped or moved, a new line of research opens (propose a concept), or the user asks about the tree, the vault, its concepts or what was tried.
 ---
 
 # Reasoning Flow Tree (rft)
 
 The project's reasoning lives in an Obsidian-compatible vault (by default `vault/`, see
 `.rft/config.json`, which may sit in a folder above the session's or link to a tree kept
-elsewhere; the session rules give the vault's path): **one markdown note per experiment and
-per direction**, linked parent →
-children as a tree. The notes are the source of truth; the index, the canvas and the
+elsewhere; the session rules give the vault's path): **one markdown note per experiment,
+direction, reference and theory note**, linked parent → children as a tree. The notes are the source of truth; the index, the canvas and the
 children / up / down fields are derived from their `parent:` field by the rft tools.
 
 ## Node types
 
 - **Experiment (E..)**, in `experiments/`: something that was *run or computed* and produced a
-  result: a training grid, a numerical check, a measurement, a proof, a literature check.
+  result: a training grid, a numerical check, a measurement, a literature search for a yes or no
+  answer.
 - **Direction (D..)**, in `directions/`: an *idea, question or hypothesis*: what to try, why, and
   whether it was pursued. Ideas discussed and rejected get a note too, so the tree records why a
   path was not taken.
+- **Reference (R..)**, in `references/`: what was *found in the literature*: a paper, a method
+  or a literature review, summarised, with the project's own reading of it. New directions,
+  theory notes and sometimes experiments come out of it. A review can hold one child reference
+  per key paper.
+- **Theory (T..)**, in `theory/`: the project's *own understanding*: definitions of concepts,
+  methods, taxonomies of methodologies, proofs and arguments, built on directions, experiments
+  and references.
 - **D00** is the root: the starting question of the project.
-- Every note has **exactly one parent**, the note it comes from. If an idea comes from several
-  notes, pick the main parent and link the others in the text. Directions are usually tested by
-  experiments, and experiment results open new directions.
+- Every note has **exactly one parent**, the note it comes from. If a note comes from several
+  notes, pick the main parent and link the others in the text (a theory note lists them under
+  **Builds on**). Directions are usually tested by experiments, experiment results and
+  references open new directions, and theory notes gather what the others established.
 
 ## Statuses and marks
 
@@ -47,8 +55,8 @@ children / up / down fields are derived from their `parent:` field by the rft to
 ## Topical tags
 
 Besides the project, type and status tags (added by the tools), every new note gets **1–3 short
-topical tags**: what it is about, so the tree view can filter by them (`theory`, `ablation`,
-`literature`, `cluster`, `radius`).
+topical tags**: what it is about, so the tree view can filter by them (`ablation`, `optimisation`,
+`cluster`, `radius`).
 
 - Lowercase kebab-case: `radial-rule`, not `Radial rule` or `radial_rule` (the tools convert).
 - **Reuse the vocabulary**: call `rft_tags` first and pick existing tags when they fit; invent
@@ -91,12 +99,23 @@ concept above them belong to the project itself. Concepts are explicit, never in
 3. **When a new idea or question comes up** (from a result, the user, a discussion), even if it
    is rejected at once: `rft_add_node` with `type: direction` and `parent` = the note it comes
    from, and its topical `tags`. A rejected idea gets status `discussed`.
-4. **When an idea is dropped or moved**: `rft_set_status` with `dropped` or `moved` and a `note`
+4. **When a paper, method or literature review is read**: `rft_add_node` with
+   `type: reference`, `parent` = the note that led to it, and its topical `tags`. Fill
+   **Source** with a link that can be checked (DOI, arXiv id or URL), **Summary**, **Method**,
+   **Key results** as the source reports them (with the table, figure or section), and the
+   project's reading under **Relevance**. Only sources actually read: never invent a citation,
+   nor a result the source does not report. Statuses: `planned` to read, `running` reading,
+   `done` summarised, `dropped` not relevant (the `note` argument appends to Relevance).
+5. **When a definition, method, taxonomy or argument of the project's own is written down**:
+   `rft_add_node` with `type: theory`, `parent` = the note it builds on most, and every other
+   note it builds on linked under **Builds on**. Statuses: `idea` draft, `running` being worked
+   out, `done` settled, `dropped` refuted.
+6. **When an idea is dropped or moved**: `rft_set_status` with `dropped` or `moved` and a `note`
    saying why, or where it went.
-5. **Record real results only.** Never write expected, invented or rounded-up numbers; if a run
+7. **Record real results only.** Never write expected, invented or rounded-up numbers; if a run
    failed, say so. Keep the numbers consistent with the project's README and result files: the
    vault is the map, the result files are the record.
-6. The vault is part of the repository: commit it with the work it describes.
+8. The vault is part of the repository: commit it with the work it describes.
 
 ## Tools
 
@@ -118,13 +137,14 @@ error. Never edit `up:` / `down:` by hand, nor the list under `## The tree` in t
 
 ## Note layout
 
-Frontmatter: `id`, `type` (`experiment` | `direction`), `status`, `date` (YYYY-MM-DD),
+Frontmatter: `id`, `type` (`experiment` | `direction` | `reference` | `theory`), `status`, `date` (YYYY-MM-DD),
 `parent: "[[<parent name>]]"` (`""` for the root), `children`, `up`, `down`,
 `tags: [<project>, <type>, <topical tags...>, <status>]`, and on a note that starts a
 concept `concept: "<name>"` and `concept_summary: "<one line>"`. Body:
 `# <ID> · <Title>`, the Parent / Status / Date lines (and Code / data for experiments), then the
-sections — experiments: What, Why, Result, Directions found; directions: Idea, Why, Status —
-and last **Children in the tree**, a list of links to the children.
+sections — experiments: What, Why, Result, Directions found; directions: Idea, Why, Status;
+references: Source, Summary, Method, Key results, Relevance, Directions found; theory notes:
+Statement, Builds on, Explanation, Open questions, Status — and last **Children in the tree**, a list of links to the children.
 
 ## Status notes (optional)
 

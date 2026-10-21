@@ -4,7 +4,7 @@ export type RftNodeState = {
   id: string
   name: string
   title: string
-  type: 'experiment' | 'direction'
+  type: 'experiment' | 'direction' | 'reference' | 'theory'
   status: string
   date: string
   parent: string | null

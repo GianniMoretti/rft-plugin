@@ -1,7 +1,7 @@
 :root {
   --bg: #0f1115; --panel: #171a21; --fg: #e6e8ee; --muted: #8b93a3; --line: #2a2f3a;
   --link: #4a5263; --link-hl: #e6e8ee; --accent: #9775fa; --label-halo: #0f1115;
-  --direction: #9775fa; --experiment: #20c997;
+  --direction: #9775fa; --experiment: #20c997; --reference: #f06595; --theory: #5c7cfa;
   --done: #40c057; --running: #fd7e14; --planned: #fab005; --idea: #ffe066;
   --dropped: #fa5252; --discussed: #868e96; --moved: #4dabf7;
   --font-scale: 1;
@@ -10,7 +10,7 @@
   :root {
     --bg: #fbfbfd; --panel: #ffffff; --fg: #1f2328; --muted: #656d76; --line: #d8dde4;
     --link: #b7bec9; --link-hl: #1f2328; --accent: #7048e8; --label-halo: #fbfbfd;
-    --direction: #7048e8; --experiment: #0ca678;
+    --direction: #7048e8; --experiment: #0ca678; --reference: #d6336c; --theory: #3b5bdb;
     --done: #2f9e44; --running: #e8590c; --planned: #e8a400; --idea: #f2c94c;
     --dropped: #e03131; --discussed: #868e96; --moved: #1c7ed6;
   }
@@ -43,6 +43,8 @@ main { position: relative; flex: 1; min-height: 0; }
 .node circle.dot { stroke-width: 2.6px; }
 .node.direction circle.dot { stroke: var(--direction); }
 .node.experiment circle.dot { stroke: var(--experiment); }
+.node.reference circle.dot { stroke: var(--reference); }
+.node.theory circle.dot { stroke: var(--theory); }
 .node.selected circle.dot { stroke: var(--fg); stroke-width: 3.5px; }
 .node.match circle.dot { stroke: var(--accent); stroke-width: 4px; }
 .node text.label { fill: var(--fg); paint-order: stroke; stroke: var(--label-halo); stroke-width: 3px;
@@ -63,6 +65,8 @@ main { position: relative; flex: 1; min-height: 0; }
 .ring { width: 11px; height: 11px; border-radius: 50%; display: inline-block; border: 2.5px solid; }
 .ring-direction { border-color: var(--direction); }
 .ring-experiment { border-color: var(--experiment); }
+.ring-reference { border-color: var(--reference); }
+.ring-theory { border-color: var(--theory); }
 .hint { margin-top: 6px; }
 #drawer { position: absolute; top: 0; right: 0; bottom: 0; width: min(calc(480px * var(--font-scale)), 92vw);
   overflow: auto; background: var(--panel); border-left: 1px solid var(--line); padding: 10px 16px 24px;

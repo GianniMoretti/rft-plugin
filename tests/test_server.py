@@ -150,7 +150,8 @@ class ServerTest(unittest.TestCase):
 
     def test_tag_parsing(self):
         self.assertEqual(rft_server.parse_tags('[demo, "theory", #cluster]'), ["demo", "theory", "cluster"])
-        self.assertEqual(rft_server.topical_tags(["demo", "experiment", "theory", "done", "theory"], "demo"), ["theory"])
+        self.assertEqual(rft_server.topical_tags(["demo", "experiment", "theory", "done", "theory"], "demo", "experiment"), ["theory"])
+        self.assertEqual(rft_server.topical_tags(["demo", "theory", "idea"], "demo", "theory"), [])
         self.assertEqual(rft_server.parse_tags(None), [])
 
     def test_version_changes_with_the_notes(self):
@@ -163,6 +164,35 @@ class ServerTest(unittest.TestCase):
             self.assertIn("D02", [n["id"] for n in after["nodes"]])
         finally:
             p.unlink()
+
+    def test_references_and_theory_notes(self):
+        ref = self.vault / "references" / "R01 A paper.md"
+        thy = self.vault / "theory" / "T01 A definition.md"
+        ref.parent.mkdir()
+        thy.parent.mkdir()
+        ref.write_text(note("R01", "reference", "done", "D01 Next idea", "A paper", ("theory",)))
+        thy.write_text(note("T01", "theory", "idea", "R01 A paper", "A definition", ("theory", "definitions")))
+        try:
+            nodes = {n["id"]: n for n in json.loads(self.get("/api/tree")[2])["nodes"]}
+            self.assertEqual((nodes["R01"]["type"], nodes["R01"]["parent"], nodes["R01"]["tags"]), ("reference", "D01", ["theory"]))
+            self.assertEqual((nodes["T01"]["type"], nodes["T01"]["parent"], nodes["T01"]["tags"]), ("theory", "R01", ["definitions"]))
+            status, _, body = self.get("/api/note?id=T01")
+            self.assertEqual(status, 200)
+            self.assertIn("Text of T01.", json.loads(body)["body"])
+        finally:
+            ref.unlink()
+            thy.unlink()
+            ref.parent.rmdir()
+            thy.parent.rmdir()
+
+    def test_types_match_the_plugin(self):
+        """The server's folders and id letters are the ones TYPES in hooks/lib/vault.ts gives."""
+        ts = (Path(__file__).resolve().parents[1] / "hooks" / "lib" / "vault.ts").read_text()
+        table = ts[ts.index("export const TYPES = {"):ts.index("} as const")]
+        types = re.findall(r"^  (\w+): \{\n    prefix: '(\w)', dir: '(\w+)'", table, re.M)
+        self.assertEqual(len(types), 4)
+        self.assertEqual(rft_server.SUBDIRS, {d: t for t, _, d in types})
+        self.assertEqual(sorted(re.search(r"\[(\w+)\]", rft_server.ID_RE.pattern).group(1)), sorted(p for _, p, _ in types))
 
     def test_note_by_id(self):
         status, _, body = self.get("/api/note?id=E01")

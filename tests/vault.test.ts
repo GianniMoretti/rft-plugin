@@ -5,7 +5,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { addNode, initVault, setStatus, setTags, tagsReport } from '../hooks/lib/ops'
 import { staticPage } from '../hooks/lib/page'
-import { canvasJson, compactTree, front, load, locate, parseTags, readConfig, resolvePath, sanitiseTag, sanitiseTitle, sync, topicalTags, validate } from '../hooks/lib/vault'
+import { TYPES, canvasJson, compactTree, front, load, locate, parseTags, readConfig, resolvePath, sanitiseTag, sanitiseTitle, sync, topicalTags, validate } from '../hooks/lib/vault'
 import { D00, D01, E01, E02, MemoryFs, WEB_FILES, demoFiles } from './fixture'
 
 const loadDemo = async (fs = new MemoryFs(demoFiles())) => {
@@ -72,6 +72,42 @@ describe('vault', () => {
     expect((await validate(io, await load(io, loaded.config))).errors).toEqual([])
   })
 
+  test('references and theory notes get their own ids, folders, sections and default statuses', async () => {
+    const { fs, io, loaded } = await loadDemo()
+    const ref = await addNode(io, loaded, {
+      type: 'reference', title: 'A paper on the variant', parent: 'D01', date: '2026-02-01',
+      sections: { Source: 'Someone et al. 2024, https://example.org/paper' }, tags: ['variants'],
+    })
+    expect(ref.id).toBe('R01')
+    const refText = fs.read(`vault/references/${ref.name}.md`)
+    expect(front(refText).status).toBe('planned')
+    expect(front(refText).tags).toBe('[demo, reference, variants, planned]')
+    expect(refText.match(/^## .*$/gm)).toEqual([...TYPES.reference.sections, 'Children in the tree'].map(h => `## ${h}`))
+    expect(refText).toContain('## Source\nSomeone et al. 2024')
+    expect(refText).not.toContain('**Code / data:**')
+
+    const thy = await addNode(io, loaded, { type: 'theory', title: 'What a variant is', parent: ref.id, date: '2026-02-02', tags: ['theory', 'definitions'] })
+    expect(thy.id).toBe('T01')
+    const thyText = fs.read(`vault/theory/${thy.name}.md`)
+    expect(front(thyText).status).toBe('idea')
+    expect(front(thyText).tags).toBe('[demo, theory, definitions, idea]')
+    expect(thyText.match(/^## .*$/gm)).toEqual([...TYPES.theory.sections, 'Children in the tree'].map(h => `## ${h}`))
+    expect(JSON.parse(fs.read('.rft/config.json')).lastId).toEqual({ E: 2, D: 1, R: 1, T: 1 })
+    expect(compactTree(loaded.tree)).toContain(`      → ${ref.name}\n        ? ${thy.name}`)
+
+    // a status note goes to Relevance on a reference, to Status on a theory note
+    await setStatus(io, loaded, 'R01', 'dropped', 'Not about this setting.')
+    expect(fs.read(`vault/references/${ref.name}.md`)).toContain('## Relevance\nNot about this setting.\n')
+    await setStatus(io, loaded, 'T01', 'done', 'Settled.')
+    expect(fs.read(`vault/theory/${thy.name}.md`)).toContain('## Status\nSettled.\n')
+
+    const v = await validate(io, await load(io, loaded.config))
+    expect(v.errors).toEqual([])
+    expect(v.warnings.filter(w => /R01|T01/.test(w))).toEqual([])
+    const canvas = JSON.parse(fs.read('vault/Reasoning tree.canvas')) as { nodes: { id: string; color: string }[] }
+    expect(canvas.nodes.find(n => n.id === 'T01')!.color).toBe(TYPES.theory.canvas)
+  })
+
   test('ids are never reused, even after a note is deleted', async () => {
     const { fs, io, loaded } = await loadDemo()
     const a = await addNode(io, loaded, { type: 'direction', title: 'Idea one', parent: 'E02', date: '2026-02-01' })
@@ -114,6 +150,8 @@ describe('vault', () => {
     expect(res.isAdopted).toBe(false)
     expect(fresh.exists('vault/directions/D00 Can we fly.md')).toBe(true)
     expect(fresh.exists('vault/templates/_experiment.md')).toBe(true)
+    expect(fresh.exists('vault/templates/_reference.md')).toBe(true)
+    expect(fresh.exists('vault/templates/_theory.md')).toBe(true)
     expect(fresh.read('vault/00 Index.md')).toContain('- ? [[D00 Can we fly]]')
     expect(fresh.exists('.rft/config.json')).toBe(true)
 
@@ -122,7 +160,7 @@ describe('vault', () => {
     const old = new MemoryFs(files)
     const adopted = await initVault(old.io(), { project: 'demo', question: '', date: '2026-02-01' })
     expect(adopted.isAdopted).toBe(true)
-    expect(JSON.parse(old.read('.rft/config.json')).lastId).toEqual({ E: 2, D: 1 })
+    expect(JSON.parse(old.read('.rft/config.json')).lastId).toEqual({ E: 2, D: 1, R: 0, T: 0 })
     expect(old.read(`vault/experiments/${E01}.md`)).toBe(files[`vault/experiments/${E01}.md`])
   })
 
@@ -130,7 +168,10 @@ describe('vault', () => {
     expect(parseTags('[demo, experiment, theory, "Radial rule", done]')).toEqual(['demo', 'experiment', 'theory', 'Radial', 'rule', 'done'])
     expect(parseTags('#theory #cluster')).toEqual(['theory', 'cluster'])
     expect(parseTags(undefined)).toEqual([])
-    expect(topicalTags(['demo', 'experiment', 'theory', 'done', 'theory', 'running'], 'demo')).toEqual(['theory'])
+    expect(topicalTags(['demo', 'experiment', 'theory', 'done', 'theory', 'running'], 'demo', 'experiment')).toEqual(['theory'])
+    // only the note's own type is reserved: a theory note's type tag goes, a direction keeps a `theory` tag
+    expect(topicalTags(['demo', 'theory', 'idea'], 'demo', 'theory')).toEqual([])
+    expect(topicalTags(['demo', 'direction', 'theory', 'idea'], 'demo', 'direction')).toEqual(['theory'])
     expect(sanitiseTag(' Radial Rule! ')).toBe('radial-rule')
     expect(sanitiseTag('#ResNet_18')).toBe('resnet-18')
     const files = demoFiles()
@@ -218,7 +259,7 @@ describe('where the tree is', () => {
     fs.write('.rft/config.json', JSON.stringify({ ...JSON.parse(fs.read('.rft/config.json')), lastId: { E: 2, D: 5 } }))
     const node = await addNode(io, loaded, { type: 'experiment', title: 'Mine', parent: 'D01', date: '2026-01-02' })
     expect(node.id).toBe('E04')
-    expect(JSON.parse(fs.read('.rft/config.json')).lastId).toEqual({ E: 4, D: 5 })
+    expect(JSON.parse(fs.read('.rft/config.json')).lastId).toEqual({ E: 4, D: 5, R: 0, T: 0 })
     const next = await addNode(io, loaded, { type: 'direction', title: 'Then', parent: 'E04', date: '2026-01-02' })
     expect(next.id).toBe('D06')
   })

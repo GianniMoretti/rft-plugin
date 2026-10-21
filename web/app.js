@@ -108,9 +108,10 @@
     buildConceptLegend()
     buildCrumbs()
     syncConceptButtons()
-    const c = { direction: 0, experiment: 0 }
+    const c = { direction: 0, experiment: 0, reference: 0, theory: 0 }
     for (const n of tree.nodes) c[n.type] = (c[n.type] || 0) + 1
-    document.getElementById('counts').textContent = `${c.direction} directions · ${c.experiment} experiments`
+    document.getElementById('counts').textContent =
+      `${c.direction} directions · ${c.experiment} experiments · ${c.reference} references · ${c.theory} theory notes`
   }
 
   function ancestors(id) {
@@ -517,7 +518,7 @@
 
   function openAdder() {
     if (!editKey()) { noKey.hidden = false; return }
-    // an experiment tests a direction, a direction comes out of an experiment: the other type first
+    // an experiment tests a direction; a direction comes out of an experiment, a reference or a theory note
     addType.value = byId.get(selected).type === 'direction' ? 'experiment' : 'direction'
     addTitle.value = ''
     setAddMsg('')

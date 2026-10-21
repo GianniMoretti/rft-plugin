@@ -8,6 +8,10 @@ interactive tree (pan, zoom, click a node to read it) in a browser.
 - **Experiments (E..)**: something run or computed that produced a result.
 - **Directions (D..)**: ideas, questions, hypotheses, including the ones rejected, so the tree
   also says why a path was not taken. **D00** is the starting question.
+- **References (R..)**: papers, methods and literature reviews that were read: a summary, a
+  source that can be checked, and what they mean for the project.
+- **Theory (T..)**: the project's own definitions, methods, taxonomies and arguments, built on
+  the directions, experiments and references.
 - **Concepts**: named lines of research. A note can start one, and its subtree belongs to it
   until a sub-concept starts. Claude proposes them; you confirm.
 
