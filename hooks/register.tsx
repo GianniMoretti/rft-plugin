@@ -229,6 +229,19 @@ async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> 
   if (failed.length) reportFailures($, failed)
 }
 
+/** A session's start, past the commands: the tree when there is one, else why its link leads nowhere. */
+async function start($: EngineInterface, shouldOpen: boolean): Promise<void> {
+  let isActive = false
+  try {
+    const h = await locateHere($)
+    if (h && 'problem' in h) {
+      await update($, snapshot, () => ({ ...EMPTY, error: h.problem }))
+      $.ui.toast(`rft: ${h.problem}`)
+    } else if (h) isActive = (await readConfig(h.io)) !== null
+  } catch { /* treated as inactive */ }
+  if (isActive) await activate($, shouldOpen)
+}
+
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err))
 
 function reportFailures($: EngineInterface, failed: string[]): void {
@@ -525,16 +538,17 @@ export const register: Register = (on, options) => {
     await registerCommands($)
     // a server of an earlier load of this module died with it
     if (!server) await update($, webUrl, () => null)
-    let isActive = false
-    try {
-      const h = await locateHere($)
-      if (h && 'problem' in h) {
-        await update($, snapshot, () => ({ ...EMPTY, error: h.problem }))
-        $.ui.toast(`rft: ${h.problem}`)
-      } else if (h) isActive = (await readConfig(h.io)) !== null
-    } catch { /* treated as inactive */ }
     // the desktop shows the tree view in its browser pane (/rft); the outline opens on asking
-    if (isActive) await activate($, options.autoOpen !== false && !(await isOnDesktop($)))
+    await start($, options.autoOpen !== false && !(await isOnDesktop($)))
+
+    return next(e)
+  })
+
+  // a /clear (or /resume) ends the session and goes on in a fresh one with no session.start: its
+  // state starts empty and session.end stopped the poll, so the tree is taken up again here; the
+  // commands, the tools and an open pane are still there
+  on('classic.SessionStart', async ($, e, next) => {
+    if (e.source === 'clear' || e.source === 'resume') await start($, false)
 
     return next(e)
   })
