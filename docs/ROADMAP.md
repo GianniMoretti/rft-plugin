@@ -1,7 +1,7 @@
 # Roadmap
 
 Planned work, split into release packages in the order they should ship. Each
-package is one minor version (the current release is 0.12.0) and lists what it contains, how it
+package is one minor version (the current release is 0.13.0) and lists what it contains, how it
 could be done, and when it is done. A package builds only on the ones before it.
 
 | Version | Package | Depends on |
@@ -11,7 +11,7 @@ could be done, and when it is done. A package builds only on the ones before it.
 | 0.10.0 | Rebalancing (done) | 0.9.0 |
 | 0.11.0 | References on every node (done) | – |
 | 0.12.0 | Literature-driven workflow (done) | 0.11.0 |
-| 0.13.0 | Paper collection | 0.11.0 |
+| 0.13.0 | Paper collection (done) | 0.11.0 |
 | 0.14.0 | Search index | – |
 | 0.15.0 | Knowledge graph | 0.14.0 |
 
@@ -85,7 +85,7 @@ Mostly changes to the manual (`rft-manual`), so Claude behaves this way in every
 Done when: in a test project, opening a new field and a new concept each lead Claude to offer
 a search, and the results land as R notes linked to the right nodes.
 
-## 0.13.0 — Paper collection
+## 0.13.0 — Paper collection (done)
 
 - **Background paper collection.** During a search, a tool downloads the papers in the
   background into the vault, in folders that follow the concepts

@@ -399,6 +399,22 @@ class ServerTest(unittest.TestCase):
         self.assertEqual((nodes["D01"]["parent"], nodes["D01"]["origin"]), ("D00", ["E01"]))
         self.assertNotIn("origin", nodes["E01"])
 
+    def test_serves_a_reference_pdf_from_papers_only(self):
+        papers = self.vault / "papers" / "Runs"
+        papers.mkdir(parents=True)
+        (papers / "2020 Doe A paper.pdf").write_bytes(b"%PDF-1.4 x")
+        self.addCleanup(lambda: ((papers / "2020 Doe A paper.pdf").unlink(), papers.rmdir(), papers.parent.rmdir()))
+        p = self.vault / "directions" / "D01 Next idea.md"
+        before = p.read_text()
+        self.addCleanup(p.write_text, before)
+        p.write_text(before.replace("tags:", 'pdf: "[[papers/Runs/2020 Doe A paper.pdf]]"\ntags:'))
+        status, ctype, body = self.get("/api/paper?id=D01")
+        self.assertEqual((status, ctype, body), (200, "application/pdf", b"%PDF-1.4 x"))
+        self.assertEqual(self.get("/api/paper?id=E01")[0], 404)
+        for target in ["../secret.md", "directions/D01 Next idea.md", "papers/../../secret.md"]:
+            p.write_text(before.replace("tags:", f'pdf: "[[{target}]]"\ntags:'))
+            self.assertEqual(self.get("/api/paper?id=D01")[0], 404, target)
+
     def test_refs_are_read_as_ids(self):
         p = self.vault / "directions" / "D01 Next idea.md"
         before = p.read_text()

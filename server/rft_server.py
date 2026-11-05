@@ -240,6 +240,9 @@ class Vault:
                 refs[nid] = link_target(fm.get("parent"))
                 origins[nid] = link_targets(fm.get("origin"))
                 refs_of[nid] = link_targets(fm.get("refs"))
+                pdf = link_target(fm.get("pdf"))
+                if pdf:
+                    nodes[nid]["pdf"] = pdf
                 cname = unquote(fm.get("concept"))
                 if cname:
                     decl[nid] = (cname, unquote(fm.get("concept_summary")))
@@ -292,6 +295,17 @@ class Vault:
         allowed = [(self.root / s).resolve() for s in SUBDIRS]
         inside = any(path.parent == a for a in allowed)
         return path if inside and path.suffix == ".md" and path.is_file() else None
+
+    def paper(self, nid: str) -> Path | None:
+        """The PDF a reference note links (`pdf:`), only when it is a PDF file in the vault's papers/."""
+        if not ID_RE.match(nid or ""):
+            return None
+        node = next((n for n in self.tree()["nodes"] if n["id"] == nid), None)
+        if not node or not node.get("pdf"):
+            return None
+        path = (self.root / node["pdf"]).resolve()
+        papers = (self.root / "papers").resolve()
+        return path if papers in path.parents and path.suffix.lower() == ".pdf" and path.is_file() else None
 
     def note(self, nid: str) -> dict | None:
         path = self.note_path(nid)
@@ -469,6 +483,11 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 nid = (parse_qs(url.query).get("id") or [""])[0]
                 note = vault.note(nid)
                 return self._json(200, note, head_only) if note else self._json(404, {"error": "no such note"}, head_only)
+            if route == "/api/paper":
+                path = vault.paper((parse_qs(url.query).get("id") or [""])[0])
+                if path is None:
+                    return self._send(404, b"no saved paper", "text/plain", head_only)
+                return self._send(200, path.read_bytes(), "application/pdf", head_only)
             return self._send(404, b"not found", "text/plain", head_only)
 
         def _refuse(self):

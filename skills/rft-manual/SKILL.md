@@ -102,8 +102,15 @@ The tree should start from what is already known, not from scratch.
   add one reference note per key paper (usually 4 to 10) under the note or concept it is about,
   with **Source** (DOI, arXiv id or URL), **Summary**, **Method**, **Key results** as reported
   and **Relevance**; `done` once summarised from the paper itself, `planned` if only found.
-  Then give a short synthesis (known, open, setups to start from) and list the directions it
-  suggests: add them only once the user chooses.
+  Then call `rft_collect_papers` with the new notes' ids, give a short synthesis (known, open,
+  setups to start from) and list the directions it suggests: add them only once the user
+  chooses.
+- **Papers in the vault.** `rft_collect_papers(ids?)` downloads, in the background, the PDFs of
+  reference notes whose **Source** has an arXiv id or link, or a PDF link on an open-access
+  host (OpenReview, PMLR, ACL Anthology, NeurIPS and CVF proceedings, JMLR, bioRxiv...), into
+  `papers/<concept>/<year> <first author> <title>.pdf`, and links each from its note with
+  `pdf:`. Run again after concepts change: saved PDFs move to their concept's folder. It never
+  downloads from paywalled publishers; for those, the note keeps its DOI.
 - **Experiments start from a paper.** A proposed experiment says which reference's setup it
   starts from (baseline, data, protocol) and links it in `refs` (rule 5 below). If there is
   none, say so: it is a sign a search is missing.
@@ -176,6 +183,7 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 | `rft_set_status` | change a status, optionally appending real results or the reason |
 | `rft_move_node` | move a note and its subtree under another parent, keeping its origin, after the user agrees |
 | `rft_set_refs` | replace the reference notes a note builds on (`refs:`) |
+| `rft_collect_papers` | download the open-access PDFs of reference notes into `papers/<concept>/`, in the background |
 | `rft_set_tags` | replace a note's topical tags |
 | `rft_tags` | the topical tags in use, with counts: check before inventing one |
 | `rft_set_concept` | set, rename or remove (name null) the concept a note starts, after the user confirms |
@@ -195,7 +203,8 @@ Frontmatter: `id`, `type` (`experiment` | `direction` | `reference` | `theory`),
 `tags: [<project>, <type>, <topical tags...>, <status>]`, and on a note that starts a
 concept `concept: "<name>"` and `concept_summary: "<one line>"`; a note that was moved has
 `origin: ["[[<first parent>]]", ...]`, its past parents oldest first; `refs: ["[[R03 …]]", ...]`
-lists the reference notes it builds on. Body:
+lists the reference notes it builds on; a reference whose paper was saved has
+`pdf: "[[papers/<concept>/<file>.pdf]]"`. Body:
 `# <ID> · <Title>`, the Parent / Status / Date lines (and Code / data for experiments), then the
 sections — experiments: What, Why, Result, Directions found; directions: Idea, Why, Status;
 references: Source, Summary, Method, Key results, Relevance, Directions found; theory notes:

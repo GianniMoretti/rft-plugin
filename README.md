@@ -113,6 +113,7 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_set_status` | changes a status (frontmatter, tag, Status line), optionally appending results or the reason |
   | `rft_move_node` | moves a note and its subtree under another parent, after you agree; the note keeps its past parents (`origin:`) and a dated `## History` line |
   | `rft_set_refs` | replaces the reference notes a note builds on (`refs:`); `rft_add_node` takes `refs` too |
+  | `rft_collect_papers` | downloads, in the background, the open-access PDFs of reference notes (arXiv, OpenReview, PMLR, ACL Anthology, NeurIPS/CVF proceedings, ...) into `vault/papers/<concept>/<year> <first author> <title>.pdf`, linked from each note (`pdf:`); saved PDFs follow their concept. Never from paywalled publishers |
   | `rft_set_tags` | replaces a note's topical tags (lowercase kebab-case), keeping the project, type and status tags |
   | `rft_tags` | lists the topical tags in use with counts, so Claude reuses them |
   | `rft_set_concept` | sets, renames or removes (name null) the concept a note starts, once you confirm it |
@@ -156,7 +157,7 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   in the session that ran `/rft`, so it costs no model turn and no tokens; it then opens in
   **Edit**.
 - The drawer lists the references a note **builds on**, and on a reference the notes that
-  **cite** it, each a link to its node.
+  **cite** it, each a link to its node; a reference whose paper was saved links its PDF.
 - **Move** in the drawer moves the note shown, and every note below it, under another note:
   pick it from the list (or type its id), **Move** or Enter. As with **+ Child**, the plugin
   makes the move with `rft_move_node`'s code. A moved note shows where it came from at the top

@@ -1,5 +1,5 @@
 // rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-concepts, /rft-rebalance, /rft-view), the model's
-// tools (rft_add_node, rft_set_status, rft_move_node, rft_set_refs, rft_set_tags, rft_tags, rft_tree, rft_validate, rft_sync), the operating rules
+// tools (rft_add_node, rft_set_status, rft_move_node, rft_set_refs, rft_collect_papers, rft_set_tags, rft_tags, rft_tree, rft_validate, rft_sync), the operating rules
 // injected into the system prompt, the outline pane, and the web view: /rft starts a local
 // server (server/rft_server.py) for the interactive tree page (web/), and makes the notes that
 // page adds or moves (addFromView, moveFromView). Everything is
@@ -12,8 +12,9 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { RftSnapshot } from '../types'
 import { addNode, conceptsReport, exportHtml, initVault, loadActive, moveNode, rulesText, setConcept, setRefs, setStatus, setTags, tagsReport, today, treeReport } from './lib/ops'
 import { ASSET_PATHS } from './lib/page'
-import type { Config, Io, NodeType, Tree } from './lib/vault'
-import { LEGEND, MARK, NODE_TYPES, bodyOf, counts, countsLine, isAbsolute, join, locate, readConfig, resolveId, resolvePath, rooted, signatureOf, sync, validate } from './lib/vault'
+import type { Config, Io, Loaded, NodeType, Tree } from './lib/vault'
+import { OPEN_HOSTS, planPapers } from './lib/papers'
+import { LEGEND, MARK, NODE_TYPES, bodyOf, counts, countsLine, isAbsolute, join, locate, readConfig, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
 
 const PANE = 'rft-tree'
 const TITLE = 'Reasoning tree'
@@ -118,6 +119,16 @@ const TOOLS = {
         refs: { type: 'array', items: { type: 'string' }, description: 'Ids of the reference notes (an empty list removes them).' },
       },
       required: ['id', 'refs'],
+    },
+  },
+  rft_collect_papers: {
+    description:
+      'Download the papers of reference notes into the vault, in the background: from arXiv (an arXiv id or link under Source) and from open-access proceedings (a PDF link), into papers/<concept>/<year> <first author> <title>.pdf, each linked from its note (pdf:). Also moves saved PDFs when a note\'s concept changed. Returns at once; never downloads from paywalled publishers. Use after a literature search, or when asked.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ids: { type: 'array', items: { type: 'string' }, description: 'Reference notes (ids); omit for every reference in the tree.' },
+      },
     },
   },
   rft_set_tags: {
@@ -324,6 +335,8 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       return moveNode(io, loaded, String(i.id ?? ''), String(i.parent ?? ''), today(), str(i.why))
     case 'rft_set_refs':
       return setRefs(io, loaded, String(i.id ?? ''), strings(i.refs))
+    case 'rft_collect_papers':
+      return collectPapers($, h, loaded, strings(i.ids))
     case 'rft_set_tags':
       return setTags(io, loaded, String(i.id ?? ''), strings(i.tags))
     case 'rft_set_concept':
@@ -484,6 +497,71 @@ async function moveFromView($: EngineInterface, request: string): Promise<void> 
   }
 }
 
+// ---------------------------------------------------------------- papers
+
+const PAPER = 'RFT_PAPER '
+const PAPERS_DONE = 'RFT_PAPERS_DONE '
+
+/** Starts the background download of reference papers (server/rft_papers.py); answers at once. */
+async function collectPapers($: EngineInterface, h: Here, loaded: Loaded, ids: string[]): Promise<string> {
+  const plan = planPapers(loaded, ids.map(id => resolveId(loaded.tree, id) ?? id))
+  const lines: string[] = []
+  const fetches = plan.jobs.filter(j => j.op === 'fetch').length
+  const moves = plan.jobs.length - fetches
+  if (plan.jobs.length) {
+    const args = [join($.plugin.root, 'server/rft_papers.py'), '--vault', vaultOf(h, loaded.config), '--jobs', JSON.stringify(plan.jobs), '--hosts', OPEN_HOSTS.join(',')]
+    let started = false
+    for (const python of ['python3', 'python']) {
+      try { runPapers($, h, $.process.spawn({ argv: [python, ...args] })); started = true; break } catch { /* the next one */ }
+    }
+    if (!started) throw new Error('collecting papers needs Python 3 on PATH')
+    lines.push(`Started in the background: ${fetches} paper(s) to download${moves ? `, ${moves} to move to their concept's folder` : ''}. Each note gets a pdf: link when its file is saved; a toast says when all are done.`)
+  } else lines.push('Nothing to download or move.')
+  if (plan.saved.length) lines.push(`Already saved: ${plan.saved.join(', ')}.`)
+  if (plan.skipped.length) lines.push('Not downloaded:', ...plan.skipped.map(s => `- ${s.id}: ${s.why}`))
+  return lines.join('\n')
+}
+
+/** Follows the downloader: links each saved file from its note, one note at a time, then reports. */
+function runPapers($: EngineInterface, h: Here, child: ReturnType<EngineInterface['process']['spawn']>): void {
+  let chain = Promise.resolve()
+  const failed: string[] = []
+  void (async () => {
+    let line = ''
+    try {
+      for await (const chunk of child) {
+        if (chunk.stream !== 'stdout') continue
+        const lines = (line + chunk.text).split('\n')
+        line = lines.pop()!
+        for (const l of lines) {
+          if (l.startsWith(PAPER)) {
+            const r = JSON.parse(l.slice(PAPER.length)) as { id: string; ok: boolean; file?: string; error?: string }
+            if (!r.ok) { failed.push(`${r.id} (${r.error})`); continue }
+            chain = chain.then(() => linkPaper(h, r.id, r.file!)).catch(err => { failed.push(`${r.id} (${message(err)})`) })
+          } else if (l.startsWith(PAPERS_DONE)) {
+            const d = JSON.parse(l.slice(PAPERS_DONE.length)) as { ok: number; failed: number }
+            await chain
+            $.ui.toast(`rft: ${d.ok} paper(s) saved in the vault's papers/ folder${failed.length ? `; not saved: ${failed.join(', ')}` : ''}`)
+            await refresh($, true)
+          }
+        }
+      }
+    } catch (err) {
+      $.ui.toast(`rft: collecting papers stopped (${message(err)})`)
+    }
+  })()
+}
+
+/** Writes `pdf: "[[<file>]]"` into the reference note (read afresh: the user may have edited it). */
+async function linkPaper(h: Here, id: string, file: string): Promise<void> {
+  const loaded = await loadActive(h.io)
+  const n = loaded.tree.nodes[id]
+  if (!n) return
+  const text = loaded.texts[id]!
+  const next = setField(text, 'pdf', `"[[${file}]]"`, 'tags')
+  if (next !== text) await h.io.write(join(loaded.config.vault, n.path), next)
+}
+
 async function stopServer($: EngineInterface): Promise<boolean> {
   const was = server
   server = null
@@ -579,7 +657,7 @@ async function submitPending($: EngineInterface): Promise<void> {
  * The literature search: `subject` is a topic in words, a note id or a concept name; the
  * references go under that note, the concept's start note, or the note the topic belongs to.
  */
-const literaturePrompt = (subject: string, where: string | null) => `Run a thorough literature search on ${JSON.stringify(subject)} for this project (rft-manual skill, "Literature"). ${where ? `Place the references under ${where}.` : 'First find where it belongs in the tree (rft_tree, rft_concepts): the note or concept it is about; if it opens a new field, ask me where to put it before adding notes.'} Use the search tools you have (web search, deep research, arXiv); prefer peer-reviewed papers, well-known preprints and surveys, the most cited and the most recent. Read each source before writing about it. For each key paper (usually 4 to 10), add one reference note with rft_add_node (type reference): Source with a link that can be checked (DOI, arXiv id or URL), Summary, Method, Key results as the paper reports them (with the table or section), and under Relevance what it means for this project; status done once summarised from the paper itself, planned if only found. Never invent a citation or a result. Then give me a short synthesis: what is known, what is open, which setups an experiment could start from; list the directions it suggests and ask which ones to add. Do not add directions or experiments until I say which.`
+const literaturePrompt = (subject: string, where: string | null) => `Run a thorough literature search on ${JSON.stringify(subject)} for this project (rft-manual skill, "Literature"). ${where ? `Place the references under ${where}.` : 'First find where it belongs in the tree (rft_tree, rft_concepts): the note or concept it is about; if it opens a new field, ask me where to put it before adding notes.'} Use the search tools you have (web search, deep research, arXiv); prefer peer-reviewed papers, well-known preprints and surveys, the most cited and the most recent. Read each source before writing about it. For each key paper (usually 4 to 10), add one reference note with rft_add_node (type reference): Source with a link that can be checked (DOI, arXiv id or URL), Summary, Method, Key results as the paper reports them (with the table or section), and under Relevance what it means for this project; status done once summarised from the paper itself, planned if only found. Never invent a citation or a result. Once the notes are written, call rft_collect_papers with their ids: it saves the open-access PDFs in the background. Then give me a short synthesis: what is known, what is open, which setups an experiment could start from; list the directions it suggests and ask which ones to add. Do not add directions or experiments until I say which.`
 
 /** The rebalancing request; `scope` (a concept name or a note id) narrows it to one part of the tree. */
 const rebalancePrompt = (scope: string) => `Propose a rebalancing of the reasoning tree (rft-manual skill, "Restructuring the tree")${scope ? `, limited to ${JSON.stringify(scope)} (a concept or a note: consider the branches in it, and moves into it or out of it)` : ''}. Over time some branches grow out of one line of research but belong to another: an experiment hung under the note that happened to come before it, an idea that opened a different line, a branch that would sit better under another concept. Read the tree with rft_tree and rft_concepts, then read the notes of the branches you consider (their Idea, Why, What, Result), not only the titles. For each branch that clearly belongs elsewhere, propose one move: the note to move (its subtree goes with it), its parent now, the new parent, and why in one line. Keep the tree's history in mind: a note that came out of a result stays where the reasoning produced it unless it really is part of another line; when in doubt, leave it. Moves only: if a new concept would help, say so separately (rft_set_concept, after the user agrees). Present the moves as a short numbered table, say what you would leave as it is, and ask me which moves to apply. Do not call rft_move_node until I say yes; then apply only the moves I confirm, each with its why, and finish with rft_validate.`

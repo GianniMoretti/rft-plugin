@@ -733,6 +733,16 @@
       })
       box.appendChild(row)
     }
+    if (n.pdf && !EMBED) {
+      const row = document.createElement('div')
+      const a = document.createElement('a')
+      a.textContent = `Open the paper (${n.pdf.split('/').pop()})`
+      a.href = `api/paper?id=${encodeURIComponent(n.id)}`
+      a.target = '_blank'
+      a.rel = 'noopener'
+      row.appendChild(a)
+      box.appendChild(row)
+    }
     line('Builds on ', (n.refs || []).filter(id => byId.has(id)))
     line('Cited by ', tree.nodes.filter(m => (m.refs || []).includes(n.id)).map(m => m.id))
     box.hidden = !box.childElementCount
