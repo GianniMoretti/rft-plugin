@@ -77,6 +77,8 @@ export type RftNode = {
   tags: string[]
   /** The id of its concept: the nearest ancestor (or itself) declaring one, else `root`. */
   concept: string
+  /** Its past parents, oldest first (`origin:`, written when the note is moved). */
+  origin?: string[]
 }
 
 export type Tree = {
@@ -395,6 +397,7 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
   const texts: Record<string, string> = {}
   const problems: string[] = []
   const parentRef: Record<string, string | null> = {}
+  const originRef: Record<string, string[]> = {}
   for (const [type, sub] of Object.entries(SUBDIR) as [NodeType, string][]) {
     const dir = join(config.vault, sub)
     if (!(await io.exists(dir))) continue
@@ -418,10 +421,15 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
       }
       texts[id] = text
       parentRef[id] = linkTarget(fm.parent)
+      originRef[id] = linksIn(fm.origin)
     }
   }
   const byName: Record<string, string> = {}
   for (const n of Object.values(nodes)) byName[n.name] = n.id
+  for (const n of Object.values(nodes)) {
+    const past = originRef[n.id]!.map(ref => byName[ref] ?? (nodes[idOf(ref)] ? idOf(ref) : null)).filter((id): id is string => id !== null)
+    if (past.length) n.origin = past
+  }
   for (const n of Object.values(nodes)) {
     const ref = parentRef[n.id]
     if (!ref) continue
@@ -863,6 +871,51 @@ export function withChildListed(text: string, childName: string): string {
   const start = m.index + '## Children in the tree\n'.length
   const kept = m[1]!.split('\n').filter(l => l.trim() !== '')
   return t.slice(0, start) + [...kept, line].join('\n') + '\n' + t.slice(start + m[1]!.length)
+}
+
+/** Drops `- [[child]]` from the "Children in the tree" section (the note moved elsewhere). */
+export function withChildUnlisted(text: string, childName: string): string {
+  const t = normalise(text)
+  const m = /## Children in the tree\n([\s\S]*?)(?=\n## |$)/.exec(t)
+  if (!m) return t
+  const start = m.index + '## Children in the tree\n'.length
+  const kept = m[1]!.split('\n').filter(l => !linksIn(l).includes(childName))
+  return t.slice(0, start) + kept.join('\n') + t.slice(start + m[1]!.length)
+}
+
+/**
+ * A note moved from `from` to `to` (both note names): its `parent:` and `**Parent:**` line, the
+ * old parent added at the end of `origin:` (past parents, oldest first), and a dated line under
+ * `## History`, so the reasoning that led to the note stays findable.
+ */
+export function withMove(text: string, from: string, to: string, date: string, why?: string): string {
+  let out = setField(text, 'parent', `"[[${to}]]"`)
+  const past = linksIn(front(out).origin)
+  out = setField(out, 'origin', linkList([...past, from]), 'parent')
+  out = out.replace(/(\*\*Parent:\*\*\s*)(\[\[[^\]]*\]\]|\(root\))/, `$1[[${to}]]`)
+  const line = `- ${date}: moved from [[${from}]] to [[${to}]]${why?.trim() ? ` (${why.trim().replace(/\s+/g, ' ')})` : ''}`
+  const heading = '## History'
+  const at = out.indexOf(`\n${heading}\n`)
+  if (at < 0) {
+    // before "Children in the tree", which stays the last section
+    const kids = out.indexOf('\n## Children in the tree')
+    return kids < 0
+      ? out.replace(/\n*$/, '\n\n') + `${heading}\n${line}\n`
+      : out.slice(0, kids).replace(/\n*$/, '\n\n') + `${heading}\n${line}\n` + out.slice(kids)
+  }
+  const start = at + heading.length + 2
+  const nxt = out.indexOf('\n## ', start - 1)
+  const end = nxt < 0 ? out.length : nxt
+  const sec = out.slice(start, end).replace(/\s+$/, '')
+  return out.slice(0, start) + (sec ? sec + '\n' : '') + line + '\n' + out.slice(end)
+}
+
+/** The ids of `id` and every note below it. */
+export function subtreeOf(tree: Tree, id: string): Set<string> {
+  const out = new Set<string>()
+  const go = (k: string) => { out.add(k); tree.nodes[k]?.children.forEach(go) }
+  go(id)
+  return out
 }
 
 export function resolveId(tree: Tree, ref: string | null | undefined): string | null {

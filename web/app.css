@@ -156,3 +156,9 @@ button.linkish { border: 0; background: none; color: var(--accent); padding: 0; 
 .cfocus:hover { text-decoration: underline; }
 /* a halo behind the concept tree's text, so links that pass under it stay readable */
 .cname, .ccount, .cfocus { paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
+/* where moved notes came from */
+#origins { pointer-events: none; }
+.origin { fill: none; stroke: var(--muted); stroke-width: 1.3px; stroke-dasharray: 5 5; opacity: 0.7; }
+.origin.dim { opacity: 0.12; }
+.drawer-origin { font-size: 0.9em; margin: 2px 0 4px; }
+.drawer-origin a { cursor: pointer; color: var(--fg); }

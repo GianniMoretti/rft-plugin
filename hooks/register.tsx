@@ -1,8 +1,8 @@
 // rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-view), the model's
-// tools (rft_add_node, rft_set_status, rft_set_tags, rft_tags, rft_tree, rft_validate, rft_sync), the operating rules
+// tools (rft_add_node, rft_set_status, rft_move_node, rft_set_tags, rft_tags, rft_tree, rft_validate, rft_sync), the operating rules
 // injected into the system prompt, the outline pane, and the web view: /rft starts a local
 // server (server/rft_server.py) for the interactive tree page (web/), and makes the notes that
-// page adds (addFromView). Everything is
+// page adds or moves (addFromView, moveFromView). Everything is
 // inert without `.rft/config.json` in the session's folder or a folder above it; that config
 // may be a link (`{"tree": "../notes"}`) to a tree kept elsewhere.
 
@@ -10,7 +10,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { RftSnapshot } from '../types'
-import { addNode, conceptsReport, exportHtml, initVault, loadActive, rulesText, setConcept, setStatus, setTags, tagsReport, today, treeReport } from './lib/ops'
+import { addNode, conceptsReport, exportHtml, initVault, loadActive, moveNode, rulesText, setConcept, setStatus, setTags, tagsReport, today, treeReport } from './lib/ops'
 import { ASSET_PATHS } from './lib/page'
 import type { Config, Io, NodeType, Tree } from './lib/vault'
 import { LEGEND, MARK, NODE_TYPES, bodyOf, counts, countsLine, isAbsolute, join, locate, readConfig, resolvePath, rooted, signatureOf, sync, validate } from './lib/vault'
@@ -92,6 +92,19 @@ const TOOLS = {
         note: { type: 'string', description: 'Optional text to append (real results, or the reason).' },
       },
       required: ['id', 'status'],
+    },
+  },
+  rft_move_node: {
+    description:
+      'Move a note and its whole subtree under another parent, when it belongs to another line of research. The note keeps where it came from (origin: and a dated History line), the old parent stops listing it, the new one lists it, and the index and canvas follow. Only after the user has agreed to the move.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id (e.g. E12) or full name of the note to move.' },
+        parent: { type: 'string', description: 'Id or full name of the new parent; not the note itself or a note below it.' },
+        why: { type: 'string', description: 'Optional: why it moves, a few words kept in its History line.' },
+      },
+      required: ['id', 'parent'],
     },
   },
   rft_set_tags: {
@@ -292,6 +305,8 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       })
       return `${node.report}\nId: ${node.id}\nNote: ${join(shownVault(h, loaded.config), node.path)}`
     }
+    case 'rft_move_node':
+      return moveNode(io, loaded, String(i.id ?? ''), String(i.parent ?? ''), today(), str(i.why))
     case 'rft_set_tags':
       return setTags(io, loaded, String(i.id ?? ''), strings(i.tags))
     case 'rft_set_concept':
@@ -396,6 +411,7 @@ async function spawnServer($: EngineInterface, argv: string[]): Promise<string> 
             const m = /RFT_SERVER_URL (\S+)/.exec(l)
             if (m) found(m[1]!)
             else if (l.startsWith(ADD_NODE)) void addFromView($, l.slice(ADD_NODE.length))
+            else if (l.startsWith(MOVE_NODE)) void moveFromView($, l.slice(MOVE_NODE.length))
           }
         } else err += chunk.text
       }
@@ -435,6 +451,19 @@ async function addFromView($: EngineInterface, request: string): Promise<void> {
     await refresh($, true)
   } catch (err) {
     $.ui.toast(`rft: the tree view could not add a note (${message(err)})`)
+  }
+}
+
+const MOVE_NODE = 'RFT_MOVE_NODE '
+
+/** A move the tree view asks for (POST api/move, relayed by the server): rft_move_node's code. */
+async function moveFromView($: EngineInterface, request: string): Promise<void> {
+  try {
+    const r = JSON.parse(request) as Record<string, unknown>
+    await runTool($, 'rft_move_node', { id: r.id, parent: r.parent })
+    await refresh($, true)
+  } catch (err) {
+    $.ui.toast(`rft: the tree view could not move a note (${message(err)})`)
   }
 }
 

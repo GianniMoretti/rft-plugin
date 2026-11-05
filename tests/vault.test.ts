@@ -3,7 +3,7 @@
 
 import { describe, expect, test } from 'claude-code/testing'
 
-import { addNode, initVault, setStatus, setTags, tagsReport } from '../hooks/lib/ops'
+import { addNode, initVault, moveNode, setStatus, setTags, tagsReport } from '../hooks/lib/ops'
 import { staticPage } from '../hooks/lib/page'
 import { TYPES, canvasJson, compactTree, front, load, locate, parseTags, readConfig, resolvePath, sanitiseTag, sanitiseTitle, sync, topicalTags, validate } from '../hooks/lib/vault'
 import { D00, D01, E01, E02, MemoryFs, WEB_FILES, demoFiles } from './fixture'
@@ -131,6 +131,41 @@ describe('vault', () => {
     expect(text).toContain('**Status:** done')
     expect(text).toContain('Text of E02.\nAccuracy 91.2 ± 0.4 over 3 seeds.')
     expect(fs.read('vault/00 Index.md')).toContain(`- ✓ [[${E02}]]`)
+  })
+
+  test('a move takes the subtree along, keeps where it came from and leaves the tree valid', async () => {
+    const { fs, io, loaded } = await loadDemo()
+    await sync(io, loaded)
+    const said = await moveNode(io, loaded, 'D01', 'D00', '2026-02-01', 'belongs to the root question')
+    expect(said).toContain(`Moved ${D01} and the 1 note(s) below it from ${E01} to ${D00}.`)
+    const text = fs.read(`vault/directions/${D01}.md`)
+    expect(front(text).parent).toBe(`"[[${D00}]]"`)
+    expect(front(text).origin).toBe(`["[[${E01}]]"]`)
+    expect(text).toContain(`**Parent:** [[${D00}]]`)
+    expect(text).toContain(`## History\n- 2026-02-01: moved from [[${E01}]] to [[${D00}]] (belongs to the root question)\n\n## Children in the tree`)
+    expect(fs.read(`vault/experiments/${E01}.md`)).not.toContain(`[[${D01}]]`)
+    expect(fs.read(`vault/directions/${D00}.md`)).toContain(`- [[${D01}]]`)
+    expect(loaded.tree.nodes.D01!.parent).toBe('D00')
+    expect(loaded.tree.nodes.D01!.origin).toEqual(['E01'])
+    expect(loaded.tree.nodes.E02!.parent).toBe('D01')
+    expect(loaded.tree.nodes.D00!.children).toEqual(['D01', 'E01'])
+    const v = await validate(io, loaded)
+    expect(v).toEqual({ errors: [], warnings: [] })
+    // a second move adds to the history, oldest first
+    await moveNode(io, loaded, 'D01', 'E01', '2026-02-02')
+    const again = fs.read(`vault/directions/${D01}.md`)
+    expect(front(again).origin).toBe(`["[[${E01}]]", "[[${D00}]]"]`)
+    expect(again).toContain(`(belongs to the root question)\n- 2026-02-02: moved from [[${D00}]] to [[${E01}]]\n`)
+    expect(loaded.tree.nodes.D01!.origin).toEqual(['E01', 'D00'])
+  })
+
+  test('a move refuses the root, the same parent and the note\'s own subtree', async () => {
+    const { io, loaded } = await loadDemo()
+    await expect(moveNode(io, loaded, 'D00', 'E01', '2026-02-01')).rejects.toThrow(/root of the tree/)
+    await expect(moveNode(io, loaded, 'D01', 'E01', '2026-02-01')).rejects.toThrow(/already under/)
+    await expect(moveNode(io, loaded, 'E01', 'E02', '2026-02-01')).rejects.toThrow(/own subtree/)
+    await expect(moveNode(io, loaded, 'E01', 'E01', '2026-02-01')).rejects.toThrow(/own subtree/)
+    await expect(moveNode(io, loaded, 'E01', 'D42', '2026-02-01')).rejects.toThrow(/not a note/)
   })
 
   test('validation reports broken links, bad statuses and forbidden titles', async () => {

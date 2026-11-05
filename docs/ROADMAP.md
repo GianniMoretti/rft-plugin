@@ -1,13 +1,13 @@
 # Roadmap
 
 Planned work, split into release packages in the order they should ship. Each
-package is one minor version (the current release is 0.8.0) and lists what it contains, how it
+package is one minor version (the current release is 0.9.0) and lists what it contains, how it
 could be done, and when it is done. A package builds only on the ones before it.
 
 | Version | Package | Depends on |
 |---------|---------|------------|
 | 0.8.0 | Tree view (done) | – |
-| 0.9.0 | Moving branches | – |
+| 0.9.0 | Moving branches (done) | – |
 | 0.10.0 | Rebalancing | 0.9.0 |
 | 0.11.0 | References on every node | – |
 | 0.12.0 | Literature-driven workflow | 0.11.0 |
@@ -30,7 +30,7 @@ Small changes to the page only; no change to the note format.
 Done when: a demo vault with 15+ concepts keeps the legend to one line when collapsed, and the
 concept tree renders and click-through works in all three layouts.
 
-## 0.9.0 — Moving branches
+## 0.9.0 — Moving branches (done)
 
 The basic operation the rest of the restructuring relies on.
 
@@ -39,9 +39,10 @@ The basic operation the rest of the restructuring relies on.
   parent, children, up/down fields, index and canvas follow; concepts are recomputed. Refuse a
   move under the node's own descendant.
 - **Keep the history of a move.** A moved note keeps where it came from, so the reasoning that
-  led to it is not lost: a frontmatter field `origin:` holding the past parents with dates
-  (the first entry is the parent at creation). The drawer shows them, and the page can draw
-  them as faint dashed "came from" links, toggled on and off.
+  led to it is not lost: a frontmatter field `origin:` holding the past parents, oldest first
+  (the first entry is the parent at creation), and the dates in a `## History` section. The
+  drawer shows them, and the page can draw them as faint dashed "came from" links, toggled on
+  and off.
 
 Done when: moving a branch from the page and from the tool leaves `rft_validate` clean, the
 `origin:` history is written, and the dashed links show the old position.

@@ -35,6 +35,9 @@
     <button id="view-toggle" aria-pressed="false" title="A tree whose nodes are the concepts">Concept tree</button>
   </div>
   <div class="group">
+    <button id="origins-toggle" aria-pressed="false" title="Dashed links from where each moved note came from">Came from</button>
+  </div>
+  <div class="group">
     <button id="filters-toggle" aria-expanded="false" aria-controls="filters">Filters</button>
     <span id="filter-status" class="filter-status" hidden><span id="filter-count"></span> · <button id="filters-clear" class="linkish">Clear</button></span>
   </div>
@@ -42,7 +45,7 @@
 </header>
 <nav id="crumbs" hidden aria-label="Concept focus"></nav>
 <main>
-  <svg id="canvas" aria-label="The reasoning tree"><defs><marker id="arrow" viewBox="0 -4 8 8" refX="8" refY="0" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,-4L8,0L0,4Z"></path></marker></defs><g id="viewport"><g id="regions"></g><g id="links"></g><g id="nodes"></g><g id="badges"></g></g></svg>
+  <svg id="canvas" aria-label="The reasoning tree"><defs><marker id="arrow" viewBox="0 -4 8 8" refX="8" refY="0" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,-4L8,0L0,4Z"></path></marker></defs><g id="viewport"><g id="regions"></g><g id="origins"></g><g id="links"></g><g id="nodes"></g><g id="badges"></g></g></svg>
   <svg id="concept-canvas" hidden aria-label="The concept tree"><g id="cviewport"></g></svg>
   <aside id="legend" aria-label="Legend and filter">
     <button id="legend-toggle" class="legend-toggle" aria-expanded="true" title="Show or hide the legend">Legend <span class="caret">▾</span></button>
@@ -100,6 +103,7 @@
     <div class="drawer-head">
       <span id="drawer-meta" class="muted"></span>
       <span class="drawer-actions">
+        <button id="drawer-move" hidden title="Move this note and the notes below it under another note">Move</button>
         <button id="drawer-add" hidden title="Add a direction, an experiment, a reference or a theory note under this note">+ Child</button>
         <button id="drawer-edit" hidden title="Edit the note's text (Ctrl+S saves, Esc cancels)">Edit</button>
         <button id="drawer-close" title="Close">✕</button>
@@ -123,6 +127,18 @@
         <span id="add-msg" class="muted" role="status"></span>
       </div>
     </form>
+    <form id="mover" class="adder" hidden>
+      <div class="adder-row">
+        <input id="move-to" type="text" list="move-targets" autocomplete="off" placeholder="Move under… (id or title)" aria-label="The new parent">
+        <datalist id="move-targets"></datalist>
+      </div>
+      <div class="editor-bar">
+        <button id="move-ok" type="submit" class="primary" title="Move the note and its subtree (Enter)">Move</button>
+        <button id="move-cancel" type="button" title="Esc">Cancel</button>
+        <span id="move-msg" class="muted" role="status"></span>
+      </div>
+    </form>
+    <div id="drawer-origin" class="drawer-origin muted" hidden></div>
     <article id="note"></article>
     <div id="editor" hidden>
       <textarea id="note-text" aria-label="The note's text, in markdown"></textarea>

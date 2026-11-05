@@ -1,6 +1,6 @@
 ---
 name: rft-manual
-description: Operating manual of the Reasoning Flow Tree, the tree of experiment (E..), direction (D..), reference (R..) and theory (T..) notes that records a research project's reasoning, grouped into concepts (lines of research). Use in a project with .rft/config.json whenever an experiment is planned, launched or finished, an idea or question comes up (even a rejected one), a paper or literature review is read, a definition, method or taxonomy is written down, an idea is dropped or moved, a new line of research opens (propose a concept), or the user asks about the tree, the vault, its concepts or what was tried.
+description: Operating manual of the Reasoning Flow Tree, the tree of experiment (E..), direction (D..), reference (R..) and theory (T..) notes that records a research project's reasoning, grouped into concepts (lines of research). Use in a project with .rft/config.json whenever an experiment is planned, launched or finished, an idea or question comes up (even a rejected one), a paper or literature review is read, a definition, method or taxonomy is written down, an idea is dropped or moved, a branch belongs under another note (move it), a new line of research opens (propose a concept), or the user asks about the tree, the vault, its concepts or what was tried.
 ---
 
 # Reasoning Flow Tree (rft)
@@ -111,11 +111,17 @@ concept above them belong to the project itself. Concepts are explicit, never in
    note it builds on linked under **Builds on**. Statuses: `idea` draft, `running` being worked
    out, `done` settled, `dropped` refuted.
 6. **When an idea is dropped or moved**: `rft_set_status` with `dropped` or `moved` and a `note`
-   saying why, or where it went.
-7. **Record real results only.** Never write expected, invented or rounded-up numbers; if a run
+   saying why, or where it went (`moved`: to another project or idea outside this tree).
+7. **When a branch sits under the wrong line of research** (it grew out of one note but belongs
+   under another, often another concept): propose the move to the user, and only once they agree
+   call `rft_move_node` with the note, the new parent and a few words of `why`. The whole subtree
+   moves with it; the note keeps its old parents in `origin:` and a dated line under
+   `## History`, so where the reasoning came from is not lost. Never move a note by editing its
+   `parent:` by hand: that loses the history.
+8. **Record real results only.** Never write expected, invented or rounded-up numbers; if a run
    failed, say so. Keep the numbers consistent with the project's README and result files: the
    vault is the map, the result files are the record.
-8. The vault is part of the repository: commit it with the work it describes.
+9. The vault is part of the repository: commit it with the work it describes.
 
 ## Tools
 
@@ -123,6 +129,7 @@ concept above them belong to the project itself. Concepts are explicit, never in
 |---|---|
 | `rft_add_node` | create a note (next free id, sanitised title, template sections, linked under its parent) |
 | `rft_set_status` | change a status, optionally appending real results or the reason |
+| `rft_move_node` | move a note and its subtree under another parent, keeping its origin, after the user agrees |
 | `rft_set_tags` | replace a note's topical tags |
 | `rft_tags` | the topical tags in use, with counts: check before inventing one |
 | `rft_set_concept` | set, rename or remove (name null) the concept a note starts, after the user confirms |
@@ -140,11 +147,13 @@ error. Never edit `up:` / `down:` by hand, nor the list under `## The tree` in t
 Frontmatter: `id`, `type` (`experiment` | `direction` | `reference` | `theory`), `status`, `date` (YYYY-MM-DD),
 `parent: "[[<parent name>]]"` (`""` for the root), `children`, `up`, `down`,
 `tags: [<project>, <type>, <topical tags...>, <status>]`, and on a note that starts a
-concept `concept: "<name>"` and `concept_summary: "<one line>"`. Body:
+concept `concept: "<name>"` and `concept_summary: "<one line>"`; a note that was moved has
+`origin: ["[[<first parent>]]", ...]`, its past parents oldest first. Body:
 `# <ID> · <Title>`, the Parent / Status / Date lines (and Code / data for experiments), then the
 sections — experiments: What, Why, Result, Directions found; directions: Idea, Why, Status;
 references: Source, Summary, Method, Key results, Relevance, Directions found; theory notes:
-Statement, Builds on, Explanation, Open questions, Status — and last **Children in the tree**, a list of links to the children.
+Statement, Builds on, Explanation, Open questions, Status — then **History** on a moved note
+(one dated line per move), and last **Children in the tree**, a list of links to the children.
 
 ## Status notes (optional)
 

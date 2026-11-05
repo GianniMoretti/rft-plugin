@@ -178,6 +178,10 @@ def link_target(value: str | None) -> str | None:
     return m.group(1).strip() if m else None
 
 
+def link_targets(value: str | None) -> list[str]:
+    return [m.strip() for m in re.findall(r"\[\[([^\]|#]+)", value or "")]
+
+
 class Vault:
     """The tree read from the notes' `parent:` fields, cached until a note changes."""
 
@@ -213,6 +217,7 @@ class Vault:
     def _load(self, sig: str) -> dict:
         nodes: dict[str, dict] = {}
         refs: dict[str, str | None] = {}
+        origins: dict[str, list[str]] = {}
         decl: dict[str, tuple[str, str]] = {}
         for sub, kind in SUBDIRS.items():
             d = self.root / sub
@@ -232,10 +237,15 @@ class Vault:
                               "tags": topical_tags(parse_tags(fm.get("tags")), self.project, ftype),
                               "concept": ROOT_CONCEPT}
                 refs[nid] = link_target(fm.get("parent"))
+                origins[nid] = link_targets(fm.get("origin"))
                 cname = unquote(fm.get("concept"))
                 if cname:
                     decl[nid] = (cname, unquote(fm.get("concept_summary")))
         by_name = {n["name"]: n["id"] for n in nodes.values()}
+        for n in nodes.values():
+            past = [by_name.get(r) or (id_of(r) if id_of(r) in nodes else None) for r in origins.get(n["id"], [])]
+            if any(past):
+                n["origin"] = [p for p in past if p]
         for n in nodes.values():
             ref = refs.get(n["id"])
             pid = by_name.get(ref) or (id_of(ref) if ref and id_of(ref) in nodes else None) if ref else None
@@ -352,9 +362,48 @@ class Vault:
                               "it may still appear (is the session that ran /rft still open?)"}
 
 
+    def move_node(self, nid: str, parent: str, ask) -> tuple[int, dict]:
+        """Moves a note and its subtree under `parent`, done by the session as for add_node; the
+        answer comes once the note's parent is the new one and the notes are quiet."""
+        with self._add_lock:
+            nodes = {n["id"]: n for n in self.tree()["nodes"]}
+            if nid not in nodes or parent not in nodes:
+                return 404, {"error": "no such note"}
+            if not nodes[nid]["parent"]:
+                return 400, {"error": "the root of the tree cannot move"}
+            if nodes[nid]["parent"] == parent:
+                return 400, {"error": "the note is already there"}
+            p = parent
+            while p:
+                if p == nid:
+                    return 400, {"error": "a note cannot move under its own subtree"}
+                p = nodes[p]["parent"] if p in nodes else None
+            try:
+                ask({"op": "move", "id": nid, "parent": parent})
+            except (OSError, ValueError):
+                return 503, {"error": "the Claude Code session that ran /rft is gone"}
+            deadline = time.monotonic() + NODE_WAIT_S
+            while time.monotonic() < deadline:
+                time.sleep(0.1)
+                now = next((n for n in self.tree()["nodes"] if n["id"] == nid), None)
+                if now and now["parent"] == parent:
+                    sig, quiet = self.signature(), time.monotonic()
+                    while time.monotonic() - quiet < SETTLE_S and time.monotonic() < deadline:
+                        time.sleep(0.1)
+                        if (later := self.signature()) != sig:
+                            sig, quiet = later, time.monotonic()
+                    return 200, {"id": nid, "parent": parent}
+        return 504, {"error": f"the Claude Code session did not move the note within {NODE_WAIT_S:g} s; "
+                              "is the session that ran /rft still open?"}
+
+
 def ask_session(request: dict) -> None:
-    """Hands a request to the plugin, which reads this process's stdout line by line."""
-    print(f"RFT_ADD_NODE {json.dumps(request)}", flush=True)
+    """Hands a request to the plugin, which reads this process's stdout line by line: a move
+    ({"op": "move", ...}) or a new note."""
+    if request.get("op") == "move":
+        print(f"RFT_MOVE_NODE {json.dumps({k: v for k, v in request.items() if k != 'op'})}", flush=True)
+    else:
+        print(f"RFT_ADD_NODE {json.dumps(request)}", flush=True)
 
 
 # ------------------------------------------------------------------ http
@@ -468,7 +517,16 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
 
         def do_POST(self):
             """POST api/node {"parent": "<id>", "type": one of TYPES, "title": "..."}:
-            a new note under `parent`, with the default status, made by the session."""
+            a new note under `parent`, with the default status, made by the session.
+            POST api/move {"id": "<id>", "parent": "<id>"}: the note and its subtree under `parent`."""
+            if urlsplit(self.path).path == "/api/move":
+                got = self._write_request("/api/move", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                _, req = got
+                if not all(isinstance(req.get(k), str) for k in ("id", "parent")):
+                    return self._json(400, {"error": "expected {id, parent}"})
+                return self._json(*vault.move_node(req["id"], req["parent"], ask))
             got = self._write_request("/api/node", MAX_NODE_BYTES)
             if got is None:
                 return

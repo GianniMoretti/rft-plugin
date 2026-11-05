@@ -9,7 +9,7 @@ import {
   CONFIG_PATH, ID_RE, INDEX, LEGEND, MERMAID, NODE_TYPES, STATUSES, SUBDIR, TEMPLATES, TYPES,
   MARK, ROOT_CONCEPT, compactTree, conceptOrder, conceptPath, counts, countsLine, defaultConfig, front, idOf, indexTemplate,
   isNodeType, join, load, nextId, noteText, orList, readConfig, removeField, resolveId, sanitiseTitle, setField, statusSummary,
-  sync, tagCounts, validate, withChildListed, withStatus, withTopicalTags, writeConfig,
+  subtreeOf, sync, tagCounts, validate, withChildListed, withChildUnlisted, withMove, withStatus, withTopicalTags, writeConfig,
 } from './vault'
 
 export const today = (now = new Date()) =>
@@ -277,6 +277,40 @@ export async function setStatus(io: Io, loaded: Loaded, ref: string, status: str
   return `${n.name}: ${n.status} → ${status}${note ? ' (note added)' : ''}. Updated ${report.changed.length} derived file(s).`
 }
 
+/**
+ * Moves a note and its subtree under another parent. The note keeps where it came from
+ * (`origin:` and a `## History` line); the old parent stops listing it, the new one lists it,
+ * and the derived files follow. Concepts move with their notes.
+ */
+export async function moveNode(io: Io, loaded: Loaded, ref: string, parentRef: string, date: string, why?: string): Promise<string> {
+  const { tree, config } = loaded
+  const id = resolveId(tree, ref)
+  if (!id) throw new RftError(`"${ref}" is not a note of the tree`)
+  const to = resolveId(tree, parentRef)
+  if (!to) throw new RftError(`the new parent "${parentRef}" is not a note of the tree`)
+  const n = tree.nodes[id]!
+  if (!n.parent) throw new RftError(`${n.name} is a root of the tree: it has no parent to move away from`)
+  if (n.parent === to) throw new RftError(`${n.name} is already under ${tree.nodes[to]!.name}`)
+  const sub = subtreeOf(tree, id)
+  if (sub.has(to)) throw new RftError(`${tree.nodes[to]!.name} is ${to === id ? 'the note itself' : 'below the note'}: a note cannot move under its own subtree`)
+  const old = tree.nodes[n.parent]!
+  const conceptWas = tree.concepts?.[n.concept]?.name
+  await io.write(join(config.vault, n.path), withMove(loaded.texts[id]!, old.name, tree.nodes[to]!.name, date, why))
+  const prev = loaded.texts[old.id]!
+  const next = withChildUnlisted(prev, n.name)
+  if (next !== prev) await io.write(join(config.vault, old.path), next)
+  const fresh = await load(io, config)
+  const report = await sync(io, fresh)
+  Object.assign(loaded, fresh)
+  const conceptNow = fresh.tree.concepts?.[fresh.tree.nodes[id]!.concept]?.name
+  const lines = [
+    `Moved ${n.name}${sub.size > 1 ? ` and the ${sub.size - 1} note(s) below it` : ''} from ${old.name} to ${fresh.tree.nodes[to]!.name}.`,
+    `Its origin keeps ${old.id}. Updated ${report.changed.length} derived file(s).`,
+  ]
+  if (conceptWas !== conceptNow) lines.push(`Its concept is now "${conceptNow}" (was "${conceptWas}").`)
+  return lines.join('\n')
+}
+
 // ---------------------------------------------------------------- text for the model
 
 /** `vault`: where the notes are as the session sees them, as in `rulesText`. */
@@ -311,6 +345,7 @@ The reasoning of this research project is kept as a tree of Obsidian notes in \`
 - Statuses: ${STATUSES.join(', ')}. Marks: ${LEGEND}.
 - The tools assign ids (never reused) and strip ^ # | [ ] from titles. After editing notes by hand, run rft_sync (children / up / down, 00 Index.md, the canvas) and rft_validate.
 - Concepts group the tree into lines of research: a note with \`concept:\` starts one, its subtree inherits it until a sub-concept starts. When a direction opens a new line of research, PROPOSE a short concept name to the user; apply it with rft_set_concept only after they confirm, never silently. rft_concepts shows the concept tree.
+- A branch that sits under the wrong line of research: propose moving it, and once the user agrees use rft_move_node (the subtree follows, the note keeps its origin and a History line). Never move a note by editing its parent: by hand.
 - The rft-manual skill is the full manual; rft_tree shows the current tree.
 
 The tree at the start of this session${Object.keys(tree.concepts ?? {}).length > 1 ? ', by concept (← parent, when not the line above)' : ''}:

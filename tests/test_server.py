@@ -3,7 +3,9 @@ adding a note through the session, and their safety.
 
     python3 -m unittest discover -s tests -p "test_*.py"
 """
+import contextlib
 import http.client
+import io
 import json
 import os
 import queue
@@ -377,6 +379,41 @@ class ServerTest(unittest.TestCase):
 
         self.session(gone)
         self.assertEqual(self.post({"parent": "D00", "type": "direction", "title": "Lost"})[0], 503)
+
+    def mover(self, request):
+        """The session as the server sees it for a move: the note's `parent:` now names the new one."""
+        p = self.vault / "directions" / "D01 Next idea.md"
+        before = p.read_text()
+        self.addCleanup(p.write_text, before)
+        names = {"D00": "D00 Root question", "E01": "E01 First run"}
+        p.write_text(before.replace('parent: "[[E01 First run]]"', f'parent: "[[{names[request["parent"]]}]]"\norigin: ["[[E01 First run]]"]'))
+
+    def move(self, payload, **kw):
+        return self.write("POST", "/api/move", payload, **kw)
+
+    def test_move_asks_the_session_and_answers_once_moved(self):
+        self.session(self.mover)
+        self.assertEqual(self.move({"id": "D01", "parent": "D00"}), (200, {"id": "D01", "parent": "D00"}))
+        self.assertEqual(self.asked, [{"op": "move", "id": "D01", "parent": "D00"}])
+        nodes = {n["id"]: n for n in json.loads(self.get("/api/tree")[2])["nodes"]}
+        self.assertEqual((nodes["D01"]["parent"], nodes["D01"]["origin"]), ("D00", ["E01"]))
+        self.assertNotIn("origin", nodes["E01"])
+
+    def test_move_bad_requests_reach_no_session(self):
+        self.session(self.mover)
+        for payload, status in [({"id": "D01"}, 400), ({"id": "D01", "parent": 3}, 400), ({"id": "D42", "parent": "D00"}, 404),
+                                ({"id": "D00", "parent": "E01"}, 400), ({"id": "D01", "parent": "E01"}, 400),
+                                ({"id": "E01", "parent": "D01"}, 400), ({"id": "E01", "parent": "E01"}, 400)]:
+            self.assertEqual(self.move(payload)[0], status, payload)
+        self.assertEqual(self.move({"id": "D01", "parent": "D00"}, key=None)[0], 403)
+        self.assertEqual(self.move({"id": "D01", "parent": "D00"}, origin="http://evil.example")[0], 403)
+        self.assertEqual(self.asked, [])
+
+    def test_move_line_on_stdout(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rft_server.ask_session({"op": "move", "id": "D01", "parent": "D00"})
+        self.assertEqual(out.getvalue(), 'RFT_MOVE_NODE {"id": "D01", "parent": "D00"}\n')
 
     def start(self, cache):
         """The server as the plugin runs it, its cache in `cache`: its process, port and key."""
