@@ -13,7 +13,7 @@ could be done, and when it is done. A package builds only on the ones before it.
 | 0.12.0 | Literature-driven workflow (done) | 0.11.0 |
 | 0.13.0 | Paper collection (done) | 0.11.0 |
 | 0.14.0 | Search index (done) | – |
-| 0.15.0 | Knowledge graph | 0.14.0 |
+| 0.15.0 | Knowledge graph (design note written) | 0.14.0 |
 
 ---
 
@@ -115,4 +115,6 @@ index is rebuilt after every edit.
   (notes, results, references, concepts as nodes and edges), and how it stays in sync with the
   markdown notes.
 
-Done when: scoped in a design note first; the implementation follows from it.
+Done when: scoped in a design note first; the implementation follows from it. The note is
+[design/knowledge-graph.md](design/knowledge-graph.md): it proposes an `rft_graph` query tool over
+the graph the notes already form, and a Graphiti bridge only if cross-project memory is wanted.
