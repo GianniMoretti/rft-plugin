@@ -136,6 +136,13 @@ button.linkish { border: 0; background: none; color: var(--accent); padding: 0; 
 @keyframes rft-flash-label { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
 #concept-legend .row { cursor: pointer; }
 #concept-legend .row.on { font-weight: 700; }
+#legend { max-height: calc(100% - 20px); overflow: auto; }
+.legend-toggle { border: 0; background: none; padding: 0; font: inherit; font-weight: 600; color: var(--fg); cursor: pointer; }
+#legend.closed .caret { display: inline-block; transform: rotate(-90deg); }
+#legend.closed #legend-body { display: none; }
+#concepts-list { max-height: 40vh; overflow: auto; }
+.fold { width: 1.1em; flex: none; text-align: center; color: var(--muted); cursor: pointer; }
+.fold:hover { color: var(--fg); }
 #concept-canvas { width: 100%; height: 100%; display: block; cursor: grab; }
 #concept-canvas[hidden], #canvas[hidden] { display: none; }
 .clink { fill: none; stroke: var(--link); stroke-width: 1.6px; }
@@ -147,3 +154,5 @@ button.linkish { border: 0; background: none; color: var(--accent); padding: 0; 
 .cbar-frame { fill: none; stroke: var(--line); }
 .cfocus { fill: var(--accent); font-size: calc(12px * var(--font-scale)); cursor: pointer; }
 .cfocus:hover { text-decoration: underline; }
+/* a halo behind the concept tree's text, so links that pass under it stay readable */
+.cname, .ccount, .cfocus { paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }

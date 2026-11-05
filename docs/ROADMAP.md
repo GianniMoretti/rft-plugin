@@ -1,12 +1,12 @@
 # Roadmap
 
-Planned work, not started, split into release packages in the order they should ship. Each
-package is one minor version (the current release is 0.7.0) and lists what it contains, how it
+Planned work, split into release packages in the order they should ship. Each
+package is one minor version (the current release is 0.8.0) and lists what it contains, how it
 could be done, and when it is done. A package builds only on the ones before it.
 
 | Version | Package | Depends on |
 |---------|---------|------------|
-| 0.8.0 | Tree view | – |
+| 0.8.0 | Tree view (done) | – |
 | 0.9.0 | Moving branches | – |
 | 0.10.0 | Rebalancing | 0.9.0 |
 | 0.11.0 | References on every node | – |
@@ -17,7 +17,7 @@ could be done, and when it is done. A package builds only on the ones before it.
 
 ---
 
-## 0.8.0 — Tree view
+## 0.8.0 — Tree view (done)
 
 Small changes to the page only; no change to the note format.
 
