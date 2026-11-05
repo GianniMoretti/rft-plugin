@@ -11,7 +11,8 @@ interactive tree (pan, zoom, click a node to read it) in a browser.
 - **References (R..)**: papers, methods and literature reviews that were read: a summary, a
   source that can be checked, and what they mean for the project. Experiments and directions
   link the references they build on (`refs:`), so every result can be traced to the papers
-  behind it.
+  behind it. When the work turns to a new field or concept, Claude offers a literature search
+  first (`/rft-literature` asks for one directly).
 - **Theory (T..)**: the project's own definitions, methods, taxonomies and arguments, built on
   the directions, experiments and references.
 - **Concepts**: named lines of research. A note can start one, and its subtree belongs to it
@@ -242,6 +243,7 @@ d3 (ISC licence, `web/vendor/LICENSE-d3.txt`) is bundled, so the page needs no n
 | `/rft-init [starting question]` | activate RFT here and create (or adopt) the vault |
 | `/rft-concepts` | print the concept tree |
 | `/rft-concepts suggest` | ask Claude to propose a concept split; nothing changes until you confirm |
+| `/rft-literature <topic, id or concept>` | ask Claude for a literature search: one reference note per key paper read, under the note or concept it is about, then a synthesis and the directions it suggests (added only once you choose) |
 | `/rft-rebalance [concept or id]` | ask Claude to propose moving branches under the line of research they belong to, as a table of moves; only the ones you confirm are made, each keeping its origin |
 | `/rft-view` | write `vault/tree.html`: the same tree view as one standalone file, every note inside, to open anywhere or share |
 

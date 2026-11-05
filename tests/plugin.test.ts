@@ -18,7 +18,7 @@ describe('activation', () => {
     const w = world(on, {})
     on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.commands).toEqual(['rft', 'rft-init', 'rft-concepts', 'rft-rebalance', 'rft-view'])
+    expect(w.commands).toEqual(['rft', 'rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-view'])
     expect(w.tools).toEqual([])
     expect(w.opened).toEqual([])
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
@@ -49,7 +49,7 @@ describe('activation', () => {
     const w = world(on, demoFiles(), { refuse: ['rft'] })
     on('prompt.compose', () => ({ sections: [] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.commands).toEqual(['rft-init', 'rft-concepts', 'rft-rebalance', 'rft-view'])
+    expect(w.commands).toEqual(['rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-view'])
     expect(w.tools).toHaveLength(11)
     expect(w.opened).toEqual(['rft-tree'])
     expect(w.toasts.join()).toContain('/rft')
@@ -59,7 +59,7 @@ describe('activation', () => {
 
   test('no command takes the name of the plugin skill', async () => {
     // a plugin skill named <x> is the command /rft:<x>; the engine refuses a command of the same name
-    expect(['rft', 'rft-init', 'rft-concepts', 'rft-rebalance', 'rft-view']).not.toContain(SKILL)
+    expect(['rft', 'rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-view']).not.toContain(SKILL)
   })
 
   test('autoOpen off keeps the pane closed', { options: { autoOpen: false } }, async ($, on) => {
@@ -134,6 +134,25 @@ describe('concepts', () => {
     expect(prompts).toHaveLength(1)
     expect(prompts[0]).toContain('Do not call rft_set_concept until I say yes')
     expect(w.fs.read(`vault/directions/${D01}.md`)).toBe(before)
+  })
+
+  test('/rft-literature places the search under a note or a concept, or asks where for a bare topic', async ($, on) => {
+    const clock = mock.clock(on)
+    const w = world(on, demoFiles())
+    const prompts: string[] = []
+    on('prompt.submit', (_$, e) => { prompts.push(String(e.text)); return { text: e.text } as never })
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const run = (args: string) => $.command.run({ command: 'rft-literature', args, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } } as never)
+    expect((await run('')).text).toContain('Usage')
+    expect((await run('D01')).text).toContain(D01)
+    await clock.advance(5000)
+    expect(prompts[0]).toContain(`Place the references under ${D01}.`)
+    expect(prompts[0]).toContain('Never invent a citation')
+    await run('label smoothing')
+    await clock.advance(5000)
+    expect(prompts[1]).toContain('"label smoothing"')
+    expect(prompts[1]).toContain('ask me where to put it')
+    expect(w.fs.read(`vault/directions/${D01}.md`)).toBe(demoFiles()[`vault/directions/${D01}.md`])
   })
 
   test('/rft-rebalance asks Claude for moves to confirm, optionally in one part of the tree, and moves nothing', async ($, on) => {

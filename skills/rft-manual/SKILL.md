@@ -1,6 +1,6 @@
 ---
 name: rft-manual
-description: Operating manual of the Reasoning Flow Tree, the tree of experiment (E..), direction (D..), reference (R..) and theory (T..) notes that records a research project's reasoning, grouped into concepts (lines of research). Use in a project with .rft/config.json whenever an experiment is planned, launched or finished, an idea or question comes up (even a rejected one), a paper or literature review is read, a definition, method or taxonomy is written down, an idea is dropped or moved, a branch belongs under another note (move it), a new line of research opens (propose a concept), or the user asks about the tree, the vault, its concepts or what was tried.
+description: Operating manual of the Reasoning Flow Tree, the tree of experiment (E..), direction (D..), reference (R..) and theory (T..) notes that records a research project's reasoning, grouped into concepts (lines of research). Use in a project with .rft/config.json whenever an experiment is planned, launched or finished, an idea or question comes up (even a rejected one), a paper or literature review is read, a new field comes up (offer a literature search first), a definition, method or taxonomy is written down, an idea is dropped or moved, a branch belongs under another note (move it), a new line of research opens (propose a concept), or the user asks about the tree, the vault, its concepts or what was tried.
 ---
 
 # Reasoning Flow Tree (rft)
@@ -86,6 +86,28 @@ concept above them belong to the project itself. Concepts are explicit, never in
   one, and `name: null` removes it. `/rft-concepts suggest` asks you to propose a full split:
   answer with a short table (start note, name, summary, what stays in the root) and wait for
   the user's yes before applying anything.
+
+## Literature
+
+The tree should start from what is already known, not from scratch.
+
+- **A new field: ask first.** When the work turns to a field, method or question the tree does
+  not cover yet (no reference or concept about it), ask the user whether to run a thorough
+  literature search before planning experiments. Do not start the search unasked: it takes
+  time.
+- **A new concept: offer a search.** When you propose a concept, offer a literature search for
+  it; once agreed, its reference notes go under the concept's start note.
+- **`/rft-literature <topic, note id or concept>`** asks for the search directly. Search with the
+  tools you have (web search, deep research, arXiv); read each source before writing about it;
+  add one reference note per key paper (usually 4 to 10) under the note or concept it is about,
+  with **Source** (DOI, arXiv id or URL), **Summary**, **Method**, **Key results** as reported
+  and **Relevance**; `done` once summarised from the paper itself, `planned` if only found.
+  Then give a short synthesis (known, open, setups to start from) and list the directions it
+  suggests: add them only once the user chooses.
+- **Experiments start from a paper.** A proposed experiment says which reference's setup it
+  starts from (baseline, data, protocol) and links it in `refs` (rule 5 below). If there is
+  none, say so: it is a sign a search is missing.
+- Never invent a citation, an author, a year or a result.
 
 ## Restructuring the tree
 

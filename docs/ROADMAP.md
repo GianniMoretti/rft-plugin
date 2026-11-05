@@ -1,7 +1,7 @@
 # Roadmap
 
 Planned work, split into release packages in the order they should ship. Each
-package is one minor version (the current release is 0.11.0) and lists what it contains, how it
+package is one minor version (the current release is 0.12.0) and lists what it contains, how it
 could be done, and when it is done. A package builds only on the ones before it.
 
 | Version | Package | Depends on |
@@ -10,7 +10,7 @@ could be done, and when it is done. A package builds only on the ones before it.
 | 0.9.0 | Moving branches (done) | – |
 | 0.10.0 | Rebalancing (done) | 0.9.0 |
 | 0.11.0 | References on every node (done) | – |
-| 0.12.0 | Literature-driven workflow | 0.11.0 |
+| 0.12.0 | Literature-driven workflow (done) | 0.11.0 |
 | 0.13.0 | Paper collection | 0.11.0 |
 | 0.14.0 | Search index | – |
 | 0.15.0 | Knowledge graph | 0.14.0 |
@@ -71,7 +71,7 @@ The data side of the literature work: where references live and how they are che
 Done when: `rft_add_node` accepts refs, the validator warns on nodes without them, and the
 drawer links to the R notes.
 
-## 0.12.0 — Literature-driven workflow
+## 0.12.0 — Literature-driven workflow (done)
 
 Mostly changes to the manual (`rft-manual`), so Claude behaves this way in every project.
 
@@ -80,6 +80,7 @@ Mostly changes to the manual (`rft-manual`), so Claude behaves this way in every
   starts from prior results instead of from scratch. The search ends in R notes.
 - **A literature search when a concept opens.** Proposing a new concept comes with the offer of
   a search; its R notes are placed under the concept.
+- **`/rft-literature <topic, note id or concept>`** asks for a search directly.
 
 Done when: in a test project, opening a new field and a new concept each lead Claude to offer
 a search, and the results land as R notes linked to the right nodes.
