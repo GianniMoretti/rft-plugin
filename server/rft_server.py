@@ -218,6 +218,7 @@ class Vault:
         nodes: dict[str, dict] = {}
         refs: dict[str, str | None] = {}
         origins: dict[str, list[str]] = {}
+        refs_of: dict[str, list[str]] = {}
         decl: dict[str, tuple[str, str]] = {}
         for sub, kind in SUBDIRS.items():
             d = self.root / sub
@@ -238,14 +239,19 @@ class Vault:
                               "concept": ROOT_CONCEPT}
                 refs[nid] = link_target(fm.get("parent"))
                 origins[nid] = link_targets(fm.get("origin"))
+                refs_of[nid] = link_targets(fm.get("refs"))
                 cname = unquote(fm.get("concept"))
                 if cname:
                     decl[nid] = (cname, unquote(fm.get("concept_summary")))
         by_name = {n["name"]: n["id"] for n in nodes.values()}
+        def ids(names):
+            return [i for i in (by_name.get(r) or (id_of(r) if id_of(r) in nodes else None) for r in names) if i]
+
         for n in nodes.values():
-            past = [by_name.get(r) or (id_of(r) if id_of(r) in nodes else None) for r in origins.get(n["id"], [])]
-            if any(past):
-                n["origin"] = [p for p in past if p]
+            for key, names in (("origin", origins), ("refs", refs_of)):
+                found = ids(names.get(n["id"], []))
+                if found:
+                    n[key] = found
         for n in nodes.values():
             ref = refs.get(n["id"])
             pid = by_name.get(ref) or (id_of(ref) if ref and id_of(ref) in nodes else None) if ref else None

@@ -107,7 +107,8 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 
 1. **Before launching an experiment**, create its node: `rft_add_node` with `type: experiment`,
    `parent` = the direction it tests, `status` `planned` (or `running` if it starts now),
-   `what` / `why` filled and its topical `tags`. Do this *before* starting the run, not after.
+   `what` / `why` filled, its topical `tags`, and `refs`: the reference(s) whose setup it starts
+   from (baseline, data, protocol). Do this *before* starting the run, not after.
 2. **When it finishes or gives a partial result**: edit its note to fill **Result** (numbers with
    spread over seeds, what failed and why, caveats), **Directions found**, and **Code / data**
    (commit, script, results folder, machine); then `rft_set_status` (`done`, or keep `running`
@@ -122,22 +123,28 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
    project's reading under **Relevance**. Only sources actually read: never invent a citation,
    nor a result the source does not report. Statuses: `planned` to read, `running` reading,
    `done` summarised, `dropped` not relevant (the `note` argument appends to Relevance).
-5. **When a definition, method, taxonomy or argument of the project's own is written down**:
+5. **References on every node.** Experiments and directions name what they build on in `refs:`
+   (links to R notes): `refs` in `rft_add_node`, or `rft_set_refs` later. A paper that is not in
+   the tree yet becomes a reference note first (rule 4). A free-text `## References` section in
+   the body is fine for sources that do not deserve a note. When the config has
+   `"requireRefs": true` (new vaults), `rft_validate` warns about experiments and directions in
+   work with no refs; rejected, dropped and moved ones need none.
+6. **When a definition, method, taxonomy or argument of the project's own is written down**:
    `rft_add_node` with `type: theory`, `parent` = the note it builds on most, and every other
    note it builds on linked under **Builds on**. Statuses: `idea` draft, `running` being worked
    out, `done` settled, `dropped` refuted.
-6. **When an idea is dropped or moved**: `rft_set_status` with `dropped` or `moved` and a `note`
+7. **When an idea is dropped or moved**: `rft_set_status` with `dropped` or `moved` and a `note`
    saying why, or where it went (`moved`: to another project or idea outside this tree).
-7. **When a branch sits under the wrong line of research** (it grew out of one note but belongs
+8. **When a branch sits under the wrong line of research** (it grew out of one note but belongs
    under another, often another concept): propose the move to the user, and only once they agree
    call `rft_move_node` with the note, the new parent and a few words of `why`. The whole subtree
    moves with it; the note keeps its old parents in `origin:` and a dated line under
    `## History`, so where the reasoning came from is not lost. Never move a note by editing its
    `parent:` by hand: that loses the history.
-8. **Record real results only.** Never write expected, invented or rounded-up numbers; if a run
+9. **Record real results only.** Never write expected, invented or rounded-up numbers; if a run
    failed, say so. Keep the numbers consistent with the project's README and result files: the
    vault is the map, the result files are the record.
-9. The vault is part of the repository: commit it with the work it describes.
+10. The vault is part of the repository: commit it with the work it describes.
 
 ## Tools
 
@@ -146,6 +153,7 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 | `rft_add_node` | create a note (next free id, sanitised title, template sections, linked under its parent) |
 | `rft_set_status` | change a status, optionally appending real results or the reason |
 | `rft_move_node` | move a note and its subtree under another parent, keeping its origin, after the user agrees |
+| `rft_set_refs` | replace the reference notes a note builds on (`refs:`) |
 | `rft_set_tags` | replace a note's topical tags |
 | `rft_tags` | the topical tags in use, with counts: check before inventing one |
 | `rft_set_concept` | set, rename or remove (name null) the concept a note starts, after the user confirms |
@@ -164,7 +172,8 @@ Frontmatter: `id`, `type` (`experiment` | `direction` | `reference` | `theory`),
 `parent: "[[<parent name>]]"` (`""` for the root), `children`, `up`, `down`,
 `tags: [<project>, <type>, <topical tags...>, <status>]`, and on a note that starts a
 concept `concept: "<name>"` and `concept_summary: "<one line>"`; a note that was moved has
-`origin: ["[[<first parent>]]", ...]`, its past parents oldest first. Body:
+`origin: ["[[<first parent>]]", ...]`, its past parents oldest first; `refs: ["[[R03 …]]", ...]`
+lists the reference notes it builds on. Body:
 `# <ID> · <Title>`, the Parent / Status / Date lines (and Code / data for experiments), then the
 sections — experiments: What, Why, Result, Directions found; directions: Idea, Why, Status;
 references: Source, Summary, Method, Key results, Relevance, Directions found; theory notes:

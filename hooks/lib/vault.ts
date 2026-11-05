@@ -79,6 +79,8 @@ export type RftNode = {
   concept: string
   /** Its past parents, oldest first (`origin:`, written when the note is moved). */
   origin?: string[]
+  /** The notes it builds on, usually references (`refs:`). */
+  refs?: string[]
 }
 
 export type Tree = {
@@ -123,6 +125,8 @@ export type Config = {
   lastId: Record<string, number>
   /** The web view's port; 0 or absent: a free one. */
   webPort?: number
+  /** Warn about experiments and directions with no `refs:` (on for new vaults, off for adopted ones). */
+  requireRefs?: boolean
 }
 
 export type Io = {
@@ -398,6 +402,7 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
   const problems: string[] = []
   const parentRef: Record<string, string | null> = {}
   const originRef: Record<string, string[]> = {}
+  const refsRef: Record<string, string[]> = {}
   for (const [type, sub] of Object.entries(SUBDIR) as [NodeType, string][]) {
     const dir = join(config.vault, sub)
     if (!(await io.exists(dir))) continue
@@ -422,13 +427,17 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
       texts[id] = text
       parentRef[id] = linkTarget(fm.parent)
       originRef[id] = linksIn(fm.origin)
+      refsRef[id] = linksIn(fm.refs)
     }
   }
   const byName: Record<string, string> = {}
   for (const n of Object.values(nodes)) byName[n.name] = n.id
+  const idsOf = (refs: string[]) => refs.map(ref => byName[ref] ?? (nodes[idOf(ref)] ? idOf(ref) : null)).filter((id): id is string => id !== null)
   for (const n of Object.values(nodes)) {
-    const past = originRef[n.id]!.map(ref => byName[ref] ?? (nodes[idOf(ref)] ? idOf(ref) : null)).filter((id): id is string => id !== null)
+    const past = idsOf(originRef[n.id]!)
     if (past.length) n.origin = past
+    const refs = idsOf(refsRef[n.id]!)
+    if (refs.length) n.refs = refs
   }
   for (const n of Object.values(nodes)) {
     const ref = parentRef[n.id]
@@ -742,6 +751,10 @@ async function allFiles(io: Io, dir: string, rel = ''): Promise<string[]> {
   return out
 }
 
+/** Experiments and directions being or done carry references; rejected or moved ones need none. */
+export const needsRefs = (n: RftNode) =>
+  (n.type === 'experiment' || n.type === 'direction') && !['discussed', 'dropped', 'moved'].includes(n.status)
+
 export async function validate(io: Io, loaded: Loaded): Promise<Validation> {
   const { config, tree, texts } = loaded
   const errors = [...loaded.problems]
@@ -774,6 +787,11 @@ export async function validate(io: Io, loaded: Loaded): Promise<Validation> {
       if (!cname) errors.push(`${n.id}: \`concept:\` is empty (give the concept a name, or remove the field)`)
       else if (/[\^#|[\]]/.test(cname)) errors.push(`${n.id}: concept name "${cname}" contains ^ # | [ or ]`)
     } else if (fm.concept_summary !== undefined) warnings.push(`${n.id}: concept_summary without concept`)
+    const notRefs = (n.refs ?? []).filter(r => tree.nodes[r]!.type !== 'reference')
+    if (notRefs.length) warnings.push(`${n.id}: refs ${notRefs.join(', ')} ${notRefs.length === 1 ? 'is not a reference' : 'are not references'} (R notes)`)
+    if (config.requireRefs && needsRefs(n) && !(n.refs ?? []).length && n.parent) {
+      warnings.push(`${n.id}: no references (refs:) — name the paper(s) it builds on with rft_set_refs, or add them first as R notes`)
+    }
     const odd = n.tags.filter(t => !isKebab(t))
     if (odd.length) warnings.push(`${n.id}: tag(s) ${odd.join(', ')} not lowercase kebab-case (rft_set_tags fixes them)`)
     if (!/^\d{4}-\d{2}-\d{2}$/.test(n.date)) warnings.push(`${n.path}: date "${n.date}" is not YYYY-MM-DD`)
@@ -824,6 +842,8 @@ export type NewNode = {
   code?: string
   /** Topical tags, sanitised to kebab-case. */
   tags?: string[]
+  /** Names of the notes it builds on (references). */
+  refs?: string[]
 }
 
 /** `taken`: ids in use beyond the loaded ones, e.g. notes another session added since. */
@@ -849,7 +869,7 @@ export function noteText(id: string, n: NewNode, project: string, parentName: st
   const head = [
     '---', `id: ${id}`, `type: ${n.type}`, `status: ${status}`, `date: ${n.date}`,
     `parent: ${parentName ? `"[[${parentName}]]"` : '""'}`, 'children: []', 'up: ""', 'down: []',
-    `tags: ${tagsLine(project, n.type, topical, status)}`, '---', '',
+    `tags: ${tagsLine(project, n.type, topical, status)}`, ...(n.refs?.length ? [`refs: ${linkList(n.refs)}`] : []), '---', '',
     `# ${id} · ${n.title}`, '',
     `**Parent:** ${parentLink}  `,
     `**Status:** ${status} · **Date:** ${n.date}${t.code ? '  ' : ''}`,
@@ -871,6 +891,11 @@ export function withChildListed(text: string, childName: string): string {
   const start = m.index + '## Children in the tree\n'.length
   const kept = m[1]!.split('\n').filter(l => l.trim() !== '')
   return t.slice(0, start) + [...kept, line].join('\n') + '\n' + t.slice(start + m[1]!.length)
+}
+
+/** Sets `refs:` (note names); an empty list removes the field. */
+export function withRefs(text: string, names: string[]): string {
+  return names.length ? setField(text, 'refs', linkList(names), 'tags') : removeField(text, 'refs')
 }
 
 /** Drops `- [[child]]` from the "Children in the tree" section (the note moved elsewhere). */

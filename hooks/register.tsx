@@ -1,5 +1,5 @@
 // rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-concepts, /rft-rebalance, /rft-view), the model's
-// tools (rft_add_node, rft_set_status, rft_move_node, rft_set_tags, rft_tags, rft_tree, rft_validate, rft_sync), the operating rules
+// tools (rft_add_node, rft_set_status, rft_move_node, rft_set_refs, rft_set_tags, rft_tags, rft_tree, rft_validate, rft_sync), the operating rules
 // injected into the system prompt, the outline pane, and the web view: /rft starts a local
 // server (server/rft_server.py) for the interactive tree page (web/), and makes the notes that
 // page adds or moves (addFromView, moveFromView). Everything is
@@ -10,7 +10,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { RftSnapshot } from '../types'
-import { addNode, conceptsReport, exportHtml, initVault, loadActive, moveNode, rulesText, setConcept, setStatus, setTags, tagsReport, today, treeReport } from './lib/ops'
+import { addNode, conceptsReport, exportHtml, initVault, loadActive, moveNode, rulesText, setConcept, setRefs, setStatus, setTags, tagsReport, today, treeReport } from './lib/ops'
 import { ASSET_PATHS } from './lib/page'
 import type { Config, Io, NodeType, Tree } from './lib/vault'
 import { LEGEND, MARK, NODE_TYPES, bodyOf, counts, countsLine, isAbsolute, join, locate, readConfig, resolvePath, rooted, signatureOf, sync, validate } from './lib/vault'
@@ -77,6 +77,7 @@ const TOOLS = {
         code: { type: 'string', description: 'Experiment: commit, script, results folder, machine.' },
         sections: { type: 'object', additionalProperties: { type: 'string' }, description: 'Other sections by heading, e.g. {"Status": "..."}. A reference has Source, Summary, Method, Key results, Relevance; a theory note Statement, Builds on, Explanation, Open questions.' },
         tags: { type: 'array', items: { type: 'string' }, description: '1-3 short topical tags, lowercase kebab-case, reused from rft_tags when they fit (the project, type and status tags are added anyway).' },
+        refs: { type: 'array', items: { type: 'string' }, description: 'Ids of the reference notes (R..) it builds on: for an experiment, the paper(s) whose setup it starts from; for a direction, the work it extends. Add missing references first.' },
       },
       required: ['type', 'title'],
     },
@@ -105,6 +106,18 @@ const TOOLS = {
         why: { type: 'string', description: 'Optional: why it moves, a few words kept in its History line.' },
       },
       required: ['id', 'parent'],
+    },
+  },
+  rft_set_refs: {
+    description:
+      'Replace the references a note builds on (refs: in its frontmatter, links to R notes): the paper(s) behind an experiment\'s setup or a direction\'s idea. Add a missing paper first as a reference note.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id (e.g. E12) or full name of the note.' },
+        refs: { type: 'array', items: { type: 'string' }, description: 'Ids of the reference notes (an empty list removes them).' },
+      },
+      required: ['id', 'refs'],
     },
   },
   rft_set_tags: {
@@ -302,12 +315,14 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       if (str(i.result)) sections.Result = String(i.result)
       const node = await addNode(io, loaded, {
         type: i.type as NodeType, title: String(i.title ?? ''), parent: str(i.parent) ?? null,
-        status: str(i.status), date: today(), sections, code: str(i.code), tags: strings(i.tags),
+        status: str(i.status), date: today(), sections, code: str(i.code), tags: strings(i.tags), refs: strings(i.refs),
       })
       return `${node.report}\nId: ${node.id}\nNote: ${join(shownVault(h, loaded.config), node.path)}`
     }
     case 'rft_move_node':
       return moveNode(io, loaded, String(i.id ?? ''), String(i.parent ?? ''), today(), str(i.why))
+    case 'rft_set_refs':
+      return setRefs(io, loaded, String(i.id ?? ''), strings(i.refs))
     case 'rft_set_tags':
       return setTags(io, loaded, String(i.id ?? ''), strings(i.tags))
     case 'rft_set_concept':

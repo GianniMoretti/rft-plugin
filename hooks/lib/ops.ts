@@ -9,7 +9,7 @@ import {
   CONFIG_PATH, ID_RE, INDEX, LEGEND, MERMAID, NODE_TYPES, STATUSES, SUBDIR, TEMPLATES, TYPES,
   MARK, ROOT_CONCEPT, compactTree, conceptOrder, conceptPath, counts, countsLine, defaultConfig, front, idOf, indexTemplate,
   isNodeType, join, load, nextId, noteText, orList, readConfig, removeField, resolveId, sanitiseTitle, setField, statusSummary,
-  subtreeOf, sync, tagCounts, validate, withChildListed, withChildUnlisted, withMove, withStatus, withTopicalTags, writeConfig,
+  subtreeOf, sync, tagCounts, validate, withChildListed, withChildUnlisted, withMove, withRefs, withStatus, withTopicalTags, writeConfig,
 } from './vault'
 
 export const today = (now = new Date()) =>
@@ -38,6 +38,8 @@ export async function initVault(io: Io, opts: { project: string; question: strin
   }
   const config = defaultConfig(opts.project)
   if (opts.vault) config.vault = opts.vault
+  // a new tree asks for references from the start; an adopted one opts in later
+  config.requireRefs = true
   const v = config.vault
   let hasNotes = false
   for (const sub of Object.values(SUBDIR)) {
@@ -52,6 +54,7 @@ export async function initVault(io: Io, opts: { project: string; question: strin
   }
   for (const t of NODE_TYPES) await ensure(`templates/_${t}.md`, TEMPLATES[t](opts.project))
   if (hasNotes) {
+    delete config.requireRefs
     config.mermaid = await io.exists(join(v, MERMAID))
     const loaded = await load(io, config)
     // the project's name as the notes already spell it: the most common first tag
@@ -106,6 +109,19 @@ export type AddInput = {
   sections?: Record<string, string>
   code?: string
   tags?: string[]
+  /** Ids or names of the notes it builds on (references). */
+  refs?: string[]
+}
+
+/** Note names for references given by id or name; unknown ones refused. */
+function refNames(tree: Tree, refs: string[]): string[] {
+  const out: string[] = []
+  for (const r of refs) {
+    const id = resolveId(tree, r)
+    if (!id) throw new RftError(`reference "${r}" is not a note of the tree (add it first with rft_add_node, type reference)`)
+    if (!out.includes(tree.nodes[id]!.name)) out.push(tree.nodes[id]!.name)
+  }
+  return out
 }
 
 export async function addNode(io: Io, loaded: Loaded, input: AddInput): Promise<RftNode & { report: string }> {
@@ -132,7 +148,8 @@ export async function addNode(io: Io, loaded: Loaded, input: AddInput): Promise<
   const name = `${id} ${title}`
   const path = `${SUBDIR[input.type]}/${name}.md`
   const parentName = parent ? tree.nodes[parent]!.name : null
-  const text = noteText(id, { ...input, title, status }, config.project, parentName)
+  const refs = refNames(tree, input.refs ?? [])
+  const text = noteText(id, { ...input, title, status, refs }, config.project, parentName)
   await io.write(join(config.vault, path), text)
   const prefix = TYPES[input.type].prefix
   config.lastId[prefix] = Math.max(config.lastId[prefix] ?? 0, Number(id.slice(1)))
@@ -169,6 +186,21 @@ export async function setTags(io: Io, loaded: Loaded, ref: string, tags: string[
   Object.assign(loaded, fresh)
   const now = fresh.tree.nodes[id]!.tags
   return `${n.name}: tags ${now.length ? now.join(', ') : '(none)'}${n.tags.join() !== now.join() ? ` (were ${n.tags.join(', ') || 'none'})` : ''}.`
+}
+
+/** Replaces the notes a note builds on (`refs:`); an empty list removes them. */
+export async function setRefs(io: Io, loaded: Loaded, ref: string, refs: string[]): Promise<string> {
+  const id = resolveId(loaded.tree, ref)
+  if (!id) throw new RftError(`"${ref}" is not a note of the tree`)
+  const n = loaded.tree.nodes[id]!
+  const names = refNames(loaded.tree, refs)
+  if (names.includes(n.name)) throw new RftError(`${n.name} cannot reference itself`)
+  await io.write(join(loaded.config.vault, n.path), withRefs(loaded.texts[id]!, names))
+  const fresh = await load(io, loaded.config)
+  Object.assign(loaded, fresh)
+  const odd = (fresh.tree.nodes[id]!.refs ?? []).filter(r => fresh.tree.nodes[r]!.type !== 'reference')
+  return `${n.name}: ${names.length ? `refs ${names.map(x => idOf(x)).join(', ')}` : 'no refs'}.` +
+    (odd.length ? ` Note: ${odd.join(', ')} ${odd.length === 1 ? 'is' : 'are'} not a reference.` : '')
 }
 
 // ---------------------------------------------------------------- concepts
@@ -341,6 +373,7 @@ The reasoning of this research project is kept as a tree of Obsidian notes in \`
 - Every new idea or question, from a result, a reference, the user or a discussion, even if rejected: rft_add_node with type direction, parent = the note it comes from. Rejected ideas get status discussed; abandoned ones dropped; moved ones moved, with the reason (rft_set_status note).
 - A paper, method or literature review that was read: rft_add_node with type reference, parent = the note that led to it (a review may hold one reference per key paper). Fill Source with a link that can be checked (DOI, arXiv id or URL), Summary, Method, Key results as the source reports them (and where), and your reading under Relevance. Only sources actually read: never invent a citation, or a result the source does not report. Status planned = to read, running = reading, done = summarised, dropped = not relevant.
 - A definition, method, taxonomy, proof or argument of the project's own: rft_add_node with type theory, parent = the note it builds on most, every other note it builds on linked under Builds on. Status idea = draft, running = being worked out, done = settled, dropped = refuted.
+- Experiments and directions name what they build on: refs (rft_add_node's refs, or rft_set_refs) links the reference notes (R..) behind them, above all the paper(s) whose setup an experiment starts from (baseline, data, protocol). A paper that is not in the tree yet becomes a reference note first.
 - Give every new note 1-3 short topical tags (lowercase kebab-case, e.g. \`ablation\`, \`optimisation\`), reusing the ones rft_tags lists before inventing new ones; rft_set_tags changes them. Do not retro-tag old notes unless asked.
 - Statuses: ${STATUSES.join(', ')}. Marks: ${LEGEND}.
 - The tools assign ids (never reused) and strip ^ # | [ ] from titles. After editing notes by hand, run rft_sync (children / up / down, 00 Index.md, the canvas) and rft_validate.

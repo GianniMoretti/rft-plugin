@@ -397,6 +397,7 @@
     drawer.hidden = false
     renderConceptPath(document.getElementById('drawer-concept'), n.concept, 'Focus on this concept')
     renderOrigin(n)
+    renderRefs(n)
     document.getElementById('drawer-meta').textContent = `${n.type} · ${MARK[n.status] || ''} ${n.status}${n.date ? ' · ' + n.date : ''}${n.tags && n.tags.length ? ' · #' + n.tags.join(' #') : ''}`
     const article = document.getElementById('note')
     article.innerHTML = '<p class="missing">Loading…</p>'
@@ -712,6 +713,29 @@
       box.appendChild(a)
     })
     box.append(' → here')
+  }
+
+  /** The notes it builds on (`refs:`), and for a reference the notes that cite it, as links. */
+  function renderRefs(n) {
+    const box = document.getElementById('drawer-refs')
+    box.innerHTML = ''
+    const line = (label, ids) => {
+      if (!ids.length) return
+      const row = document.createElement('div')
+      row.append(label)
+      ids.forEach((id, i) => {
+        if (i) row.append(', ')
+        const a = document.createElement('a')
+        a.textContent = byId.get(id).name
+        a.title = 'Go to this note'
+        a.addEventListener('click', ev => { ev.preventDefault(); go(id) })
+        row.appendChild(a)
+      })
+      box.appendChild(row)
+    }
+    line('Builds on ', (n.refs || []).filter(id => byId.has(id)))
+    line('Cited by ', tree.nodes.filter(m => (m.refs || []).includes(n.id)).map(m => m.id))
+    box.hidden = !box.childElementCount
   }
 
   function syncOriginsButton() {

@@ -399,6 +399,15 @@ class ServerTest(unittest.TestCase):
         self.assertEqual((nodes["D01"]["parent"], nodes["D01"]["origin"]), ("D00", ["E01"]))
         self.assertNotIn("origin", nodes["E01"])
 
+    def test_refs_are_read_as_ids(self):
+        p = self.vault / "directions" / "D01 Next idea.md"
+        before = p.read_text()
+        self.addCleanup(p.write_text, before)
+        p.write_text(before.replace("tags:", 'refs: ["[[E01 First run]]", "[[R99 Gone]]"]\ntags:'))
+        nodes = {n["id"]: n for n in json.loads(self.get("/api/tree")[2])["nodes"]}
+        self.assertEqual(nodes["D01"]["refs"], ["E01"])
+        self.assertNotIn("refs", nodes["E01"])
+
     def test_move_bad_requests_reach_no_session(self):
         self.session(self.mover)
         for payload, status in [({"id": "D01"}, 400), ({"id": "D01", "parent": 3}, 400), ({"id": "D42", "parent": "D00"}, 404),

@@ -3,7 +3,7 @@
 
 import { describe, expect, test } from 'claude-code/testing'
 
-import { addNode, initVault, moveNode, setStatus, setTags, tagsReport } from '../hooks/lib/ops'
+import { addNode, initVault, moveNode, setRefs, setStatus, setTags, tagsReport } from '../hooks/lib/ops'
 import { staticPage } from '../hooks/lib/page'
 import { TYPES, canvasJson, compactTree, front, load, locate, parseTags, readConfig, resolvePath, sanitiseTag, sanitiseTitle, sync, topicalTags, validate } from '../hooks/lib/vault'
 import { D00, D01, E01, E02, MemoryFs, WEB_FILES, demoFiles } from './fixture'
@@ -168,6 +168,27 @@ describe('vault', () => {
     await expect(moveNode(io, loaded, 'E01', 'D42', '2026-02-01')).rejects.toThrow(/not a note/)
   })
 
+  test('references: given at creation or set later, read back as ids, checked by the validator', async () => {
+    const { fs, io, loaded } = await loadDemo()
+    await sync(io, loaded)
+    const r = await addNode(io, loaded, { type: 'reference', title: 'A paper on the thing', parent: 'E01', date: '2026-02-01' })
+    const e = await addNode(io, loaded, { type: 'experiment', title: 'Its baseline', parent: 'D01', date: '2026-02-01', refs: [r.id] })
+    expect(front(fs.read(`vault/${e.path}`)).refs).toBe(`["[[${r.name}]]"]`)
+    expect(loaded.tree.nodes[e.id]!.refs).toEqual([r.id])
+    await expect(addNode(io, loaded, { type: 'experiment', title: 'x', parent: 'D01', date: '2026-02-01', refs: ['R42'] })).rejects.toThrow(/not a note/)
+    expect(await setRefs(io, loaded, 'E02', [r.id, 'D01'])).toContain('D01 is not a reference')
+    expect(loaded.tree.nodes.E02!.refs).toEqual([r.id, 'D01'])
+    expect((await validate(io, loaded)).warnings).toContain('E02: refs D01 is not a reference (R notes)')
+    await setRefs(io, loaded, 'E02', [])
+    expect(front(fs.read(`vault/experiments/${E02}.md`)).refs).toBeUndefined()
+    await expect(setRefs(io, loaded, 'E02', ['E02'])).rejects.toThrow(/itself/)
+    // off unless the config asks: then experiments and directions in work want references
+    expect((await validate(io, loaded)).warnings.filter(w => w.includes('no references'))).toEqual([])
+    loaded.config.requireRefs = true
+    const missing = (await validate(io, loaded)).warnings.filter(w => w.includes('no references')).map(w => w.split(':')[0])
+    expect(missing.sort()).toEqual(['D01', 'E01', 'E02'])
+  })
+
   test('validation reports broken links, bad statuses and forbidden titles', async () => {
     const files = demoFiles()
     files[`vault/experiments/${E02}.md`] = files[`vault/experiments/${E02}.md`]!.replace('status: running', 'status: maybe') + '\nSee [[Nowhere]].\n'
@@ -189,6 +210,7 @@ describe('vault', () => {
     expect(fresh.exists('vault/templates/_theory.md')).toBe(true)
     expect(fresh.read('vault/00 Index.md')).toContain('- ? [[D00 Can we fly]]')
     expect(fresh.exists('.rft/config.json')).toBe(true)
+    expect(JSON.parse(fresh.read('.rft/config.json')).requireRefs).toBe(true)
 
     const files = demoFiles()
     delete files['.rft/config.json']
@@ -196,6 +218,7 @@ describe('vault', () => {
     const adopted = await initVault(old.io(), { project: 'demo', question: '', date: '2026-02-01' })
     expect(adopted.isAdopted).toBe(true)
     expect(JSON.parse(old.read('.rft/config.json')).lastId).toEqual({ E: 2, D: 1, R: 0, T: 0 })
+    expect(JSON.parse(old.read('.rft/config.json')).requireRefs).toBeUndefined()
     expect(old.read(`vault/experiments/${E01}.md`)).toBe(files[`vault/experiments/${E01}.md`])
   })
 

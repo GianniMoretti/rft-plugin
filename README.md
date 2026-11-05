@@ -9,7 +9,9 @@ interactive tree (pan, zoom, click a node to read it) in a browser.
 - **Directions (D..)**: ideas, questions, hypotheses, including the ones rejected, so the tree
   also says why a path was not taken. **D00** is the starting question.
 - **References (R..)**: papers, methods and literature reviews that were read: a summary, a
-  source that can be checked, and what they mean for the project.
+  source that can be checked, and what they mean for the project. Experiments and directions
+  link the references they build on (`refs:`), so every result can be traced to the papers
+  behind it.
 - **Theory (T..)**: the project's own definitions, methods, taxonomies and arguments, built on
   the directions, experiments and references.
 - **Concepts**: named lines of research. A note can start one, and its subtree belongs to it
@@ -109,6 +111,7 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_add_node` | creates a note with the next free id, a sanitised title (no `^ # \| [ ]`), the template sections, and links it under its parent |
   | `rft_set_status` | changes a status (frontmatter, tag, Status line), optionally appending results or the reason |
   | `rft_move_node` | moves a note and its subtree under another parent, after you agree; the note keeps its past parents (`origin:`) and a dated `## History` line |
+  | `rft_set_refs` | replaces the reference notes a note builds on (`refs:`); `rft_add_node` takes `refs` too |
   | `rft_set_tags` | replaces a note's topical tags (lowercase kebab-case), keeping the project, type and status tags |
   | `rft_tags` | lists the topical tags in use with counts, so Claude reuses them |
   | `rft_set_concept` | sets, renames or removes (name null) the concept a note starts, once you confirm it |
@@ -151,6 +154,8 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   the default status, linked under its parent, the index and canvas regenerated), by the plugin
   in the session that ran `/rft`, so it costs no model turn and no tokens; it then opens in
   **Edit**.
+- The drawer lists the references a note **builds on**, and on a reference the notes that
+  **cite** it, each a link to its node.
 - **Move** in the drawer moves the note shown, and every note below it, under another note:
   pick it from the list (or type its id), **Move** or Enter. As with **+ Child**, the plugin
   makes the move with `rft_move_node`'s code. A moved note shows where it came from at the top
@@ -255,12 +260,14 @@ and it runs. The terminal's typeahead lists them.
 
 ```json
 { "version": 1, "vault": "vault", "project": "my-project", "canvas": true, "mermaid": false,
-  "lastId": { "E": 12, "D": 9 }, "webPort": 0 }
+  "lastId": { "E": 12, "D": 9 }, "webPort": 0, "requireRefs": true }
 ```
 
 `mermaid: true` also writes `Reasoning tree (diagram).md`, a Mermaid flowchart Obsidian draws
 natively. `lastId` keeps ids from being reused after a note is deleted. `webPort` fixes the
-tree view's port (0: a free one), handy for a standing `ssh -L` forward. A config that holds
+tree view's port (0: a free one), handy for a standing `ssh -L` forward. `requireRefs: true`
+(set by `/rft-init` on a new vault, off on an adopted one) makes `rft_validate` warn about
+experiments and directions in work that name no reference. A config that holds
 only `tree` is a link to a tree in another folder (see above).
 
 ### Obsidian, if you use it
