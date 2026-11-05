@@ -1,14 +1,14 @@
 # Roadmap
 
 Planned work, split into release packages in the order they should ship. Each
-package is one minor version (the current release is 0.9.0) and lists what it contains, how it
+package is one minor version (the current release is 0.10.0) and lists what it contains, how it
 could be done, and when it is done. A package builds only on the ones before it.
 
 | Version | Package | Depends on |
 |---------|---------|------------|
 | 0.8.0 | Tree view (done) | – |
 | 0.9.0 | Moving branches (done) | – |
-| 0.10.0 | Rebalancing | 0.9.0 |
+| 0.10.0 | Rebalancing (done) | 0.9.0 |
 | 0.11.0 | References on every node | – |
 | 0.12.0 | Literature-driven workflow | 0.11.0 |
 | 0.13.0 | Paper collection | 0.11.0 |
@@ -47,7 +47,7 @@ The basic operation the rest of the restructuring relies on.
 Done when: moving a branch from the page and from the tool leaves `rft_validate` clean, the
 `origin:` history is written, and the dashed links show the old position.
 
-## 0.10.0 — Rebalancing
+## 0.10.0 — Rebalancing (done)
 
 - **Rebalance the tree.** After a while some branches grow out of one line of research but
   belong under another concept. A command (`/rft-rebalance`) asks Claude to propose a new

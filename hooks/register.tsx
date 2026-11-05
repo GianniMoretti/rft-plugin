@@ -1,4 +1,4 @@
-// rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-view), the model's
+// rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-concepts, /rft-rebalance, /rft-view), the model's
 // tools (rft_add_node, rft_set_status, rft_move_node, rft_set_tags, rft_tags, rft_tree, rft_validate, rft_sync), the operating rules
 // injected into the system prompt, the outline pane, and the web view: /rft starts a local
 // server (server/rft_server.py) for the interactive tree page (web/), and makes the notes that
@@ -270,6 +270,7 @@ async function registerCommands($: EngineInterface): Promise<void> {
   await attempt('rft', () => $.command.register({ name: 'rft', description: 'Open the interactive tree view (/rft list: the outline pane, /rft text: print it, /rft stop: stop the server)', argumentHint: '[list|text|stop]' }))
   await attempt('rft-init', () => $.command.register({ name: 'rft-init', description: 'Activate the Reasoning Flow Tree in this project and create its vault', argumentHint: '[starting question]' }))
   await attempt('rft-concepts', () => $.command.register({ name: 'rft-concepts', description: 'Print the concept tree (/rft-concepts suggest: ask Claude to propose a concept split)', argumentHint: '[suggest]' }))
+  await attempt('rft-rebalance', () => $.command.register({ name: 'rft-rebalance', description: 'Ask Claude to propose moving branches under the line of research they belong to; nothing moves until you confirm', argumentHint: '[concept or note id]' }))
   await attempt('rft-view', () => $.command.register({ name: 'rft-view', description: 'Write a standalone HTML view of the tree to <vault>/tree.html' }))
   if (failed.length) reportFailures($, failed)
 }
@@ -558,6 +559,9 @@ async function submitPending($: EngineInterface): Promise<void> {
   }
 }
 
+/** The rebalancing request; `scope` (a concept name or a note id) narrows it to one part of the tree. */
+const rebalancePrompt = (scope: string) => `Propose a rebalancing of the reasoning tree (rft-manual skill, "Restructuring the tree")${scope ? `, limited to ${JSON.stringify(scope)} (a concept or a note: consider the branches in it, and moves into it or out of it)` : ''}. Over time some branches grow out of one line of research but belong to another: an experiment hung under the note that happened to come before it, an idea that opened a different line, a branch that would sit better under another concept. Read the tree with rft_tree and rft_concepts, then read the notes of the branches you consider (their Idea, Why, What, Result), not only the titles. For each branch that clearly belongs elsewhere, propose one move: the note to move (its subtree goes with it), its parent now, the new parent, and why in one line. Keep the tree's history in mind: a note that came out of a result stays where the reasoning produced it unless it really is part of another line; when in doubt, leave it. Moves only: if a new concept would help, say so separately (rft_set_concept, after the user agrees). Present the moves as a short numbered table, say what you would leave as it is, and ask me which moves to apply. Do not call rft_move_node until I say yes; then apply only the moves I confirm, each with its why, and finish with rft_validate.`
+
 const SUGGEST_CONCEPTS = `Propose a split of the reasoning tree into concepts (rft-manual skill, "Concepts"). Read the current tree with rft_tree and rft_concepts. Suggest 2 to 6 concepts, nested at most two levels: for each, the note that starts it (usually the direction that opened that line of research), a short readable name for the line of research, in words as in a heading (e.g. "Strong augmentation", not a tag like strong-augmentation; never a single experiment), and a one-line summary; say which notes stay in the project root and why. Present the proposal as a short table and ask me to confirm or change it. Do not call rft_set_concept until I say yes.`
 
 const NOT_ACTIVE = 'RFT is not active in this project. Run /rft-init [starting question] to set it up.'
@@ -673,6 +677,18 @@ export const register: Register = (on, options) => {
       // timer started here ends with it: the session's poller submits it at its next tick
       pendingPrompt = SUGGEST_CONCEPTS
       return { text: `${conceptsReport(loaded)}\n\nClaude will propose a concept split in a moment; nothing changes until you confirm it.` }
+    } catch (err) {
+      return { text: message(err) }
+    }
+  })
+
+  on('command.run', { command: 'rft-rebalance' }, async ($, e) => {
+    try {
+      const loaded = await loadActive((await mustHere($)).io)
+      if (Object.keys(loaded.tree.nodes).length < 3) return { text: 'The tree has too few notes to rebalance.' }
+      // submitted by the poller, as for /rft-concepts suggest
+      pendingPrompt = rebalancePrompt(e.args.trim())
+      return { text: `${conceptsReport(loaded)}\n\nClaude will propose moves in a moment, as a table; nothing moves until you confirm.` }
     } catch (err) {
       return { text: message(err) }
     }

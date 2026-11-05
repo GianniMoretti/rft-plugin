@@ -237,6 +237,7 @@ d3 (ISC licence, `web/vendor/LICENSE-d3.txt`) is bundled, so the page needs no n
 | `/rft-init [starting question]` | activate RFT here and create (or adopt) the vault |
 | `/rft-concepts` | print the concept tree |
 | `/rft-concepts suggest` | ask Claude to propose a concept split; nothing changes until you confirm |
+| `/rft-rebalance [concept or id]` | ask Claude to propose moving branches under the line of research they belong to, as a table of moves; only the ones you confirm are made, each keeping its origin |
 | `/rft-view` | write `vault/tree.html`: the same tree view as one standalone file, every note inside, to open anywhere or share |
 
 The plugin registers these commands when a session starts, so the desktop app's slash-command

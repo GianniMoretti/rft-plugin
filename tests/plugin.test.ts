@@ -18,7 +18,7 @@ describe('activation', () => {
     const w = world(on, {})
     on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.commands).toEqual(['rft', 'rft-init', 'rft-concepts', 'rft-view'])
+    expect(w.commands).toEqual(['rft', 'rft-init', 'rft-concepts', 'rft-rebalance', 'rft-view'])
     expect(w.tools).toEqual([])
     expect(w.opened).toEqual([])
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
@@ -49,7 +49,7 @@ describe('activation', () => {
     const w = world(on, demoFiles(), { refuse: ['rft'] })
     on('prompt.compose', () => ({ sections: [] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.commands).toEqual(['rft-init', 'rft-concepts', 'rft-view'])
+    expect(w.commands).toEqual(['rft-init', 'rft-concepts', 'rft-rebalance', 'rft-view'])
     expect(w.tools).toHaveLength(10)
     expect(w.opened).toEqual(['rft-tree'])
     expect(w.toasts.join()).toContain('/rft')
@@ -59,7 +59,7 @@ describe('activation', () => {
 
   test('no command takes the name of the plugin skill', async () => {
     // a plugin skill named <x> is the command /rft:<x>; the engine refuses a command of the same name
-    expect(['rft', 'rft-init', 'rft-concepts', 'rft-view']).not.toContain(SKILL)
+    expect(['rft', 'rft-init', 'rft-concepts', 'rft-rebalance', 'rft-view']).not.toContain(SKILL)
   })
 
   test('autoOpen off keeps the pane closed', { options: { autoOpen: false } }, async ($, on) => {
@@ -133,6 +133,27 @@ describe('concepts', () => {
     await clock.advance(5000)
     expect(prompts).toHaveLength(1)
     expect(prompts[0]).toContain('Do not call rft_set_concept until I say yes')
+    expect(w.fs.read(`vault/directions/${D01}.md`)).toBe(before)
+  })
+
+  test('/rft-rebalance asks Claude for moves to confirm, optionally in one part of the tree, and moves nothing', async ($, on) => {
+    const clock = mock.clock(on)
+    const w = world(on, demoFiles())
+    const prompts: string[] = []
+    on('prompt.submit', (_$, e) => { prompts.push(String(e.text)); return { text: e.text } as never })
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const run = (args: string) => $.command.run({ command: 'rft-rebalance', args, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } } as never)
+    const before = w.fs.read(`vault/directions/${D01}.md`)
+    const res = await run('')
+    expect(res.text).toContain('nothing moves until you confirm')
+    expect(prompts).toEqual([])
+    await clock.advance(5000)
+    expect(prompts).toHaveLength(1)
+    expect(prompts[0]).toContain('Do not call rft_move_node until I say yes')
+    expect(prompts[0]).not.toContain('limited to')
+    await run('D01')
+    await clock.advance(5000)
+    expect(prompts[1]).toContain('limited to "D01"')
     expect(w.fs.read(`vault/directions/${D01}.md`)).toBe(before)
   })
 

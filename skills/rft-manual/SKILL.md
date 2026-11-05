@@ -87,6 +87,22 @@ concept above them belong to the project itself. Concepts are explicit, never in
   answer with a short table (start note, name, summary, what stays in the root) and wait for
   the user's yes before applying anything.
 
+## Restructuring the tree
+
+A note's parent is where the reasoning came from; a concept is the line of research it belongs
+to. Over time the two drift apart: a branch grows out of one note but belongs to another line.
+
+- **Move a branch** with `rft_move_node(id, parent, why)`, after the user agrees. The subtree
+  moves with it, and the note keeps its past parents in `origin:` plus a dated line under
+  `## History`, so the path that led to it stays readable (the tree view's **Came from** draws
+  it).
+- **`/rft-rebalance [concept or id]`** asks you to review the whole tree, or one part of it, and
+  propose moves. Read the notes of the branches you consider, not only their titles. Answer
+  with a short numbered table (note, parent now, new parent, why), say what you would leave as
+  it is, and wait: apply only the moves the user confirms, each with its `why`, then run
+  `rft_validate`. When in doubt, leave a note where the reasoning produced it. Propose a new
+  concept separately, never as part of a move.
+
 ## When to create and update nodes
 
 1. **Before launching an experiment**, create its node: `rft_add_node` with `type: experiment`,
