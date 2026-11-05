@@ -113,6 +113,7 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_set_status` | changes a status (frontmatter, tag, Status line), optionally appending results or the reason |
   | `rft_move_node` | moves a note and its subtree under another parent, after you agree; the note keeps its past parents (`origin:`) and a dated `## History` line |
   | `rft_set_refs` | replaces the reference notes a note builds on (`refs:`); `rft_add_node` takes `refs` too |
+  | `rft_search` | searches every note (titles weigh most, then tags and concepts, then the text) and answers the best matches with the line that matched; filters by type, status, concept and tag. Built from the notes at each call, so never out of date, and nothing is stored |
   | `rft_collect_papers` | downloads, in the background, the open-access PDFs of reference notes (arXiv, OpenReview, PMLR, ACL Anthology, NeurIPS/CVF proceedings, ...) into `vault/papers/<concept>/<year> <first author> <title>.pdf`, linked from each note (`pdf:`); saved PDFs follow their concept. Never from paywalled publishers |
   | `rft_set_tags` | replaces a note's topical tags (lowercase kebab-case), keeping the project, type and status tags |
   | `rft_tags` | lists the topical tags in use with counts, so Claude reuses them |

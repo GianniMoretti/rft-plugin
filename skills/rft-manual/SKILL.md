@@ -183,6 +183,7 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 | `rft_set_status` | change a status, optionally appending real results or the reason |
 | `rft_move_node` | move a note and its subtree under another parent, keeping its origin, after the user agrees |
 | `rft_set_refs` | replace the reference notes a note builds on (`refs:`) |
+| `rft_search` | search every note (titles, tags, concepts, text), best first with the matching line; filters by type, status, concept, tag |
 | `rft_collect_papers` | download the open-access PDFs of reference notes into `papers/<concept>/`, in the background |
 | `rft_set_tags` | replace a note's topical tags |
 | `rft_tags` | the topical tags in use, with counts: check before inventing one |
@@ -191,6 +192,9 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 | `rft_tree` | the current tree, or the subtree of one node (`root`, `depth`) |
 | `rft_validate` | errors (bad ids, statuses, titles, missing parents, broken links) and warnings |
 | `rft_sync` | regenerate children / up / down, the tree in `00 Index.md`, the canvas |
+
+Before proposing an experiment or an idea, `rft_search` whether the tree already has it; to
+answer "what did we try on X", search first and read only the notes that match.
 
 Editing note bodies (What, Why, Result, ...) with the ordinary file tools is fine. After editing
 notes by hand — above all a `parent:` field — run `rft_sync`, then `rft_validate`, and fix every

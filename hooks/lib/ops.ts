@@ -380,6 +380,7 @@ The reasoning of this research project is kept as a tree of Obsidian notes in \`
 - The tools assign ids (never reused) and strip ^ # | [ ] from titles. After editing notes by hand, run rft_sync (children / up / down, 00 Index.md, the canvas) and rft_validate.
 - Concepts group the tree into lines of research: a note with \`concept:\` starts one, its subtree inherits it until a sub-concept starts. When a direction opens a new line of research, PROPOSE a short concept name to the user; apply it with rft_set_concept only after they confirm, never silently. rft_concepts shows the concept tree.
 - A branch that sits under the wrong line of research: propose moving it, and once the user agrees use rft_move_node (the subtree follows, the note keeps its origin and a History line). Never move a note by editing its parent: by hand.
+- To find what was tried, measured or read on a subject, use rft_search (titles, tags, concepts and text, best first, with the line that matched) before reading note files one by one; check it before proposing an experiment that may already exist.
 - The rft-manual skill is the full manual; rft_tree shows the current tree.
 
 The tree at the start of this session${Object.keys(tree.concepts ?? {}).length > 1 ? ', by concept (← parent, when not the line above)' : ''}:

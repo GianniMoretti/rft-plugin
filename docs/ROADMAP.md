@@ -1,7 +1,7 @@
 # Roadmap
 
 Planned work, split into release packages in the order they should ship. Each
-package is one minor version (the current release is 0.13.0) and lists what it contains, how it
+package is one minor version (the current release is 0.14.0) and lists what it contains, how it
 could be done, and when it is done. A package builds only on the ones before it.
 
 | Version | Package | Depends on |
@@ -12,7 +12,7 @@ could be done, and when it is done. A package builds only on the ones before it.
 | 0.11.0 | References on every node (done) | – |
 | 0.12.0 | Literature-driven workflow (done) | 0.11.0 |
 | 0.13.0 | Paper collection (done) | 0.11.0 |
-| 0.14.0 | Search index | – |
+| 0.14.0 | Search index (done) | – |
 | 0.15.0 | Knowledge graph | 0.14.0 |
 
 ---
@@ -96,13 +96,14 @@ a search, and the results land as R notes linked to the right nodes.
 Done when: a search fills `vault/papers/` without blocking the chat, every PDF is linked from an
 R note, and non-open-access papers are listed but not downloaded.
 
-## 0.14.0 — Search index
+## 0.14.0 — Search index (done)
 
 The simple first step towards fast access to the whole tree.
 
-- **`rft_search`.** A local SQLite full-text index of notes, results, references and concepts,
-  rebuilt from the markdown notes (which stay the source of truth) on `rft_sync` and on change.
-  Claude queries it instead of reading files one by one.
+- **`rft_search`.** A full-text index of notes, results, references and concepts, built from
+  the markdown notes (which stay the source of truth). Done as an in-memory BM25 ranking over
+  the notes the tools already load at each call, instead of SQLite: it can never be out of
+  date, and nothing is stored. Claude queries it instead of reading files one by one.
 
 Done when: `rft_search` answers "what did we try on X" from the index on a large vault, and the
 index is rebuilt after every edit.

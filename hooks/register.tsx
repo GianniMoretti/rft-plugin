@@ -1,5 +1,5 @@
 // rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-concepts, /rft-rebalance, /rft-view), the model's
-// tools (rft_add_node, rft_set_status, rft_move_node, rft_set_refs, rft_collect_papers, rft_set_tags, rft_tags, rft_tree, rft_validate, rft_sync), the operating rules
+// tools (rft_add_node, rft_set_status, rft_move_node, rft_set_refs, rft_search, rft_collect_papers, rft_set_tags, rft_tags, rft_tree, rft_validate, rft_sync), the operating rules
 // injected into the system prompt, the outline pane, and the web view: /rft starts a local
 // server (server/rft_server.py) for the interactive tree page (web/), and makes the notes that
 // page adds or moves (addFromView, moveFromView). Everything is
@@ -14,6 +14,7 @@ import { addNode, conceptsReport, exportHtml, initVault, loadActive, moveNode, r
 import { ASSET_PATHS } from './lib/page'
 import type { Config, Io, Loaded, NodeType, Tree } from './lib/vault'
 import { OPEN_HOSTS, planPapers } from './lib/papers'
+import { searchReport } from './lib/search'
 import { LEGEND, MARK, NODE_TYPES, bodyOf, counts, countsLine, isAbsolute, join, locate, readConfig, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
 
 const PANE = 'rft-tree'
@@ -119,6 +120,21 @@ const TOOLS = {
         refs: { type: 'array', items: { type: 'string' }, description: 'Ids of the reference notes (an empty list removes them).' },
       },
       required: ['id', 'refs'],
+    },
+  },
+  rft_search: {
+    description:
+      'Search every note of the tree (titles, tags, concepts and text) and get the best matches with the line that matched: use it to find what was tried, measured or read on a subject before reading files one by one, or before proposing an experiment that may already exist. Filters narrow by type, status, concept or tag; with filters alone it lists the newest notes that pass.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Words to look for, e.g. "label smoothing calibration".' },
+        type: { type: 'string', enum: NODE_TYPES },
+        status: { type: 'string', enum: ['planned', 'running', 'done', 'idea', 'dropped', 'discussed', 'moved'] },
+        concept: { type: 'string', description: 'A concept, by name or start note id: its notes and its sub-concepts\'.' },
+        tag: { type: 'string', description: 'A topical tag.' },
+        limit: { type: 'number', description: 'How many notes at most (default 10).' },
+      },
     },
   },
   rft_collect_papers: {
@@ -335,6 +351,9 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       return moveNode(io, loaded, String(i.id ?? ''), String(i.parent ?? ''), today(), str(i.why))
     case 'rft_set_refs':
       return setRefs(io, loaded, String(i.id ?? ''), strings(i.refs))
+    case 'rft_search':
+      return searchReport(loaded, str(i.query) ?? '', { type: str(i.type), status: str(i.status), concept: str(i.concept), tag: str(i.tag) },
+        typeof i.limit === 'number' && i.limit > 0 ? Math.min(50, Math.floor(i.limit)) : 10)
     case 'rft_collect_papers':
       return collectPapers($, h, loaded, strings(i.ids))
     case 'rft_set_tags':
