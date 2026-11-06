@@ -192,9 +192,10 @@ In the tree view, **Concepts: Off / Regions / Arrows** switches the overlay:
 - **Arrows**: links coloured by the concept of the note they lead to, and a name badge at each
   concept's start.
 - Concept colours are a palette of their own, apart from the status colours; a concept legend
-  shows while the overlay is on.
+  shows while the overlay is on. It lists the top-level concepts, each with an arrow that
+  unfolds its sub-concepts, and the whole legend folds to one line (**Legend ▸**).
 - **Concept tree** shows a tree of the concepts: each sized by its notes, with a bar of their
-  statuses. Click one to go back to the reasoning tree on its start note, its region briefly
+  statuses, in the same layout as the reasoning tree (top-down, left-right or radial). Click one to go back to the reasoning tree on its start note, its region briefly
   highlighted; **focus** shows only that concept's subtree.
 - **Focus** is also reachable from the legend, a badge, and the concept path at the top of the
   note drawer; a breadcrumb (project › concept › sub-concept) leads back up.

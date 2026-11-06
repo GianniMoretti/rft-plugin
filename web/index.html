@@ -47,6 +47,8 @@
   <svg id="canvas" aria-label="The reasoning tree"><defs><marker id="arrow" viewBox="0 -4 8 8" refX="8" refY="0" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,-4L8,0L0,4Z"></path></marker></defs><g id="viewport"><g id="regions"></g><g id="links"></g><g id="nodes"></g><g id="badges"></g></g></svg>
   <svg id="concept-canvas" hidden aria-label="The concept tree"><g id="cviewport"></g></svg>
   <aside id="legend" aria-label="Legend and filter">
+    <button id="legend-toggle" class="legend-toggle" aria-expanded="true" title="Show or hide the legend">Legend <span class="caret">▾</span></button>
+    <div id="legend-body">
     <div class="legend-title">Status <span class="muted">(click to filter)</span></div>
     <div id="statuses"></div>
     <div class="legend-title">Type</div>
@@ -59,6 +61,7 @@
       <div id="concepts-list"></div>
     </div>
     <div class="hint muted">Drag to pan, scroll to zoom. Click a node to read it, double-click or ± to fold.</div>
+    </div>
   </aside>
   <aside id="filters" hidden aria-label="Filters">
     <div class="fhead"><strong>Filters</strong><button id="filters-close" title="Close">✕</button></div>

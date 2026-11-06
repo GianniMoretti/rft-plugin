@@ -12,6 +12,7 @@
   const LABEL = { done: 'done', running: 'running', planned: 'planned', idea: 'idea', dropped: 'dropped', discussed: 'discussed, not pursued', moved: 'moved' }
   const R = 7 // node radius
   const SPACING = { td: [150, 104], lr: [34, 280], radial: [90, 140] } // [breadth, depth] in world units
+  const CSPACING = { td: [240, 230], lr: [170, 300], radial: [250, 280] } // the same, for the concept tree
   const LABEL_PX = 15 // label size on screen at A 100 %, whatever the zoom
   const FONT_STEPS = [0.7, 0.8, 0.9, 1, 1.1, 1.25, 1.4, 1.6, 1.8, 2]
   const POLL_MS = 2000
@@ -99,6 +100,7 @@
       document.title = `${tree.project} · reasoning tree`
       document.getElementById('title').textContent = `${tree.project} — the reasoning tree`
       buildLegend()
+      setLegendOpen(store.get('legendOpen', true))
       syncLayoutButtons()
       togglePanel(new URLSearchParams(location.search).get('panel') === 'filters' || Boolean(store.get('filtersOpen', false)))
     }
@@ -782,6 +784,7 @@
     store.set('layout', layoutKind)
     syncLayoutButtons()
     render(true)
+    if (view === 'concepts') drawConceptTree()
     setTimeout(() => fit(true), 420)
   }))
   function setFont(value, save = true) {
@@ -975,22 +978,53 @@
     nav.append(' · ', all)
   }
 
+  /**
+   * The concepts in the legend: the top-level ones, each with an arrow that unfolds its
+   * sub-concepts (kept per project); the path to the focused concept is always open.
+   */
   function buildConceptLegend() {
     const list = C.ordered(concepts).filter(c => c.id !== C.ROOT)
     const box = document.getElementById('concept-legend')
     box.hidden = conceptMode === 'off' || !list.length
     const rows = document.getElementById('concepts-list')
     rows.innerHTML = ''
+    const open = new Set(store.get('legendConcepts', []))
+    if (focus) C.pathOf(concepts, focus).forEach(id => open.add(id))
+    const visible = c => C.pathOf(concepts, c.id).slice(0, -1).every(id => id === C.ROOT || open.has(id))
     for (const c of list) {
+      if (!visible(c)) continue
       const row = document.createElement('div')
       row.className = `row${focus === c.id ? ' on' : ''}`
       row.style.paddingLeft = `${(c.depth - 1) * 12}px`
-      row.innerHTML = `<span class="swatch" style="background: ${C.colourOf(concepts, c.id)}"></span>${escH(c.name)} <span class="muted">${c.total}</span>`
+      const fold = document.createElement('span')
+      fold.className = 'fold'
+      if (c.children.length) {
+        fold.textContent = open.has(c.id) ? '▾' : '▸'
+        fold.title = open.has(c.id) ? 'Hide the sub-concepts' : `Show the ${c.children.length} sub-concept${c.children.length === 1 ? '' : 's'}`
+        fold.addEventListener('click', ev => {
+          ev.stopPropagation()
+          store.set('legendConcepts', toggled(store.get('legendConcepts', []), c.id))
+          buildConceptLegend()
+        })
+      }
+      row.appendChild(fold)
+      row.insertAdjacentHTML('beforeend', `<span class="swatch" style="background: ${C.colourOf(concepts, c.id)}"></span>${escH(c.name)} <span class="muted">${c.total}</span>`)
       row.title = `${c.summary || c.name} — click to focus`
       row.addEventListener('click', () => setFocus(focus === c.id ? null : c.id))
       rows.appendChild(row)
     }
   }
+
+  const legend = document.getElementById('legend')
+  function setLegendOpen(open) {
+    legend.classList.toggle('closed', !open)
+    document.getElementById('legend-toggle').setAttribute('aria-expanded', String(open))
+  }
+  document.getElementById('legend-toggle').addEventListener('click', () => {
+    const open = legend.classList.contains('closed')
+    store.set('legendOpen', open)
+    setLegendOpen(open)
+  })
 
   // ---------------------------------------------------------------- the concept tree
 
@@ -1012,14 +1046,34 @@
   function drawConceptTree() {
     cviewport.selectAll('*').remove()
     const top = d3.hierarchy(concepts.get(C.ROOT), c => c.children.map(id => concepts.get(id)).filter(Boolean))
-    d3.tree().nodeSize([240, 230])(top)
     const radius = c => 12 + 4.5 * Math.sqrt(c.total)
-    // a link leaves below the parent's name, count, bar and focus line, and enters the child's circle
+    // every concept is a circle with its name, count, bar and focus line below it: the block is
+    // about 240 wide and 84 tall under the circle, which sets the spacing of each layout
     const BLOCK = 84
-    cviewport.append('g').selectAll('path').data(top.links()).join('path').attr('class', 'clink')
-      .attr('d', l => d3.linkVertical()({ source: [l.source.x, l.source.y + radius(l.source.data) + BLOCK], target: [l.target.x, l.target.y - radius(l.target.data) - 4] }))
+    const [b, d] = CSPACING[layoutKind]
+    if (layoutKind === 'radial') L.radial(d3, top, b, d)
+    else d3.tree().nodeSize([b, d])(top)
+    const at = n => {
+      if (layoutKind === 'td') return [n.x, n.y]
+      if (layoutKind === 'lr') return [n.y, n.x]
+      const a = n.angle - Math.PI / 2
+      return [n.radius * Math.cos(a), n.radius * Math.sin(a)]
+    }
+    top.each(n => { n.p = at(n) })
+    const clink = l => {
+      const [x1, y1] = l.source.p, [x2, y2] = l.target.p
+      const rs = radius(l.source.data), rt = radius(l.target.data)
+      // top-down: from below the parent's block into the top of the child's circle
+      if (layoutKind === 'td') return d3.linkVertical()({ source: [x1, y1 + rs + BLOCK], target: [x2, y2 - rt - 4] })
+      // left-right: from the parent's circle to the child's, beside the blocks
+      if (layoutKind === 'lr') return d3.linkHorizontal()({ source: [x1 + rs + 4, y1], target: [x2 - rt - 4, y2] })
+      // radial: along the spoke, from circle edge to circle edge
+      const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1
+      return `M${x1 + (dx / len) * (rs + 4)},${y1 + (dy / len) * (rs + 4)}L${x2 - (dx / len) * (rt + 4)},${y2 - (dy / len) * (rt + 4)}`
+    }
+    cviewport.append('g').selectAll('path').data(top.links()).join('path').attr('class', 'clink').attr('d', clink)
     const node = cviewport.append('g').selectAll('g').data(top.descendants()).join('g')
-      .attr('class', 'cnode').attr('transform', n => `translate(${n.x},${n.y})`)
+      .attr('class', 'cnode').attr('transform', n => `translate(${n.p[0]},${n.p[1]})`)
       .on('click', (ev, n) => { ev.stopPropagation(); openConcept(n.data.id) })
     node.append('title').text(n => `${n.data.name}${n.data.summary ? ' — ' + n.data.summary : ''}`)
     node.append('circle').attr('r', n => radius(n.data))
