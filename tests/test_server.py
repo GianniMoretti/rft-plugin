@@ -53,8 +53,8 @@ class ServerTest(unittest.TestCase):
         cls.asked = []  # the requests handed to the session
         cls.answer = None  # what the session does with one: nothing, unless a test says
 
-        def ask(request):
-            cls.asked.append(request)
+        def ask(verb, request):
+            cls.asked.append((verb, request))
             if cls.answer:
                 cls.answer(request)
 
@@ -119,6 +119,20 @@ class ServerTest(unittest.TestCase):
         p.write_bytes((text or note(nid, "direction", "idea", "D00 Root question", "Scratch")).encode())
         self.addCleanup(p.unlink)
         return p
+    
+    def retyped_note(self):
+        """A direction of its own, D08, and the session that makes it the experiment E08."""
+        old = self.vault / "directions" / "D08 Retyped.md"
+        new = self.vault / "experiments" / "E08 Retyped.md"
+        old.write_text(note("D08", "direction", "idea", "D00 Root question", "Retyped"))
+        self.addCleanup(old.unlink, missing_ok=True)
+        self.addCleanup(new.unlink, missing_ok=True)
+
+        def plugin(request):
+            new.write_text(note("E08", request["type"], "idea", "D00 Root question", "Retyped"))
+            old.unlink()
+
+        return plugin
 
     def test_tree_json(self):
         status, ctype, body = self.get("/api/tree")
@@ -328,7 +342,7 @@ class ServerTest(unittest.TestCase):
         status, res = self.post({"parent": "E01", "type": "direction", "title": "  Then this  "})
         self.assertEqual((status, res), (201, {"id": "D07", "name": "D07 Then this"}))
         # the session is asked for the type, the parent and the title alone: the status is its default
-        self.assertEqual(self.asked, [{"parent": "E01", "type": "direction", "title": "Then this"}])
+        self.assertEqual(self.asked, [("RFT_ADD_NODE", {"parent": "E01", "type": "direction", "title": "Then this"})])
         nodes = {n["id"]: n for n in json.loads(self.get("/api/tree")[2])["nodes"]}
         self.assertEqual(nodes["D07"]["parent"], "E01")
 
@@ -378,6 +392,26 @@ class ServerTest(unittest.TestCase):
 
         self.session(gone)
         self.assertEqual(self.post({"parent": "D00", "type": "direction", "title": "Lost"})[0], 503)
+
+    def test_set_type_asks_the_session_and_answers_the_new_id(self):
+        self.session(self.retyped_note())
+        status, res = self.write("POST", "/api/type", {"id": "D08", "type": "experiment"})
+        self.assertEqual((status, res), (200, {"id": "E08", "name": "E08 Retyped"}))
+        self.assertEqual(self.asked, [("RFT_SET_TYPE", {"id": "D08", "type": "experiment"})])
+        ids = {n["id"] for n in json.loads(self.get("/api/tree")[2])["nodes"]}
+        self.assertIn("E08", ids)
+        self.assertNotIn("D08", ids)
+
+    def test_set_type_bad_requests_reach_no_session(self):
+        self.session(self.retyped_note())
+        ok = {"id": "D08", "type": "experiment"}
+        for payload, status in [({**ok, "type": "note"}, 400), ({**ok, "type": "direction"}, 400),
+                                ({"id": "D00", "type": "experiment"}, 400), ({**ok, "id": "D42"}, 404),
+                                ({**ok, "id": "../secret"}, 404), ({"id": "D08"}, 400), (["D08"], 400)]:
+            self.assertEqual(self.write("POST", "/api/type", payload)[0], status, payload)
+        self.assertEqual(self.write("POST", "/api/type", ok, key=None)[0], 403)
+        self.assertEqual(self.write("POST", "/api/type", ok, origin="http://evil.example")[0], 403)
+        self.assertEqual(self.asked, [])
 
     def start(self, cache):
         """The server as the plugin runs it, its cache in `cache`: its process, port and key."""

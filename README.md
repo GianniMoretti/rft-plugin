@@ -109,6 +109,7 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_add_node` | creates a note with the next free id, a sanitised title (no `^ # \| [ ]`), the template sections, and links it under its parent |
   | `rft_set_status` | changes a status (frontmatter, tag, Status line), optionally appending results or the reason |
   | `rft_set_tags` | replaces a note's topical tags (lowercase kebab-case), keeping the project, type and status tags |
+  | `rft_set_type` | changes the type of a note made with the wrong one: the next free id of the new type, the file moved to that type's folder, the type's sections (no text lost), every link to it renamed |
   | `rft_tags` | lists the topical tags in use with counts, so Claude reuses them |
   | `rft_set_concept` | sets, renames or removes (name null) the concept a note starts, once you confirm it |
   | `rft_concepts` | prints the concept tree: names, start notes, counts and statuses |
@@ -150,6 +151,11 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   the default status, linked under its parent, the index and canvas regenerated), by the plugin
   in the session that ran `/rft`, so it costs no model turn and no tokens; it then opens in
   **Edit**.
+- **Type** in the drawer changes the type of a note made with the wrong one: choose the type,
+  **Change**. The note gets the next free id of that type and moves to its folder; its text
+  stays, the type's missing sections are added, and every link to it is renamed. Like
+  **+ Child**, the session that ran `/rft` does it with `rft_set_type`'s code, at no model turn.
+  The root stays a direction.
 - Hover a node to highlight its path to the root; **search** (Enter jumps to the next match).
 - **Filters** opens a side panel: topical tags (with counts, matching **any** or **all**), type,
   status (the same filter as clicking the legend), and a date range. Notes that do not match
@@ -204,8 +210,9 @@ their counts.
 The server listens on `127.0.0.1` only, on a free port (or `webPort` in the config). It serves
 the page, the tree as JSON and the text of one note at a time, read by its id from inside the
 vault, and answers only requests for a loopback host name. It writes one thing, a note's text
-from **Edit**, its frontmatter kept as it is; a new note from **+ Child** it asks the session
-that started it to make (a line on its output, which the plugin reads). It does either only for
+from **Edit**, its frontmatter kept as it is; a new note from **+ Child**, or a note's new type
+from **Type**, it asks the session that started it to make (a line on its output, which the
+plugin reads). It does any of these only for
 the page itself carrying the project's key, which the address `/rft` prints holds (`?token=…`):
 neither another web page nor another user of the machine can change or add a note. Open that address once and the browser
 remembers the key, which stays the same across restarts (kept, readable by you alone, in

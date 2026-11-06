@@ -7,7 +7,7 @@ import { staticPage } from './page'
 import type { Config, Io, Loaded, NodeType, RftNode, Tree } from './vault'
 import {
   CONFIG_PATH, ID_RE, INDEX, LEGEND, MERMAID, NODE_TYPES, STATUSES, SUBDIR, TEMPLATES, TYPES,
-  MARK, ROOT_CONCEPT, compactTree, conceptOrder, conceptPath, counts, countsLine, defaultConfig, front, idOf, indexTemplate,
+  MARK, ROOT_CONCEPT, CANVAS, renameLinks, retyped, withCardRenamed, withLinksRenamed, compactTree, conceptOrder, conceptPath, counts, countsLine, defaultConfig, front, idOf, indexTemplate,
   isNodeType, join, load, nextId, noteText, orList, readConfig, removeField, resolveId, sanitiseTitle, setField, statusSummary,
   sync, tagCounts, validate, withChildListed, withStatus, withTopicalTags, writeConfig,
 } from './vault'
@@ -126,9 +126,7 @@ export async function addNode(io: Io, loaded: Loaded, input: AddInput): Promise<
     throw new RftError('the root of the tree must be a direction (D00, the starting question)')
   }
   // another session on the same tree may have added notes since `loaded` was read
-  const onDisk = await readConfig(io)
-  if (onDisk) for (const [p, last] of Object.entries(onDisk.lastId)) config.lastId[p] = Math.max(config.lastId[p] ?? 0, last)
-  const id = nextId(loaded, input.type, await idsIn(io, join(config.vault, SUBDIR[input.type])))
+  const id = await freshId(io, loaded, input.type)
   const name = `${id} ${title}`
   const path = `${SUBDIR[input.type]}/${name}.md`
   const parentName = parent ? tree.nodes[parent]!.name : null
@@ -157,6 +155,13 @@ export async function addNode(io: Io, loaded: Loaded, input: AddInput): Promise<
 async function idsIn(io: Io, dir: string): Promise<string[]> {
   if (!(await io.exists(dir))) return []
   return (await io.list(dir)).map(f => idOf(f.name)).filter(id => ID_RE.test(id))
+}
+
+async function freshId(io: Io, loaded: Loaded, type: NodeType): Promise<string> {
+  const { config } = loaded
+  const onDisk = await readConfig(io)
+  if (onDisk) for (const [p, last] of Object.entries(onDisk.lastId)) config.lastId[p] = Math.max(config.lastId[p] ?? 0, last)
+  return nextId(loaded, type, await idsIn(io, join(config.vault, SUBDIR[type])))
 }
 
 export async function setTags(io: Io, loaded: Loaded, ref: string, tags: string[]): Promise<string> {
@@ -277,6 +282,43 @@ export async function setStatus(io: Io, loaded: Loaded, ref: string, status: str
   return `${n.name}: ${n.status} → ${status}${note ? ' (note added)' : ''}. Updated ${report.changed.length} derived file(s).`
 }
 
+// ---------------------------------------------------------------- type
+
+/**
+ * Changes a note's type as if it had been made with that type: the next free id of the type
+ * (the old id is never reused), the file moved to the type's folder, the type's sections (no
+ * text lost), and every link to it in the vault renamed. The root stays a direction.
+ */
+export async function setType(io: Io, loaded: Loaded, ref: string, type: string): Promise<string> {
+  const { tree, config, texts } = loaded
+  const old = resolveId(tree, ref)
+  if (!old) throw new RftError(`"${ref}" is not a note of the tree`)
+  if (!isNodeType(type)) throw new RftError(`type must be ${orList(NODE_TYPES.map(t => `"${t}"`))}`)
+  const n = tree.nodes[old]!
+  if (n.type === type) throw new RftError(`${n.name} is already of type ${type}`)
+  if (!n.parent && type !== 'direction') throw new RftError('the root of the tree stays a direction (D00, the starting question)')
+  const id = await freshId(io, loaded, type)
+  const name = `${id} ${n.title}`
+  const path = `${SUBDIR[type]}/${name}.md`
+  // the note in its new place first: whatever fails after, no text is lost
+  await io.write(join(config.vault, path), withLinksRenamed(retyped(texts[old]!, n, type, id, config.project), n.name, name))
+  const prefix = TYPES[type].prefix
+  config.lastId[prefix] = Math.max(config.lastId[prefix] ?? 0, Number(id.slice(1)))
+  await writeConfig(io, config)
+  const linked = await renameLinks(io, config.vault, n.name, name, [n.path, path])
+  const canvas = join(config.vault, CANVAS)
+  if (config.canvas && (await io.exists(canvas))) await io.write(canvas, withCardRenamed(await io.read(canvas), old, id))
+  try {
+    await io.remove(join(config.vault, n.path))
+  } catch (err) {
+    throw new RftError(`${path} is written, but ${n.path} could not be removed (${err instanceof Error ? err.message : String(err)}): delete it by hand, then run rft_sync`)
+  }
+  const fresh = await load(io, config)
+  const report = await sync(io, fresh)
+  Object.assign(loaded, fresh)
+  return `${n.name} → ${name} (${n.type} → ${type}), now ${path}. Links renamed in ${linked.length} file(s); updated ${report.changed.length} derived file(s).`
+}
+
 // ---------------------------------------------------------------- text for the model
 
 /** `vault`: where the notes are as the session sees them, as in `rulesText`. */
@@ -310,6 +352,7 @@ The reasoning of this research project is kept as a tree of Obsidian notes in \`
 - Give every new note 1-3 short topical tags (lowercase kebab-case, e.g. \`ablation\`, \`optimisation\`), reusing the ones rft_tags lists before inventing new ones; rft_set_tags changes them. Do not retro-tag old notes unless asked.
 - Statuses: ${STATUSES.join(', ')}. Marks: ${LEGEND}.
 - The tools assign ids (never reused) and strip ^ # | [ ] from titles. After editing notes by hand, run rft_sync (children / up / down, 00 Index.md, the canvas) and rft_validate.
+- A note made with the wrong type: rft_set_type (the next id of the new type, the file moved, every link renamed), never a rename by hand.
 - Concepts group the tree into lines of research: a note with \`concept:\` starts one, its subtree inherits it until a sub-concept starts. When a direction opens a new line of research, PROPOSE a short concept name to the user; apply it with rft_set_concept only after they confirm, never silently. rft_concepts shows the concept tree.
 - The rft-manual skill is the full manual; rft_tree shows the current tree.
 

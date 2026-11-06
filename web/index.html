@@ -99,6 +99,7 @@
     <div class="drawer-head">
       <span id="drawer-meta" class="muted"></span>
       <span class="drawer-actions">
+        <button id="drawer-type" hidden title="Change the note's type: it gets a new id of that type, and links to it follow">Type</button>
         <button id="drawer-add" hidden title="Add a direction, an experiment, a reference or a theory note under this note">+ Child</button>
         <button id="drawer-edit" hidden title="Edit the note's text (Ctrl+S saves, Esc cancels)">Edit</button>
         <button id="drawer-close" title="Close">✕</button>
@@ -120,6 +121,22 @@
         <button id="add-ok" type="submit" class="primary" title="Add the note under this one (Enter)">Add</button>
         <button id="add-cancel" type="button" title="Esc">Cancel</button>
         <span id="add-msg" class="muted" role="status"></span>
+      </div>
+    </form>
+    <form id="retyper" class="adder" hidden>
+      <div class="adder-row">
+        <select id="retype-type" aria-label="The note's new type">
+          <option value="direction">Direction</option>
+          <option value="experiment">Experiment</option>
+          <option value="reference">Reference</option>
+          <option value="theory">Theory</option>
+        </select>
+      </div>
+      <div id="retype-hint" class="muted editor-hint"></div>
+      <div class="editor-bar">
+        <button id="retype-ok" type="submit" class="primary" title="Change the note's type">Change</button>
+        <button id="retype-cancel" type="button" title="Esc">Cancel</button>
+        <span id="retype-msg" class="muted" role="status"></span>
       </div>
     </form>
     <article id="note"></article>

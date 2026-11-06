@@ -1,5 +1,5 @@
 // rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-view), the model's
-// tools (rft_add_node, rft_set_status, rft_set_tags, rft_tags, rft_tree, rft_validate, rft_sync), the operating rules
+// tools (rft_add_node, rft_set_status, rft_set_tags, rft_set_type, rft_tags, rft_tree, rft_validate, rft_sync), the operating rules
 // injected into the system prompt, the outline pane, and the web view: /rft starts a local
 // server (server/rft_server.py) for the interactive tree page (web/), and makes the notes that
 // page adds (addFromView). Everything is
@@ -10,7 +10,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { RftSnapshot } from '../types'
-import { addNode, conceptsReport, exportHtml, initVault, loadActive, rulesText, setConcept, setStatus, setTags, tagsReport, today, treeReport } from './lib/ops'
+import { addNode, conceptsReport, exportHtml, initVault, loadActive, rulesText, setConcept, setStatus, setTags, setType, tagsReport, today, treeReport } from './lib/ops'
 import { ASSET_PATHS } from './lib/page'
 import type { Config, Io, NodeType, Tree } from './lib/vault'
 import { LEGEND, MARK, NODE_TYPES, bodyOf, counts, countsLine, isAbsolute, join, locate, readConfig, resolvePath, rooted, signatureOf, sync, validate } from './lib/vault'
@@ -30,6 +30,11 @@ const ioOf = ($: EngineInterface): Io => ({
   write: (path, text) => $.fs.write(path, text),
   list: path => $.fs.list(path),
   exists: path => $.fs.exists(path),
+  remove: async path => {
+    const argv = /^[A-Za-z]:/.test(path) ? ['cmd', '/c', 'del', '/f', '/q', path.replace(/\//g, '\\')] : ['rm', '-f', '--', path]
+    const r = await $.process.run(argv)
+    if (r.exitCode !== 0 || (await $.fs.exists(path))) throw new Error(r.stderr.trim() || `${argv[0]} left the file in place`)
+  },
 })
 
 /** The tree a session works on: its files and folder, the link that led there, the session's folder. */
@@ -104,6 +109,18 @@ const TOOLS = {
         tags: { type: 'array', items: { type: 'string' }, description: 'The new topical tags (an empty list removes them).' },
       },
       required: ['id', 'tags'],
+    },
+  },
+  rft_set_type: {
+    description:
+      'Change the type of a note made with the wrong one (e.g. an experiment that is really a direction). The note gets the next free id of the new type (the old id is not reused) and moves to that type\'s folder; its text is kept, the type\'s missing sections are added, and every link to it in the vault is renamed. Regenerates the index and canvas. The root D00 stays a direction.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id (e.g. E12) or full name of the note.' },
+        type: { type: 'string', enum: NODE_TYPES, description: 'The type the note should have.' },
+      },
+      required: ['id', 'type'],
     },
   },
   rft_set_concept: {
@@ -294,6 +311,8 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
     }
     case 'rft_set_tags':
       return setTags(io, loaded, String(i.id ?? ''), strings(i.tags))
+    case 'rft_set_type':
+      return setType(io, loaded, String(i.id ?? ''), String(i.type ?? ''))
     case 'rft_set_concept':
       return setConcept(io, loaded, String(i.id ?? ''), typeof i.name === 'string' ? i.name : null, typeof i.summary === 'string' ? i.summary : undefined)
     case 'rft_concepts':
@@ -396,7 +415,10 @@ async function spawnServer($: EngineInterface, argv: string[]): Promise<string> 
           for (const l of lines) {
             const m = /RFT_SERVER_URL (\S+)/.exec(l)
             if (m) found(m[1]!)
-            else if (l.startsWith(ADD_NODE)) void addFromView($, l.slice(ADD_NODE.length))
+            else {
+              const asked = FROM_VIEW.find(a => l.startsWith(a.line))
+              if (asked) void fromView($, asked, l.slice(asked.line.length))
+            }
           }
         } else err += chunk.text
       }
@@ -423,7 +445,21 @@ async function spawnServer($: EngineInterface, argv: string[]): Promise<string> 
   }
 }
 
-const ADD_NODE = 'RFT_ADD_NODE '
+const FROM_VIEW = [
+  { line: 'RFT_ADD_NODE ', tool: 'rft_add_node', fields: ['type', 'parent', 'title'], what: 'add a note' },
+  { line: 'RFT_SET_TYPE ', tool: 'rft_set_type', fields: ['id', 'type'], what: "change a note's type" },
+] as const
+
+/** A change the tree view asks for (POST api/node or api/type, relayed by the server). */
+async function fromView($: EngineInterface, asked: (typeof FROM_VIEW)[number], request: string): Promise<void> {
+  try {
+    const r = JSON.parse(request) as Record<string, unknown>
+    await runTool($, asked.tool, Object.fromEntries(asked.fields.map(f => [f, r[f]])))
+    await refresh($, true)
+  } catch (err) {
+    $.ui.toast(`rft: the tree view could not ${asked.what} (${message(err)})`)
+  }
+}
 
 /**
  * A note the tree view adds (POST api/node, relayed by the server): made by rft_add_node's code

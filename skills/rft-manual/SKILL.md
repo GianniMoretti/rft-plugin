@@ -124,6 +124,7 @@ concept above them belong to the project itself. Concepts are explicit, never in
 | `rft_add_node` | create a note (next free id, sanitised title, template sections, linked under its parent) |
 | `rft_set_status` | change a status, optionally appending real results or the reason |
 | `rft_set_tags` | replace a note's topical tags |
+| `rft_set_type` | change the type of a note made with the wrong one (new id, file moved, links renamed) |
 | `rft_tags` | the topical tags in use, with counts: check before inventing one |
 | `rft_set_concept` | set, rename or remove (name null) the concept a note starts, after the user confirms |
 | `rft_concepts` | the concept tree: names, start notes, counts, statuses |
@@ -134,6 +135,9 @@ concept above them belong to the project itself. Concepts are explicit, never in
 Editing note bodies (What, Why, Result, ...) with the ordinary file tools is fine. After editing
 notes by hand — above all a `parent:` field — run `rft_sync`, then `rft_validate`, and fix every
 error. Never edit `up:` / `down:` by hand, nor the list under `## The tree` in the index.
+
+A note made with the wrong type is fixed with `rft_set_type`, never renamed by hand: its id, its
+folder and every link to it change together.
 
 ## Note layout
 

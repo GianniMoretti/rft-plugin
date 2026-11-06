@@ -3,9 +3,9 @@
 
 import { describe, expect, test } from 'claude-code/testing'
 
-import { addNode, initVault, setStatus, setTags, tagsReport } from '../hooks/lib/ops'
+import { addNode, initVault, setStatus, setTags, setType, tagsReport } from '../hooks/lib/ops'
 import { staticPage } from '../hooks/lib/page'
-import { TYPES, canvasJson, compactTree, front, load, locate, parseTags, readConfig, resolvePath, sanitiseTag, sanitiseTitle, sync, topicalTags, validate } from '../hooks/lib/vault'
+import { TYPES, bodyOf, canvasJson, compactTree, front, load, locate, noteText, parseTags, readConfig, resolvePath, retyped, sanitiseTag, sanitiseTitle, sync, topicalTags, validate } from '../hooks/lib/vault'
 import { D00, D01, E01, E02, MemoryFs, WEB_FILES, demoFiles } from './fixture'
 
 const loadDemo = async (fs = new MemoryFs(demoFiles())) => {
@@ -114,6 +114,65 @@ describe('vault', () => {
     fs.files.delete(`vault/${a.path}`)
     const b = await addNode(io, await load(io, loaded.config), { type: 'direction', title: 'Idea two', parent: 'E02', date: '2026-02-01' })
     expect([a.id, b.id]).toEqual(['D02', 'D03'])
+  })
+
+    
+  test('a type change gives a new id and folder, the type\'s sections, and renames every link', async () => {
+    const fs = new MemoryFs({ ...demoFiles(), 'vault/notes/Reading.md': `See [[${E02}|the run]] and [[${E02}#Result]].\n` })
+    const { io, loaded } = await loadDemo(fs)
+    expect(await setType(io, loaded, 'E02', 'direction')).toContain(`${E02} → D02 Variant run (experiment → direction)`)
+    expect(fs.exists(`vault/experiments/${E02}.md`)).toBe(false)
+    const text = fs.read('vault/directions/D02 Variant run.md')
+    expect(front(text)).toMatchObject({ id: 'D02', type: 'direction', status: 'running', tags: '[demo, direction, running]', parent: `"[[${D01}]]"` })
+    expect(text).toContain('# D02 · Variant run')
+    // the direction's sections in order, then the experiment's Result, kept for its text
+    expect(text.match(/^## .*/gm)).toEqual(['## Idea', '## Why', '## Status', '## Result', '## Children in the tree'])
+    expect(text).toContain('## Result\nText of E02.\n')
+    expect(fs.read(`vault/directions/${D01}.md`)).toContain('- [[D02 Variant run]]')
+    expect(fs.read(`vault/directions/${D01}.md`)).not.toContain(E02)
+    expect(fs.read('vault/notes/Reading.md')).toBe('See [[D02 Variant run|the run]] and [[D02 Variant run#Result]].\n')
+    expect(JSON.parse(fs.read('.rft/config.json')).lastId).toMatchObject({ E: 2, D: 2 })
+    expect((await validate(io, loaded)).errors).toEqual([])
+  })
+
+  test('a type change takes the children along, and the canvas card keeps its place', async () => {
+    const { fs, io, loaded } = await loadDemo()
+    await sync(io, loaded)
+    const canvas = JSON.parse(fs.read('vault/Reasoning tree.canvas')) as { nodes: { id: string; x: number }[] }
+    canvas.nodes.find(c => c.id === 'E01')!.x = 9999
+    fs.write('vault/Reasoning tree.canvas', JSON.stringify(canvas))
+    await setType(io, loaded, 'E01', 'reference')
+    expect(front(fs.read(`vault/directions/${D01}.md`)).parent).toBe('"[[R01 First check]]"')
+    expect(loaded.tree.nodes.D00!.children).toEqual(['R01'])
+    expect(loaded.tree.nodes.R01!.children).toEqual(['D01'])
+    const after = JSON.parse(fs.read('vault/Reasoning tree.canvas')) as { nodes: { id: string; x: number }[] }
+    expect(after.nodes.find(c => c.id === 'R01')!.x).toBe(9999)
+    expect(after.nodes.some(c => c.id === 'E01')).toBe(false)
+    expect((await validate(io, loaded)).errors).toEqual([])
+  })
+
+  test('an empty note changed to another type reads as one made with that type, and back', async () => {
+    const { fs, io, loaded } = await loadDemo()
+    await addNode(io, loaded, { type: 'experiment', title: 'Sweep', parent: 'D01', date: '2026-02-01' })
+    const made = (id: string, type: 'experiment' | 'direction') =>
+      bodyOf(noteText(id, { type, title: 'Sweep', parent: D01, status: 'planned', date: '2026-02-01' }, 'demo', D01))
+    await setType(io, loaded, 'E03', 'direction')
+    expect(bodyOf(fs.read('vault/directions/D02 Sweep.md'))).toBe(made('D02', 'direction'))
+    await setType(io, loaded, 'D02', 'experiment')
+    expect(bodyOf(fs.read('vault/experiments/E04 Sweep.md'))).toBe(made('E04', 'experiment'))
+    // a Code / data line that holds more than the hint stays, whatever the type
+    const text = loaded.texts.E04!.replace('commit, script, results folder, machine', 'abc123, train.py')
+    expect(retyped(text, loaded.tree.nodes.E04!, 'theory', 'T01', 'demo')).toContain('**Code / data:** abc123, train.py')
+  })
+
+  test('a type change refuses the root, the same type, unknown notes and types, and writes nothing', async () => {
+    const { fs, io, loaded } = await loadDemo()
+    const before = [...fs.files.keys()]
+    await expect(setType(io, loaded, 'D00', 'experiment')).rejects.toThrow(/root of the tree stays a direction/)
+    await expect(setType(io, loaded, 'E02', 'experiment')).rejects.toThrow(/already of type experiment/)
+    await expect(setType(io, loaded, 'E42', 'direction')).rejects.toThrow(/not a note/)
+    await expect(setType(io, loaded, 'E02', 'note')).rejects.toThrow(/type must be/)
+    expect([...fs.files.keys()]).toEqual(before)
   })
 
   test('adding refuses unknown parents and a second root', async () => {

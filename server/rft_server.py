@@ -2,14 +2,15 @@
 """The rft web view's server: local, standard library only.
 
 Serves the page (web/), the tree of the vault as JSON, and the text of one note at a time, and
-writes one thing: the body of a note, its frontmatter kept as it is. A new note it never writes
-itself: it asks the session that runs it, with a line `RFT_ADD_NODE {"parent", "type", "title"}`
-on stdout, and the plugin makes it as the rft_add_node tool does (no model turn), then answers
-the new id once the note is on disk. It binds 127.0.0.1 only, takes requests only for a loopback
+writes one thing: the body of a note, its frontmatter kept as it is. A new note, or a note's new type, 
+it never writes itself: it asks the session that runs it, with a
+line `RFT_ADD_NODE {"parent", "type", "title"}` or `RFT_SET_TYPE {"id", "type"}` on stdout, and the
+plugin makes the change as the rft_add_node or rft_set_type tool does (no model turn), then answers
+the note's id once it is on disk. It binds 127.0.0.1 only, takes requests only for a loopback
 host name (so a web page elsewhere cannot reach it through DNS rebinding), serves nothing but an
 allow-list of page files, and reads or writes a note only by its id, in a markdown file that
 resolves inside one of the vault's note folders (experiments/, directions/, references/,
-theory/). A write (PUT api/note, POST api/node) must also come from the page itself (its
+theory/). AA write (PUT api/note, POST api/node, POST api/type) must also come from the page itself (its
 Origin) and carry the vault's key, which is in the address the server prints, so neither
 another web page nor another user of the machine can change a note. The key is kept in the
 user's cache, readable by them alone, so it stays the same across restarts.
@@ -189,7 +190,7 @@ class Vault:
         self.ident = hashlib.sha256(str(self.root).encode()).hexdigest()[:16]
         self._lock = threading.Lock()
         self._write_lock = threading.Lock()
-        self._add_lock = threading.Lock()
+        self._ask_lock = threading.Lock()
         self._sig: str | None = None
         self._tree: dict | None = None
 
@@ -319,6 +320,24 @@ class Vault:
                 tmp.unlink(missing_ok=True)
         return 200, {"id": nid, "version": version_of(out)}
 
+    def _wait(self, found) -> dict | None:
+        """The note `found` picks out of the tree's nodes once the session has made the change,
+        answered once the notes are quiet; None when NODE_WAIT_S passes first."""
+        deadline = time.monotonic() + NODE_WAIT_S
+        while time.monotonic() < deadline:
+            time.sleep(0.1)
+            n = found(self.tree()["nodes"])
+            if n:
+                # the session goes on to write the notes' derived fields, the new one's `up:` too:
+                # answered once the notes are quiet, so the page opens the note as it then stays
+                sig, quiet = self.signature(), time.monotonic()
+                while time.monotonic() - quiet < SETTLE_S and time.monotonic() < deadline:
+                    time.sleep(0.1)
+                    if (now := self.signature()) != sig:
+                        sig, quiet = now, time.monotonic()
+                return n
+        return None
+
     def add_node(self, parent: str, kind: str, title: str, ask) -> tuple[int, dict]:
         """A new note under `parent`, made by the session: `ask` hands it the request, and the
         answer is the note's id once it is on disk. One request at a time, so each finds its own."""
@@ -326,36 +345,60 @@ class Vault:
             return 400, {"error": f"type must be one of {', '.join(TYPES)}"}
         if not re.search(r"\w", title):
             return 400, {"error": "the title needs a letter or a digit"}
-        with self._add_lock:
+        with self._ask_lock:
             before = {n["id"] for n in self.tree()["nodes"]}
             if parent not in before:
                 return 404, {"error": "no such parent note"}
             try:
-                ask({"parent": parent, "type": kind, "title": title})
+                ask("RFT_ADD_NODE", {"parent": parent, "type": kind, "title": title})
             except (OSError, ValueError):
                 return 503, {"error": "the Claude Code session that ran /rft is gone"}
-            deadline = time.monotonic() + NODE_WAIT_S
-            while time.monotonic() < deadline:
-                time.sleep(0.1)
-                new = [n for n in self.tree()["nodes"]
-                       if n["id"] not in before and n["parent"] == parent and n["type"] == kind]
-                if new:
-                    n = next((n for n in new if n["title"] == " ".join(title.split())), new[0])
-                    # the session goes on to write the notes' derived fields, the new one's `up:` too:
-                    # answered once the notes are quiet, so the page opens the note as it then stays
-                    sig, quiet = self.signature(), time.monotonic()
-                    while time.monotonic() - quiet < SETTLE_S and time.monotonic() < deadline:
-                        time.sleep(0.1)
-                        if (now := self.signature()) != sig:
-                            sig, quiet = now, time.monotonic()
-                    return 201, {"id": n["id"], "name": n["name"]}
+
+            def found(nodes):
+                new = [n for n in nodes if n["id"] not in before and n["parent"] == parent and n["type"] == kind]
+                return next((n for n in new if n["title"] == " ".join(title.split())), new[0]) if new else None
+
+            n = self._wait(found)
+            if n:
+                return 201, {"id": n["id"], "name": n["name"]}
         return 504, {"error": f"the Claude Code session did not add the note within {NODE_WAIT_S:g} s; "
                               "it may still appear (is the session that ran /rft still open?)"}
+    
+    def set_type(self, nid: str, kind: str, ask) -> tuple[int, dict]:
+        """A note's type changed by the session, which gives it the next id of the type, moves its
+        file and renames the links to it: the answer is the new id once the old note is gone."""
+        if kind not in TYPES:
+            return 400, {"error": f"type must be one of {', '.join(TYPES)}"}
+        with self._ask_lock:
+            before = {n["id"]: n for n in self.tree()["nodes"]}
+            old = before.get(nid)
+            if old is None:
+                return 404, {"error": "no such note"}
+            if old["type"] == kind:
+                return 400, {"error": f"the note is already of type {kind}"}
+            if old["parent"] is None and kind != "direction":
+                return 400, {"error": "the root of the tree stays a direction"}
+            try:
+                ask("RFT_SET_TYPE", {"id": nid, "type": kind})
+            except (OSError, ValueError):
+                return 503, {"error": "the Claude Code session that ran /rft is gone"}
+
+            def found(nodes):
+                if any(n["id"] == nid for n in nodes):
+                    return None
+                return next((n for n in nodes if n["id"] not in before and n["type"] == kind
+                             and n["title"] == old["title"]), None)
+
+            n = self._wait(found)
+            if n:
+                return 200, {"id": n["id"], "name": n["name"]}
+        return 504, {"error": f"the Claude Code session did not change the note's type within {NODE_WAIT_S:g} s; "
+                              "it may still change (is the session that ran /rft still open?)"}
 
 
-def ask_session(request: dict) -> None:
+def ask_session(verb: str, request: dict) -> None:
     """Hands a request to the plugin, which reads this process's stdout line by line."""
-    print(f"RFT_ADD_NODE {json.dumps(request)}", flush=True)
+    print(f"{verb} {json.dumps(request)}", flush=True)
 
 
 # ------------------------------------------------------------------ http
@@ -468,8 +511,17 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             return self._json(*vault.write_body(nid, req["body"], version))
 
         def do_POST(self):
-            """POST api/node {"parent": "<id>", "type": one of TYPES, "title": "..."}:
-            a new note under `parent`, with the default status, made by the session."""
+            """POST api/node {"parent": "<id>", "type": one of TYPES, "title": "..."}: a new note
+            under `parent`, with the default status; POST api/type {"id": "<id>", "type": one of
+            TYPES}: the note's type changed. The session makes either."""
+            if urlsplit(self.path).path == "/api/type":
+                got = self._write_request("/api/type", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                _, req = got
+                if not all(isinstance(req.get(k), str) for k in ("id", "type")):
+                    return self._json(400, {"error": "expected {id, type}"})
+                return self._json(*vault.set_type(req["id"], req["type"], ask))
             got = self._write_request("/api/node", MAX_NODE_BYTES)
             if got is None:
                 return

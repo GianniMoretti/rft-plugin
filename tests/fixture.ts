@@ -88,6 +88,9 @@ export class MemoryFs {
   write(p: string, text: string) {
     this.files.set(this.norm(p), { text, mtimeMs: ++this.clock })
   }
+  remove(p: string) {
+    this.files.delete(this.norm(p))
+  }
   isDir(p: string) {
     const d = this.norm(p).replace(/\/$/, '') + '/'
     return [...this.files.keys()].some(k => k.startsWith(d))
@@ -113,6 +116,7 @@ export class MemoryFs {
     return {
       read: async p => this.read(p),
       write: async (p, t) => this.write(p, t),
+      remove: async p => this.remove(p),
       list: async p => this.list(p),
       exists: async p => this.exists(p),
     }
@@ -132,6 +136,11 @@ export function world(on: On, files: Record<string, string>, opts: { refuse?: st
   on('fs.write', (_$, e) => { w.fs.write(e.path, e.text); return { value: undefined } })
   on('fs.list', (_$, e) => ({ value: w.fs.list(e.path) }))
   on('fs.exists', (_$, e) => { w.seen.push(e.path); return { value: w.fs.exists(e.path) } })
+  // the plugin deletes a file with `rm` through $.process.run
+  on('process.run', (_$, e) => {
+    if (e.argv[0] === 'rm') w.fs.remove(e.argv[e.argv.length - 1]!)
+    return { value: { exitCode: 0, stdout: '', stderr: '' } } as never
+  })
   on('command.register', (_$, e) => {
     if (opts.refuse?.includes(e.name)) return { deny: `"/${e.name}" refused: it is the plugin's /rft:${e.name}` }
     w.commands.push(e.name)

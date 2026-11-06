@@ -128,6 +128,7 @@ export type Io = {
   write: (path: string, text: string) => Promise<void>
   list: (path: string) => Promise<{ name: string; kind: string; mtimeMs: number; size: number }[]>
   exists: (path: string) => Promise<boolean>
+  remove: (path: string) => Promise<void>
 }
 
 export const CONFIG_PATH = '.rft/config.json'
@@ -186,6 +187,7 @@ export const rooted = (io: Io, root: string): Io => {
     write: (path, text) => io.write(at(path), text),
     list: path => io.list(at(path)),
     exists: path => io.exists(at(path)),
+    remove: path => io.remove(at(path)),
   }
 }
 
@@ -656,6 +658,17 @@ export function canvasJson(tree: Tree, previous?: string, relayout = false): str
   return JSON.stringify({ nodes, edges }, null, 1)
 }
 
+/** The canvas with note `from`'s card given to `to`, so a note that changes id keeps its place. */
+export function withCardRenamed(canvas: string, from: string, to: string): string {
+  try {
+    const c = JSON.parse(canvas) as { nodes?: CanvasNode[] }
+    for (const nd of c.nodes ?? []) if (nd.id === from) nd.id = to
+    return JSON.stringify(c, null, 1)
+  } catch {
+    return canvas
+  }
+}
+
 export function mermaidNote(tree: Tree): string {
   // children before their parent, the order the canvas layout visits them
   const ids: string[] = []
@@ -832,6 +845,9 @@ export function nextId(loaded: Loaded, type: NodeType, taken: string[] = []): st
   return formatId(prefix, isEmpty && max === 0 ? 0 : max + 1)
 }
 
+/** What a new experiment's Code / data line says until it is filled. */
+const CODE_HINT = 'commit, script, results folder, machine'
+
 export function noteText(id: string, n: NewNode, project: string, parentName: string | null): string {
   const t = TYPES[n.type]
   const status = n.status ?? t.status
@@ -846,7 +862,7 @@ export function noteText(id: string, n: NewNode, project: string, parentName: st
     `**Parent:** ${parentLink}  `,
     `**Status:** ${status} · **Date:** ${n.date}${t.code ? '  ' : ''}`,
   ]
-  if (t.code) head.push(`**Code / data:** ${s['Code / data'] ?? n.code ?? 'commit, script, results folder, machine'}`)
+  if (t.code) head.push(`**Code / data:** ${s['Code / data'] ?? n.code ?? CODE_HINT}`)
   const order: readonly string[] = t.sections
   const extra = Object.keys(s).filter(k => !order.includes(k) && k !== 'Code / data' && k !== 'Children in the tree')
   const blocks = [...order, ...extra].map(k => `## ${k}\n${(s[k] ?? '').trim()}${s[k]?.trim() ? '\n' : ''}`)
@@ -863,6 +879,69 @@ export function withChildListed(text: string, childName: string): string {
   const start = m.index + '## Children in the tree\n'.length
   const kept = m[1]!.split('\n').filter(l => l.trim() !== '')
   return t.slice(0, start) + [...kept, line].join('\n') + '\n' + t.slice(start + m[1]!.length)
+}
+
+// ---------------------------------------------------------------- changing a note's type
+
+/** `[[from]]`, `[[folder/from|alias]]`, `![[from#heading]]` and the like as links to `to`. */
+export function withLinksRenamed(text: string, from: string, to: string): string {
+  const name = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return text.replace(new RegExp(`\\[\\[(?:[^\\]|#\\n]*/)?${name}(?=\\]\\]|[|#])`, 'g'), () => `[[${to}`)
+}
+
+/** Renames the links to note `from` in the vault's markdown files, the templates and `skip` aside; answers the files changed. */
+export async function renameLinks(io: Io, vault: string, from: string, to: string, skip: string[] = []): Promise<string[]> {
+  const changed: string[] = []
+  for (const f of await allFiles(io, vault)) {
+    if (!f.endsWith('.md') || f.startsWith('templates/') || skip.includes(f)) continue
+    const prev = await io.read(join(vault, f))
+    const next = withLinksRenamed(prev, from, to)
+    if (next === prev) continue
+    await io.write(join(vault, f), next)
+    changed.push(f)
+  }
+  return changed
+}
+
+/**
+ * A note's text as a note of another type with id `id`: the id, type and type tag, the heading,
+ * the Code / data line (experiments alone have one; one holding more than the hint stays), and
+ * the sections: the new type's in its order, each with the text it had, then the note's other
+ * sections, less the old type's empty ones. No text is lost.
+ */
+export function retyped(text: string, n: RftNode, type: NodeType, id: string, project: string): string {
+  const CHILDREN = 'Children in the tree'
+  let out = setField(setField(normalise(text), 'id', id), 'type', type)
+  out = setField(out, 'tags', tagsLine(project, type, topicalTags(n.tags, project, type), n.status))
+  out = out.replace(new RegExp(`^# ${n.id}\\b`, 'm'), `# ${id}`)
+  const code = /^\*\*Code \/ data:\*\*(.*)$/m.exec(out)
+  if (TYPES[type].code && !code) out = out.replace(/^(\*\*Status:\*\*.*?) *$/m, `$1  \n**Code / data:** ${CODE_HINT}`)
+  if (!TYPES[type].code && code && code[1]!.trim() === CODE_HINT) out = out.replace(/ *\n\*\*Code \/ data:\*\*.*\n/, '\n')
+  const parts = split(out)
+  if (!parts) return out
+  // the body by `## ` section; a heading inside a code block is text
+  const lead: string[] = []
+  const found: { title: string; lines: string[] }[] = []
+  let lines = lead
+  let isFenced = false
+  for (const line of parts.body.split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) isFenced = !isFenced
+    if (!isFenced && line.startsWith('## ')) {
+      lines = []
+      found.push({ title: line.slice(3).trim(), lines })
+    } else lines.push(line)
+  }
+  const textOf = (s?: { lines: string[] }) => (s ? s.lines.join('\n').replace(/^\n+/, '').replace(/\s+$/, '') : '')
+  const first = (title: string) => found.find(s => s.title === title)
+  const block = (title: string, t: string) => `## ${title}\n${t}${t ? '\n' : ''}`
+  const now: readonly string[] = TYPES[type].sections
+  const was: readonly string[] = TYPES[n.type].sections
+  // a section the new type places itself: its first of that heading, and the children list
+  const isTypeSection = (s: { title: string }) => s === first(s.title) && (now.includes(s.title) || s.title === CHILDREN)
+  const kept = found.filter(s => !isTypeSection(s) && !(was.includes(s.title) && !textOf(s)))
+  const blocks = [...now.map(t => block(t, textOf(first(t)))), ...kept.map(s => block(s.title, textOf(s)))]
+  const top = lead.join('\n').replace(/\s*$/, '\n\n')
+  return joinNote(parts.head, top + blocks.join('\n') + '\n' + block(CHILDREN, textOf(first(CHILDREN))))
 }
 
 export function resolveId(tree: Tree, ref: string | null | undefined): string | null {

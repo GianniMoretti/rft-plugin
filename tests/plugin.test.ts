@@ -4,7 +4,7 @@
 import type { On } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { addNode, loadActive, today } from '../hooks/lib/ops'
+import { addNode, loadActive, setType, today } from '../hooks/lib/ops'
 import { CWD, D01, E02, MemoryFs, WEB_FILES, demoAt, demoFiles, paneProps, world } from './fixture'
 
 const SURFACES = ['terminal', 'desktop'] as const
@@ -35,7 +35,7 @@ describe('activation', () => {
     const w = world(on, demoFiles())
     on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.tools).toEqual(['rft_add_node', 'rft_set_status', 'rft_set_tags', 'rft_set_concept', 'rft_concepts', 'rft_tags', 'rft_tree', 'rft_validate', 'rft_sync'])
+    expect(w.tools).toEqual(['rft_add_node', 'rft_set_status', 'rft_set_tags', 'rft_set_type', 'rft_set_concept', 'rft_concepts', 'rft_tags', 'rft_tree', 'rft_validate', 'rft_sync'])
     expect(w.opened).toEqual(['rft-tree'])
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
     const rules = res.sections.find(s => s.id === 'rft:rules')
@@ -50,7 +50,7 @@ describe('activation', () => {
     on('prompt.compose', () => ({ sections: [] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
     expect(w.commands).toEqual(['rft-init', 'rft-concepts', 'rft-view'])
-    expect(w.tools).toHaveLength(9)
+    expect(w.tools).toHaveLength(10)
     expect(w.opened).toEqual(['rft-tree'])
     expect(w.toasts.join()).toContain('/rft')
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
@@ -403,6 +403,37 @@ describe('web view', () => {
     expect(texts(w.fs)).toEqual(before)
   })
 
+  test('a type change from the tree view is the one rft_set_type makes, with no model turn', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, demoFiles())
+    const srv = fakeServer(on)
+    const prompts: string[] = []
+    on('prompt.submit', (_$, e) => { prompts.push(String(e.text)); return { text: e.text } as never })
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    await $.command.run(RUN(''))
+    const ref = new MemoryFs(demoFiles())
+    await setType(ref.io(), await loadActive(ref.io()), 'E02', 'direction')
+    srv.print(`RFT_SET_TYPE ${JSON.stringify({ id: 'E02', type: 'direction' })}\n`)
+    await until(() => w.fs.exists('vault/directions/D02 Variant run.md') && !w.fs.exists(`vault/experiments/${E02}.md`))
+    expect(texts(w.fs)).toEqual(texts(ref))
+    expect(prompts).toEqual([])
+    expect(w.toasts).toEqual([])
+  })
+
+  test('a type change the tree view cannot make is reported in the session, and nothing is written', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, demoFiles())
+    const srv = fakeServer(on)
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    await $.command.run(RUN(''))
+    const before = texts(w.fs)
+    srv.print(`RFT_SET_TYPE ${JSON.stringify({ id: 'D00', type: 'experiment' })}\n`)
+    await until(() => w.toasts.length > 0)
+    expect(w.toasts.join()).toContain("the tree view could not change a note's type")
+    expect(w.toasts.join()).toContain('the root of the tree stays a direction')
+    expect(texts(w.fs)).toEqual(before)
+  })
+
   test('/rft outside an RFT project starts nothing', async ($, on) => {
     mock.clock(on)
     world(on, {})
@@ -484,7 +515,7 @@ describe('linked trees', () => {
     const srv = fakeServer(on)
     on('prompt.compose', () => ({ sections: [] }))
     await $.session.start({ cwd: REPO, source: 'startup' } as never)
-    expect(w.tools).toHaveLength(9)
+    expect(w.tools).toHaveLength(10)
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
     expect(res.sections.find(s => s.id === 'rft:rules')?.text).toContain(`notes in \`${TREE}/vault/\``)
     expect((await $.tool.call({ tool: 'mcp__rft__rft_tree' } as never)).text).toContain(`theory notes in ${TREE}/vault/.`)
@@ -519,7 +550,7 @@ describe('linked trees', () => {
     mock.clock(on)
     const w = world(on, linked(), { cwd: `${TREE}/analysis` })
     await $.session.start({ cwd: `${TREE}/analysis`, source: 'startup' } as never)
-    expect(w.tools).toHaveLength(9)
+    expect(w.tools).toHaveLength(10)
     const tree = await $.tool.call({ tool: 'mcp__rft__rft_tree' } as never)
     expect(tree.text).toMatch(/^demo: 2 directions, 2 experiments/)
   })

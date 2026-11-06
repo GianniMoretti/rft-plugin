@@ -1,7 +1,7 @@
 // The rft web view: the reasoning tree as a tidy tree on an infinite canvas (d3), with notes in
 // a side drawer. It runs in two ways: served by server/rft_server.py, where it polls
-// `api/tree`, reads notes from `api/note` and writes a note's edited text back to it, and asks
-// `api/node` for a new note under the one shown; or
+// `api/tree`, reads notes from `api/note` and writes a note's edited text back to it, asks
+// `api/node` for a new note under the one shown and `api/type` to change its type; or
 // inlined into a standalone tree.html by /rft-view, where `window.RFT_DATA` holds the tree and
 // every note's text, and nothing is edited.
 (function () {
@@ -41,6 +41,7 @@
   let editing = null // while a note's text is edited: { id, version, lead, text (as opened), newer (on a conflict) }
   let saving = false
   let adding = false
+  let retyping = false
 
   // ---------------------------------------------------------------- persistence
 
@@ -356,7 +357,7 @@
   async function select(id) {
     // the note being edited stays as it is; another one only once its changes are saved or dropped
     if (editing && (editing.id === id || !leaveEditor())) return
-    if (id !== selected) closeAdder()
+    if (id !== selected) { closeAdder(); closeRetyper() }
     selected = id
     showEditButton()
     gNodes.selectAll('g.node').attr('class', n => nodeClass(n.data))
@@ -405,6 +406,8 @@
     editBtn.hidden = Boolean(EMBED) || editing != null || !shown || shown.id !== selected
     if (editBtn.hidden) noKey.hidden = true
     addBtn.hidden = Boolean(EMBED) || editing != null || !byId.has(selected)
+    // the root stays a direction
+    typeBtn.hidden = Boolean(EMBED) || editing != null || !byId.has(selected) || !byId.get(selected).parent
   }
 
   function setEditorMsg(text, isError = false, isConflict = false) {
@@ -419,6 +422,7 @@
     const lead = /^\n*/.exec(note.body)[0] // the blank line under the frontmatter is kept, not shown
     editing = { id: note.id, version: note.version, lead, text: note.body.slice(lead.length), newer: null }
     closeAdder()
+    closeRetyper()
     textBox.value = editing.text
     textBox.readOnly = false
     noKey.hidden = true
@@ -518,6 +522,7 @@
 
   function openAdder() {
     if (!editKey()) { noKey.hidden = false; return }
+    closeRetyper()
     // an experiment tests a direction; a direction comes out of an experiment, a reference or a theory note
     addType.value = byId.get(selected).type === 'direction' ? 'experiment' : 'direction'
     addTitle.value = ''
@@ -569,6 +574,85 @@
   document.getElementById('add-cancel').addEventListener('click', () => closeAdder())
   adder.addEventListener('keydown', ev => {
     if (ev.key === 'Escape') { ev.preventDefault(); closeAdder() }
+  })
+
+  // ---------------------------------------------------------------- changing the type of the note shown
+
+  const typeBtn = document.getElementById('drawer-type')
+  const retyper = document.getElementById('retyper')
+  const retypeType = document.getElementById('retype-type')
+  const retypeHint = document.getElementById('retype-hint')
+  const retypeMsg = document.getElementById('retype-msg')
+  const PREFIX = { experiment: 'E', direction: 'D', reference: 'R', theory: 'T' }
+
+  function setRetypeMsg(text, isError = false) {
+    retypeMsg.textContent = text
+    retypeMsg.classList.toggle('error', isError)
+  }
+
+  function showRetypeHint() {
+    retypeHint.textContent = `${selected} gets the next ${PREFIX[retypeType.value]} id; its text stays, and links to it follow.`
+  }
+
+  function openRetyper() {
+    if (!editKey()) { noKey.hidden = false; return }
+    closeAdder()
+    const type = byId.get(selected).type
+    for (const o of retypeType.options) o.disabled = o.value === type
+    // the commonest mistake: a direction made as an experiment, or the other way round
+    retypeType.value = type === 'direction' ? 'experiment' : 'direction'
+    showRetypeHint()
+    setRetypeMsg('')
+    retyper.hidden = false
+    retypeType.focus()
+  }
+
+  function closeRetyper() {
+    retyper.hidden = true
+  }
+
+  /** Asks the server to change the type of the note shown (the session does it), then shows it under its new id. */
+  async function retype() {
+    const id = selected
+    if (!id || retyping) return
+    const wasFolded = collapsed.has(id)
+    retyping = true
+    retypeType.disabled = true
+    setRetypeMsg('Changing…')
+    try {
+      const res = await fetch('api/type', {
+        method: 'POST',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'X-RFT-Token': editKey() },
+        body: JSON.stringify({ id, type: retypeType.value }),
+      })
+      const reply = await res.json().catch(() => ({}))
+      if (!res.ok) { setRetypeMsg(`Not changed: ${reply.error || `the server answered ${res.status}`}.`, true); return }
+      closeRetyper()
+      // a folded branch stays folded under its new id (a poll meanwhile may have redrawn it unfolded)
+      if (wasFolded) { collapsed.delete(id); collapsed.add(reply.id); store.set('collapsed', [...collapsed]) }
+      const version = tree.version
+      await poll()
+      if (wasFolded && tree.version === version) render(true)
+      // the user may have moved on meanwhile
+      if (selected !== id || editing || !byId.has(reply.id)) return
+      reveal(reply.id)
+      centreOn(reply.id)
+      await select(reply.id)
+    } catch (e) {
+      setRetypeMsg('Not changed: the server is not answering.', true)
+    } finally {
+      retyping = false
+      retypeType.disabled = false
+    }
+  }
+
+  typeBtn.addEventListener('click', () => (retyper.hidden ? openRetyper() : closeRetyper()))
+  retypeType.addEventListener('change', showRetypeHint)
+  retyper.addEventListener('submit', ev => { ev.preventDefault(); retype() })
+  document.getElementById('retype-cancel').addEventListener('click', () => closeRetyper())
+  retyper.addEventListener('keydown', ev => {
+    if (ev.key === 'Escape') { ev.preventDefault(); closeRetyper() }
   })
 
   // ---------------------------------------------------------------- search, filter, legend
@@ -723,6 +807,7 @@
   document.getElementById('drawer-close').addEventListener('click', () => {
     if (!leaveEditor()) return
     closeAdder()
+    closeRetyper()
     document.getElementById('drawer').hidden = true
     selected = null
     gNodes.selectAll('g.node').attr('class', n => nodeClass(n.data))
