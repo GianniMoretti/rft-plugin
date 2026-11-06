@@ -113,6 +113,10 @@ button.primary { border-color: var(--accent); color: var(--accent); }
 #note .katex-display { margin: 0.6em 0; overflow-x: auto; overflow-y: hidden; padding: 2px 0; }
 #note .math-block .katex-display { margin: 0.8em 0; }
 #note code.math { color: var(--muted); }
+/* images: never wider than the drawer; a width given in the note kept below that */
+#note a.image { display: inline-block; max-width: 100%; vertical-align: middle; }
+#note img { max-width: 100%; object-fit: contain; vertical-align: middle; border-radius: 4px; }
+#note img:not([height]) { height: auto; }
 #tooltip { position: fixed; pointer-events: none; padding: 4px 8px; border-radius: 6px; font-size: calc(13px * var(--font-scale));
   background: var(--panel); border: 1px solid var(--line); max-width: 360px; z-index: 5; }
 @media (max-width: 640px) { #legend { display: none; } #search { min-width: 120px; flex: 1; } }

@@ -144,6 +144,15 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
 - Click a node to read its note in a side drawer; links in the note jump to their node. LaTeX
   renders as in Obsidian: `$…$` inline, `$$…$$` displayed (on one line or several); a `$` in
   code, `\$`, and amounts like "$5 and $10" stay text.
+- Images show as in Obsidian: `![[name.png]]` and `![alt](path/to/fig.png)`, with a width as
+  `![[name.png|400]]` or `![alt|400](…)` (or `400x300`). A path is read from the note's folder or
+  the vault's top, or is a path on disk (`/home/…/results/fig.png`); a bare name is the image of
+  that name nearest the note, in the vault, else in the Obsidian vault around it (the folder
+  holding `.obsidian/`), so `![[Pasted image ….png]]` finds Obsidian's attachments. An image
+  outside the vault needs the key (see below); a missing one says so in its place. Click an image
+  to open it at full size. A remote image (`https://…`) shows as a link: the page loads nothing
+  from elsewhere. `rft_validate` leaves embedded images alone. `/rft-view` shows each image as
+  a placeholder.
 - **Edit** in the drawer changes the note's text: the markdown below the frontmatter (status,
   parent and tags stay with Claude's tools). **Save** or Ctrl/Cmd+S writes the file, **Cancel**
   or Esc drops the changes. A note that changed meanwhile (Claude, another editor) is never
@@ -219,7 +228,11 @@ their counts.
 
 The server listens on `127.0.0.1` only, on a free port (or `webPort` in the config). It serves
 the page, the tree as JSON and the text of one note at a time, read by its id from inside the
-vault, and answers only requests for a loopback host name. It writes one thing, a note's text
+vault, and the image files notes embed: one inside the vault to anyone who can read the notes,
+one outside it (anywhere on disk) only to the page carrying the key below, so another user of
+the machine cannot read your files through it, nor learn whether one exists. An image is sent
+with a policy that runs nothing in it, an SVG's scripts included. It answers only requests for
+a loopback host name. It writes one thing, a note's text
 from **Edit**, its frontmatter kept as it is; a new note from **+ Child**, or a note's new type
 from **Type**, it asks the session that started it to make (a line on its output, which the
 plugin reads). It does any of these only for
@@ -252,7 +265,7 @@ needs no network.
 | `/rft-init [starting question]` | activate RFT here and create (or adopt) the vault |
 | `/rft-concepts` | print the concept tree |
 | `/rft-concepts suggest` | ask Claude to propose a concept split; nothing changes until you confirm |
-| `/rft-view` | write `vault/tree.html`: the same tree view as one standalone file, every note inside, to open anywhere or share |
+| `/rft-view` | write `vault/tree.html`: the same tree view as one standalone file, every note inside (images as placeholders), to open anywhere or share |
 
 The plugin registers these commands when a session starts, so the desktop app's slash-command
 menu may not list them (it lists the plugin's skill, `/rft:rft-manual`): type `/rft` in full

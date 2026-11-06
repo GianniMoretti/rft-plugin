@@ -15,6 +15,11 @@ Origin) and carry the vault's key, which is in the address the server prints, so
 another web page nor another user of the machine can change a note. The key is kept in the
 user's cache, readable by them alone, so it stays the same across restarts.
 
+It also serves the images a note embeds (GET api/image?note=<id>&src=<as written>), found as
+Obsidian finds them: by path, from the note's folder or the vault's top, else by name, nearest
+the note, in the vault and then in the Obsidian vault around it (the folder that holds
+`.obsidian/`). Only image files, and one outside the vault only for a request carrying the key.
+
     python3 rft_server.py --vault /abs/project/vault --web /abs/plugin/web [--port 0] [--project NAME]
 
 It prints `RFT_SERVER_URL http://127.0.0.1:<port>/?token=<key>` once listening, and exits when
@@ -65,6 +70,16 @@ MAX_NOTE_BYTES = 2_000_000
 MAX_NODE_BYTES = 10_000
 NODE_WAIT_S = 10.0  # how long a new note may take the session to make
 SETTLE_S = 0.3  # how long the notes stay as they are before a new one counts as made
+IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+               ".webp": "image/webp", ".avif": "image/avif", ".bmp": "image/bmp", ".svg": "image/svg+xml"}
+MAX_IMAGE_BYTES = 50_000_000
+RESCAN_S = 5.0  # a name not found looks through the folders again at most this often
+MAX_SCAN_FILES = 2_000_000  # the most files a search by name looks through
+SKIP_DIRS = {"node_modules", "__pycache__"}  # with every dot folder: never searched by name
+PAGE_CSP = ("default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; "
+            "connect-src 'self'; frame-ancestors 'self'")
+# an image runs nothing, even an SVG opened on its own
+IMAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
 
 
 # ------------------------------------------------------------------ the vault
@@ -188,6 +203,25 @@ def link_target(value: str | None) -> str | None:
     return m.group(1).strip() if m else None
 
 
+def obsidian_root(folder: Path) -> Path | None:
+    """The Obsidian vault the folder is in: the nearest folder, itself or above, holding `.obsidian/`."""
+    return next((d for d in (folder, *folder.parents) if (d / ".obsidian").is_dir()), None)
+
+
+def is_image(path: Path) -> bool:
+    return path.suffix.lower() in IMAGE_TYPES
+
+
+def distance(a: Path, b: Path) -> int:
+    """The steps from folder `a` to folder `b`: up to their common folder, then down."""
+    common = 0
+    for x, y in zip(a.parts, b.parts):
+        if x != y:
+            break
+        common += 1
+    return len(a.parts) + len(b.parts) - 2 * common
+
+
 class Vault:
     """The tree read from the notes' `parent:` fields, cached until a note changes."""
 
@@ -201,6 +235,11 @@ class Vault:
         self._ask_lock = threading.Lock()
         self._sig: str | None = None
         self._tree: dict | None = None
+        # the folders an image is searched in by name: the vault, then the Obsidian vault around it
+        outer = obsidian_root(self.root)
+        self.image_tops = [self.root] + ([outer] if outer and outer != self.root else [])
+        self._names: dict[Path, tuple[float, dict[str, list[tuple[str, str]]]]] = {}
+        self._names_lock = threading.Lock()
 
     def signature(self) -> str:
         parts = []
@@ -294,6 +333,72 @@ class Vault:
         data = path.read_bytes()
         return {"id": nid, "name": path.name[:-3], "body": body_of(data.decode("utf-8", errors="replace")),
                 "version": version_of(data)}
+
+    def inside(self, path: Path) -> bool:
+        return self.root in path.parents
+
+    def image(self, nid: str, src: str) -> Path | None:
+        """The image file note `nid` embeds as `src` (`![[src]]` or `![](src)`), resolved, as
+        Obsidian finds it: a path on disk; else from the note's folder, the vault's top or the
+        Obsidian vault's; else by name, the file whose path ends as `src` does that lies nearest
+        the note, first in the vault, then in the Obsidian vault. None when there is none."""
+        note = self.note_path(nid)
+        src = (src or "").strip()
+        if note is None or not src or "\x00" in src or len(src) > 4096:
+            return None
+        if src.lower().startswith("file://"):
+            src = src[len("file://"):]
+        if not is_image(Path(src)):
+            return None
+        inner = src.lstrip("/")  # Obsidian reads `/a.png` from its vault's top
+        tries = ([Path(src)] if Path(src).is_absolute() else []) + [note.parent / inner, *(t / inner for t in self.image_tops)]
+        parts = [p for p in Path(inner).parts if p not in (".", "..")]
+        try:
+            found = next((p for p in tries if p.is_file()), None)
+            for top in self.image_tops if parts else ():
+                found = found or self._by_name(top, parts, note.parent)
+            path = found.resolve() if found else None
+        except OSError:  # a name too long, a folder it may not read
+            return None
+        # a link named .png that leads to anything else is not an image
+        return path if path and is_image(path) else None
+
+    def _by_name(self, top: Path, parts: list[str], near: Path) -> Path | None:
+        """The image under `top` whose path ends in `parts`, nearest folder `near`."""
+        want = [p.lower() for p in parts]
+        for fresh in (False, True):
+            hits = []
+            for folder, name in self._image_names(top, fresh).get(want[-1], []):
+                f = Path(folder)
+                tail = f.parts[len(f.parts) - (len(want) - 1):] if len(want) > 1 else ()
+                if [x.lower() for x in tail] == want[:-1] and (f / name).is_file():
+                    hits.append(f / name)
+            if hits:
+                return min(hits, key=lambda p: (distance(near, p.parent), str(p)))
+        return None
+
+    def _image_names(self, top: Path, fresh: bool) -> dict[str, list[tuple[str, str]]]:
+        """The image files under `top` by lowercase name, kept until a name is not found
+        (`fresh`): then looked for again, in the vault at once (an image just pasted), in the
+        Obsidian vault, often far larger, once the last look is older than RESCAN_S. Dot
+        folders, SKIP_DIRS and links to folders are left out."""
+        with self._names_lock:
+            kept = self._names.get(top)
+            wait = 0 if top == self.root else RESCAN_S
+            if kept and (not fresh or time.monotonic() - kept[0] < wait):
+                return kept[1]
+            names: dict[str, list[tuple[str, str]]] = {}
+            seen = 0
+            for folder, dirs, files in os.walk(top):
+                dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in SKIP_DIRS)
+                for f in files:
+                    if os.path.splitext(f)[1].lower() in IMAGE_TYPES:
+                        names.setdefault(f.lower(), []).append((folder, f))
+                seen += len(files)
+                if seen > MAX_SCAN_FILES:
+                    break
+            self._names[top] = (time.monotonic(), names)
+            return names
 
     def write_body(self, nid: str, body: str, version: str | None) -> tuple[int, dict]:
         """Replaces a note's body, keeping its frontmatter byte for byte. Refused, with the note as
@@ -429,12 +534,43 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
-            self.send_header("Content-Security-Policy",
-                             "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; "
-                             "connect-src 'self'; frame-ancestors 'self'")
+            self.send_header("Content-Security-Policy", PAGE_CSP)
             self.end_headers()
             if not head_only:
                 self.wfile.write(body)
+
+        def _image(self, q: dict, head_only: bool):
+            """GET api/image?note=<id>&src=<as the note writes it>[&token=<key>]: the image, when
+            it is in the vault or the request carries the key. Without the key, an image that is
+            not in the vault is refused whether it exists or not, so nothing outside can be probed."""
+            one = lambda k: (q.get(k) or [""])[0]
+            path = vault.image(one("note"), one("src"))
+            keyed = bool(token) and secrets.compare_digest(one("token").encode(), token.encode())
+            if path is None or not (keyed or vault.inside(path)):
+                if keyed:
+                    return self._send(404, b"no such image", "text/plain", head_only)
+                return self._send(403, b"not in the vault: an image from elsewhere needs the key in the address /rft printed",
+                                  "text/plain; charset=utf-8", head_only)
+            try:
+                st = path.stat()
+                if st.st_size > MAX_IMAGE_BYTES:
+                    return self._send(413, b"the image is too large", "text/plain", head_only)
+                # the browser asks again each time, and the image comes again only once it changed
+                tag = f'"{st.st_mtime_ns:x}-{st.st_size:x}"'
+                same = self.headers.get("If-None-Match") == tag
+                data = b"" if head_only or same else path.read_bytes()
+            except OSError:
+                return self._send(404, b"no such image", "text/plain", head_only)
+            self.send_response(304 if same else 200)
+            if not same:
+                self.send_header("Content-Type", IMAGE_TYPES[path.suffix.lower()])
+                self.send_header("Content-Length", str(len(data) if data else st.st_size))
+            for k, v in (("Cache-Control", "private, no-cache"), ("ETag", tag), ("X-Content-Type-Options", "nosniff"),
+                         ("Referrer-Policy", "no-referrer"), ("Content-Security-Policy", IMAGE_CSP)):
+                self.send_header(k, v)
+            self.end_headers()
+            if data:
+                self.wfile.write(data)
 
         def _json(self, status: int, obj, head_only=False):
             self._send(status, json.dumps(obj, ensure_ascii=False).encode(), "application/json; charset=utf-8", head_only)
@@ -466,6 +602,8 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 nid = (parse_qs(url.query).get("id") or [""])[0]
                 note = vault.note(nid)
                 return self._json(200, note, head_only) if note else self._json(404, {"error": "no such note"}, head_only)
+            if route == "/api/image":
+                return self._image(parse_qs(url.query), head_only)
             return self._send(404, b"not found", "text/plain", head_only)
 
         def _refuse(self):

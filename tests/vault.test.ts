@@ -194,12 +194,17 @@ describe('vault', () => {
 
   test('validation reports broken links, bad statuses and forbidden titles', async () => {
     const files = demoFiles()
-    files[`vault/experiments/${E02}.md`] = files[`vault/experiments/${E02}.md`]!.replace('status: running', 'status: maybe') + '\nSee [[Nowhere]].\n'
+    files[`vault/experiments/${E02}.md`] = files[`vault/experiments/${E02}.md`]!.replace('status: running', 'status: maybe') +
+      '\nSee [[Nowhere]] and [[gone.png]].\n\n![[elsewhere.png|400]] ![[Missing note]]\n'
     files['vault/directions/D02 Bad #title.md'] = `---\nid: D02\ntype: direction\nstatus: idea\ndate: 2026-01-01\nparent: "[[${E02}]]"\n---\n`
     const { io, loaded } = await loadDemo(new MemoryFs(files))
     const v = await validate(io, loaded)
     expect(v.errors.some(x => x.includes('status "maybe"'))).toBe(true)
     expect(v.errors.some(x => x.includes('broken link [[Nowhere]]'))).toBe(true)
+    expect(v.errors.some(x => x.includes('broken link [[gone.png]]'))).toBe(true)
+    expect(v.errors.some(x => x.includes('broken link [[Missing note]]'))).toBe(true)
+    // an embedded image may be elsewhere in the Obsidian vault, where the tree view finds it
+    expect(v.errors.some(x => x.includes('elsewhere.png'))).toBe(false)
     expect(v.errors.some(x => x.includes('breaks links'))).toBe(true)
   })
 

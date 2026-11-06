@@ -16,6 +16,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import rft_server  # noqa: E402
@@ -495,6 +496,130 @@ def fetch(port, path):
         return status, json.loads(body)
     except OSError:
         return None, None
+
+
+class ImageTest(unittest.TestCase):
+    """The images a note embeds: found as Obsidian finds them, the ones outside the vault only with the key."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        obs = Path(cls.tmp.name) / "obs"  # an Obsidian vault, the tree's vault inside it
+        vault = obs / "proj" / "vault"
+        for d in [obs / ".obsidian", obs / "pics", obs / ".trash", obs / "proj" / "code" / "results",
+                  vault / "directions", vault / "experiments" / "attachments", vault / "experiments" / "figs"]:
+            d.mkdir(parents=True, exist_ok=True)
+        (vault / "directions" / "D00 Root.md").write_text(note("D00", "direction", "done", "", "Root"))
+        (vault / "experiments" / "E01 Run.md").write_text(note("E01", "experiment", "done", "D00 Root", "Run"))
+        cls.files = {
+            "pasted": vault / "experiments" / "attachments" / "Pasted image 20260101.png",
+            "near": vault / "experiments" / "attachments" / "dup.png",
+            "far": obs / "pics" / "dup.png",
+            "spaced": vault / "experiments" / "figs" / "loss plot.png",
+            "shared": obs / "pics" / "shared.jpg",
+            "code": obs / "proj" / "code" / "results" / "fig3.png",
+            "trash": obs / ".trash" / "binned.png",
+            "svg": vault / "experiments" / "figs" / "chart.svg",
+        }
+        for name, p in cls.files.items():
+            p.write_bytes(b"\x89PNG " + name.encode())
+        (obs / "secret.txt").write_text("secret")
+        os.symlink(obs / "secret.txt", vault / "experiments" / "figs" / "secret.png")
+        cls.obs, cls.vault = obs, vault
+        handler = rft_server.make_handler(rft_server.Vault(vault, "demo"), WEB, KEY)
+        cls.server = rft_server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        cls.port = cls.server.server_address[1]
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.tmp.cleanup()
+
+    def image(self, src, key=None, note_id="E01", headers=(), host=None):
+        """The status, headers and body of the image note `note_id` embeds as `src`."""
+        q = f"/api/image?note={note_id}&src={quote(src, safe="")}" + (f"&token={key}" if key else "")
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.putrequest("GET", q, skip_host=True)
+        c.putheader("Host", host or f"127.0.0.1:{self.port}")
+        for k, v in headers:
+            c.putheader(k, v)
+        c.endheaders()
+        r = c.getresponse()
+        body = r.read()
+        c.close()
+        return r.status, dict(r.getheaders()), body
+
+    def assertServes(self, src, name, key=None):
+        status, h, body = self.image(src, key)
+        self.assertEqual(status, 200, src)
+        self.assertEqual(body, b"\x89PNG " + name.encode(), src)
+        return h
+
+    def test_in_the_vault_without_the_key(self):
+        # by name, as Obsidian pastes it (attachments/ beside the note), and by a path from the note
+        h = self.assertServes("Pasted image 20260101.png", "pasted")
+        self.assertEqual(h["Content-Type"], "image/png")
+        self.assertServes("figs/loss plot.png", "spaced")
+        self.assertServes("./attachments/dup.png", "near")
+        self.assertServes("experiments/figs/loss plot.png", "spaced")  # from the vault's top
+        self.assertServes("PASTED IMAGE 20260101.PNG", "pasted")  # names match in any case
+
+    def test_the_nearest_of_two_names(self):
+        self.assertServes("dup.png", "near")
+        self.assertServes("pics/dup.png", "far", KEY)  # a path picks the other one
+
+    def test_outside_the_vault_only_with_the_key(self):
+        code = str(self.files["code"])
+        for src, name in [("shared.jpg", "shared"), ("results/fig3.png", "code"), (code, "code"),
+                          ("file://" + code, "code"), ("../../code/results/fig3.png", "code"), ("/pics/shared.jpg", "shared")]:
+            self.assertEqual(self.image(src)[0], 403, src)
+            self.assertEqual(self.image(src, "wrong-key")[0], 403, src)
+            self.assertServes(src, name, KEY)
+        self.assertEqual(self.image("shared.jpg", KEY)[1]["Content-Type"], "image/jpeg")
+
+    def test_nothing_to_probe_without_the_key(self):
+        # a missing image and one outside the vault get the same answer without the key
+        self.assertEqual(self.image("nowhere.png")[0], 403)
+        self.assertEqual(self.image("/no/such/dir/x.png")[0], 403)
+        self.assertEqual(self.image("nowhere.png", KEY)[0], 404)
+
+    def test_images_only(self):
+        for src in [str(self.obs / "secret.txt"), "figs/secret.png", "../../../secret.txt", "E01 Run.md",
+                    "../directions/D00 Root.md", "", "figs/", "figs/loss plot.png\x00.png"]:
+            self.assertEqual(self.image(src, KEY)[0], 404, repr(src))
+        self.assertEqual(self.image("binned.png", KEY)[0], 404)  # dot folders are not searched by name
+        for nid in ["E99", "X01", "../E01", ""]:
+            self.assertEqual(self.image("dup.png", KEY, note_id=nid)[0], 404, nid)
+
+    def test_an_svg_runs_nothing(self):
+        h = self.assertServes("chart.svg", "svg")
+        self.assertEqual(h["Content-Type"], "image/svg+xml")
+        self.assertIn("sandbox", h["Content-Security-Policy"])
+        self.assertIn("default-src 'none'", h["Content-Security-Policy"])
+        self.assertEqual(h["X-Content-Type-Options"], "nosniff")
+
+    def test_sent_again_only_once_changed(self):
+        h = self.assertServes("dup.png", "near")
+        status, again, body = self.image("dup.png", headers=[("If-None-Match", h["ETag"])])
+        self.assertEqual((status, body), (304, b""))
+        self.assertEqual(again["ETag"], h["ETag"])
+
+    def test_an_image_just_added_is_found(self):
+        self.assertServes("dup.png", "near")  # the vault's names are now known
+        p = self.vault / "experiments" / "attachments" / "new.png"
+        p.write_bytes(b"\x89PNG new")
+        self.addCleanup(p.unlink)
+        self.assertServes("new.png", "new")
+
+    def test_loopback_hosts_only(self):
+        self.assertEqual(self.image("dup.png", KEY, host="evil.example")[0], 403)
+
+    def test_no_obsidian_vault_around(self):
+        # the vault is all there is to search by name
+        self.assertEqual(rft_server.Vault(self.vault, "demo").image_tops, [self.vault.resolve(), self.obs.resolve()])
+        with tempfile.TemporaryDirectory() as t:
+            self.assertEqual(rft_server.Vault(Path(t), "demo").image_tops, [Path(t).resolve()])
 
 
 class SharedPortTest(unittest.TestCase):

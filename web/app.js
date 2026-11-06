@@ -394,7 +394,7 @@
     if (selected !== id || editing) return
     shown = body == null ? null : { id, body, version }
     showEditButton()
-    article.innerHTML = body == null ? '<p class="missing">The note could not be read.</p>' : markdown(body)
+    article.innerHTML = body == null ? '<p class="missing">The note could not be read.</p>' : markdown(body, id)
   }
 
   function go(id) {
@@ -509,7 +509,7 @@
   document.getElementById('note-reload').addEventListener('click', () => {
     if (!editing || !editing.newer) return
     shown = editing.newer
-    article.innerHTML = markdown(shown.body)
+    article.innerHTML = markdown(shown.body, shown.id)
     openEditor(shown)
   })
   textBox.addEventListener('keydown', ev => {
@@ -862,6 +862,21 @@
     const a = ev.target.closest('a[data-go]')
     if (a) { ev.preventDefault(); go(a.dataset.go) }
   })
+  // an image that does not come says why in its place: the server answers 404 when there is
+  // none, 403 to a page without the key when it is not in the vault (it may be elsewhere)
+  document.getElementById('note').addEventListener('error', async ev => {
+    const img = ev.target
+    if (!(img instanceof HTMLImageElement) || !img.dataset.label) return
+    let status = 0
+    try { status = (await fetch(img.src, { method: 'HEAD', cache: 'no-store' })).status } catch (e) { /* the server is gone */ }
+    const label = img.dataset.label
+    const span = document.createElement('span')
+    span.className = 'missing'
+    span.textContent = status === 404 ? `(missing image: ${label})`
+      : status === 403 ? `(${label}: not in the vault; open the address /rft printed to show images from elsewhere)`
+        : `(${label} could not be shown)`
+    ;(img.closest('a.image') || img).replaceWith(span)
+  }, true)
   window.addEventListener('resize', () => scheduleLabels())
 
   // ---------------------------------------------------------------- concepts
@@ -1194,10 +1209,48 @@
   // whose dollars have no space just inside them and no digit just after ("$5 and $10" is text)
   const CODE = /`([^`]+)`/g
   const MATH = /\\\$|\$\$([^\u0000]+?)\$\$|\$(?=[^\s$])((?:\\[^\u0000]|[^\\$\u0000])+?)(?<!\s)\$(?!\d)/g
+  // images as Obsidian embeds them: ![[name.png]], ![[name.png|400]] (a width, or 400x300) and
+  // ![alt](path.png), ![alt|400](<a path with spaces.png>); the server finds the file. In a
+  // table the | is written \|
+  const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i
+  const WIKI_IMAGE = /!\[\[([^\]\n]+)\]\]/g
+  const MD_IMAGE = /!\[([^\]\n]*)\]\(\s*(<[^>\n]+>|[^)\s]+)(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\s*\)/g
+  const sizeOf = o => /^\s*(\d+)(?:x(\d+))?\s*$/.exec(o)
+  let mdNote = null // the note markdown() renders: its images are found from its folder
+  /** An image of the note shown, as the server serves it; a mention in the standalone page. */
+  function image(src, alt, size) {
+    const label = alt || src.split('/').pop()
+    if (EMBED || !mdNote) return `<em class="missing">(image: ${escH(label)})</em>`
+    const key = editKey()
+    const url = `api/image?note=${encodeURIComponent(mdNote)}&src=${encodeURIComponent(src)}` +
+      (key ? `&token=${encodeURIComponent(key)}` : '')
+    const dims = size ? ` width="${size[1]}"` + (size[2] ? ` height="${size[2]}"` : '') : ''
+    return `<a class="image" href="${escH(url)}" target="_blank" rel="noopener noreferrer" title="Open at full size">` +
+      `<img src="${escH(url)}" alt="${escH(alt)}" data-label="${escH(label)}" loading="lazy"${dims}></a>`
+  }
+  /** `![[inner]]` as an image, or null when it embeds something else (a note, a PDF). */
+  function wikiImage(inner) {
+    const [target, ...opts] = inner.split(/\\?\|/)
+    if (!IMAGE_EXT.test(target.trim())) return null
+    const alt = opts.find(o => !sizeOf(o))
+    return image(target.trim(), alt ? alt.trim() : '', opts.map(sizeOf).find(Boolean))
+  }
+  /** `![alt](src)`: a local image, a link to a remote one (the page fetches nothing from elsewhere). */
+  function mdImage(alt, src) {
+    const [text, ...opts] = alt.split(/\\?\|/)
+    src = src.replace(/^<(.*)>$/, '$1')
+    if (/^https?:/i.test(src)) return `<a href="${escH(src)}" target="_blank" rel="noopener noreferrer">(image: ${escH(text.trim() || src)})</a>`
+    let path = src
+    try { path = decodeURIComponent(src) } catch (e) { /* a % of its own */ }
+    if (!IMAGE_EXT.test(path)) return `<em>(embedded: ${escH(text.trim() || path)})</em>`
+    return image(path, text.trim(), opts.map(sizeOf).find(Boolean))
+  }
   function inline(t) {
     const held = []
     const hold = html => `\u0000${held.push(html) - 1}\u0000`
     t = t.replace(CODE, (m, code) => hold(`<code>${escH(code)}</code>`))
+      .replace(WIKI_IMAGE, (m, inner) => { const html = wikiImage(inner); return html == null ? m : hold(html) })
+      .replace(MD_IMAGE, (m, alt, src) => hold(mdImage(alt, src)))
       .replace(MATH, (m, display, math) => hold(display != null ? tex(display, true) : math != null ? tex(math, false) : '$'))
     return escH(t)
       .replace(/!\[\[([^\]]+)\]\]/g, '<em>(embedded: $1)</em>')
@@ -1211,7 +1264,8 @@
       .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
       .replace(/\u0000(\d+)\u0000/g, (m, i) => held[i])
   }
-  function markdown(src) {
+  function markdown(src, noteId) {
+    mdNote = noteId || null
     const out = []
     let list = 0, inCode = false, table = false, para = []
     let math = null // the lines of a $$ block opened on a line of its own, until its closing $$

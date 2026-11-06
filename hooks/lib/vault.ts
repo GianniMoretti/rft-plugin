@@ -748,6 +748,7 @@ export async function sync(io: Io, loaded: Loaded, opts: { relayout?: boolean } 
 
 export type Validation = { errors: string[]; warnings: string[] }
 
+const IMAGE_FILE = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i
 const stripCode = (text: string) => text.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '')
 
 async function allFiles(io: Io, dir: string, rel = ''): Promise<string[]> {
@@ -817,7 +818,9 @@ export async function validate(io: Io, loaded: Loaded): Promise<Validation> {
     const text = stripCode(await io.read(join(config.vault, f)))
     for (const m of text.matchAll(/!?\[\[([^\]|#]*)[^\]]*\]\]/g)) {
       const target = m[1]!.trim()
-      if (!target) continue
+      // an embedded image is no link of the tree, and may be anywhere in the Obsidian vault
+      // around this one, where the tree view finds it
+      if (!target || (m[0].startsWith('!') && IMAGE_FILE.test(target))) continue
       const base = target.split('/').pop()!.toLowerCase()
       if (!names.has(base) && !names.has(base + '.md')) errors.push(`${f}: broken link [[${target}]]`)
     }
