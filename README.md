@@ -135,16 +135,20 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   opens the outline pane. Open the address in any browser on the same machine.
 
 - A tidy tree, **top-down**, **left-right** or **radial** (never a force layout): circles
-  filled by status and ringed by type, arrows from parent to child.
-- An infinite canvas: drag to pan, scroll or pinch to zoom; **Fit** and **Centre on root**.
+  filled by status and ringed by type, arrows from parent to child. The layout button shows
+  the current layout as a symbol and switches to the next one.
+- An infinite canvas: drag to pan, scroll or pinch to zoom. One button fits the whole tree,
+  then centres on the root; panning or zooming by hand makes it fit again.
   Labels show more of the title the closer you zoom.
+- The title is the project's name, or the root note's concept when it declares one.
 - Click a node to read its note in a side drawer; links in the note jump to their node.
 - **Edit** in the drawer changes the note's text: the markdown below the frontmatter (status,
   parent and tags stay with Claude's tools). **Save** or Ctrl/Cmd+S writes the file, **Cancel**
   or Esc drops the changes. A note that changed meanwhile (Claude, another editor) is never
   overwritten silently: you choose **Overwrite** or **Reload**. Leaving a note with unsaved
   changes asks first.
-  Fold a branch with its **−** / **+** badge or a double-click; **Expand all**, **Collapse all**.
+  Fold a branch with its **−** / **+** badge or a double-click; one button expands every
+  branch while one is folded, and collapses them all otherwise.
 - **+ Child** in the drawer adds a direction or an experiment under the note shown: choose the
   type (the other one than the note's comes first), type a title, **Add** or Enter. The note is
   made as Claude's `rft_add_node` makes it (the next free id, the title cleaned, the template,
@@ -185,7 +189,8 @@ applies it with `rft_set_concept` only after you say yes. `/rft-concepts suggest
 a full split of the existing tree, as a table to confirm or change; `/rft-concepts` prints the
 concept tree.
 
-In the tree view, **Concepts: Off / Regions / Arrows** switches the overlay:
+In the tree view, the concept button switches the overlay from off to **Regions** to
+**Arrows** and back; its symbol shows the current one:
 
 - **Regions**: a soft region behind each concept, bordered in its colour, its name on top;
   sub-concepts are nested, lighter regions. They follow the layout (top-down, left-right,

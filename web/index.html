@@ -12,16 +12,21 @@
   <h1 id="title">Reasoning tree</h1>
   <span id="counts" class="muted"></span>
   <span id="live" class="live" title="Live: follows the vault"></span>
-  <div class="group" role="group" aria-label="Layout">
-    <button data-layout="td" aria-pressed="true">Top-down</button>
-    <button data-layout="lr" aria-pressed="false">Left-right</button>
-    <button data-layout="radial" aria-pressed="false">Radial</button>
-  </div>
-  <div class="group">
-    <button id="fit" title="Show the whole tree">Fit</button>
-    <button id="centre" title="Centre on the root">Centre on root</button>
-    <button id="expand" title="Expand every branch">Expand all</button>
-    <button id="collapse" title="Collapse every branch below the root">Collapse all</button>
+  <div class="group" role="group" aria-label="View">
+    <!-- each toggle shows the symbol of its state (or of what a click does); its tooltip names it -->
+    <button id="layout" class="cycle icon-btn" title="Layout: Top-down (click: Left-right)" aria-label="Layout: Top-down (click: Left-right)">
+      <svg data-v="td" class="ico on" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7v5M6 17v-5h12v5"/><circle cx="12" cy="5" r="2.6" fill="currentColor" stroke="none"/><circle cx="6" cy="19" r="2.6" fill="currentColor" stroke="none"/><circle cx="18" cy="19" r="2.6" fill="currentColor" stroke="none"/></svg>
+      <svg data-v="lr" class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 12h5M17 6h-5v12h5"/><circle cx="5" cy="12" r="2.6" fill="currentColor" stroke="none"/><circle cx="19" cy="6" r="2.6" fill="currentColor" stroke="none"/><circle cx="19" cy="18" r="2.6" fill="currentColor" stroke="none"/></svg>
+      <svg data-v="radial" class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" stroke-width="1.2" stroke-dasharray="2 2.6" opacity="0.6"/><path d="M12 12V3.5M12 12l7.4 4.3M12 12l-7.4 4.3"/><circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none"/><circle cx="12" cy="3.5" r="2.3" fill="currentColor" stroke="none"/><circle cx="19.4" cy="16.3" r="2.3" fill="currentColor" stroke="none"/><circle cx="4.6" cy="16.3" r="2.3" fill="currentColor" stroke="none"/></svg>
+    </button>
+    <button id="fit" class="cycle icon-btn" title="Fit: show the whole tree" aria-label="Fit: show the whole tree">
+      <svg data-v="fit" class="ico on" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>
+      <svg data-v="centre" class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6.5"/><path d="M12 2v3.5M12 18.5V22M2 12h3.5M18.5 12H22"/><circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/></svg>
+    </button>
+    <button id="fold-all" class="cycle icon-btn" title="Collapse every branch below the root" aria-label="Collapse every branch below the root">
+      <svg data-v="expand" class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8l5-5 5 5M7 16l5 5 5-5"/><path d="M5 12h14" stroke-dasharray="2 3"/></svg>
+      <svg data-v="collapse" class="ico on" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3l5 5 5-5M7 21l5-5 5 5"/><path d="M5 12h14" stroke-dasharray="2 3"/></svg>
+    </button>
   </div>
   <div class="group" role="group" aria-label="Text size">
     <button id="font-down" title="Smaller text">A−</button>
@@ -29,10 +34,11 @@
     <button id="font-up" title="Larger text">A+</button>
   </div>
   <div class="group" role="group" aria-label="Concepts">
-    <span class="muted seg-label">Concepts</span>
-    <button data-cmode="off" aria-pressed="true" title="No concept overlay">Off</button>
-    <button data-cmode="regions" aria-pressed="false" title="Soft regions behind each concept">Regions</button>
-    <button data-cmode="arrows" aria-pressed="false" title="Links coloured by concept">Arrows</button>
+    <button id="cmode" class="cycle icon-btn" title="Concept overlay: off (click: regions)" aria-label="Concept overlay: off (click: regions)">
+      <svg data-v="off" class="ico on" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="7" stroke-dasharray="3 2.6" opacity="0.6"/><path d="M5 20L19 4"/></svg>
+      <svg data-v="regions" class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="3.5" width="11" height="17" rx="5.5" fill="#f783ac" fill-opacity="0.35" stroke="#f783ac"/><rect x="11" y="7" width="10.5" height="13" rx="5.2" fill="#3bc9db" fill-opacity="0.35" stroke="#3bc9db"/></svg>
+      <svg data-v="arrows" class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 11.2L18 6M15.4 9.9L18 6l-4.7-.6" stroke="#f783ac"/><path d="M6.5 12.8L18 18M13.3 18.6L18 18l-2.6-3.9" stroke="#3bc9db"/><circle cx="4.5" cy="12" r="2.6" fill="currentColor" stroke="none"/></svg>
+    </button>
     <button id="view-toggle" aria-pressed="false" title="A tree whose nodes are the concepts">Concept tree</button>
   </div>
   <div class="group">

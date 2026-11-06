@@ -64,6 +64,7 @@
   const zoom = d3.zoom().scaleExtent([0.03, 6]).on('zoom', ev => {
     viewport.attr('transform', ev.transform)
     k = ev.transform.k
+    if (ev.sourceEvent) setViewNext('fit')
     scheduleLabels()
     clearTimeout(saveTimer)
     saveTimer = setTimeout(() => store.set('view', { x: ev.transform.x, y: ev.transform.y, k: ev.transform.k }), 250)
@@ -97,8 +98,6 @@
       if (fq.has('tags')) filters = F.normalise({ ...filters, tags: fq.get('tags').split(',').filter(Boolean) })
       if (fq.has('hide')) filters = F.normalise({ ...filters, mode: 'hide' })
       setFont(new URLSearchParams(location.search).get('font') || store.get('font', 1), false)
-      document.title = `${tree.project} · reasoning tree`
-      document.getElementById('title').textContent = `${tree.project} — the reasoning tree`
       buildLegend()
       setLegendOpen(store.get('legendOpen', true))
       syncLayoutButtons()
@@ -111,10 +110,21 @@
     buildConceptLegend()
     buildCrumbs()
     syncConceptButtons()
+    syncTitle()
     const c = { direction: 0, experiment: 0, reference: 0, theory: 0 }
     for (const n of tree.nodes) c[n.type] = (c[n.type] || 0) + 1
     document.getElementById('counts').textContent =
       `${c.direction} directions · ${c.experiment} experiments · ${c.reference} references · ${c.theory} theory notes`
+  }
+
+  /** The page's title: the root note's concept when it declares one, else the project. */
+  function syncTitle() {
+    const top = concepts.get(C.ROOT)
+    const project = `${tree.project} — the reasoning tree`
+    const h1 = document.getElementById('title')
+    h1.textContent = top && top.root ? top.name : project
+    h1.title = top && top.root ? `${project}${top.summary ? ': ' + top.summary : ''}` : ''
+    document.title = top && top.root ? top.name : `${tree.project} · reasoning tree`
   }
 
   function ancestors(id) {
@@ -222,6 +232,7 @@
     gLinks.selectAll('path.link').attr('class', l => `link${matchSet.has(l.target.data.id) ? '' : ' dim'}`)
     drawConcepts(pos, dur)
     updateLabels()
+    syncFoldButton()
   }
 
   function nodeClass(d) {
@@ -345,6 +356,7 @@
     if (!p) return
     const t = animate ? svg.transition().duration(450) : svg
     t.call(zoom.translateTo, p.p[0], p.p[1])
+    setViewNext('fit')
   }
 
   function fit(animate = true) {
@@ -354,6 +366,7 @@
     const s = Math.max(0.03, Math.min(2, 0.9 * Math.min(w / (box.width + 80), h / (box.height + 80))))
     const t = d3.zoomIdentity.translate(w / 2, h / 2).scale(s).translate(-(box.x + box.width / 2), -(box.y + box.height / 2))
     ;(animate ? svg.transition().duration(450) : svg).call(zoom.transform, t)
+    setViewNext('centre')
   }
 
   async function select(id) {
@@ -775,18 +788,30 @@
   document.getElementById('filters-toggle').addEventListener('click', () => togglePanel(panel.hidden))
   document.getElementById('filters-close').addEventListener('click', () => togglePanel(false))
 
+  // the toolbar's toggles show the current state (or the action a click does) and name the
+  // next one in their tooltip
+  const LAYOUTS = ['td', 'lr', 'radial']
+  const LAYOUT_NAME = { td: 'Top-down', lr: 'Left-right', radial: 'Radial' }
+  const following = (list, v) => list[(list.indexOf(v) + 1) % list.length]
+  /** Shows the symbol of `v` on a toggle, and says in words what it is. */
+  function showValue(b, v, words) {
+    b.querySelectorAll('[data-v]').forEach(s => s.classList.toggle('on', s.dataset.v === v))
+    b.title = words
+    b.setAttribute('aria-label', words)
+  }
   function syncLayoutButtons() {
-    document.querySelectorAll('[data-layout]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.layout === layoutKind)))
+    const b = document.getElementById('layout')
+    showValue(b, layoutKind, `Layout: ${LAYOUT_NAME[layoutKind]} (click: ${LAYOUT_NAME[following(LAYOUTS, layoutKind)]})`)
   }
 
-  document.querySelectorAll('[data-layout]').forEach(b => b.addEventListener('click', () => {
-    layoutKind = b.dataset.layout
+  document.getElementById('layout').addEventListener('click', () => {
+    layoutKind = following(LAYOUTS, layoutKind)
     store.set('layout', layoutKind)
     syncLayoutButtons()
     render(true)
     if (view === 'concepts') drawConceptTree()
     setTimeout(() => fit(true), 420)
-  }))
+  })
   function setFont(value, save = true) {
     const v = Number(value)
     font = FONT_STEPS.reduce((a, b) => (Math.abs(b - v) < Math.abs(a - v) ? b : a), 1)
@@ -798,12 +823,30 @@
   const stepFont = d => setFont(FONT_STEPS[Math.max(0, Math.min(FONT_STEPS.length - 1, FONT_STEPS.indexOf(font) + d))])
   document.getElementById('font-down').addEventListener('click', () => stepFont(-1))
   document.getElementById('font-up').addEventListener('click', () => stepFont(1))
-  document.getElementById('fit').addEventListener('click', () => fit(true))
+  // Fit, then Centre on root, then Fit again; a pan or zoom by hand brings it back to Fit
+  let viewNext = 'fit'
+  function setViewNext(v) {
+    if (v === viewNext) return
+    viewNext = v
+    const b = document.getElementById('fit')
+    showValue(b, v, v === 'fit' ? 'Fit: show the whole tree' : 'Centre on the root')
+  }
   const topId = () => (focus ? concepts.get(focus).root : tree.roots[0])
-  document.getElementById('centre').addEventListener('click', () => tree && topId() && centreOn(topId()))
-  document.getElementById('expand').addEventListener('click', () => { collapsed.clear(); store.set('collapsed', []); render(true) })
-  document.getElementById('collapse').addEventListener('click', () => {
-    collapsed = new Set(tree.nodes.filter(n => n.parent && n.children.length).map(n => n.id))
+  document.getElementById('fit').addEventListener('click', () => {
+    if (viewNext === 'fit') fit(true)
+    else if (tree && topId()) centreOn(topId())
+  })
+  // Expand all while a drawn branch is folded, else Collapse all
+  const foldedDrawn = () => [...collapsed].some(id => positions.has(id) && byId.has(id) && byId.get(id).children.length)
+  function syncFoldButton() {
+    const b = document.getElementById('fold-all')
+    const expand = foldedDrawn()
+    showValue(b, expand ? 'expand' : 'collapse', expand ? 'Expand every branch' : 'Collapse every branch below the root')
+    b.disabled = !expand && !tree.nodes.some(n => n.parent && n.children.length)
+  }
+  document.getElementById('fold-all').addEventListener('click', () => {
+    if (!tree) return
+    collapsed = foldedDrawn() ? new Set() : new Set(tree.nodes.filter(n => n.parent && n.children.length).map(n => n.id))
     store.set('collapsed', [...collapsed])
     render(true)
   })
@@ -940,8 +983,13 @@
     setTimeout(() => fit(true), 420)
   }
 
+  const CMODES = ['off', 'regions', 'arrows']
+  const CMODE_NAME = { off: 'off', regions: 'regions', arrows: 'arrows' }
+  const CMODE_HINT = { off: 'no overlay', regions: 'a soft region behind each concept', arrows: 'links coloured by concept' }
   function syncConceptButtons() {
-    document.querySelectorAll('[data-cmode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.cmode === conceptMode)))
+    const b = document.getElementById('cmode')
+    const next = following(CMODES, conceptMode)
+    showValue(b, conceptMode, `Concept overlay: ${CMODE_NAME[conceptMode]}, ${CMODE_HINT[conceptMode]} (click: ${CMODE_NAME[next]})`)
     const t = document.getElementById('view-toggle')
     t.setAttribute('aria-pressed', String(view === 'concepts'))
     t.textContent = view === 'concepts' ? 'Reasoning tree' : 'Concept tree'
@@ -1122,7 +1170,7 @@
     setTimeout(() => flashConcept(id), 450)
   }
 
-  document.querySelectorAll('[data-cmode]').forEach(b => b.addEventListener('click', () => setMode(b.dataset.cmode)))
+  document.getElementById('cmode').addEventListener('click', () => setMode(following(CMODES, conceptMode)))
   document.getElementById('view-toggle').addEventListener('click', () => setView(view === 'concepts' ? 'tree' : 'concepts'))
 
   // ---------------------------------------------------------------- markdown (the subset notes use)

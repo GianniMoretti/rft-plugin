@@ -29,6 +29,12 @@ button { font: inherit; font-size: 12px; padding: 3px 9px; border-radius: 6px; c
   border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
 button:hover { border-color: var(--muted); }
 button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+button:disabled { opacity: 0.45; cursor: default; }
+button:disabled:hover { border-color: var(--line); }
+/* a toggle holds one symbol per state: the current one shows */
+.icon-btn { display: inline-flex; align-items: center; padding: 3px 6px; }
+.cycle > :not(.on) { display: none; }
+.ico { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 #search { margin-left: auto; min-width: 180px; padding: 4px 8px; border-radius: 6px; font: inherit;
   border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
 .live { width: 8px; height: 8px; border-radius: 50%; background: var(--discussed); }
@@ -126,7 +132,6 @@ button.primary { border-color: var(--accent); color: var(--accent); }
 button.linkish { border: 0; background: none; color: var(--accent); padding: 0; text-decoration: underline; }
 #filters-toggle[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
 /* concepts */
-.seg-label { align-self: center; font-size: 12px; margin-right: 2px; }
 #crumbs { padding: 5px 12px; border-bottom: 1px solid var(--line); background: var(--panel); font-size: 13px; }
 #crumbs a, .drawer-concept a { cursor: pointer; font-weight: 600; text-decoration: none; color: var(--fg); }
 #crumbs a:hover, .drawer-concept a:hover { text-decoration: underline; }
