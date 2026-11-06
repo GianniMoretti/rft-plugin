@@ -248,6 +248,8 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.get("/layout.js")[0], 200)
         self.assertEqual(self.get("/theme.js")[0], 200)
         self.assertEqual(self.get("/vendor/d3.v7.9.0.min.js")[0], 200)
+        self.assertEqual(self.get("/vendor/katex.v0.16.22.min.js")[0], 200)
+        self.assertEqual(self.get("/vendor/katex.v0.16.22.min.css")[0], 200)
         for p in ["/../server/rft_server.py", "/vendor/../../server/rft_server.py", "/%2e%2e/%2e%2e/etc/passwd",
                   "/00%20Index.md", "/vault/00%20Index.md", "/.rft/config.json", "/api", "/app.js/../index.html"]:
             self.assertEqual(self.get(p)[0], 404, p)

@@ -141,7 +141,9 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   then centres on the root; panning or zooming by hand makes it fit again.
   Labels show more of the title the closer you zoom.
 - The title is the project's name, or the root note's concept when it declares one.
-- Click a node to read its note in a side drawer; links in the note jump to their node.
+- Click a node to read its note in a side drawer; links in the note jump to their node. LaTeX
+  renders as in Obsidian: `$…$` inline, `$$…$$` displayed (on one line or several); a `$` in
+  code, `\$`, and amounts like "$5 and $10" stay text.
 - **Edit** in the drawer changes the note's text: the markdown below the frontmatter (status,
   parent and tags stay with Claude's tools). **Save** or Ctrl/Cmd+S writes the file, **Cancel**
   or Esc drops the changes. A note that changed meanwhile (Claude, another editor) is never
@@ -235,7 +237,9 @@ node), forward the port and open the address on your own machine:
 ssh -L 41234:127.0.0.1:41234 user@remote
 ```
 
-d3 (ISC licence, `web/vendor/LICENSE-d3.txt`) is bundled, so the page needs no network.
+d3 (ISC licence, `web/vendor/LICENSE-d3.txt`) and KaTeX (MIT licence,
+`web/vendor/LICENSE-katex.txt`; its fonts inlined in its stylesheet) are bundled, so the page
+needs no network.
 
 ### Commands
 

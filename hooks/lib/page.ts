@@ -5,7 +5,7 @@
 import type { Tree } from './vault'
 import { bodyOf, conceptOrder, tagCounts } from './vault'
 
-export type PageAssets = { html: string; css: string; js: string; d3: string; filters: string; layout: string; concepts: string; theme: string }
+export type PageAssets = { html: string; css: string; js: string; d3: string; katex: string; katexCss: string; filters: string; layout: string; concepts: string; theme: string }
 
 export const ASSET_PATHS = {
   html: 'web/index.html',
@@ -16,6 +16,8 @@ export const ASSET_PATHS = {
   concepts: 'web/concepts.js',
   theme: 'web/theme.js',
   d3: 'web/vendor/d3.v7.9.0.min.js',
+  katex: 'web/vendor/katex.v0.16.22.min.js',
+  katexCss: 'web/vendor/katex.v0.16.22.min.css',
 } as const
 
 /** The tree as the server's `api/tree` answers it. */
@@ -34,7 +36,9 @@ export function staticPage(a: PageAssets, tree: Tree, texts: Record<string, stri
   return a.html
     .replace(/<script src="theme\.js" data-rft-inline><\/script>/, () => script(a.theme))
     .replace(/<link rel="stylesheet" href="app\.css" data-rft-inline>/, () => `<style>${a.css}</style>`)
+    .replace(/<link rel="stylesheet" href="vendor\/katex[^"]*" data-rft-inline>/, () => `<style>${a.katexCss}</style>`)
     .replace(/<script src="vendor\/d3[^"]*" data-rft-inline><\/script>/, () => script(a.d3))
+    .replace(/<script src="vendor\/katex[^"]*" data-rft-inline><\/script>/, () => script(a.katex))
     .replace(/<script src="filters\.js" data-rft-inline><\/script>/, () => script(a.filters))
     .replace(/<script src="layout\.js" data-rft-inline><\/script>/, () => script(a.layout))
     .replace(/<script src="concepts\.js" data-rft-inline><\/script>/, () => script(a.concepts))

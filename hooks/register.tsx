@@ -701,6 +701,8 @@ export const register: Register = (on, options) => {
         css: await $.fs.read(join(root, ASSET_PATHS.css)),
         js: await $.fs.read(join(root, ASSET_PATHS.js)),
         d3: await $.fs.read(join(root, ASSET_PATHS.d3)),
+        katex: await $.fs.read(join(root, ASSET_PATHS.katex)),
+        katexCss: await $.fs.read(join(root, ASSET_PATHS.katexCss)),
         filters: await $.fs.read(join(root, ASSET_PATHS.filters)),
         layout: await $.fs.read(join(root, ASSET_PATHS.layout)),
         concepts: await $.fs.read(join(root, ASSET_PATHS.concepts)),

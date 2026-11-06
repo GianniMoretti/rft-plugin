@@ -55,6 +55,9 @@ PAGE_FILES = {
     "/theme.js": ("theme.js", "text/javascript; charset=utf-8"),
     "/vendor/d3.v7.9.0.min.js": ("vendor/d3.v7.9.0.min.js", "text/javascript; charset=utf-8"),
     "/vendor/LICENSE-d3.txt": ("vendor/LICENSE-d3.txt", "text/plain; charset=utf-8"),
+    "/vendor/katex.v0.16.22.min.js": ("vendor/katex.v0.16.22.min.js", "text/javascript; charset=utf-8"),
+    "/vendor/katex.v0.16.22.min.css": ("vendor/katex.v0.16.22.min.css", "text/css; charset=utf-8"),
+    "/vendor/LICENSE-katex.txt": ("vendor/LICENSE-katex.txt", "text/plain; charset=utf-8"),
 }
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 ID_RE = re.compile(r"^[EDRT]\d+$")
@@ -427,7 +430,7 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Content-Security-Policy",
-                             "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                             "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; "
                              "connect-src 'self'; frame-ancestors 'self'")
             self.end_headers()
             if not head_only:

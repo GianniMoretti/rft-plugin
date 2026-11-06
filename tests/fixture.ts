@@ -37,13 +37,15 @@ export const E02 = 'E02 Variant run'
 
 /** Stand-ins for the web view's files, with the markers the static export inlines. */
 export const WEB_FILES: Record<string, string> = {
-  'web/index.html': '<!doctype html><html><head><script src="theme.js" data-rft-inline></script><link rel="stylesheet" href="app.css" data-rft-inline></head><body>' +
-    '<script src="vendor/d3.v7.9.0.min.js" data-rft-inline></script><script src="filters.js" data-rft-inline></script>' +
+  'web/index.html': '<!doctype html><html><head><script src="theme.js" data-rft-inline></script><link rel="stylesheet" href="app.css" data-rft-inline><link rel="stylesheet" href="vendor/katex.v0.16.22.min.css" data-rft-inline></head><body>' +
+    '<script src="vendor/d3.v7.9.0.min.js" data-rft-inline></script><script src="vendor/katex.v0.16.22.min.js" data-rft-inline></script><script src="filters.js" data-rft-inline></script>' +
     '<script src="layout.js" data-rft-inline></script><script src="concepts.js" data-rft-inline></script>' +
     '<script src="app.js" data-rft-inline></script></body></html>',
   'web/app.css': 'body { color: red }',
   'web/app.js': 'console.log(window.RFT_DATA.tree.nodes.length, "$&")',
   'web/vendor/d3.v7.9.0.min.js': '/* d3 */ var d3 = {}; "</script>"',
+  'web/vendor/katex.v0.16.22.min.js': '/* katex */',
+  'web/vendor/katex.v0.16.22.min.css': '/* katex css */',
   'web/filters.js': '/* filters */',
   'web/layout.js': '/* layout */',
   'web/concepts.js': '/* concepts */',

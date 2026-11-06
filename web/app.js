@@ -1182,9 +1182,24 @@
     const id = t.split(' ')[0]
     return byId.has(id) ? id : null
   }
+  /** TeX as HTML, by KaTeX; the source as code when KaTeX is missing or gives up. */
+  function tex(src, display) {
+    try {
+      if (window.katex) return window.katex.renderToString(src, { displayMode: display, throwOnError: false, strict: 'ignore' })
+    } catch (e) { /* below */ }
+    return `<code class="math">${escH(display ? `$$${src}$$` : `$${src}$`)}</code>`
+  }
+  // what the other inline rules must not touch: `code` first, as it binds tightest (a $ in it
+  // stays a $), then, as Obsidian reads them, \$ (a dollar), $$display math$$ and $inline math$,
+  // whose dollars have no space just inside them and no digit just after ("$5 and $10" is text)
+  const CODE = /`([^`]+)`/g
+  const MATH = /\\\$|\$\$([^\u0000]+?)\$\$|\$(?=[^\s$])((?:\\[^\u0000]|[^\\$\u0000])+?)(?<!\s)\$(?!\d)/g
   function inline(t) {
+    const held = []
+    const hold = html => `\u0000${held.push(html) - 1}\u0000`
+    t = t.replace(CODE, (m, code) => hold(`<code>${escH(code)}</code>`))
+      .replace(MATH, (m, display, math) => hold(display != null ? tex(display, true) : math != null ? tex(math, false) : '$'))
     return escH(t)
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
       .replace(/!\[\[([^\]]+)\]\]/g, '<em>(embedded: $1)</em>')
       .replace(/\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g, (m, target, alias) => {
         const id = idForLink(target.replace(/&amp;/g, '&'))
@@ -1194,10 +1209,12 @@
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
       .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>')
       .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+      .replace(/\u0000(\d+)\u0000/g, (m, i) => held[i])
   }
   function markdown(src) {
     const out = []
     let list = 0, inCode = false, table = false, para = []
+    let math = null // the lines of a $$ block opened on a line of its own, until its closing $$
     // a line ending in two spaces breaks the line, as in Obsidian
     const flush = () => {
       if (para.length) out.push(`<p>${para.map((l, i) => inline(l.replace(/\s+$/, '')) + (i < para.length - 1 ? (/ {2}$/.test(l) ? '<br>' : ' ') : '')).join('')}</p>`)
@@ -1205,6 +1222,15 @@
     }
     const close = () => { flush(); while (list > 0) { out.push('</ul>'); list-- } if (table) { out.push('</table>'); table = false } }
     for (const raw of src.split('\n')) {
+      if (math) {
+        const end = raw.indexOf('$$')
+        if (end < 0) { math.push(raw); continue }
+        out.push(`<div class="math-block">${tex([...math, raw.slice(0, end)].join('\n'), true)}</div>`)
+        math = null
+        if (raw.slice(end + 2).trim()) para.push(raw.slice(end + 2))
+        continue
+      }
+      if (!inCode && /^\s*\$\$/.test(raw) && !raw.trim().slice(2).includes('$$')) { close(); math = [raw.trim().slice(2)]; continue }
       if (raw.startsWith('```')) { close(); out.push(inCode ? '</pre>' : '<pre>'); inCode = !inCode; continue }
       if (inCode) { out.push(escH(raw)); continue }
       const h = /^(#{1,6})\s+(.*)$/.exec(raw)
@@ -1220,7 +1246,7 @@
       } else if (/^\|.*\|\s*$/.test(raw)) {
         if (/^\|[\s:|-]+\|\s*$/.test(raw)) continue
         if (!table) { close(); out.push('<table>'); table = true }
-        out.push('<tr>' + raw.trim().slice(1, -1).split('|').map(c => `<td>${inline(c.trim())}</td>`).join('') + '</tr>')
+        out.push('<tr>' + raw.trim().slice(1, -1).split(/(?<!\\)\|/).map(c => `<td>${inline(c.trim())}</td>`).join('') + '</tr>')
       } else if (raw.trim() === '') close()
       else if (list && /^\s+\S/.test(raw) && out[out.length - 1].endsWith('</li>')) {
         // an indented line continues the list item above
@@ -1229,6 +1255,7 @@
     }
     close()
     if (inCode) out.push('</pre>')
+    if (math) out.push(`<div class="math-block">${tex(math.join('\n'), true)}</div>`)
     return out.join('\n')
   }
 

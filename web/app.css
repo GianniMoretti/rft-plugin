@@ -109,6 +109,10 @@ button.primary { border-color: var(--accent); color: var(--accent); }
 #note table { border-collapse: collapse; }
 #note td { border: 1px solid var(--line); padding: 2px 6px; }
 #note .missing { color: var(--muted); }
+/* math: a wide formula scrolls on its own instead of widening the drawer */
+#note .katex-display { margin: 0.6em 0; overflow-x: auto; overflow-y: hidden; padding: 2px 0; }
+#note .math-block .katex-display { margin: 0.8em 0; }
+#note code.math { color: var(--muted); }
 #tooltip { position: fixed; pointer-events: none; padding: 4px 8px; border-radius: 6px; font-size: calc(13px * var(--font-scale));
   background: var(--panel); border: 1px solid var(--line); max-width: 360px; z-index: 5; }
 @media (max-width: 640px) { #legend { display: none; } #search { min-width: 120px; flex: 1; } }
