@@ -153,23 +153,24 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   to open it at full size. A remote image (`https://…`) shows as a link: the page loads nothing
   from elsewhere. `rft_validate` leaves embedded images alone. `/rft-view` shows each image as
   a placeholder.
-- **Edit** in the drawer changes the note's text: the markdown below the frontmatter (status,
-  parent and tags stay with Claude's tools). **Save** or Ctrl/Cmd+S writes the file, **Cancel**
+- **Edit** (the pencil in the drawer) changes the note's text: the markdown below the
+  frontmatter (status, parent and tags stay with Claude's tools). **Save** or Ctrl/Cmd+S writes the file, **Cancel**
   or Esc drops the changes. A note that changed meanwhile (Claude, another editor) is never
   overwritten silently: you choose **Overwrite** or **Reload**. Leaving a note with unsaved
   changes asks first.
   Fold a branch with its **−** / **+** badge or a double-click; one button expands every
   branch while one is folded, and collapses them all otherwise.
-- **+ Child** in the drawer adds a direction or an experiment under the note shown: choose the
-  type (the other one than the note's comes first), type a title, **Add** or Enter. The note is
+- **Add child** (a node with a **+**, in the drawer) adds a direction or an experiment under
+  the note shown: choose the type (the other one than the note's comes first), type a title,
+  **Add** or Enter. The note is
   made as Claude's `rft_add_node` makes it (the next free id, the title cleaned, the template,
   the default status, linked under its parent, the index and canvas regenerated), by the plugin
   in the session that ran `/rft`, so it costs no model turn and no tokens; it then opens in
   **Edit**.
-- **Type** in the drawer changes the type of a note made with the wrong one: choose the type,
-  **Change**. The note gets the next free id of that type and moves to its folder; its text
+- **Change type** (a ring in a turning arrow, in the drawer) changes the type of a note made
+  with the wrong one: choose the type, **Change**. The note gets the next free id of that type and moves to its folder; its text
   stays, the type's missing sections are added, and every link to it is renamed. Like
-  **+ Child**, the session that ran `/rft` does it with `rft_set_type`'s code, at no model turn.
+  **Add child**, the session that ran `/rft` does it with `rft_set_type`'s code, at no model turn.
   The root stays a direction.
 - Hover a node to highlight its path to the root; **search** (Enter jumps to the next match).
 - **Filters** opens a side panel: topical tags (with counts, matching **any** or **all**), type,
@@ -233,8 +234,8 @@ one outside it (anywhere on disk) only to the page carrying the key below, so an
 the machine cannot read your files through it, nor learn whether one exists. An image is sent
 with a policy that runs nothing in it, an SVG's scripts included. It answers only requests for
 a loopback host name. It writes one thing, a note's text
-from **Edit**, its frontmatter kept as it is; a new note from **+ Child**, or a note's new type
-from **Type**, it asks the session that started it to make (a line on its output, which the
+from **Edit**, its frontmatter kept as it is; a new note from **Add child**, or a note's new type
+from **Change type**, it asks the session that started it to make (a line on its output, which the
 plugin reads). It does any of these only for
 the page itself carrying the project's key, which the address `/rft` prints holds (`?token=…`):
 neither another web page nor another user of the machine can change or add a note. Open that address once and the browser

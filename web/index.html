@@ -109,9 +109,15 @@
     <div class="drawer-head">
       <span id="drawer-meta" class="muted"></span>
       <span class="drawer-actions">
-        <button id="drawer-type" hidden title="Change the note's type: it gets a new id of that type, and links to it follow">Type</button>
-        <button id="drawer-add" hidden title="Add a direction, an experiment, a reference or a theory note under this note">+ Child</button>
-        <button id="drawer-edit" hidden title="Edit the note's text (Ctrl+S saves, Esc cancels)">Edit</button>
+        <button id="drawer-type" class="icon-btn" hidden aria-label="Change type" title="Change the note's type: it gets a new id of that type, and links to it follow">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 18.93A8 8 0 1 1 18.93 8"/><path d="M20 4.1L18.93 8l-3.9-1"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+        <button id="drawer-add" class="icon-btn" hidden aria-label="Add a child note" title="Add a direction, an experiment, a reference or a theory note under this note">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.6" fill="currentColor" stroke="none"/><path d="M6 9v6a2 2 0 0 0 2 2h2.5"/><path d="M17.5 13.5v7M14 17h7"/></svg>
+        </button>
+        <button id="drawer-edit" class="icon-btn" hidden aria-label="Edit" title="Edit the note's text (Ctrl+S saves, Esc cancels)">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l1-4.5L15.5 5a2.1 2.1 0 0 1 3 0l.5.5a2.1 2.1 0 0 1 0 3L8.5 19z"/><path d="M13.5 7l3.5 3.5"/></svg>
+        </button>
         <button id="drawer-close" title="Close">✕</button>
       </span>
     </div>
