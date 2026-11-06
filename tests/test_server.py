@@ -182,6 +182,32 @@ class ServerTest(unittest.TestCase):
         self.assertEqual((root["name"], root["root"], root["children"], root["count"]), ("demo", None, ["D00"], 1))
         self.assertEqual((geometry["id"], geometry["parent"], geometry["depth"], runs["depth"]), ("D00", "root", 1, 2))
 
+    def test_concept_repos(self):
+        # a one-line list, JSON or YAML; commas alone separate, a path once
+        self.assertEqual(rft_server.parse_repos('["/a b/c", "../d", "/a b/c"]'), ["/a b/c", "../d"])
+        self.assertEqual(rft_server.parse_repos("['/a', ../b]"), ["/a", "../b"])
+        self.assertEqual(rft_server.parse_repos("/one/path"), ["/one/path"])
+        self.assertEqual(rft_server.parse_repos(None), [])
+        # each concept carries its own; repos on the only root note without a concept are the project's
+        nodes = {"D00": {"status": "done", "children": ["E01"]}, "E01": {"status": "running", "children": []}}
+        root, runs = rft_server.compute_concepts(nodes, ["D00"], "demo", {"E01": ("Runs", "", ["/code/runs"])}, {"D00": ["/code/all"]})
+        self.assertEqual((root["repos"], runs["repos"]), (["/code/all"], ["/code/runs"]))
+        # a two-part declaration, as before, has none
+        root, runs = rft_server.compute_concepts(nodes, ["D00"], "demo", {"E01": ("Runs", "")})
+        self.assertEqual((root["repos"], runs["repos"]), ([], []))
+        # read from the notes: concept_repos on a note that starts a concept, and on the root note
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            (vault / "directions").mkdir()
+            (vault / "experiments").mkdir()
+            root_note = note("D00", "direction", "done", "", "Root").replace("---\n\n#", 'concept_repos: ["/code/all"]\n---\n\n#', 1)
+            run_note = note("E01", "experiment", "running", "D00 Root", "Run", concept="Runs").replace(
+                "---\n\n#", 'concept_repos: ["../code/runs", "/code/b"]\n---\n\n#', 1)
+            (vault / "directions" / "D00 Root.md").write_text(root_note)
+            (vault / "experiments" / "E01 Run.md").write_text(run_note)
+            root, runs = rft_server.Vault(vault, "demo").tree()["concepts"]
+            self.assertEqual((root["repos"], runs["repos"]), (["/code/all"], ["../code/runs", "/code/b"]))
+
     def test_tag_parsing(self):
         self.assertEqual(rft_server.parse_tags('[demo, "theory", #cluster]'), ["demo", "theory", "cluster"])
         self.assertEqual(rft_server.topical_tags(["demo", "experiment", "theory", "done", "theory"], "demo", "experiment"), ["theory"])

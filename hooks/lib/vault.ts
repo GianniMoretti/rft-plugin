@@ -112,6 +112,11 @@ export type Concept = {
   total: number
   /** Status counts of its own notes. */
   statuses: Record<string, number>
+  /**
+   * The code repositories it links (`concept_repos:`), as written: absolute, `~/…` or relative
+   * to the tree's folder. Its notes also work with the repos of the concepts above it, after these.
+   */
+  repos: string[]
 }
 
 export type Config = {
@@ -467,13 +472,21 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
 /** A frontmatter value without the quotes YAML allows around it. */
 export const unquote = (v: string | undefined) => (v ?? '').trim().replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1').trim()
 
-/** The notes that declare a concept: `concept:` (and `concept_summary:`) in the frontmatter. */
-export function conceptDeclarations(texts: Record<string, string>): Record<string, { name: string; summary: string }> {
-  const out: Record<string, { name: string; summary: string }> = {}
+/** What a note's frontmatter says of a concept: its name (empty when it declares none), summary, repos. */
+export type Declaration = { name: string; summary: string; repos?: string[] }
+
+/**
+ * The notes that declare a concept (`concept:`, `concept_summary:`, `concept_repos:` in the
+ * frontmatter), and those that link repos without one: on the only root note those are the
+ * project's own.
+ */
+export function conceptDeclarations(texts: Record<string, string>): Record<string, Declaration> {
+  const out: Record<string, Declaration> = {}
   for (const [id, text] of Object.entries(texts)) {
     const fm = front(text)
     const name = unquote(fm.concept)
-    if (name) out[id] = { name, summary: unquote(fm.concept_summary) }
+    const repos = parseRepos(fm.concept_repos)
+    if (name || repos.length) out[id] = { name, summary: name ? unquote(fm.concept_summary) : '', repos }
   }
   return out
 }
@@ -482,22 +495,23 @@ export function conceptDeclarations(texts: Record<string, string>): Record<strin
  * Concept membership, inherited down the tree: every note belongs to its nearest ancestor (or
  * itself) declaring a concept, else to the project root concept. Sets `concept` on every node.
  * When the only root note declares a concept, that concept is the root one: the project above
- * it would hold no note.
+ * it would hold no note. The repos the only root note links are the root concept's either way.
  */
-export function computeConcepts(tree: Tree, project: string, decl: Record<string, { name: string; summary: string }>): Record<string, Concept> {
-  const make = (id: string, name: string, summary: string, root: string | null, parent: string | null, depth: number): Concept =>
-    ({ id, name, summary, root, parent, children: [], depth, count: 0, total: 0, statuses: {} })
+export function computeConcepts(tree: Tree, project: string, decl: Record<string, Declaration>): Record<string, Concept> {
+  const make = (id: string, name: string, summary: string, root: string | null, parent: string | null, depth: number, repos: string[] = []): Concept =>
+    ({ id, name, summary, root, parent, children: [], depth, count: 0, total: 0, statuses: {}, repos })
   const only = tree.roots.length === 1 ? tree.roots[0]! : null
-  const top = only && tree.nodes[only] && decl[only] ? only : null
+  const top = only && tree.nodes[only] && decl[only]?.name ? only : null
+  const rootRepos = only ? decl[only]?.repos ?? [] : []
   const concepts: Record<string, Concept> = {
-    [ROOT_CONCEPT]: top ? make(ROOT_CONCEPT, decl[top]!.name, decl[top]!.summary, top, null, 0) : make(ROOT_CONCEPT, project, '', null, null, 0),
+    [ROOT_CONCEPT]: top ? make(ROOT_CONCEPT, decl[top]!.name, decl[top]!.summary, top, null, 0, rootRepos) : make(ROOT_CONCEPT, project, '', null, null, 0, rootRepos),
   }
   const visit = (id: string, current: string) => {
     const n = tree.nodes[id]
     if (!n) return
     const d = id === top ? undefined : decl[id]
-    if (d) {
-      concepts[id] = make(id, d.name, d.summary, id, current, concepts[current]!.depth + 1)
+    if (d?.name) {
+      concepts[id] = make(id, d.name, d.summary, id, current, concepts[current]!.depth + 1, d.repos)
       concepts[current]!.children.push(id)
       current = id
     }
@@ -539,6 +553,140 @@ export function conceptOrder(concepts: Record<string, Concept>): Concept[] {
 
 export const statusSummary = (statuses: Record<string, number>) =>
   STATUSES.filter(st => statuses[st]).map(st => `${MARK[st]}${statuses[st]}`).join(' ')
+
+// ---------------------------------------------------------------- code repos
+
+/** A repo a note works with, and the concept that links it: the note's own, or one above it. */
+export type CodeRepo = { path: string; concept: string }
+
+const cleanRepos = (list: string[]) => [...new Set(list.map(p => unquote(p)).filter(Boolean))]
+
+/** The paths of a `concept_repos:` value, a one-line list: `["/a/b", "../c"]` (or YAML's `['/a/b', ../c]`). */
+export function parseRepos(value: string | undefined): string[] {
+  const v = (value ?? '').trim()
+  if (!v) return []
+  try {
+    const x: unknown = JSON.parse(v)
+    if (Array.isArray(x)) return cleanRepos(x.filter((p): p is string => typeof p === 'string'))
+    if (typeof x === 'string') return cleanRepos([x])
+  } catch { /* a YAML list, or a bare path */ }
+  // commas alone separate: a path may hold spaces
+  return cleanRepos(v.replace(/^\[|\]$/g, '').split(','))
+}
+
+/** The `concept_repos:` value: a one-line list Obsidian reads as a list property. */
+export const reposLine = (repos: string[]) => `[${repos.map(p => JSON.stringify(p)).join(', ')}]`
+
+/**
+ * The repos the notes of a concept work with, by priority: the concept's own, then those of each
+ * concept above it, nearest first; a path once, at its highest place.
+ */
+export function codeRepos(concepts: Record<string, Concept> | undefined, id: string): CodeRepo[] {
+  const out: CodeRepo[] = []
+  const seen = new Set<string>()
+  for (let c = concepts?.[id]; c; c = c.parent ? concepts?.[c.parent] : undefined) {
+    for (const path of c.repos ?? []) {
+      if (seen.has(path)) continue
+      seen.add(path)
+      out.push({ path, concept: c.id })
+    }
+  }
+  return out
+}
+
+/** Where a repo is on disk: an absolute path, `~/…` in the home folder, else from the tree's folder `root`. */
+export function repoAbs(root: string, path: string, home?: string): string {
+  if (home && (path === '~' || path.startsWith('~/'))) return resolvePath(home, path.slice(2) || '.')
+  return resolvePath(root, path)
+}
+
+/**
+ * The notes a concept's code concerns: experiments and directions, less the ideas discussed and
+ * not pursued, or moved elsewhere.
+ */
+export const needsCode = (n: { type: string; status: string }) => (n.type === 'experiment' || n.type === 'direction') && n.status !== 'discussed' && n.status !== 'moved'
+
+export const CODE = 'Code'
+const REPRODUCE = '**Reproduce:**'
+
+/** A repo line of a `## Code` section, as rft_set_code writes it: ``- `path` @ <commit> (…) · checked <date>``. */
+const REPO_LINE = /^- `([^`]+)`(?: @ ([0-9a-f]{7,40})\b)?/
+
+export type CodeSection = {
+  /** The repos it was last checked against, with the commit of each (null: none recorded). */
+  repos: { path: string; commit: string | null; line: string }[]
+  /** How the note relates to the code. */
+  description: string
+  /** How to reproduce the note's results, after `**Reproduce:**`. */
+  reproduce: string
+}
+
+/** The body's lines, each with whether it is a `## ` heading outside a fenced block. */
+function bodyLines(body: string): { line: string; isHeading: boolean }[] {
+  let isFenced = false
+  return body.split('\n').map(line => {
+    if (/^\s*(```|~~~)/.test(line)) isFenced = !isFenced
+    return { line, isHeading: !isFenced && line.startsWith('## ') }
+  })
+}
+
+/** Where a section's lines are among `lines`: from its heading to the next heading; null when absent. */
+function sectionAt(lines: { line: string; isHeading: boolean }[], title: string): { start: number; end: number } | null {
+  const start = lines.findIndex(l => l.isHeading && l.line.slice(3).trim() === title)
+  if (start < 0) return null
+  const next = lines.findIndex((l, i) => i > start && l.isHeading)
+  return { start, end: next < 0 ? lines.length : next }
+}
+
+/** A note's `## Code` section, read back; null when it has none. */
+export function codeSection(text: string): CodeSection | null {
+  const lines = bodyLines(bodyOf(text))
+  const at = sectionAt(lines, CODE)
+  if (!at) return null
+  const inner = lines.slice(at.start + 1, at.end).map(l => l.line)
+  let i = 0
+  while (i < inner.length && !inner[i]!.trim()) i++
+  const repos: CodeSection['repos'] = []
+  for (let m; i < inner.length && (m = REPO_LINE.exec(inner[i]!)); i++) repos.push({ path: m[1]!, commit: m[2] ?? null, line: inner[i]! })
+  const rest = inner.slice(i)
+  const r = rest.findIndex(l => l.startsWith(REPRODUCE))
+  const description = (r < 0 ? rest : rest.slice(0, r)).join('\n').trim()
+  const reproduce = r < 0 ? '' : [rest[r]!.slice(REPRODUCE.length), ...rest.slice(r + 1)].join('\n').trim()
+  return { repos, description, reproduce }
+}
+
+/**
+ * The note with its `## Code` section written: the repo lines, the description, the Reproduce
+ * part. A description or reproduce left undefined keeps what the section held. A new section
+ * goes before the one status notes go to (Result for an experiment, Status for a direction),
+ * else before the children list, else last.
+ */
+export function withCodeSection(text: string, type: NodeType, parts: { repos: string[]; description?: string; reproduce?: string }): string {
+  const t = normalise(text)
+  const head = split(t)
+  const body = head ? head.body : t
+  const was = codeSection(t)
+  const description = (parts.description ?? was?.description ?? '').trim()
+  const reproduce = (parts.reproduce ?? was?.reproduce ?? '').trim()
+  const block = [
+    `## ${CODE}`,
+    ...parts.repos,
+    ...(description ? ['', description] : []),
+    ...(reproduce ? ['', `${REPRODUCE} ${reproduce}`] : []),
+    '',
+  ]
+  const lines = bodyLines(body)
+  const raw = lines.map(l => l.line)
+  const at = sectionAt(lines, CODE)
+  if (at) raw.splice(at.start, at.end - at.start, ...block)
+  else {
+    const before = sectionAt(lines, TYPES[type].noteIn) ?? sectionAt(lines, 'Children in the tree')
+    if (before) raw.splice(before.start, 0, ...block)
+    else raw.push(...(raw[raw.length - 1]?.trim() ? [''] : []), ...block)
+  }
+  const next = raw.join('\n')
+  return head ? joinNote(head.head, next) : next
+}
 
 /** Removes a one-line frontmatter field, if present. */
 export function removeField(text: string, key: string): string {
@@ -762,7 +910,19 @@ async function allFiles(io: Io, dir: string, rel = ''): Promise<string[]> {
   return out
 }
 
-export async function validate(io: Io, loaded: Loaded): Promise<Validation> {
+/** Whether a folder is in a git repository: it or a folder above it holds `.git`. */
+export async function isInGit(io: Io, abs: string): Promise<boolean> {
+  for (let dir = abs; ; dir = resolvePath(dir, '..')) {
+    if (await io.exists(join(dir, '.git'))) return true
+    if (resolvePath(dir, '..') === dir) return false
+  }
+}
+
+/**
+ * `root`: the tree's folder, which relative repo paths start from (else they are left to `io`);
+ * `home`: the home folder, for `~/…` paths.
+ */
+export async function validate(io: Io, loaded: Loaded, opts: { root?: string; home?: string } = {}): Promise<Validation> {
   const { config, tree, texts } = loaded
   const errors = [...loaded.problems]
   const warnings: string[] = []
@@ -794,6 +954,30 @@ export async function validate(io: Io, loaded: Loaded): Promise<Validation> {
       if (!cname) errors.push(`${n.id}: \`concept:\` is empty (give the concept a name, or remove the field)`)
       else if (/[\^#|[\]]/.test(cname)) errors.push(`${n.id}: concept name "${cname}" contains ^ # | [ or ]`)
     } else if (fm.concept_summary !== undefined) warnings.push(`${n.id}: concept_summary without concept`)
+    if (fm.concept_repos !== undefined) {
+      const isTop = tree.roots.length === 1 && tree.roots[0] === n.id
+      if (!unquote(fm.concept) && !isTop) {
+        warnings.push(`${n.id}: concept_repos without concept, ignored (repos belong to a concept, or to the root note for the whole project)`)
+      } else {
+        for (const p of parseRepos(fm.concept_repos)) {
+          const at = opts.root ? repoAbs(opts.root, p, opts.home) : p
+          if (!(await io.exists(at))) warnings.push(`${n.id}: repo ${p} not found${isAbsolute(p) ? '' : " (a relative path starts from the tree's folder)"}`)
+          else if (!(await isInGit(io, at))) warnings.push(`${n.id}: repo ${p} is not in a git repository, so the commits its notes were checked against cannot be recorded`)
+        }
+      }
+    }
+    const repos = codeRepos(tree.concepts, n.concept)
+    if (repos.length && needsCode(n)) {
+      const cs = codeSection(text)
+      const linked = new Set(repos.map(r => r.path))
+      if (!cs) warnings.push(`${n.id}: its concept links code (${repos.map(r => r.path).join(', ')}) but the note has no ## ${CODE} section (rft_set_code writes it)`)
+      else {
+        const stale = cs.repos.filter(r => !linked.has(r.path)).map(r => r.path)
+        const absent = repos.filter(r => !cs.repos.some(x => x.path === r.path)).map(r => r.path)
+        if (stale.length) warnings.push(`${n.id}: ## ${CODE} names ${stale.join(', ')}, which its concept no longer links (rft_set_code updates it)`)
+        if (absent.length) warnings.push(`${n.id}: ## ${CODE} does not cover ${absent.join(', ')} (rft_set_code adds it)`)
+      }
+    }
     const odd = n.tags.filter(t => !isKebab(t))
     if (odd.length) warnings.push(`${n.id}: tag(s) ${odd.join(', ')} not lowercase kebab-case (rft_set_tags fixes them)`)
     if (!/^\d{4}-\d{2}-\d{2}$/.test(n.date)) warnings.push(`${n.path}: date "${n.date}" is not YYYY-MM-DD`)
@@ -880,7 +1064,10 @@ export function noteText(id: string, n: NewNode, project: string, parentName: st
     `**Status:** ${status} · **Date:** ${n.date}${t.code ? '  ' : ''}`,
   ]
   if (t.code) head.push(`**Code / data:** ${s['Code / data'] ?? n.code ?? CODE_HINT}`)
-  const order: readonly string[] = t.sections
+  const own: readonly string[] = t.sections
+  // a Code section goes before the section status notes go to (Result, Status, ...)
+  const at = own.indexOf(t.noteIn)
+  const order = s[CODE]?.trim() ? [...own.slice(0, at), CODE, ...own.slice(at)] : own
   const extra = Object.keys(s).filter(k => !order.includes(k) && k !== 'Code / data' && k !== 'Children in the tree')
   const blocks = [...order, ...extra].map(k => `## ${k}\n${(s[k] ?? '').trim()}${s[k]?.trim() ? '\n' : ''}`)
   return head.join('\n') + '\n\n' + blocks.join('\n') + '\n## Children in the tree\n'

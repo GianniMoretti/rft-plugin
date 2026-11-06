@@ -154,21 +154,48 @@ def unquote(value: str | None) -> str:
     return v.strip()
 
 
+def parse_repos(value: str | None) -> list[str]:
+    """The paths of a `concept_repos:` value, a one-line list: `["/a/b", "../c"]` (or YAML's
+    `['/a/b', ../c]`). Commas alone separate: a path may hold spaces."""
+    v = (value or "").strip()
+    if not v:
+        return []
+    items: list = []
+    try:
+        x = json.loads(v)
+        items = [p for p in x if isinstance(p, str)] if isinstance(x, list) else [x] if isinstance(x, str) else []
+    except ValueError:
+        items = (v[1:-1] if v.startswith("[") and v.endswith("]") else v).split(",")
+    out: list[str] = []
+    for p in items:
+        p = unquote(p)
+        if p and p not in out:
+            out.append(p)
+    return out
+
+
 def compute_concepts(nodes: dict[str, dict], roots: list[str], project: str,
-                     decl: dict[str, tuple[str, str]]) -> list[dict]:
+                     decl: dict[str, tuple], root_repos: dict[str, list[str]] | None = None) -> list[dict]:
     """Concepts, inherited down the tree: a note belongs to its nearest ancestor (or itself)
     declaring `concept:`, else to the project root concept. Sets each node's `concept` and
     returns the concepts depth first, the root concept first. When the only root note declares
-    a concept, that concept is the root one: the project above it would hold no note."""
-    def make(cid, name, summary, root, parent, depth):
+    a concept, that concept is the root one: the project above it would hold no note.
+    `decl`: name, summary and, optionally, the repos (`concept_repos:`) per declaring note;
+    `root_repos`: the repos of notes that declare no concept, which count on the only root note
+    alone, as the project's."""
+    def make(cid, name, summary, root, parent, depth, repos=()):
         return {"id": cid, "name": name, "summary": summary, "root": root, "parent": parent, "children": [],
-                "depth": depth, "count": 0, "total": 0, "statuses": {}}
+                "depth": depth, "count": 0, "total": 0, "statuses": {}, "repos": list(repos)}
 
-    top = roots[0] if len(roots) == 1 and roots[0] in nodes and roots[0] in decl else None
+    def parts(d):
+        return d[0], d[1], (list(d[2]) if len(d) > 2 else [])
+
+    only = roots[0] if len(roots) == 1 and roots[0] in nodes else None
+    top = only if only in decl else None
     if top:
-        concepts = {ROOT_CONCEPT: make(ROOT_CONCEPT, *decl[top], top, None, 0)}
+        concepts = {ROOT_CONCEPT: make(ROOT_CONCEPT, *parts(decl[top])[:2], top, None, 0, parts(decl[top])[2])}
     else:
-        concepts = {ROOT_CONCEPT: make(ROOT_CONCEPT, project, "", None, None, 0)}
+        concepts = {ROOT_CONCEPT: make(ROOT_CONCEPT, project, "", None, None, 0, (root_repos or {}).get(only, []))}
     stack = [(r, ROOT_CONCEPT) for r in reversed(roots)]
     while stack:
         nid, current = stack.pop()
@@ -176,8 +203,8 @@ def compute_concepts(nodes: dict[str, dict], roots: list[str], project: str,
         if n is None:
             continue
         if nid in decl and nid != top:
-            name, summary = decl[nid]
-            concepts[nid] = make(nid, name, summary, nid, current, concepts[current]["depth"] + 1)
+            name, summary, repos = parts(decl[nid])
+            concepts[nid] = make(nid, name, summary, nid, current, concepts[current]["depth"] + 1, repos)
             concepts[current]["children"].append(nid)
             current = nid
         n["concept"] = current
@@ -262,7 +289,8 @@ class Vault:
     def _load(self, sig: str) -> dict:
         nodes: dict[str, dict] = {}
         refs: dict[str, str | None] = {}
-        decl: dict[str, tuple[str, str]] = {}
+        decl: dict[str, tuple[str, str, list[str]]] = {}
+        repos_only: dict[str, list[str]] = {}
         for sub, kind in SUBDIRS.items():
             d = self.root / sub
             if not d.is_dir():
@@ -282,8 +310,11 @@ class Vault:
                               "concept": ROOT_CONCEPT}
                 refs[nid] = link_target(fm.get("parent"))
                 cname = unquote(fm.get("concept"))
+                repos = parse_repos(fm.get("concept_repos"))
                 if cname:
-                    decl[nid] = (cname, unquote(fm.get("concept_summary")))
+                    decl[nid] = (cname, unquote(fm.get("concept_summary")), repos)
+                elif repos:
+                    repos_only[nid] = repos
         by_name = {n["name"]: n["id"] for n in nodes.values()}
         for n in nodes.values():
             ref = refs.get(n["id"])
@@ -310,7 +341,7 @@ class Vault:
             for t in n["tags"]:
                 counts[t] = counts.get(t, 0) + 1
         tags = [{"tag": t, "count": c} for t, c in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
-        concepts = compute_concepts(nodes, roots, self.project, decl)
+        concepts = compute_concepts(nodes, roots, self.project, decl, repos_only)
         return {"project": self.project, "version": sig, "nodes": list(nodes.values()), "roots": roots, "tags": tags,
                 "concepts": concepts}
 

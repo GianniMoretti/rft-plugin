@@ -130,7 +130,8 @@ export type World = { fs: MemoryFs; tools: string[]; opened: string[]; commands:
 /** Answers everything the plugin asks of the session from memory. */
 /** `refuse` names commands the engine refuses to register, as it refuses a skill's name. */
 /** `cwd`: the session's folder, in a world keyed by absolute path (see `MemoryFs`). */
-export function world(on: On, files: Record<string, string>, opts: { refuse?: string[]; surfaces?: string[]; cwd?: string } = {}): World {
+/** `git`: answers `git -C <dir> <args>` (see `fakeGit`). */
+export function world(on: On, files: Record<string, string>, opts: { refuse?: string[]; surfaces?: string[]; cwd?: string; git?: GitAnswer } = {}): World {
   const w: World = { fs: new MemoryFs(files, opts.cwd !== undefined), tools: [], opened: [], commands: [], seen: [], toasts: [] }
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.cwd', () => ({ value: opts.cwd ?? CWD }))
@@ -138,9 +139,13 @@ export function world(on: On, files: Record<string, string>, opts: { refuse?: st
   on('fs.write', (_$, e) => { w.fs.write(e.path, e.text); return { value: undefined } })
   on('fs.list', (_$, e) => ({ value: w.fs.list(e.path) }))
   on('fs.exists', (_$, e) => { w.seen.push(e.path); return { value: w.fs.exists(e.path) } })
-  // the plugin deletes a file with `rm` through $.process.run
+  // the plugin deletes a file with `rm` through $.process.run, and reads repos with `git -C <dir>`
   on('process.run', (_$, e) => {
     if (e.argv[0] === 'rm') w.fs.remove(e.argv[e.argv.length - 1]!)
+    if (e.argv[0] === 'git' && e.argv[1] === '-C' && opts.git) {
+      const r = opts.git(e.argv[2]!, e.argv.slice(3))
+      return { value: { exitCode: r.ok ? 0 : 128, stdout: r.out, stderr: r.err } } as never
+    }
     return { value: { exitCode: 0, stdout: '', stderr: '' } } as never
   })
   on('command.register', (_$, e) => {
@@ -154,6 +159,41 @@ export function world(on: On, files: Record<string, string>, opts: { refuse?: st
   on('tool.register', (_$, e) => { w.tools.push(e.name); return { value: { tool: `mcp__rft__${e.name}` } } })
   on('ui.open', (_$, e) => { w.opened.push(e.id); return { value: { isPlaced: true as const } } })
   return w
+}
+
+/** What `git -C <dir> <args>` answers. */
+export type GitAnswer = (dir: string, args: string[]) => { ok: boolean; out: string; err: string }
+
+/** A repo as the fake git sees it: its commit and branch now, dirty files, and its history. */
+export type FakeRepo = { commit: string; branch?: string; dirty?: number; log?: string[]; stat?: string[]; known?: string[] }
+
+/**
+ * A git that knows the repos by folder: `status` gives the commit, branch and dirty files,
+ * `cat-file -e` knows the current commit and `known` ones, `log` and `diff` answer `log` and
+ * `stat`. Any other folder is not a git repository. The repos can be changed between calls.
+ */
+export function fakeGit(repos: Record<string, FakeRepo>): GitAnswer & { calls: string[][] } {
+  const calls: string[][] = []
+  const git = (dir: string, args: string[]) => {
+    calls.push([dir, ...args])
+    const r = repos[dir]
+    if (!r) return { ok: false, out: '', err: 'fatal: not a git repository (or any of the parent directories): .git' }
+    switch (args[0]) {
+      case 'status':
+        return {
+          ok: true, err: '',
+          out: [`# branch.oid ${r.commit}`, `# branch.head ${r.branch ?? 'main'}`, ...Array.from({ length: r.dirty ?? 0 }, (_, i) => `1 .M N... 100644 100644 100644 aaa bbb f${i}.py`)].join('\n') + '\n',
+        }
+      case 'cat-file': {
+        const c = args[2]!.replace('^{commit}', '')
+        return { ok: [r.commit, ...(r.known ?? [])].some(k => k.startsWith(c)), out: '', err: '' }
+      }
+      case 'log': return { ok: true, out: (r.log ?? []).join('\n'), err: '' }
+      case 'diff': return { ok: true, out: (r.stat ?? []).join('\n'), err: '' }
+      default: return { ok: false, out: '', err: `unknown git command ${args[0]}` }
+    }
+  }
+  return Object.assign(git, { calls })
 }
 
 export const paneProps = (bodyColumns = 80) => ({

@@ -380,6 +380,7 @@
     const drawer = document.getElementById('drawer')
     drawer.hidden = false
     renderConceptPath(document.getElementById('drawer-concept'), n.concept, 'Focus on this concept')
+    renderCode(document.getElementById('drawer-code'), n.concept)
     document.getElementById('drawer-meta').textContent = `${n.type} · ${MARK[n.status] || ''} ${n.status}${n.date ? ' · ' + n.date : ''}${n.tags && n.tags.length ? ' · #' + n.tags.join(' #') : ''}`
     const article = document.getElementById('note')
     article.innerHTML = '<p class="missing">Loading…</p>'
@@ -1026,6 +1027,28 @@
     })
   }
 
+  /** The code repos of a note's concept, its own first, then inherited; nothing when it links none. */
+  function renderCode(box, id) {
+    const cid = concepts.has(id) ? id : C.ROOT
+    const repos = C.reposOf(concepts, cid)
+    box.innerHTML = ''
+    box.hidden = !repos.length
+    if (!repos.length) return
+    box.append(repos.length === 1 ? 'Code: ' : 'Code, by priority: ')
+    repos.forEach((r, i) => {
+      if (i) box.append(', ')
+      const code = document.createElement('code')
+      code.textContent = r.path
+      box.appendChild(code)
+      if (r.concept !== cid) {
+        const from = document.createElement('span')
+        from.className = 'muted'
+        from.textContent = ` (from ${concepts.get(r.concept).name})`
+        box.appendChild(from)
+      }
+    })
+  }
+
   function buildCrumbs() {
     const nav = document.getElementById('crumbs')
     nav.hidden = !focus
@@ -1138,13 +1161,15 @@
     const node = cviewport.append('g').selectAll('g').data(top.descendants()).join('g')
       .attr('class', 'cnode').attr('transform', n => `translate(${n.p[0]},${n.p[1]})`)
       .on('click', (ev, n) => { ev.stopPropagation(); openConcept(n.data.id) })
-    node.append('title').text(n => `${n.data.name}${n.data.summary ? ' — ' + n.data.summary : ''}`)
+    const repos = c => c.repos || []
+    const baseName = p => p.replace(/\/+$/, '').split('/').pop() || p
+    node.append('title').text(n => `${n.data.name}${n.data.summary ? ' — ' + n.data.summary : ''}${repos(n.data).length ? '\nCode: ' + repos(n.data).join(', ') : ''}`)
     node.append('circle').attr('r', n => radius(n.data))
       .attr('fill', n => C.colourOf(concepts, n.data.id) || 'var(--panel)')
       .attr('stroke', n => (n.data.id === C.ROOT ? 'var(--muted)' : 'none'))
     node.append('text').attr('class', 'cname').attr('y', n => radius(n.data) + 20).attr('text-anchor', 'middle').text(n => n.data.name)
     node.append('text').attr('class', 'ccount muted').attr('y', n => radius(n.data) + 38).attr('text-anchor', 'middle')
-      .text(n => `${n.data.total} note${n.data.total === 1 ? '' : 's'}${n.data.total > n.data.count ? ` (${n.data.count} own)` : ''}`)
+      .text(n => `${n.data.total} note${n.data.total === 1 ? '' : 's'}${n.data.total > n.data.count ? ` (${n.data.count} own)` : ''}${repos(n.data).length ? ` · code: ${repos(n.data).map(baseName).join(', ')}` : ''}`)
     // the stacked bar of statuses, the concept with its sub-concepts
     const BAR = 130
     node.each(function (n) {

@@ -1,6 +1,6 @@
 // The tree view's concepts as pure functions over the tree JSON (`api/tree`): each note's path
-// of concepts, which drawn notes and links make up a concept's region, the concept colours
-// and the status totals of the concept tree. Loaded by the page before app.js, and by the
+// of concepts, which drawn notes and links make up a concept's region, the concept colours,
+// the status totals of the concept tree and the code repos a concept's notes work with. Loaded by the page before app.js, and by the
 // plugin's tests; it sets `globalThis.RftConcepts` and touches nothing else.
 (function (root) {
   'use strict'
@@ -85,5 +85,22 @@
     return out
   }
 
-  root.RftConcepts = { ROOT, PALETTE, byId, pathOf, annotate, ordered, colourOf, region, totalStatuses, subtree }
+  /**
+   * The code repos a concept's notes work with, by priority: its own (`repos`), then those of
+   * each concept above it, nearest first; a path once, at its highest place.
+   */
+  function reposOf(concepts, id) {
+    const out = []
+    const seen = new Set()
+    for (let c = concepts.get(id); c; c = c.parent ? concepts.get(c.parent) : null) {
+      for (const path of c.repos || []) {
+        if (seen.has(path)) continue
+        seen.add(path)
+        out.push({ path, concept: c.id })
+      }
+    }
+    return out
+  }
+
+  root.RftConcepts = { ROOT, PALETTE, byId, pathOf, annotate, ordered, colourOf, region, totalStatuses, subtree, reposOf }
 })(typeof globalThis !== 'undefined' ? globalThis : window)

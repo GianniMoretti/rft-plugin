@@ -13,7 +13,9 @@ interactive tree (pan, zoom, click a node to read it) in a browser.
 - **Theory (T..)**: the project's own definitions, methods, taxonomies and arguments, built on
   the directions, experiments and references.
 - **Concepts**: named lines of research. A note can start one, and its subtree belongs to it
-  until a sub-concept starts. Claude proposes them; you confirm.
+  until a sub-concept starts. Claude proposes them; you confirm. A concept can link the code
+  repositories it runs on, and its experiments and directions then say how they relate to that
+  code.
 
 The notes are plain, Obsidian-compatible markdown in your repository (`vault/` by default) and
 are the source of truth. You never need Obsidian open.
@@ -101,7 +103,9 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
 - **At session start** Claude receives short operating rules and a compact copy of the tree
   (grouped by concept once there are concepts), so it knows to create an experiment's node
   *before* launching it, record only real results, add a direction for every new idea, and
-  propose a concept when a new line of research opens. The full manual is the `rft-manual` skill.
+  propose a concept when a new line of research opens (and ask whether code for it exists). A
+  session started inside a concept's repo is told which concept that code belongs to. The full
+  manual is the `rft-manual` skill.
 - **Tools** Claude calls to keep the tree consistent:
 
   | tool | does |
@@ -112,7 +116,10 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_set_type` | changes the type of a note made with the wrong one: the next free id of the new type, the file moved to that type's folder, the type's sections (no text lost), every link to it renamed |
   | `rft_tags` | lists the topical tags in use with counts, so Claude reuses them |
   | `rft_set_concept` | sets, renames or removes (name null) the concept a note starts, once you confirm it |
-  | `rft_concepts` | prints the concept tree: names, start notes, counts and statuses |
+  | `rft_concepts` | prints the concept tree: names, start notes, counts, statuses and linked code |
+  | `rft_set_repos` | links code repositories to a concept (or, on the root note, to the whole project), once you give the path |
+  | `rft_code` | a note's code context: its repos by priority, the commit it was last checked against, and the commits and files changed since |
+  | `rft_set_code` | writes or updates a note's `## Code` section (how it relates to the code, how to reproduce its results), recording each repo's current commit |
   | `rft_tree` | prints the tree or a subtree |
   | `rft_validate` | checks ids, types, statuses, titles, parents, broken wikilinks, derived fields |
   | `rft_sync` | regenerates children / up / down, the index tree and the canvas after hand edits |
@@ -223,6 +230,59 @@ In the tree view, the concept button switches the overlay from off to **Regions*
 A link can open the view in a given state, e.g. `?layout=lr&concepts=regions`,
 `?view=concepts`, or `?focus=D02&note=E05`.
 
+### Code repos
+
+A concept can link the code it runs on: one or more repositories on the machine, in its
+starting note.
+
+```yaml
+concept: "Schedule-free training"
+concept_summary: "Training without a stopping rule"
+concept_repos: ["/home/me/code/sfree", "../code/train-utils"]
+```
+
+Paths are absolute, `~/…`, or relative to the tree's folder (the one holding `.rft/`). On the
+root note, `concept_repos` is the code of the whole project.
+
+- **Priority.** A note works with its own concept's repos first, then with those inherited from
+  the concepts above it. A sub-concept's code is the most specific.
+- **When a concept is created**, Claude asks whether code for it already exists, and where, and
+  links it with `rft_set_repos`. It then reads the code and gives the concept's experiments and
+  directions a `## Code` section. `rft_set_repos` also says whether sessions started in the repo
+  reach the tree; when they don't, it names the `.rft/config.json` link that would fix that, and
+  Claude asks before writing it.
+- **The `## Code` section** says how the note relates to the code: entry points, files,
+  functions, configs, what has to change. A direction gets a short pointer. It opens with one
+  line per repo, written by the plugin from git, holding the commit the references were checked
+  against:
+
+  ```
+  ## Code
+  - `/home/me/code/sfree` @ 3f2a1c9d0e (main) · checked 2026-11-06
+  - `../code/train-utils` @ a1b2c3d4e5 (main) · checked 2026-11-06 · inherited from Strong augmentation
+
+  Entry point `train.py --schedule free`, config `configs/cifar_1k.yaml`; needs a new
+  `--no-early-stop` flag in `train.py`.
+
+  **Reproduce:** at 3f2a1c9d0e: `python train.py --config configs/cifar_1k.yaml --seed 0 1 2`;
+  raw outputs in `runs/E08/`, aggregated with `tools/summary.py`.
+  ```
+
+- **The code as it is now comes first.** Before working on an experiment, Claude calls
+  `rft_code`. It shows the commits and changed files since the note was last checked, uncommitted
+  changes included. Claude reads those changes, updates the references, and `rft_set_code`
+  records the current commits. Plans and proposed changes start from the current code, not from
+  an older note's commit.
+- **Results live in the experiment's note.** Each repo stores its outputs its own way. Claude
+  processes them and writes the numbers in **Result**, and the Reproduce part says how to get
+  them again: the commit of the run, the command and config, where the raw outputs are, and how
+  they were processed. That commit stays fixed when the references are checked again later.
+- `rft_validate` warns about a repo that is missing or not under git, `concept_repos` on a note
+  that starts no concept, and a Code section that is missing or names a repo the concept no
+  longer links.
+- The tree view shows a note's code under its concept path in the drawer, with inherited repos
+  marked as such. The concept tree names each concept's repos.
+
 Every note carries 1–3 **topical tags** besides the project, type and status ones (the manual
 asks Claude to reuse the vocabulary `rft_tags` lists); the tree's `api/tree` JSON lists them with
 their counts.
@@ -289,7 +349,8 @@ and it runs. The terminal's typeahead lists them.
 `mermaid: true` also writes `Reasoning tree (diagram).md`, a Mermaid flowchart Obsidian draws
 natively. `lastId` keeps ids from being reused after a note is deleted. `webPort` fixes the
 tree view's port (0: a free one), handy for a standing `ssh -L` forward. A config that holds
-only `tree` is a link to a tree in another folder (see above).
+only `tree` is a link to a tree in another folder (see above). The code a concept runs on is
+linked in its note, not in the config (see Code repos).
 
 ### Obsidian, if you use it
 

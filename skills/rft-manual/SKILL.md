@@ -1,6 +1,6 @@
 ---
 name: rft-manual
-description: Operating manual of the Reasoning Flow Tree, the tree of experiment (E..), direction (D..), reference (R..) and theory (T..) notes that records a research project's reasoning, grouped into concepts (lines of research). Use in a project with .rft/config.json whenever an experiment is planned, launched or finished, an idea or question comes up (even a rejected one), a paper or literature review is read, a definition, method or taxonomy is written down, an idea is dropped or moved, a new line of research opens (propose a concept), or the user asks about the tree, the vault, its concepts or what was tried.
+description: Operating manual of the Reasoning Flow Tree, the tree of experiment (E..), direction (D..), reference (R..) and theory (T..) notes that records a research project's reasoning, grouped into concepts (lines of research) that can link the code repositories they run on. Use in a project with .rft/config.json whenever an experiment is planned, launched or finished, an idea or question comes up (even a rejected one), a paper or literature review is read, a definition, method or taxonomy is written down, an idea is dropped or moved, a new line of research opens (propose a concept, ask for its code), work starts on an experiment whose concept links code, or the user asks about the tree, the vault, its concepts, its code or what was tried.
 ---
 
 # Reasoning Flow Tree (rft)
@@ -87,16 +87,73 @@ and takes the project's place at the top of the concept tree. Concepts are expli
   one, and `name: null` removes it. `/rft-concepts suggest` asks you to propose a full split:
   answer with a short table (start note, name, summary, what stays in the root) and wait for
   the user's yes before applying anything.
+- **Ask for the code.** Once a new concept is set, ask the user whether code for that line of
+  research already exists on this machine, and where (see Code below).
+
+## Code
+
+A concept can link the **code repositories** its work runs on: folders on this machine, in
+`concept_repos:` on the note that starts it (on the root note, the code of the whole project).
+
+```yaml
+concept: "Schedule-free training"
+concept_summary: "Training without a stopping rule"
+concept_repos: ["/home/me/code/sfree", "../code/train-utils"]
+```
+
+- **Priority.** A note works with its concept's own repos first, then with those its concept
+  inherits from the concepts above it, nearest first. A sub-concept's code is the most specific;
+  its parent's is context.
+- **Linking.** When a concept is created, ask whether code for it already exists and where. Link
+  it with `rft_set_repos(id, repos)` using the path the user gives (absolute, `~/…`, or relative
+  to the tree's folder, the one holding `.rft/`); never guess a path. An empty list removes the
+  link. Its answer gives each repo's git state, whether sessions started in the repo reach this
+  tree (if not, it says which `.rft/config.json` link would do it: ask before writing it into the
+  repo), and the notes that now need a Code section.
+- **After linking, read the code** as it is now, and give every experiment and direction of the
+  concept (sub-concepts included) a `## Code` section with `rft_set_code`. Ideas `discussed` or
+  `moved` need none.
+- **The `## Code` section** says how the note relates to the code: entry points, files,
+  functions and classes, configs, what has to change, where outputs go. A direction gets a short
+  pointer (where the idea would land in the code). It opens with one line per repo, written by
+  the plugin, never by hand:
+  `` - `../code/sfree` @ 3f2a1c9d0e (main) · checked 2026-11-06 ``: the commit the references
+  were checked against. `rft_set_code(id, text?, reproduce?)` writes the section and records
+  each repo's current commit; `text` or `reproduce` left out keeps what the section holds.
+- **The current state comes first.** Plan and propose changes from the code as it is now (the
+  current commit and the uncommitted changes), not from the commit an older note recorded.
+- **Before working on an experiment** (planning it, launching it, analysing its results) whose
+  concept links code, call `rft_code(id)`: it lists, per repo, the commit the note was checked
+  against, the commits since and the files changed (uncommitted changes included). Read the
+  changes that touch what the note refers to (`git -C <repo> diff <commit> -- <files>`), update
+  the references, and call `rft_set_code` to record the current commits. `rft_add_node` writes
+  the section at creation, stamped: pass its description as `sections.Code` once you have read
+  the code, or fill it right after with `rft_set_code`.
+- **Results live in the experiment's note.** Each repo keeps its outputs its own way (logs,
+  CSVs, checkpoints, tracker exports): read them where the repo puts them, process them (seeds
+  aggregated, tables, the figures that matter) and write the numbers in **Result**, so the note
+  can be discussed without the repo. Then record how to reproduce them with `rft_set_code`'s
+  `reproduce`: the commit the run used (and whether the tree had uncommitted changes), the
+  command and config, where the raw outputs are, and how they were processed into Result (the
+  script or command). The Reproduce part keeps the commit of the run even when the references
+  are checked again later.
+- `rft_validate` warns about repos that are missing or not under git, `concept_repos` on a note
+  that starts no concept, and notes whose Code section is missing or names repos the concept no
+  longer links.
 
 ## When to create and update nodes
 
 1. **Before launching an experiment**, create its node: `rft_add_node` with `type: experiment`,
    `parent` = the direction it tests, `status` `planned` (or `running` if it starts now),
    `what` / `why` filled and its topical `tags`. Do this *before* starting the run, not after.
+   In a concept with code, call `rft_code` first and plan from the code as it is now; the note's
+   `## Code` section says how the run uses the code.
 2. **When it finishes or gives a partial result**: edit its note to fill **Result** (numbers with
-   spread over seeds, what failed and why, caveats), **Directions found**, and **Code / data**
-   (commit, script, results folder, machine); then `rft_set_status` (`done`, or keep `running`
-   for partial results). The `note` argument appends to Result.
+   spread over seeds, what failed and why, caveats, processed from the run's outputs),
+   **Directions found**, and **Code / data** (commit, script, results folder, machine); in a
+   concept with code, record how to reproduce the results with `rft_set_code`'s `reproduce`;
+   then `rft_set_status` (`done`, or keep `running` for partial results). The `note` argument
+   appends to Result.
 3. **When a new idea or question comes up** (from a result, the user, a discussion), even if it
    is rejected at once: `rft_add_node` with `type: direction` and `parent` = the note it comes
    from, and its topical `tags`. A rejected idea gets status `discussed`.
@@ -128,7 +185,10 @@ and takes the project's place at the top of the concept tree. Concepts are expli
 | `rft_set_type` | change the type of a note made with the wrong one (new id, file moved, links renamed) |
 | `rft_tags` | the topical tags in use, with counts: check before inventing one |
 | `rft_set_concept` | set, rename or remove (name null) the concept a note starts, after the user confirms |
-| `rft_concepts` | the concept tree: names, start notes, counts, statuses |
+| `rft_concepts` | the concept tree: names, start notes, counts, statuses, linked code |
+| `rft_set_repos` | link code repos to a concept (or, on the root note, to the project); an empty list removes them |
+| `rft_code` | a note's code context: its repos by priority, the commit it was checked against, what changed since |
+| `rft_set_code` | write or update a note's `## Code` section (description, Reproduce), recording each repo's current commit |
 | `rft_tree` | the current tree, or the subtree of one node (`root`, `depth`) |
 | `rft_validate` | errors (bad ids, statuses, titles, missing parents, broken links) and warnings |
 | `rft_sync` | regenerate children / up / down, the tree in `00 Index.md`, the canvas |
@@ -145,11 +205,14 @@ folder and every link to it change together.
 Frontmatter: `id`, `type` (`experiment` | `direction` | `reference` | `theory`), `status`, `date` (YYYY-MM-DD),
 `parent: "[[<parent name>]]"` (`""` for the root), `children`, `up`, `down`,
 `tags: [<project>, <type>, <topical tags...>, <status>]`, and on a note that starts a
-concept `concept: "<name>"` and `concept_summary: "<one line>"`. Body:
+concept `concept: "<name>"`, `concept_summary: "<one line>"` and, when it links code,
+`concept_repos: ["<path>", ...]` (on one line). Body:
 `# <ID> · <Title>`, the Parent / Status / Date lines (and Code / data for experiments), then the
 sections — experiments: What, Why, Result, Directions found; directions: Idea, Why, Status;
 references: Source, Summary, Method, Key results, Relevance, Directions found; theory notes:
 Statement, Builds on, Explanation, Open questions, Status — and last **Children in the tree**, a list of links to the children.
+In a concept with code, experiments and directions also have a **Code** section, before Result
+(experiments) or Status (directions).
 
 ## Status notes (optional)
 

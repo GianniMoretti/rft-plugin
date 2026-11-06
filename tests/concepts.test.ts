@@ -147,7 +147,7 @@ describe('concepts in the vault', () => {
   test('rft_set_concept on the root note sets, renames and removes the root concept', async () => {
     const { fs, io, loaded } = await loadFrom(nested())
     const path = `vault/directions/${D00}.md`
-    expect(await setConcept(io, loaded, 'D00', 'Feature geometry')).toBe('D00 Does the thing work now starts the concept "Feature geometry". It holds 1 note(s) (4 with its sub-concepts).')
+    expect(await setConcept(io, loaded, 'D00', 'Feature geometry')).toBe('D00 Does the thing work now starts the concept "Feature geometry". It holds 1 note(s) (4 with its sub-concepts). Ask the user whether code for this line of research already exists on this machine, and where; if so, link it with rft_set_repos (never guess a path).')
     expect(front(fs.read(path)).concept).toBe('"Feature geometry"')
     expect(loaded.tree.concepts!.root!.name).toBe('Feature geometry')
     expect(await setConcept(io, loaded, 'D00', 'Geometry')).toContain('concept "Feature geometry" renamed to "Geometry". It holds 1 note(s)')

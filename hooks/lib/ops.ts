@@ -4,12 +4,12 @@
 
 import type { PageAssets } from './page'
 import { staticPage } from './page'
-import type { Config, Io, Loaded, NodeType, RftNode, Tree } from './vault'
+import type { CodeRepo, Concept, Config, Io, Loaded, NodeType, RftNode, Tree } from './vault'
 import {
-  CONFIG_PATH, ID_RE, INDEX, LEGEND, MERMAID, NODE_TYPES, STATUSES, SUBDIR, TEMPLATES, TYPES,
+  CODE, CONFIG_PATH, ID_RE, INDEX, LEGEND, MERMAID, NODE_TYPES, STATUSES, SUBDIR, TEMPLATES, TYPES,
   MARK, ROOT_CONCEPT, CANVAS, renameLinks, retyped, withCardRenamed, withLinksRenamed, compactTree, conceptOrder, conceptPath, counts, countsLine, defaultConfig, front, idOf, indexTemplate,
-  declaredConcept, isNodeType, join, load, nextId, noteText, orList, readConfig, removeField, resolveId, sanitiseTitle, setField, statusSummary,
-  sync, tagCounts, validate, withChildListed, withStatus, withTopicalTags, writeConfig,
+  codeRepos, codeSection, declaredConcept, isAbsolute, isInGit, isNodeType, join, load, locate, needsCode, nextId, noteText, orList, readConfig, removeField, repoAbs, reposLine, resolveId, sanitiseTitle, setField, statusSummary,
+  sync, tagCounts, unquote, validate, walk, withChildListed, withCodeSection, withStatus, withTopicalTags, writeConfig,
 } from './vault'
 
 export const today = (now = new Date()) =>
@@ -108,7 +108,11 @@ export type AddInput = {
   tags?: string[]
 }
 
-export async function addNode(io: Io, loaded: Loaded, input: AddInput): Promise<RftNode & { report: string }> {
+/**
+ * `env`: how to reach the code; with it, an experiment or direction in a concept that links code
+ * gets a `## Code` section with each repo's current commit (`sections.Code` is its description).
+ */
+export async function addNode(io: Io, loaded: Loaded, input: AddInput, env?: CodeEnv): Promise<RftNode & { report: string }> {
   const { tree, config } = loaded
   if (!isNodeType(input.type)) throw new RftError(`type must be ${orList(NODE_TYPES.map(t => `"${t}"`))}`)
   const title = sanitiseTitle(input.title ?? '')
@@ -130,7 +134,20 @@ export async function addNode(io: Io, loaded: Loaded, input: AddInput): Promise<
   const name = `${id} ${title}`
   const path = `${SUBDIR[input.type]}/${name}.md`
   const parentName = parent ? tree.nodes[parent]!.name : null
-  const text = noteText(id, { ...input, title, status }, config.project, parentName)
+  // a new note starts no concept: it is in its parent's
+  const concept = parent ? tree.nodes[parent]!.concept : ROOT_CONCEPT
+  const repos = env && parent && needsCode({ type: input.type, status }) ? codeRepos(tree.concepts, concept) : []
+  let sections = input.sections
+  let codeSaid = ''
+  if (env && repos.length) {
+    const stamped = await stamp(io, env, tree.concepts, concept, repos)
+    const description = sections?.[CODE]?.trim() ?? ''
+    sections = { ...sections, [CODE]: [...stamped.lines, ...(description ? ['', description] : [])].join('\n') }
+    codeSaid = ` Its concept links code: ${stamped.said.join('; ')}.` + (description
+      ? ` The ${CODE} section holds your description, checked against these commits.`
+      : ' Read the code as it is now (the current commit and uncommitted changes) and write how this note relates to it with rft_set_code.')
+  }
+  const text = noteText(id, { ...input, sections, title, status }, config.project, parentName)
   await io.write(join(config.vault, path), text)
   const prefix = TYPES[input.type].prefix
   config.lastId[prefix] = Math.max(config.lastId[prefix] ?? 0, Number(id.slice(1)))
@@ -147,7 +164,7 @@ export async function addNode(io: Io, loaded: Loaded, input: AddInput): Promise<
   const node = fresh.tree.nodes[id]!
   return {
     ...node,
-    report: `Created ${path}${parent ? ` under ${parentName}` : ' as the root'} (status ${status}). Updated ${report.changed.length} derived file(s).`,
+    report: `Created ${path}${parent ? ` under ${parentName}` : ' as the root'} (status ${status}). Updated ${report.changed.length} derived file(s).${codeSaid}`,
   }
 }
 
@@ -199,6 +216,12 @@ export async function setConcept(io: Io, loaded: Loaded, ref: string, name: stri
     if (!was) return `${n.name} declares no concept: nothing to remove.`
     text = removeField(removeField(text, 'concept'), 'concept_summary')
     said = `${n.name} no longer starts the concept "${was.name}": its notes now belong to the enclosing concept.`
+    // the only root note's repos are the project's, with or without a concept
+    const isTop = loaded.tree.roots.length === 1 && loaded.tree.roots[0] === id
+    if (was.repos.length && !isTop) {
+      text = removeField(text, 'concept_repos')
+      said += ` Its code links (${was.repos.join(', ')}) went with it.`
+    }
   } else {
     const clean = checkConceptName(name)
     text = setField(text, 'concept', JSON.stringify(clean), 'tags')
@@ -214,8 +237,18 @@ export async function setConcept(io: Io, loaded: Loaded, ref: string, name: stri
   const fresh = await load(io, loaded.config)
   Object.assign(loaded, fresh)
   const c = declaredConcept(fresh.tree.concepts, id)
-  return c ? `${said} It holds ${c.count} note(s) (${c.total} with its sub-concepts).` : said
+  if (!c) return said
+  said += ` It holds ${c.count} note(s) (${c.total} with its sub-concepts).`
+  if (!was) {
+    const above = codeRepos(fresh.tree.concepts, c.id).filter(r => r.concept !== c.id)
+    if (above.length) said += ` It inherits code from the concepts above: ${above.map(r => `${r.path} (${fresh.tree.concepts![r.concept]!.name})`).join(', ')}.`
+    said += ' Ask the user whether code for this line of research already exists on this machine, and where; if so, link it with rft_set_repos (never guess a path).'
+  }
+  return said
 }
+
+/** ` · code: a, b`: the repos a concept links itself, or nothing. */
+const codeOf = (c: Concept) => (c.repos?.length ? ` · code: ${c.repos.join(', ')}` : '')
 
 /** The concept tree as compact text. */
 export function conceptsReport(loaded: Loaded): string {
@@ -225,7 +258,7 @@ export function conceptsReport(loaded: Loaded): string {
     const where = c.root ? `@${c.root}` : 'project root'
     const sub = c.total > c.count ? ` (+${c.total - c.count} in sub-concepts)` : ''
     const stats = statusSummary(c.statuses)
-    return `${'  '.repeat(c.depth)}- ${c.name} [${where}] ${c.count} note(s)${sub}${stats ? ` ${stats}` : ''}${c.summary ? ` — ${c.summary}` : ''}`
+    return `${'  '.repeat(c.depth)}- ${c.name} [${where}] ${c.count} note(s)${sub}${stats ? ` ${stats}` : ''}${c.summary ? ` — ${c.summary}` : ''}${codeOf(c)}`
   })
   const declared = order.filter(c => c.root).length
   return `${declared ? `${declared} concept(s)` : 'No concepts yet: every note is in the project root concept'}. Marks: ${LEGEND}.\n${lines.join('\n')}`
@@ -251,7 +284,7 @@ export function groupedTree(tree: Tree): string {
     const path = conceptPath(concepts, c.id).map(id => concepts[id]!.name).join(' › ')
     const notes = own[c.id] ?? []
     if (!notes.length && c.id === ROOT_CONCEPT) continue
-    out.push(`## ${path}${c.root ? ` (from ${c.root})` : ''}${c.summary ? ` — ${c.summary}` : ''}`)
+    out.push(`## ${path}${c.root ? ` (from ${c.root})` : ''}${c.summary ? ` — ${c.summary}` : ''}${codeOf(c)}`)
     let prev: string | null = null
     for (const id of notes) {
       const n = tree.nodes[id]!
@@ -281,6 +314,239 @@ export async function setStatus(io: Io, loaded: Loaded, ref: string, status: str
   const report = await sync(io, fresh)
   Object.assign(loaded, fresh)
   return `${n.name}: ${n.status} → ${status}${note ? ' (note added)' : ''}. Updated ${report.changed.length} derived file(s).`
+}
+
+// ---------------------------------------------------------------- code
+
+/** Runs git in a folder: whether it exited 0, and what it wrote. */
+export type Git = (dir: string, args: string[]) => Promise<{ ok: boolean; out: string; err: string }>
+
+/**
+ * How the code is reached: the tree's folder (relative repo paths start there), git, the home
+ * folder (for `~/…`), and today's date (when a note's code references were checked).
+ */
+export type CodeEnv = { root: string; git: Git; home?: string; date: string }
+
+export type RepoState =
+  | { kind: 'git'; commit: string | null; branch: string; dirty: number }
+  | { kind: 'plain' }
+  | { kind: 'missing' }
+  | { kind: 'error'; why: string }
+
+/** The length of a recorded commit: short, and safe from clashes in large repos. */
+const COMMIT_LEN = 10
+const MAX_LOG = 30
+const MAX_STAT = 40
+
+const firstLine = (s: string) => s.trim().split('\n')[0] ?? ''
+
+/** A repo's state now: its branch, commit and uncommitted changes to tracked files. */
+export async function repoState(io: Io, env: CodeEnv, path: string): Promise<RepoState> {
+  const abs = repoAbs(env.root, path, env.home)
+  if (!(await io.exists(abs))) return { kind: 'missing' }
+  // told by the folders, not by git's message, which is in the user's language
+  if (!(await isInGit(io, abs))) return { kind: 'plain' }
+  const r = await env.git(abs, ['status', '--porcelain=v2', '--branch', '--untracked-files=no'])
+  if (!r.ok) return { kind: 'error', why: firstLine(r.err) || 'git failed' }
+  let commit: string | null = null
+  let branch = ''
+  let dirty = 0
+  for (const line of r.out.split('\n')) {
+    const oid = /^# branch\.oid (\S+)/.exec(line)
+    const head = /^# branch\.head (\S+)/.exec(line)
+    if (oid) commit = /^[0-9a-f]{7,}$/.test(oid[1]!) ? oid[1]!.slice(0, COMMIT_LEN) : null
+    else if (head) branch = head[1] === '(detached)' ? 'detached HEAD' : head[1]!
+    else if (line.trim() && !line.startsWith('#')) dirty++
+  }
+  return { kind: 'git', commit, branch: branch || 'detached HEAD', dirty }
+}
+
+export function stateText(st: RepoState): string {
+  switch (st.kind) {
+    case 'git':
+      return `${st.branch} @ ${st.commit ?? '(no commits yet)'}, ${st.dirty ? `uncommitted changes in ${st.dirty} file(s)` : 'clean'}`
+    case 'plain': return 'not under git (no commit can be recorded)'
+    case 'missing': return 'not found'
+    case 'error': return `git failed (${st.why})`
+  }
+}
+
+/** A repo line of a `## Code` section: the repo, the commit it was checked against, when, and where it comes from. */
+export function repoLine(path: string, st: RepoState, date: string, inheritedFrom?: string): string {
+  const where = st.kind === 'git'
+    ? st.commit ? ` @ ${st.commit} (${st.branch}${st.dirty ? `, uncommitted changes in ${st.dirty} file(s)` : ''})` : ` (${st.branch}, no commits yet)`
+    : st.kind === 'plain' ? ' (not under git)' : st.kind === 'missing' ? ' (not found)' : ` (git failed: ${st.why})`
+  return `- \`${path}\`${where} · checked ${date}${inheritedFrom ? ` · inherited from ${inheritedFrom}` : ''}`
+}
+
+/** The repo lines for a note of concept `own`, each repo's state read now, and the same said in words. */
+async function stamp(io: Io, env: CodeEnv, concepts: Record<string, Concept> | undefined, own: string, repos: CodeRepo[]): Promise<{ lines: string[]; said: string[] }> {
+  const lines: string[] = []
+  const said: string[] = []
+  for (const r of repos) {
+    const st = await repoState(io, env, r.path)
+    const from = r.concept !== own ? concepts?.[r.concept]?.name ?? r.concept : undefined
+    lines.push(repoLine(r.path, st, env.date, from))
+    said.push(`${r.path}${from ? ` (inherited from ${from})` : ''}: ${stateText(st)}`)
+  }
+  return { lines, said }
+}
+
+/** What changed in a repo since `commit`: the commits, then the files changed, uncommitted changes included. */
+async function changesSince(env: CodeEnv, abs: string, commit: string): Promise<string[]> {
+  const known = await env.git(abs, ['cat-file', '-e', `${commit}^{commit}`])
+  if (!known.ok) return [`The commit ${commit} is not in this repository (rebased, or another clone?): check the references against the code as it is now.`]
+  const out: string[] = []
+  const log = await env.git(abs, ['log', '--oneline', '--no-decorate', '-n', String(MAX_LOG + 1), `${commit}..HEAD`])
+  const commits = log.out.split('\n').filter(Boolean)
+  if (commits.length) {
+    out.push(`Commits since (newest first):`, ...commits.slice(0, MAX_LOG).map(l => `  ${l}`))
+    if (commits.length > MAX_LOG) out.push(`  … more (git -C ${abs} log ${commit}..HEAD)`)
+  } else out.push('No commits since.')
+  // from the commit to the working tree: committed and uncommitted changes to tracked files
+  const stat = (await env.git(abs, ['diff', '--stat=120', commit])).out.split('\n').filter(Boolean)
+  if (stat.length) {
+    const files = stat.slice(0, -1)
+    out.push(`Files changed since, uncommitted changes included (${firstLine(stat[stat.length - 1]!)}):`, ...files.slice(0, MAX_STAT).map(l => `  ${l.trim()}`))
+    if (files.length > MAX_STAT) out.push(`  … ${files.length - MAX_STAT} more (git -C ${abs} diff --stat ${commit})`)
+  } else out.push('No file changed since.')
+  return out
+}
+
+/** How a concept is named in the tools' answers. */
+const conceptLabel = (c: Concept | undefined) => (c?.root ? `concept "${c.name}" (from ${c.root})` : 'the project')
+
+/** A path as given: `~/…` made absolute, a trailing slash dropped. */
+const givenPath = (p: string, home?: string) => {
+  const t = p.trim().replace(/(.)\/+$/, '$1')
+  return home && (t === '~' || t.startsWith('~/')) ? repoAbs('/', t, home) : t
+}
+
+/** Whether a session started in `abs` works on this tree, and what to do when it does not. */
+async function reach(io: Io, env: CodeEnv, abs: string): Promise<string> {
+  const found = await locate(io, abs)
+  if (found && found.root === env.root) return 'Sessions started there work on this tree.'
+  if (found && found.root === null) return `Sessions started there do not reach this tree: ${found.problem}.`
+  if (found) return `Sessions started there work on another tree, in ${found.root}.`
+  return `Sessions started there find no tree: a .rft/config.json there holding {"tree": "${env.root}"} would link them to this one. Ask the user before writing it into the repo.`
+}
+
+/**
+ * Links code repos to the concept a note starts (or, on the only root note, to the whole
+ * project), replacing the list; an empty list removes it. Every path must exist.
+ */
+export async function setRepos(io: Io, loaded: Loaded, env: CodeEnv, ref: string, repos: string[]): Promise<string> {
+  const { tree, config } = loaded
+  const id = resolveId(tree, ref)
+  if (!id) throw new RftError(`"${ref}" is not a note of the tree`)
+  const n = tree.nodes[id]!
+  const isTop = tree.roots.length === 1 && tree.roots[0] === id
+  if (!declaredConcept(tree.concepts, id) && !isTop) {
+    throw new RftError(`${n.name} starts no concept. Code is linked to a concept: propose one to the user and set it with rft_set_concept first, or link code of the whole project on the root note${tree.roots.length === 1 ? ` (${tree.roots[0]})` : ''}`)
+  }
+  const list = [...new Set(repos.map(p => givenPath(p, env.home)).filter(Boolean))]
+  const missing: string[] = []
+  for (const p of list) if (!(await io.exists(repoAbs(env.root, p, env.home)))) missing.push(p)
+  if (missing.length) {
+    throw new RftError(`not found: ${missing.join(', ')}${missing.some(p => !isAbsolute(p)) ? ` (a relative path starts from the tree's folder, ${env.root})` : ''}. Ask the user for the path; do not guess one.`)
+  }
+  const prev = loaded.texts[id]!
+  const fm = front(prev)
+  const had = tree.concepts?.[declaredConcept(tree.concepts, id)?.id ?? ROOT_CONCEPT]?.repos ?? []
+  const text = list.length
+    ? setField(prev, 'concept_repos', reposLine(list), fm.concept_summary !== undefined ? 'concept_summary' : unquote(fm.concept) ? 'concept' : 'tags')
+    : removeField(prev, 'concept_repos')
+  await io.write(join(config.vault, n.path), text)
+  const fresh = await load(io, config)
+  Object.assign(loaded, fresh)
+  const concepts = fresh.tree.concepts ?? {}
+  const cid = declaredConcept(concepts, id)?.id ?? ROOT_CONCEPT
+  const label = conceptLabel(concepts[cid])
+  if (!list.length) {
+    return had.length
+      ? `${n.name}: ${label} links no code any more (was ${had.join(', ')}). rft_validate lists the Code sections that still name it.`
+      : `${n.name}: ${label} linked no code: nothing to remove.`
+  }
+  const out = [`${n.name}: ${label} now links, by priority:`]
+  for (const p of list) {
+    const abs = repoAbs(env.root, p, env.home)
+    out.push(`- ${p}${abs !== p ? ` (${abs})` : ''}: ${stateText(await repoState(io, env, p))}. ${await reach(io, env, abs)}`)
+  }
+  const above = codeRepos(concepts, cid).filter(r => r.concept !== cid)
+  if (above.length) out.push(`Inherited from the concepts above, after these: ${above.map(r => `${r.path} (${concepts[r.concept]!.name})`).join(', ')}.`)
+  const notes: string[] = []
+  walk(fresh.tree, x => { if (needsCode(x)) notes.push(x.id) }, [id])
+  if (notes.length) {
+    out.push(`Now read the code as it is now and give each of these notes a ## ${CODE} section with rft_set_code (how it relates to the code; for an experiment with results, how to reproduce them): ${notes.join(', ')}.`)
+  }
+  return out.join('\n')
+}
+
+/**
+ * A note's code context: the repos its concept links (its own first, then inherited), each
+ * one's state now, the commit the note's `## Code` section was checked against, and the commits
+ * and files changed since.
+ */
+export async function codeReport(io: Io, loaded: Loaded, env: CodeEnv, ref: string): Promise<string> {
+  const { tree } = loaded
+  const id = resolveId(tree, ref)
+  if (!id) throw new RftError(`"${ref}" is not a note of the tree`)
+  const n = tree.nodes[id]!
+  const concepts = tree.concepts ?? {}
+  const c = concepts[n.concept]
+  const repos = codeRepos(concepts, n.concept)
+  if (!repos.length) {
+    return `${n.name} is in ${conceptLabel(c)}, which links no code, nor does any concept above it. If code for it exists, ask the user where and link it with rft_set_repos on the note that starts the concept.`
+  }
+  const cs = codeSection(loaded.texts[id]!)
+  const out = [`${n.name}, in ${conceptLabel(c)}. Its code, by priority:`]
+  for (const [i, r] of repos.entries()) {
+    const abs = repoAbs(env.root, r.path, env.home)
+    const st = await repoState(io, env, r.path)
+    const from = r.concept === n.concept ? "its concept's own" : `inherited from ${concepts[r.concept]?.name ?? r.concept}`
+    out.push(`${i + 1}. ${r.path}${abs !== r.path ? ` (${abs})` : ''}, ${from}: now ${stateText(st)}.`)
+    const rec = cs?.repos.find(x => x.path === r.path)
+    if (!cs) continue
+    if (!rec) out.push('   Not in the note\'s Code section yet.')
+    else if (!rec.commit) out.push('   The Code section records no commit for it.')
+    else if (st.kind !== 'git' || !st.commit) out.push(`   Checked at ${rec.commit}; the repo has no commit to compare with now.`)
+    else if ((st.commit.startsWith(rec.commit) || rec.commit.startsWith(st.commit)) && !st.dirty) out.push(`   Checked at ${rec.commit}: nothing changed since.`)
+    else out.push(`   Checked at ${rec.commit}.`, ...(await changesSince(env, abs, rec.commit)).map(l => `   ${l}`))
+  }
+  out.push(cs
+    ? 'Read the changes to what the note refers to (git -C <repo> diff <checked commit> -- <files>), against the code as it is now; then update the Code section with rft_set_code, which records the current commits. Keep the Reproduce part as it is unless a result was redone.'
+    : `The note has no ## ${CODE} section: read the code as it is now and write one with rft_set_code.`)
+  return out.join('\n')
+}
+
+/**
+ * Writes a note's `## Code` section: the repos its concept links, each with its commit now (what
+ * the references were checked against), the description and the Reproduce part. Left undefined,
+ * the description or the Reproduce part keeps what the section held.
+ */
+export async function setCode(io: Io, loaded: Loaded, env: CodeEnv, ref: string, description?: string, reproduce?: string): Promise<string> {
+  const { tree, config } = loaded
+  const id = resolveId(tree, ref)
+  if (!id) throw new RftError(`"${ref}" is not a note of the tree`)
+  const n = tree.nodes[id]!
+  const concepts = tree.concepts ?? {}
+  const repos = codeRepos(concepts, n.concept)
+  if (!repos.length) {
+    const c = concepts[n.concept]
+    throw new RftError(`${n.name} is in ${conceptLabel(c)}, which links no code: link a repo first with rft_set_repos on ${c?.root ?? 'the root note'}, once the user gives its path`)
+  }
+  const prev = loaded.texts[id]!
+  const was = codeSection(prev)
+  const { lines, said } = await stamp(io, env, concepts, n.concept, repos)
+  const text = withCodeSection(prev, n.type, { repos: lines, description, reproduce })
+  await io.write(join(config.vault, n.path), text)
+  const fresh = await load(io, config)
+  Object.assign(loaded, fresh)
+  const now = codeSection(text)
+  let out = `${n.name}: ## ${CODE} ${was ? 'updated' : 'written'}, checked against ${said.join('; ')}.`
+  if (!now?.description) out += ' It holds no description yet: pass text, how the note relates to the code.'
+  if (n.type === 'experiment' && n.status === 'done' && !now?.reproduce) out += ' A done experiment says how to reproduce its results: pass reproduce.'
+  return out
 }
 
 // ---------------------------------------------------------------- type
@@ -337,8 +603,34 @@ export function treeReport(loaded: Loaded, opts: { root?: string; depth?: number
 
 const MAX_LINES = 160
 
-/** `vault`: where the notes are as the session sees them, when the tree is not in its folder. */
-export function rulesText(tree: Tree, config: Config, vault = config.vault): string {
+/**
+ * What the session is told of the code: the project's repos when there are no concepts (the
+ * grouped tree names each concept's), and the concepts whose code the session's folder is in.
+ */
+function codeContext(tree: Tree, where: { cwd?: string; root?: string; home?: string }): string {
+  const concepts = tree.concepts ?? {}
+  const out: string[] = []
+  const top = concepts[ROOT_CONCEPT]
+  if (top?.repos.length && Object.keys(concepts).length <= 1) out.push(`The project's code (every note works with it): ${top.repos.join(', ')}.`)
+  if (where.cwd && where.root) {
+    const hits: string[] = []
+    for (const c of conceptOrder(concepts)) {
+      for (const p of c.repos ?? []) {
+        const abs = repoAbs(where.root, p, where.home)
+        if (where.cwd === abs || where.cwd.startsWith(abs.replace(/\/$/, '') + '/')) hits.push(c.root ? `concept "${c.name}" (from ${c.root})` : 'the whole project')
+      }
+    }
+    if (hits.length) out.push(`This session runs in the code of ${orList([...new Set(hits)])}: new experiments and directions from here usually belong under it, and their Code sections refer to this repository.`)
+  }
+  return out.length ? `\n${out.join('\n')}\n` : ''
+}
+
+/**
+ * `vault`: where the notes are as the session sees them, when the tree is not in its folder;
+ * `where`: the session's folder and the tree's (and the home folder), to say which concept's code
+ * the session runs in.
+ */
+export function rulesText(tree: Tree, config: Config, vault = config.vault, where: { cwd?: string; root?: string; home?: string } = {}): string {
   let lines = groupedTree(tree).split('\n')
   if (lines.length > MAX_LINES) lines = [...lines.slice(0, MAX_LINES), `… ${lines.length - MAX_LINES} more (rft_tree shows them)`]
   return `# Reasoning Flow Tree (rft) is active in this project
@@ -355,8 +647,11 @@ The reasoning of this research project is kept as a tree of Obsidian notes in \`
 - The tools assign ids (never reused) and strip ^ # | [ ] from titles. After editing notes by hand, run rft_sync (children / up / down, 00 Index.md, the canvas) and rft_validate.
 - A note made with the wrong type: rft_set_type (the next id of the new type, the file moved, every link renamed), never a rename by hand.
 - Concepts group the tree into lines of research: a note with \`concept:\` starts one, its subtree inherits it until a sub-concept starts. When a direction opens a new line of research, PROPOSE a short concept name to the user; apply it with rft_set_concept only after they confirm, never silently. rft_concepts shows the concept tree.
+- Code: a concept can link the code repositories its work runs on (\`concept_repos:\` on its starting note; on the root note, the whole project's). Its notes work with its own repos first, then those of the concepts above it. When you create a concept, ask the user whether code for it already exists and where; link it with rft_set_repos (never guess a path), then read the code and give the concept's experiments and directions a ## Code section with rft_set_code.
+- The ## Code section of an experiment or direction says how it relates to the code: entry points, files, functions, configs, what has to change (a short pointer for a direction). Write it from the code as it is now (the current commit and uncommitted changes), not as an older note saw it; rft_set_code records the commit it was checked against. Before working on such an experiment (planning, launching, analysing), call rft_code: it lists what changed since that commit; read the changes and update the references with rft_set_code.
+- Results go in the experiment's own note: read the run's outputs where its repo keeps them, process them (seeds aggregated, tables) and write the numbers in Result; record how to reproduce them (the commit of the run, the command and config, where the raw outputs are, how they were processed) with rft_set_code's reproduce.
 - The rft-manual skill is the full manual; rft_tree shows the current tree.
-
+${codeContext(tree, where)}
 The tree at the start of this session${Object.keys(tree.concepts ?? {}).length > 1 ? ', by concept (← parent, when not the line above)' : ''}:
 ${lines.join('\n')}`
 }

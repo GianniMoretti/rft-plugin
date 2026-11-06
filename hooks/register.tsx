@@ -1,5 +1,6 @@
 // rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-view), the model's
-// tools (rft_add_node, rft_set_status, rft_set_tags, rft_set_type, rft_tags, rft_tree, rft_validate, rft_sync), the operating rules
+// tools (rft_add_node, rft_set_status, rft_set_tags, rft_set_type, rft_set_concept, rft_concepts, rft_set_repos,
+// rft_code, rft_set_code, rft_tags, rft_tree, rft_validate, rft_sync), the operating rules
 // injected into the system prompt, the outline pane, and the web view: /rft starts a local
 // server (server/rft_server.py) for the interactive tree page (web/), and makes the notes that
 // page adds (addFromView). Everything is
@@ -10,7 +11,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { RftSnapshot } from '../types'
-import { addNode, conceptsReport, exportHtml, initVault, loadActive, rulesText, setConcept, setStatus, setTags, setType, tagsReport, today, treeReport } from './lib/ops'
+import type { CodeEnv, Git } from './lib/ops'
+import { addNode, codeReport, conceptsReport, exportHtml, initVault, loadActive, rulesText, setCode, setConcept, setRepos, setStatus, setTags, setType, tagsReport, today, treeReport } from './lib/ops'
 import { ASSET_PATHS } from './lib/page'
 import type { Config, Io, NodeType, Tree } from './lib/vault'
 import { LEGEND, MARK, NODE_TYPES, bodyOf, counts, countsLine, isAbsolute, join, locate, readConfig, resolvePath, rooted, signatureOf, sync, validate } from './lib/vault'
@@ -67,7 +69,7 @@ const treeOf = (s: RftSnapshot): Tree => ({ nodes: s.nodes, roots: s.roots, conc
 const TOOLS = {
   rft_add_node: {
     description:
-      'Add a node to the reasoning tree: an experiment (something run or computed), a direction (an idea, question or hypothesis, rejected ones included), a reference (a paper, method or literature review that was read, summarised and commented, with a source that can be checked) or a theory note (a definition, method, taxonomy or argument of the project\'s own, built on the other notes). Assigns the next free id, sanitises the title, writes the note from the template, links it under its parent and regenerates the index and canvas. Create an experiment BEFORE launching it (status planned or running).',
+      'Add a node to the reasoning tree: an experiment (something run or computed), a direction (an idea, question or hypothesis, rejected ones included), a reference (a paper, method or literature review that was read, summarised and commented, with a source that can be checked) or a theory note (a definition, method, taxonomy or argument of the project\'s own, built on the other notes). Assigns the next free id, sanitises the title, writes the note from the template, links it under its parent and regenerates the index and canvas. Create an experiment BEFORE launching it (status planned or running). In a concept that links code, an experiment or direction gets a ## Code section with the repos\' current commits: read the code first and pass its description as sections.Code, or write it after with rft_set_code.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -84,6 +86,40 @@ const TOOLS = {
         tags: { type: 'array', items: { type: 'string' }, description: '1-3 short topical tags, lowercase kebab-case, reused from rft_tags when they fit (the project, type and status tags are added anyway).' },
       },
       required: ['type', 'title'],
+    },
+  },
+  rft_set_repos: {
+    description:
+      'Link code repositories on this machine to a concept: the folders holding the code its experiments and directions run on. Set on the note that starts the concept, or on the root note for code of the whole project. A sub-concept\'s notes work with its own repos first, then with those inherited from the concepts above. Replaces the list; an empty list removes it. Use the path the user gives; never guess one. Answers each repo\'s git state, whether sessions started there reach this tree, and the notes that now need a ## Code section (rft_set_code).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id (e.g. D04) of the note that starts the concept, or of the root note.' },
+        repos: { type: 'array', items: { type: 'string' }, description: 'Repository folders: absolute, ~/..., or relative to the tree\'s folder (the one holding .rft/). Highest priority first.' },
+      },
+      required: ['id', 'repos'],
+    },
+  },
+  rft_code: {
+    description:
+      'The code context of a note: the repos its concept links (its own first, then inherited), each one\'s branch and commit now, the commit its ## Code section was last checked against, and the commits and changed files since (uncommitted changes included). Call it before working on an experiment (planning, launching, analysing results) or relying on a note\'s code references.',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'Id (e.g. E12) or full name of the note.' } },
+      required: ['id'],
+    },
+  },
+  rft_set_code: {
+    description:
+      'Write or update the ## Code section of a note whose concept links code: how the experiment or direction relates to the code (entry points, files, functions, configs, what has to change; a short pointer for a direction), checked against the code as it is now. Records each repo\'s current commit, so rft_code can list later changes. reproduce, for an experiment with results: the commit of the run, the command and config, where the raw outputs are and how they were processed into Result. text or reproduce left out keeps what the section holds.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id (e.g. E12) or full name of the note.' },
+        text: { type: 'string', description: 'How the note relates to the code (markdown).' },
+        reproduce: { type: 'string', description: 'How to reproduce the note\'s results from the code (markdown).' },
+      },
+      required: ['id'],
     },
   },
   rft_set_status: {
@@ -125,7 +161,7 @@ const TOOLS = {
   },
   rft_set_concept: {
     description:
-      'Make a note the start of a concept (a line of research: the note and its subtree, until a sub-concept starts), rename it, or remove it with name null. Only after the user has confirmed the concept: propose first, never apply silently.',
+      'Make a note the start of a concept (a line of research: the note and its subtree, until a sub-concept starts), rename it, or remove it with name null. Only after the user has confirmed the concept: propose first, never apply silently. For a new concept, also ask whether code for it already exists on this machine, and where (rft_set_repos).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -225,7 +261,7 @@ async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> 
   } catch (err) {
     failed.push(`reading the vault (${message(err)})`)
   }
-  if (s && config && h) rules = rulesText(treeOf(s), config, shownVault(h, config))
+  if (s && config && h) rules = rulesText(treeOf(s), config, shownVault(h, config), { cwd: h.cwd, root: h.root, home: await homeOf($) })
   // each registration on its own, so one refusal leaves the rest working
   for (const [name, spec] of Object.entries(TOOLS)) {
     if (registeredTools.has(name)) continue
@@ -290,6 +326,27 @@ const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : undefined)
 const answer = (text: string, isError = false) =>
   isError ? { isError: true as const, result: text, text } : { result: text, text }
 
+/** Git in a folder, through the host: no shell, the repo's hooks off. */
+const gitOf = ($: EngineInterface): Git => async (dir, args) => {
+  try {
+    const r = await $.process.run(['git', '-C', dir, ...args], { timeoutMs: 20000 })
+    return { ok: r.exitCode === 0, out: r.stdout, err: r.stderr }
+  } catch (err) {
+    return { ok: false, out: '', err: message(err) }
+  }
+}
+
+async function homeOf($: EngineInterface): Promise<string | undefined> {
+  try {
+    return (await $.env.get('HOME')) || undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** How the tools reach the code of the tree's concepts. */
+const codeEnv = async ($: EngineInterface, h: Here): Promise<CodeEnv> => ({ root: h.root, git: gitOf($), home: await homeOf($), date: today() })
+
 /** Runs one of the rft tools; its text is the tool's result. */
 async function runTool($: EngineInterface, name: string, i: Record<string, unknown>): Promise<string> {
   const h = await mustHere($)
@@ -306,9 +363,15 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       const node = await addNode(io, loaded, {
         type: i.type as NodeType, title: String(i.title ?? ''), parent: str(i.parent) ?? null,
         status: str(i.status), date: today(), sections, code: str(i.code), tags: strings(i.tags),
-      })
+      }, await codeEnv($, h))
       return `${node.report}\nId: ${node.id}\nNote: ${join(shownVault(h, loaded.config), node.path)}`
     }
+    case 'rft_set_repos':
+      return setRepos(io, loaded, await codeEnv($, h), String(i.id ?? ''), strings(i.repos))
+    case 'rft_code':
+      return codeReport(io, loaded, await codeEnv($, h), String(i.id ?? ''))
+    case 'rft_set_code':
+      return setCode(io, loaded, await codeEnv($, h), String(i.id ?? ''), typeof i.text === 'string' ? i.text : undefined, typeof i.reproduce === 'string' ? i.reproduce : undefined)
     case 'rft_set_tags':
       return setTags(io, loaded, String(i.id ?? ''), strings(i.tags))
     case 'rft_set_type':
@@ -324,7 +387,7 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
     case 'rft_tree':
       return treeReport(loaded, { root: str(i.root), depth: typeof i.depth === 'number' ? i.depth : undefined, vault: shownVault(h, loaded.config) })
     case 'rft_validate': {
-      const v = await validate(io, loaded)
+      const v = await validate(io, loaded, { root: h.root, home: await homeOf($) })
       const lines = [v.errors.length
         ? `FAILED: ${v.errors.length} error(s), ${v.warnings.length} warning(s).`
         : `OK: no errors, ${v.warnings.length} warning(s).`]
@@ -566,7 +629,7 @@ async function submitPending($: EngineInterface): Promise<void> {
   }
 }
 
-const SUGGEST_CONCEPTS = `Propose a split of the reasoning tree into concepts (rft-manual skill, "Concepts"). Read the current tree with rft_tree and rft_concepts. Suggest 2 to 6 concepts, nested at most two levels: for each, the note that starts it (usually the direction that opened that line of research), a short readable name for the line of research, in words as in a heading (e.g. "Strong augmentation", not a tag like strong-augmentation; never a single experiment), and a one-line summary; say which notes stay in the project root and why. Present the proposal as a short table and ask me to confirm or change it. Do not call rft_set_concept until I say yes.`
+const SUGGEST_CONCEPTS = `Propose a split of the reasoning tree into concepts (rft-manual skill, "Concepts"). Read the current tree with rft_tree and rft_concepts. Suggest 2 to 6 concepts, nested at most two levels: for each, the note that starts it (usually the direction that opened that line of research), a short readable name for the line of research, in words as in a heading (e.g. "Strong augmentation", not a tag like strong-augmentation; never a single experiment), and a one-line summary; say which notes stay in the project root and why. Present the proposal as a short table and ask me to confirm or change it, and for each concept whether code for it already exists on this machine and where. Do not call rft_set_concept until I say yes, nor rft_set_repos before I give a path.`
 
 const NOT_ACTIVE = 'RFT is not active in this project. Run /rft-init [starting question] to set it up.'
 

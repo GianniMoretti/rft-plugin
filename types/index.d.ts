@@ -25,6 +25,8 @@ export type RftConceptState = {
   count: number
   total: number
   statuses: Record<string, number>
+  /** The code repos it links (`concept_repos:`), as written. */
+  repos: string[]
 }
 
 /** The tree as last read from the vault; `null` until the session has looked. */

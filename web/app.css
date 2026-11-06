@@ -144,6 +144,8 @@ button.linkish { border: 0; background: none; color: var(--accent); padding: 0; 
 #crumbs a, .drawer-concept a { cursor: pointer; font-weight: 600; text-decoration: none; color: var(--fg); }
 #crumbs a:hover, .drawer-concept a:hover { text-decoration: underline; }
 .drawer-concept { font-size: 0.9em; margin-bottom: 4px; }
+.drawer-code { font-size: 0.85em; margin-bottom: 4px; overflow-wrap: anywhere; }
+.drawer-code code { color: var(--fg); }
 #regions, #badges { pointer-events: none; }
 #badges .badge { pointer-events: auto; cursor: pointer; }
 #badges .badge text { fill: #111418; font-weight: 700; }
