@@ -162,6 +162,25 @@ class ServerTest(unittest.TestCase):
         self.assertEqual((runs["count"], runs["total"], runs["statuses"]), (2, 2, {"running": 1, "idea": 1}))
         self.assertEqual(root["total"], 4)
 
+    def test_concept_on_the_only_root_note_is_the_root_concept(self):
+        def nodes():
+            return {"D00": {"status": "done", "children": ["E01"]}, "E01": {"status": "running", "children": ["D01"]},
+                    "D01": {"status": "idea", "children": []}, "E02": {"status": "idea", "children": []}}
+        decl = {"D00": ("Geometry", "The study"), "E01": ("Runs", "")}
+        # one root note: its concept is the root one, with no project level above
+        n = nodes()
+        root, runs = rft_server.compute_concepts(n, ["D00"], "demo", decl)
+        self.assertEqual((root["id"], root["name"], root["summary"], root["root"], root["parent"], root["children"]),
+                         ("root", "Geometry", "The study", "D00", None, ["E01"]))
+        self.assertEqual((root["count"], root["total"]), (1, 3))
+        self.assertEqual((runs["parent"], runs["depth"]), ("root", 1))
+        self.assertEqual((n["D00"]["concept"], n["D01"]["concept"]), ("root", "E01"))
+        # a second root note: the project holds it, above the root note's concept
+        n = nodes()
+        root, geometry, runs = rft_server.compute_concepts(n, ["D00", "E02"], "demo", decl)
+        self.assertEqual((root["name"], root["root"], root["children"], root["count"]), ("demo", None, ["D00"], 1))
+        self.assertEqual((geometry["id"], geometry["parent"], geometry["depth"], runs["depth"]), ("D00", "root", 1, 2))
+
     def test_tag_parsing(self):
         self.assertEqual(rft_server.parse_tags('[demo, "theory", #cluster]'), ["demo", "theory", "cluster"])
         self.assertEqual(rft_server.topical_tags(["demo", "experiment", "theory", "done", "theory"], "demo", "experiment"), ["theory"])

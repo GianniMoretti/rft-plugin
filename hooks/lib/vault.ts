@@ -82,11 +82,14 @@ export type RftNode = {
 export type Tree = {
   nodes: Record<string, RftNode>
   roots: string[]
-  /** The concepts by id: `root` (the project) and one per note that declares `concept:`. */
+  /** The concepts by id: `root` (the top one) and one per other note that declares `concept:`. */
   concepts?: Record<string, Concept>
 }
 
-/** The id of the implicit concept every note belongs to without a concept ancestor. */
+/**
+ * The id of the top concept: the project, which holds every note without a concept ancestor,
+ * or, when the tree's only root note declares a concept, that concept, which holds them all.
+ */
 export const ROOT_CONCEPT = 'root'
 
 /**
@@ -94,11 +97,11 @@ export const ROOT_CONCEPT = 'root'
  * frontmatter), less the subtrees of the sub-concepts declared below it.
  */
 export type Concept = {
-  /** The declaring note's id; `root` for the project. */
+  /** The declaring note's id; `root` for the top concept. */
   id: string
   name: string
   summary: string
-  /** The declaring note; null for the project root concept. */
+  /** The declaring note; null for the project. */
   root: string | null
   parent: string | null
   children: string[]
@@ -478,15 +481,21 @@ export function conceptDeclarations(texts: Record<string, string>): Record<strin
 /**
  * Concept membership, inherited down the tree: every note belongs to its nearest ancestor (or
  * itself) declaring a concept, else to the project root concept. Sets `concept` on every node.
+ * When the only root note declares a concept, that concept is the root one: the project above
+ * it would hold no note.
  */
 export function computeConcepts(tree: Tree, project: string, decl: Record<string, { name: string; summary: string }>): Record<string, Concept> {
   const make = (id: string, name: string, summary: string, root: string | null, parent: string | null, depth: number): Concept =>
     ({ id, name, summary, root, parent, children: [], depth, count: 0, total: 0, statuses: {} })
-  const concepts: Record<string, Concept> = { [ROOT_CONCEPT]: make(ROOT_CONCEPT, project, '', null, null, 0) }
+  const only = tree.roots.length === 1 ? tree.roots[0]! : null
+  const top = only && tree.nodes[only] && decl[only] ? only : null
+  const concepts: Record<string, Concept> = {
+    [ROOT_CONCEPT]: top ? make(ROOT_CONCEPT, decl[top]!.name, decl[top]!.summary, top, null, 0) : make(ROOT_CONCEPT, project, '', null, null, 0),
+  }
   const visit = (id: string, current: string) => {
     const n = tree.nodes[id]
     if (!n) return
-    const d = decl[id]
+    const d = id === top ? undefined : decl[id]
     if (d) {
       concepts[id] = make(id, d.name, d.summary, id, current, concepts[current]!.depth + 1)
       concepts[current]!.children.push(id)
@@ -508,7 +517,12 @@ export function computeConcepts(tree: Tree, project: string, decl: Record<string
   return concepts
 }
 
-/** The concept ids from the project root down to `id`. */
+/** The concept a note declares, if any (the root concept too, when the root note declares it). */
+export function declaredConcept(concepts: Record<string, Concept> | undefined, id: string): Concept | undefined {
+  return Object.values(concepts ?? {}).find(c => c.root === id)
+}
+
+/** The concept ids from the root concept down to `id`. */
 export function conceptPath(concepts: Record<string, Concept>, id: string): string[] {
   const out: string[] = []
   for (let c: Concept | undefined = concepts[id]; c; c = c.parent ? concepts[c.parent] : undefined) out.unshift(c.id)

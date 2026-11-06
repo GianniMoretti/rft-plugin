@@ -140,19 +140,24 @@ def compute_concepts(nodes: dict[str, dict], roots: list[str], project: str,
                      decl: dict[str, tuple[str, str]]) -> list[dict]:
     """Concepts, inherited down the tree: a note belongs to its nearest ancestor (or itself)
     declaring `concept:`, else to the project root concept. Sets each node's `concept` and
-    returns the concepts depth first, the root concept first."""
+    returns the concepts depth first, the root concept first. When the only root note declares
+    a concept, that concept is the root one: the project above it would hold no note."""
     def make(cid, name, summary, root, parent, depth):
         return {"id": cid, "name": name, "summary": summary, "root": root, "parent": parent, "children": [],
                 "depth": depth, "count": 0, "total": 0, "statuses": {}}
 
-    concepts = {ROOT_CONCEPT: make(ROOT_CONCEPT, project, "", None, None, 0)}
+    top = roots[0] if len(roots) == 1 and roots[0] in nodes and roots[0] in decl else None
+    if top:
+        concepts = {ROOT_CONCEPT: make(ROOT_CONCEPT, *decl[top], top, None, 0)}
+    else:
+        concepts = {ROOT_CONCEPT: make(ROOT_CONCEPT, project, "", None, None, 0)}
     stack = [(r, ROOT_CONCEPT) for r in reversed(roots)]
     while stack:
         nid, current = stack.pop()
         n = nodes.get(nid)
         if n is None:
             continue
-        if nid in decl:
+        if nid in decl and nid != top:
             name, summary = decl[nid]
             concepts[nid] = make(nid, name, summary, nid, current, concepts[current]["depth"] + 1)
             concepts[current]["children"].append(nid)

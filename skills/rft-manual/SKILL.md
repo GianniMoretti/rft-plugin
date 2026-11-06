@@ -70,7 +70,8 @@ topical tags**: what it is about, so the tree view can filter by them (`ablation
 Concepts split the tree into **lines of research**. A note with `concept: "<name>"` (and an
 optional `concept_summary: "<one line>"`) in its frontmatter starts a concept: it and its whole
 subtree belong to it, until a descendant starts a sub-concept. Concepts nest; notes with no
-concept above them belong to the project itself. Concepts are explicit, never inferred:
+concept above them belong to the project itself; a concept on the root note covers the whole tree
+and takes the project's place at the top of the concept tree. Concepts are explicit, never inferred:
 
 - **Propose, then apply.** When a direction opens a new line of research (not a single
   experiment), propose a concept to the user: the note it starts at, a short name and a

@@ -8,7 +8,7 @@ import type { Config, Io, Loaded, NodeType, RftNode, Tree } from './vault'
 import {
   CONFIG_PATH, ID_RE, INDEX, LEGEND, MERMAID, NODE_TYPES, STATUSES, SUBDIR, TEMPLATES, TYPES,
   MARK, ROOT_CONCEPT, CANVAS, renameLinks, retyped, withCardRenamed, withLinksRenamed, compactTree, conceptOrder, conceptPath, counts, countsLine, defaultConfig, front, idOf, indexTemplate,
-  isNodeType, join, load, nextId, noteText, orList, readConfig, removeField, resolveId, sanitiseTitle, setField, statusSummary,
+  declaredConcept, isNodeType, join, load, nextId, noteText, orList, readConfig, removeField, resolveId, sanitiseTitle, setField, statusSummary,
   sync, tagCounts, validate, withChildListed, withStatus, withTopicalTags, writeConfig,
 } from './vault'
 
@@ -192,7 +192,7 @@ export async function setConcept(io: Io, loaded: Loaded, ref: string, name: stri
   const id = resolveId(loaded.tree, ref)
   if (!id) throw new RftError(`"${ref}" is not a note of the tree`)
   const n = loaded.tree.nodes[id]!
-  const was = loaded.tree.concepts?.[id]
+  const was = declaredConcept(loaded.tree.concepts, id)
   let text = loaded.texts[id]!
   let said: string
   if (name === null || !name.trim()) {
@@ -213,20 +213,21 @@ export async function setConcept(io: Io, loaded: Loaded, ref: string, name: stri
   await io.write(join(loaded.config.vault, n.path), text)
   const fresh = await load(io, loaded.config)
   Object.assign(loaded, fresh)
-  const c = fresh.tree.concepts?.[id]
+  const c = declaredConcept(fresh.tree.concepts, id)
   return c ? `${said} It holds ${c.count} note(s) (${c.total} with its sub-concepts).` : said
 }
 
 /** The concept tree as compact text. */
 export function conceptsReport(loaded: Loaded): string {
   const concepts = loaded.tree.concepts ?? {}
-  const lines = conceptOrder(concepts).map(c => {
+  const order = conceptOrder(concepts)
+  const lines = order.map(c => {
     const where = c.root ? `@${c.root}` : 'project root'
     const sub = c.total > c.count ? ` (+${c.total - c.count} in sub-concepts)` : ''
     const stats = statusSummary(c.statuses)
     return `${'  '.repeat(c.depth)}- ${c.name} [${where}] ${c.count} note(s)${sub}${stats ? ` ${stats}` : ''}${c.summary ? ` — ${c.summary}` : ''}`
   })
-  const declared = lines.length - 1
+  const declared = order.filter(c => c.root).length
   return `${declared ? `${declared} concept(s)` : 'No concepts yet: every note is in the project root concept'}. Marks: ${LEGEND}.\n${lines.join('\n')}`
 }
 

@@ -171,8 +171,9 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
 
 A **concept** is a line of research: the note that starts it (usually the direction that opened
 the line) and its whole subtree, until a descendant starts a sub-concept. Concepts nest; notes
-with no concept above them belong to the project itself. They live in the starting note's
-frontmatter:
+with no concept above them belong to the project itself. A concept on the root note covers the
+whole tree, so it takes the project's place at the top of the concept tree. Concepts live in
+the starting note's frontmatter:
 
 ```yaml
 concept: "Strong augmentation"
@@ -198,7 +199,8 @@ In the tree view, **Concepts: Off / Regions / Arrows** switches the overlay:
   statuses, in the same layout as the reasoning tree (top-down, left-right or radial). Click one to go back to the reasoning tree on its start note, its region briefly
   highlighted; **focus** shows only that concept's subtree.
 - **Focus** is also reachable from the legend, a badge, and the concept path at the top of the
-  note drawer; a breadcrumb (project › concept › sub-concept) leads back up.
+  note drawer; a breadcrumb (project › concept › sub-concept, or from the root note's concept when it has
+  one) leads back up.
 - Concepts are also a filter in **Filters**.
 
 A link can open the view in a given state, e.g. `?layout=lr&concepts=regions`,
