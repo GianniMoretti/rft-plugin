@@ -1,7 +1,7 @@
 # Roadmap
 
 Planned work, split into release packages in the order they should ship. Each
-package is one minor version (the current release is 0.18.0, which also brings Alex's
+package is one minor version (the current release is 0.19.0, which also brings Alex's
 changes: note types, light theme, LaTeX, images, code repos) and lists what it contains, how it
 could be done, and when it is done. A package builds only on the ones before it.
 
@@ -18,7 +18,7 @@ could be done, and when it is done. A package builds only on the ones before it.
 | 0.16.0 | Project map (done) | 0.14.0 |
 | 0.17.0 | Recall (done) | 0.16.0 |
 | 0.18.0 | Cheaper rebalancing (done) | 0.16.0 |
-| 0.19.0 | State of knowledge | 0.16.0 |
+| 0.19.0 | State of knowledge (done) | 0.16.0 |
 
 ---
 
@@ -161,7 +161,7 @@ before (tokens, turns).
   `/rft-rebalance` proposes moves from that short list; `--full` keeps the old behaviour.
 - Measured on the replica against 0.10's rebalancing.
 
-## 0.19.0 — State of knowledge
+## 0.19.0 — State of knowledge (done)
 
 - "What we know" in each digest kept current; a result that overturns another marks it
   (`superseded_by:`), so an old result is not relied on.

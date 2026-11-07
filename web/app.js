@@ -417,6 +417,17 @@
     const summary = document.getElementById('drawer-summary')
     summary.textContent = n.summary || ''
     summary.hidden = !n.summary
+    const over = document.getElementById('drawer-superseded')
+    over.replaceChildren()
+    const newer = n.supersededBy && byId.get(n.supersededBy)
+    over.hidden = !newer
+    if (newer) {
+      const a = document.createElement('a')
+      a.textContent = newer.name
+      a.title = 'Go to this note'
+      a.addEventListener('click', ev => { ev.preventDefault(); go(newer.id) })
+      over.append('Superseded by ', a, ': its result no longer holds.')
+    }
     const article = document.getElementById('note')
     article.innerHTML = '<p class="missing">Loading…</p>'
     let body = null, version = null

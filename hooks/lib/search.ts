@@ -102,6 +102,8 @@ export function search(loaded: Loaded, query: string, filter: SearchFilter = {},
     if (!score) continue
     // notes with every word of the query come first
     score *= 1 + found / terms.length
+    // an overturned result still answers, after the one that holds now
+    if (d.n.supersededBy) score *= 0.6
     const line = bestLine(d.lines, terms)
     hits.push({ id: d.n.id, score, heading: line?.heading ?? '', snippet: cut(line?.text ?? ''), coverage: found / terms.length })
   }
@@ -146,7 +148,7 @@ function hitLine(loaded: Loaded, h: Hit, terms: string[] = []): string {
   const n = tree.nodes[h.id]!
   const c = tree.concepts?.[n.concept]
   const where = [n.status, n.parent ? `← ${n.parent}` : '', c && c.root ? c.name : ''].filter(Boolean).join(', ')
-  const head = `${MARK[n.status] ?? '-'} ${n.name} (${where})${n.summary ? ` — ${n.summary}` : ''}`
+  const head = `${MARK[n.status] ?? '-'} ${n.name} (${where})${n.supersededBy ? ` [superseded by ${n.supersededBy}]` : ''}${n.summary ? ` — ${n.summary}` : ''}`
   // the matched line only when it holds a word of the query the title and summary do not
   if (!h.snippet) return head
   const told = new Set(words(`${n.title} ${n.summary ?? ''}`))

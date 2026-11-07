@@ -239,6 +239,16 @@ class ServerTest(unittest.TestCase):
         finally:
             p.unlink()
 
+    def test_superseded_by(self):
+        p = self.vault / "directions" / "D02 Overturned.md"
+        p.write_text(note("D02", "direction", "idea", "D01 Next idea", "Overturned").replace("date: 2026-01-01\n", 'date: 2026-01-01\nsuperseded_by: "[[D01 Next idea]]"\n'))
+        try:
+            nodes = {n["id"]: n for n in json.loads(self.get("/api/tree")[2])["nodes"]}
+            self.assertEqual(nodes["D02"]["supersededBy"], "D01")
+            self.assertNotIn("supersededBy", nodes["D01"])
+        finally:
+            p.unlink()
+
     def test_references_and_theory_notes(self):
         ref = self.vault / "references" / "R01 A paper.md"
         thy = self.vault / "theory" / "T01 A definition.md"

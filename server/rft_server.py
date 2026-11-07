@@ -304,6 +304,7 @@ class Vault:
         refs: dict[str, str | None] = {}
         origins: dict[str, list[str]] = {}
         refs_of: dict[str, list[str]] = {}
+        superseded: dict[str, list[str]] = {}
         decl: dict[str, tuple[str, str, list[str]]] = {}
         repos_only: dict[str, list[str]] = {}
         for sub, kind in SUBDIRS.items():
@@ -326,6 +327,8 @@ class Vault:
                 refs[nid] = link_target(fm.get("parent"))
                 origins[nid] = link_targets(fm.get("origin"))
                 refs_of[nid] = link_targets(fm.get("refs"))
+                newer = link_target(fm.get("superseded_by"))
+                superseded[nid] = [newer] if newer else []
                 summary = unquote_json(fm.get("summary"))
                 if summary:
                     nodes[nid]["summary"] = summary
@@ -348,6 +351,9 @@ class Vault:
                 found = ids(names.get(n["id"], []))
                 if found:
                     n[key] = found
+            newer = ids(superseded.get(n["id"], []))
+            if newer and newer[0] != n["id"]:
+                n["supersededBy"] = newer[0]
         for n in nodes.values():
             ref = refs.get(n["id"])
             pid = by_name.get(ref) or (id_of(ref) if ref and id_of(ref) in nodes else None) if ref else None

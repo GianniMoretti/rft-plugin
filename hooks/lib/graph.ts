@@ -8,7 +8,7 @@ import { MARK, resolveId } from './vault'
 
 export type GraphMode = 'around' | 'path'
 
-const line = (n: RftNode) => `${MARK[n.status] ?? '-'} ${n.name} (${n.type}, ${n.status})${n.summary ? ` — ${n.summary}` : ''}`
+const line = (n: RftNode) => `${MARK[n.status] ?? '-'} ${n.name} (${n.type}, ${n.status})${n.supersededBy ? ` [superseded by ${n.supersededBy}]` : ''}${n.summary ? ` — ${n.summary}` : ''}`
 
 const lines = (tree: Tree, ids: string[], max = 12) => {
   const shown = ids.filter(id => tree.nodes[id]).slice(0, max).map(id => `  ${line(tree.nodes[id]!)}`)
@@ -55,6 +55,9 @@ export function graphReport(loaded: Loaded, ref: string, mode: GraphMode = 'arou
   if (n.refs?.length) out.push(`Builds on (${n.refs.length}):`, ...lines(tree, n.refs))
   const cites = citedBy(tree, id)
   if (cites.length) out.push(`Cited by (${cites.length}):`, ...lines(tree, cites))
+  if (n.supersededBy && tree.nodes[n.supersededBy]) out.push('Superseded by (its result holds instead):', `  ${line(tree.nodes[n.supersededBy]!)}`)
+  const overturned = Object.values(tree.nodes).filter(m => m.supersededBy === id).map(m => m.id)
+  if (overturned.length) out.push(`Supersedes (${overturned.length}):`, ...lines(tree, overturned))
   if (n.origin?.length) out.push(`Was under: ${n.origin.join(', then ')}.`)
   return out.join('\n')
 }

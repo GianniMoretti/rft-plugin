@@ -83,6 +83,8 @@ export type RftNode = {
   refs?: string[]
   /** One line on what the note is and, once known, what it found (`summary:`, written by Claude). */
   summary?: string
+  /** The note whose result overturns this one's (`superseded_by:`): do not build on this one. */
+  supersededBy?: string
 }
 
 export type Tree = {
@@ -417,6 +419,7 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
   const parentRef: Record<string, string | null> = {}
   const originRef: Record<string, string[]> = {}
   const refsRef: Record<string, string[]> = {}
+  const supersededRef: Record<string, string | null> = {}
   for (const [type, sub] of Object.entries(SUBDIR) as [NodeType, string][]) {
     const dir = join(config.vault, sub)
     if (!(await io.exists(dir))) continue
@@ -444,6 +447,7 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
       parentRef[id] = linkTarget(fm.parent)
       originRef[id] = linksIn(fm.origin)
       refsRef[id] = linksIn(fm.refs)
+      supersededRef[id] = linkTarget(fm.superseded_by)
     }
   }
   const byName: Record<string, string> = {}
@@ -454,6 +458,8 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
     if (past.length) n.origin = past
     const refs = idsOf(refsRef[n.id]!)
     if (refs.length) n.refs = refs
+    const by = supersededRef[n.id] ? idsOf([supersededRef[n.id]!])[0] : undefined
+    if (by && by !== n.id) n.supersededBy = by
   }
   for (const n of Object.values(nodes)) {
     const ref = parentRef[n.id]
@@ -990,6 +996,7 @@ export async function validate(io: Io, loaded: Loaded, opts: { root?: string; ho
       if (!cname) errors.push(`${n.id}: \`concept:\` is empty (give the concept a name, or remove the field)`)
       else if (/[\^#|[\]]/.test(cname)) errors.push(`${n.id}: concept name "${cname}" contains ^ # | [ or ]`)
     } else if (fm.concept_summary !== undefined) warnings.push(`${n.id}: concept_summary without concept`)
+    if (fm.superseded_by !== undefined && !n.supersededBy) warnings.push(`${n.id}: superseded_by names no note of the tree (rft_supersede sets or clears it)`)
     const notRefs = (n.refs ?? []).filter(r => tree.nodes[r]!.type !== 'reference')
     if (notRefs.length) warnings.push(`${n.id}: refs ${notRefs.join(', ')} ${notRefs.length === 1 ? 'is not a reference' : 'are not references'} (R notes)`)
     if (config.requireRefs && needsRefs(n) && !(n.refs ?? []).length && n.parent) {
@@ -1156,7 +1163,11 @@ export function withMove(text: string, from: string, to: string, date: string, w
   const past = linksIn(front(out).origin)
   out = setField(out, 'origin', linkList([...past, from]), 'parent')
   out = out.replace(/(\*\*Parent:\*\*\s*)(\[\[[^\]]*\]\]|\(root\))/, `$1[[${to}]]`)
-  const line = `- ${date}: moved from [[${from}]] to [[${to}]]${why?.trim() ? ` (${why.trim().replace(/\s+/g, ' ')})` : ''}`
+  return withHistory(out, `- ${date}: moved from [[${from}]] to [[${to}]]${why?.trim() ? ` (${why.trim().replace(/\s+/g, ' ')})` : ''}`)
+}
+
+/** A dated line added under `## History` (made before "Children in the tree" when missing). */
+export function withHistory(out: string, line: string): string {
   const heading = '## History'
   const at = out.indexOf(`\n${heading}\n`)
   if (at < 0) {

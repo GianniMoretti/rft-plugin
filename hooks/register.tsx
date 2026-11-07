@@ -1,6 +1,6 @@
 // rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-concepts, /rft-literature, /rft-rebalance,
-// /rft-summarize, /rft-view), the model's tools (rft_add_node, rft_set_status, rft_set_summary, rft_map, rft_set_digest, rft_move_node, rft_set_refs, rft_search,
-// rft_graph, rft_collect_papers, rft_set_tags, rft_set_type, rft_set_concept, rft_concepts, rft_set_repos, rft_code,
+// /rft-summarize, /rft-next, /rft-view), the model's tools (rft_add_node, rft_set_status, rft_set_summary, rft_map, rft_set_digest, rft_move_node, rft_set_refs, rft_search,
+// rft_graph, rft_supersede, rft_next, rft_collect_papers, rft_set_tags, rft_set_type, rft_set_concept, rft_concepts, rft_set_repos, rft_code,
 // rft_set_code, rft_tags, rft_tree, rft_validate, rft_sync), the operating rules
 // injected into the system prompt, the outline pane, and the web view: /rft starts a local
 // server (server/rft_server.py) for the interactive tree page (web/), and makes the notes that
@@ -20,6 +20,7 @@ import { OPEN_HOSTS, planPapers } from './lib/papers'
 import { searchReport, similarNotes } from './lib/search'
 import { graphReport } from './lib/graph'
 import { candidates, candidatesReport } from './lib/rebalance'
+import { nextReport, supersede } from './lib/knowledge'
 import { RECALL_HINT, searchesVault } from './lib/recall'
 import { SMALL_TREE, mapGaps, mapReport, mapWarnings, projectMap, readDigests, resolveConcept, setDigest, setSummaries } from './lib/map'
 import { LEGEND, MARK, NODE_TYPES, bodyOf, counts, countsLine, isAbsolute, join, locate, readConfig, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
@@ -162,6 +163,27 @@ const TOOLS = {
     inputSchema: {
       type: 'object',
       properties: { concept: { type: 'string', description: 'A concept, by name or the id of the note that starts it; omit for the project map.' } },
+    },
+  },
+  rft_supersede: {
+    description:
+      'Mark a note whose result a newer one overturns (superseded_by: in its frontmatter, and a dated History line): a corrected number, a bug found in the run, a better-controlled rerun that changes the conclusion. rft_map, rft_search and rft_graph then show it as superseded, so nobody builds on the old result. Without by, clears the mark. Then update the concept\'s digest.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'The note whose result no longer holds (id or full name).' },
+        by: { type: 'string', description: 'The note whose result holds instead; omit to clear the mark.' },
+        why: { type: 'string', description: 'A few words: what changed (kept in the History line).' },
+      },
+      required: ['id'],
+    },
+  },
+  rft_next: {
+    description:
+      'What is still open, concept by concept: experiments running, experiments planned and never run, directions with nothing tried under them (oldest first, with their age), and the open questions of the digests. Use it when asked what to do next, or before proposing new work, so open threads are picked up before new ones are opened.',
+    inputSchema: {
+      type: 'object',
+      properties: { concept: { type: 'string', description: 'A concept (name or start note id): it and its sub-concepts; omit for the whole tree.' } },
     },
   },
   rft_set_digest: {
@@ -431,6 +453,7 @@ async function registerCommands($: EngineInterface): Promise<void> {
   await attempt('rft-concepts', () => $.command.register({ name: 'rft-concepts', description: 'Print the concept tree (/rft-concepts suggest: ask Claude to propose a concept split)', argumentHint: '[suggest]' }))
   await attempt('rft-literature', () => $.command.register({ name: 'rft-literature', description: 'Ask Claude for a literature search on a topic, a note or a concept, ending in reference notes', argumentHint: '<topic, note id or concept>' }))
   await attempt('rft-rebalance', () => $.command.register({ name: 'rft-rebalance', description: 'Ask Claude to propose moving branches under the line of research they belong to; nothing moves until you confirm', argumentHint: '[concept or note id] [--full]' }))
+  await attempt('rft-next', () => $.command.register({ name: 'rft-next', description: 'What is still open, by concept: running and planned experiments, unexplored directions, open questions', argumentHint: '[concept]' }))
   await attempt('rft-summarize', () => $.command.register({ name: 'rft-summarize', description: 'Ask Claude to write the missing one-line note summaries and concept digests (the project map)', argumentHint: '[concept]' }))
   await attempt('rft-view', () => $.command.register({ name: 'rft-view', description: 'Write a standalone HTML view of the tree to <vault>/tree.html' }))
   if (failed.length) reportFailures($, failed)
@@ -524,6 +547,10 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       if (!Object.keys(given).length) throw new Error('summaries is empty: give {"<id>": "<one line>"}')
       return setSummaries(io, loaded, given)
     }
+    case 'rft_supersede':
+      return supersede(io, loaded, String(i.id ?? ''), str(i.by) ?? null, str(i.why), today())
+    case 'rft_next':
+      return nextReport(io, loaded, today(), str(i.concept))
     case 'rft_map':
       return mapReport(io, loaded, str(i.concept))
     case 'rft_set_digest':
@@ -996,6 +1023,15 @@ export const register: Register = (on, options) => {
       }
       // submitted by the poller, as for /rft-concepts suggest
       return { text: `${conceptsReport(loaded)}\n\nClaude will propose moves in a moment, as a table${full ? '' : ', from the candidates the plugin found'}; nothing moves until you confirm.` }
+    } catch (err) {
+      return { text: message(err) }
+    }
+  })
+
+  on('command.run', { command: 'rft-next' }, async ($, e) => {
+    try {
+      const io = (await mustHere($)).io
+      return { text: await nextReport(io, await loadActive(io), today(), e.args.trim() || undefined) }
     } catch (err) {
       return { text: message(err) }
     }

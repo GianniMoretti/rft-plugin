@@ -10,6 +10,8 @@ export const MAP_DIR = 'map'
 /** Above this many notes the session starts from the project map instead of the list of titles. */
 export const SMALL_TREE = 60
 export const MAX_SUMMARY = 240
+/** More notes of its own than one digest can stand for: the concept should be split. */
+export const DIGEST_MAX = 40
 
 class MapError extends Error {}
 
@@ -82,7 +84,7 @@ export function ownNotes(tree: Tree, conceptId: string): RftNode[] {
 
 /** FNV-1a over what a digest is written from: each own note's id, status, title and summary. */
 export function fingerprint(tree: Tree, conceptId: string): string {
-  const text = ownNotes(tree, conceptId).map(n => `${n.id}|${n.status}|${n.title}|${n.summary ?? ''}`).sort().join('\n')
+  const text = ownNotes(tree, conceptId).map(n => `${n.id}|${n.status}|${n.title}|${n.summary ?? ''}${n.supersededBy ? `|>${n.supersededBy}` : ''}`).sort().join('\n')
   let h = 0x811c9dc5
   for (let i = 0; i < text.length; i++) {
     h ^= text.charCodeAt(i)
@@ -145,7 +147,7 @@ export async function setDigest(io: Io, loaded: Loaded, ref: string, state: stri
 // ---------------------------------------------------------------- reports
 
 const noteLine = (n: RftNode, prev: string | null) =>
-  `${MARK[n.status] ?? '-'} ${n.name}${n.parent && n.parent !== prev ? ` ← ${n.parent}` : ''}${n.summary ? ` — ${n.summary}` : ''}`
+  `${MARK[n.status] ?? '-'} ${n.name}${n.parent && n.parent !== prev ? ` ← ${n.parent}` : ''}${n.supersededBy ? ` [superseded by ${n.supersededBy}]` : ''}${n.summary ? ` — ${n.summary}` : ''}`
 
 const pathName = (tree: Tree, c: Concept) => conceptPath(tree.concepts ?? {}, c.id).map(id => tree.concepts![id]!.name).join(' › ')
 
@@ -222,6 +224,9 @@ export async function mapWarnings(io: Io, loaded: Loaded): Promise<string[]> {
   const missing = Object.values(tree.nodes).filter(n => !n.summary)
   if (config.requireSummaries) for (const n of missing) out.push(`${n.id}: no one-line summary (summary:) — rft_set_summary`)
   else if (missing.length) out.push(`${missing.length} note(s) have no one-line summary (summary:): /rft-summarize writes them`)
+  for (const c of Object.values(tree.concepts ?? {})) {
+    if (c.count > DIGEST_MAX) out.push(`concept "${c.name}" has ${c.count} notes of its own, more than one digest can stand for (${DIGEST_MAX}): split it into sub-concepts at the notes that open its sub-lines (/rft-concepts suggest, then rft_set_concept)`)
+  }
   const digests = await readDigests(io, loaded)
   for (const d of Object.values(digests)) {
     const c = tree.concepts?.[d.concept]

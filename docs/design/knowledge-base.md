@@ -1,6 +1,6 @@
 # Design note: the tree as a knowledge base
 
-Status: adopted for 0.16–0.19 (roadmap). 0.16.0 (project map), 0.17.0 (recall) and 0.18.0 (cheaper rebalancing) are built.
+Status: adopted for 0.16–0.19 (roadmap). 0.16.0 to 0.19.0 are built.
 
 ## The problem
 
@@ -94,6 +94,20 @@ ruled out, what is open.
 - With the weak tier (0.18.1): 3 clear and 15 weak candidates; $0.28, 12 turns, about 320K
   input tokens. Claude proposed the same clear move, looked at the note it had missed (one of the full run's
   uncertain moves, now a weak candidate) and kept it where the result that produced it is.
+
+## 0.19.0, as built
+
+- `superseded_by: "[[<note>]]"` on a note whose result a newer one overturns, set or cleared by
+  `rft_supersede` with a dated History line; refused on itself or a loop. The map, search (ranked
+  lower, ×0.6), graph (Superseded by / Supersedes) and the tree view's drawer show it; it is part
+  of the concept fingerprint, so the digest goes out of date; the validator warns when it names
+  no note. `rft_next` leaves superseded notes out.
+- `rft_next [concept]` and `/rft-next` (no model turn): by concept, running experiments, planned
+  experiments never run, directions with no experiment under them (oldest first, age in days),
+  and the `## Open questions` of the digest.
+- `rft_validate` flags a concept with more than 40 notes of its own and suggests a split.
+- Not done: keeping "what we know" current is left to Claude through the rules (rewrite the
+  digest after a result, and after a supersede); the plugin only says when a digest is stale.
 
 ## Not in scope
 

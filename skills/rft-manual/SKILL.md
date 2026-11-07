@@ -207,6 +207,23 @@ What keeps the layers useful:
   notes and it is missing or out of date.
 - **`/rft-summarize [concept]`** writes the missing summaries and digests of an existing tree,
   concept by concept (a one-off job on a large tree).
+- **A concept grown past 40 notes of its own** is more than one digest can stand for:
+  `rft_validate` says so; propose a split into sub-concepts at the notes that open its sub-lines.
+
+## State of knowledge
+
+The map says what holds now, not only what was done.
+
+- **A result that overturns another** (a corrected number, a bug found in the run, a
+  better-controlled rerun that changes the conclusion) marks the old note:
+  `rft_supersede(id, by, why)` writes `superseded_by:` and a dated History line. The map, search
+  and graph then show it as `[superseded by …]`; never quote or build on such a result without
+  saying it was overturned. Then rewrite the concept's digest so its key results are the ones
+  that hold. `rft_supersede(id)` without `by` clears the mark.
+- **What is still open**: `rft_next [concept]` (and `/rft-next` for the user) lists, by concept,
+  the experiments running, those planned and never run, the directions with nothing tried under
+  them (oldest first, with their age) and the open questions of the digests. Call it when asked
+  what to do next and before proposing new work: pick up an open thread before opening a new one.
 
 ## Restructuring the tree
 
@@ -286,6 +303,8 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 | `rft_set_summary` | set the one-line summary of one or more notes |
 | `rft_map` | the project map, or one concept's digest and notes with their summaries |
 | `rft_set_digest` | write a concept's digest (state, key results, dead ends, open questions) |
+| `rft_supersede` | mark a note whose result a newer one overturns (`superseded_by:`), or clear the mark |
+| `rft_next` | what is still open by concept: running, planned, unexplored directions, open questions |
 | `rft_move_node` | move a note and its subtree under another parent, keeping its origin, after the user agrees |
 | `rft_set_refs` | replace the reference notes a note builds on (`refs:`) |
 | `rft_search` | search every note (titles, summaries, tags, concepts, text), best first with each summary, matching concepts first; filters by type, status, concept, tag |
@@ -317,7 +336,7 @@ folder and every link to it change together.
 ## Note layout
 
 Frontmatter: `id`, `type` (`experiment` | `direction` | `reference` | `theory`), `status`, `date` (YYYY-MM-DD),
-`summary: "<one line>"`,
+`summary: "<one line>"`, `superseded_by: "[[<newer note>]]"` when a newer result overturns it,
 `parent: "[[<parent name>]]"` (`""` for the root), `children`, `up`, `down`,
 `tags: [<project>, <type>, <topical tags...>, <status>]`, and on a note that starts a
 concept `concept: "<name>"`, `concept_summary: "<one line>"` and, when it links code,
