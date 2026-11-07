@@ -64,6 +64,20 @@ describe('rebalance', () => {
     expect(candidates(one)).toEqual([])
   })
 
+  test('a note only slightly closer to another concept is a weak candidate, one line each after the clear ones', async () => {
+    const { io, l, smooth, aug } = await twoLines()
+    const slight = await add(io, l, 'experiment', 'Augmentation seeds', smooth, 'Seeds for the runs, three each')
+    const list = candidates(l)
+    const c = list.find(x => x.id === slight)!
+    expect(c.weak).toBe(true)
+    expect(c.to).toBe(aug)
+    expect(list.findIndex(x => x.weak)).toBeGreaterThan(list.findIndex(x => !x.weak))
+    const text = candidatesReport(l, list)
+    expect(text).toContain('1 weak candidate(s)')
+    expect(text).toContain(`- ${l.tree.nodes[slight]!.name}: Label smoothing (D02) → Strong augmentation (D03), `)
+    expect(candidates(l, { weakLimit: 0 }).some(x => x.weak)).toBe(false)
+  })
+
   test('/rft-rebalance asks Claude to judge the candidates only', async ($, on) => {
     const clock = mock.clock(on)
     const files = demoFiles()

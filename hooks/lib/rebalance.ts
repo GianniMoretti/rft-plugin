@@ -19,13 +19,15 @@ export type Candidate = {
   to: string
   toFit: number
   near: string | null
+  /** Past the lower bar only: worth a look when the summary leaves a doubt. */
+  weak?: boolean
 }
 
 const REF_WEIGHT = 0.3
 /** A candidate fits its best other concept at least this well, and by this margin over its own. */
-const MIN_FIT = 0.12
-const MIN_GAIN = 0.08
-const MIN_RATIO = 1.4
+const STRONG = { fit: 0.12, gain: 0.08, ratio: 1.4 }
+/** The lower bar of the weak candidates. */
+const WEAK = { fit: 0.08, gain: 0.03, ratio: 1.15 }
 
 /** What a note is about, as words: title and summary twice, tags; the start of the body when it has no summary. */
 function noteWords(loaded: Loaded, n: RftNode): string[] {
@@ -62,7 +64,7 @@ function descendants(tree: Tree, id: string): Set<string> {
 }
 
 /** The notes that sit closer to another concept than to their own, the clearest first. */
-export function candidates(loaded: Loaded, opts: { scope?: string; limit?: number } = {}): Candidate[] {
+export function candidates(loaded: Loaded, opts: { scope?: string; limit?: number; weakLimit?: number } = {}): Candidate[] {
   const { tree } = loaded
   const concepts = tree.concepts ?? {}
   if (Object.keys(concepts).length < 2) return []
@@ -109,29 +111,43 @@ export function candidates(loaded: Loaded, opts: { scope?: string; limit?: numbe
   }
   const inScope = scopeOf(loaded, opts.scope)
   const starts = new Set(Object.values(concepts).map(c => c.root).filter(Boolean))
+  // the distinctive words of each concept's name (a model or method name), for a note whose title names another line
+  // a word names a concept when every concept whose name has it is that one or below it
+  const holders = new Map<string, string[]>()
+  for (const c of Object.values(concepts)) for (const w of new Set(words(c.name))) holders.set(w, [...(holders.get(w) ?? []), c.id])
+  const nameWords = new Map(Object.values(concepts).map(c => [c.id,
+    words(c.name).filter(w => w.length >= 4 && holders.get(w)!.every(h => conceptPath(concepts, h).includes(c.id)))]))
   const found: Candidate[] = []
   for (const n of nodes) {
     if (!n.parent || starts.has(n.id) || n.type === 'reference') continue
     const below = descendants(tree, n.id)
     const fit = fitOf(n, n.concept)
+    const path = conceptPath(concepts, n.concept)
+    const ownNames = new Set(path.flatMap(id => nameWords.get(id) ?? []))
+    const title = new Set(words(n.title))
     let best: { id: string; fit: number } | null = null
+    let named: { id: string; fit: number } | null = null
     for (const c of Object.values(concepts)) {
-      if (c.id === n.concept || c.count < 2 || (c.root && below.has(c.root))) continue
       // a concept on the note's own path to the top is where it already sits
-      if (conceptPath(concepts, n.concept).includes(c.id)) continue
+      if (c.id === n.concept || c.count < 2 || (c.root && below.has(c.root)) || path.includes(c.id)) continue
       const f = fitOf(n, c.id)
       if (!best || f > best.fit) best = { id: c.id, fit: f }
+      if ((nameWords.get(c.id) ?? []).some(w => title.has(w) && !ownNames.has(w)) && (!named || f > named.fit)) named = { id: c.id, fit: f }
     }
-    if (!best || best.fit < MIN_FIT || best.fit - fit < MIN_GAIN || best.fit < fit * MIN_RATIO) continue
-    if (inScope && !inScope.has(n.id) && !inScope.has(best.id)) continue
+    const passes = (to: { fit: number } | null, bar: typeof STRONG) => !!to && to.fit >= bar.fit && to.fit - fit >= bar.gain && to.fit >= fit * bar.ratio
+    // strong: clearly closer elsewhere; weak: a little closer, or its title names another concept it is not less close to
+    const to = passes(best, WEAK) ? best! : named && named.fit >= fit ? named : null
+    if (!to) continue
+    const weak = to !== best || !passes(best, STRONG)
+    if (inScope && !inScope.has(n.id) && !inScope.has(to.id)) continue
     // the closest note of that concept, as a parent to start from
     let near: string | null = null, close = -1
     for (const m of nodes) {
-      if (m.concept !== best.id || below.has(m.id) || m.type === 'reference') continue
-      const s = cosine(vec.get(n.id)!, vec.get(m.id)!)
-      if (s > close) { close = s; near = m.id }
+      if (m.concept !== to.id || below.has(m.id) || m.type === 'reference') continue
+      const sim = cosine(vec.get(n.id)!, vec.get(m.id)!)
+      if (sim > close) { close = sim; near = m.id }
     }
-    found.push({ id: n.id, from: n.concept, fit, to: best.id, toFit: best.fit, near })
+    found.push({ id: n.id, from: n.concept, fit, to: to.id, toFit: to.fit, near, ...(weak ? { weak } : {}) })
   }
   // a branch moves whole: drop a note whose ancestor already goes to the same concept
   const going = new Map(found.map(c => [c.id, c.to]))
@@ -139,7 +155,11 @@ export function candidates(loaded: Loaded, opts: { scope?: string; limit?: numbe
     for (let at = tree.nodes[c.id]!.parent; at; at = tree.nodes[at]?.parent ?? null) if (going.get(at) === c.to) return false
     return true
   })
-  return kept.sort((a, b) => (b.toFit - b.fit) - (a.toFit - a.fit) || a.id.localeCompare(b.id)).slice(0, opts.limit ?? 15)
+  const order = (a: Candidate, b: Candidate) => (b.toFit - b.fit) - (a.toFit - a.fit) || a.id.localeCompare(b.id)
+  return [
+    ...kept.filter(c => !c.weak).sort(order).slice(0, opts.limit ?? 15),
+    ...kept.filter(c => c.weak).sort(order).slice(0, opts.weakLimit ?? 15),
+  ]
 }
 
 /** The notes and concepts a scope (a concept or a note) covers, as ids; null for the whole tree. */
@@ -169,12 +189,25 @@ export function candidatesReport(loaded: Loaded, list: Candidate[]): string {
     return c ? `${c.name}${c.root ? ` (${c.root})` : ''}` : cid
   }
   if (!list.length) return 'No note sits clearly closer to another concept than to its own.'
-  const lines = list.map(c => {
-    const n = tree.nodes[c.id]!
-    const near = c.near ? tree.nodes[c.near] : undefined
-    return `- ${n.name}${n.children.length ? ` (+${descendants(tree, n.id).size - 1} below)` : ''}${n.summary ? ` — ${n.summary}` : ''}\n` +
-      `  now under ${n.parent}, concept ${name(c.from)} (fit ${c.fit.toFixed(2)}); closer to ${name(c.to)} (fit ${c.toFit.toFixed(2)})` +
-      `${near ? `, nearest there: ${near.name}${near.summary ? ` — ${near.summary}` : ''}` : ''}`
-  })
-  return `${list.length} candidate(s), the clearest first (fit: closeness of the note's title, summary, tags and references to a concept's notes):\n${lines.join('\n')}`
+  const strong = list.filter(c => !c.weak), weak = list.filter(c => c.weak)
+  const below = (n: RftNode) => (n.children.length ? ` (+${descendants(tree, n.id).size - 1} below)` : '')
+  const out: string[] = []
+  if (strong.length) {
+    out.push(`${strong.length} candidate(s), the clearest first (fit: closeness of the note's title, summary, tags and references to a concept's notes):`)
+    for (const c of strong) {
+      const n = tree.nodes[c.id]!
+      const near = c.near ? tree.nodes[c.near] : undefined
+      out.push(`- ${n.name}${below(n)}${n.summary ? ` — ${n.summary}` : ''}\n` +
+        `  now under ${n.parent}, concept ${name(c.from)} (fit ${c.fit.toFixed(2)}); closer to ${name(c.to)} (fit ${c.toFit.toFixed(2)})` +
+        `${near ? `, nearest there: ${near.name}${near.summary ? ` — ${near.summary}` : ''}` : ''}`)
+    }
+  }
+  if (weak.length) {
+    out.push(`${weak.length} weak candidate(s), only slightly closer to another concept or naming it in the title (concept now → other, fits):`)
+    for (const c of weak) {
+      const n = tree.nodes[c.id]!
+      out.push(`- ${n.name}${below(n)}: ${name(c.from)} → ${name(c.to)}, ${c.fit.toFixed(2)} → ${c.toFit.toFixed(2)}${c.near ? `, nearest ${c.near}` : ''}`)
+    }
+  }
+  return out.join('\n')
 }

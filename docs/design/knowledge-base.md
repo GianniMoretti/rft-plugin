@@ -80,6 +80,9 @@ ruled out, what is open.
   its own concept path, not one started inside its subtree) fits at least 0.12, by 0.08 more
   and 1.4 times its own; a note whose ancestor already goes to the same concept is dropped, so
   a branch is proposed whole. With the nearest note in the target concept as a suggested parent.
+- Weak candidates (one line each, at most 15, after the clear ones): past a lower bar (fit 0.08,
+  gain 0.03, ratio 1.15), or whose title names another concept (a word of its name found in no
+  concept's name outside it) that they fit at least as well as their own.
 - `/rft-rebalance` embeds that list (at most 15, clearest first) in the prompt and asks Claude to
   judge only those; with none, it says so and asks nothing. `--full` keeps the 0.16 prompt.
 - No clustering of the note graph: on the replica the text and reference signal alone gives a
@@ -88,6 +91,9 @@ ruled out, what is open.
   4 moves (1 clear, 3 it called less certain); the candidates cost $0.61 (17 turns, about 331K)
   and proposed the clear one, rejecting the other 4 candidates with reasons. The 3 uncertain
   moves of the full run were not among the candidates: the list trades some recall for cost.
+- With the weak tier (0.18.1): 3 clear and 15 weak candidates; $0.28, 12 turns, about 320K
+  input tokens. Claude proposed the same clear move, looked at the note it had missed (one of the full run's
+  uncertain moves, now a weak candidate) and kept it where the result that produced it is.
 
 ## Not in scope
 

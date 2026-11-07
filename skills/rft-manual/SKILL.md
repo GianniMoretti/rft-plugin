@@ -219,7 +219,8 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
   it).
 - **`/rft-rebalance [concept or id]`** gives you a short list of candidates the plugin found:
   notes whose title, summary, tags and references sit closer to another concept than to their
-  own, each with its fit to both and the nearest note in the other concept. Judge only those
+  own, each with its fit to both and the nearest note in the other concept, then one line each for
+  the weak ones (only slightly closer, or naming another concept in the title; most stay). Judge only those
   (the fit is a hint from shared words, not a verdict); check a candidate with `rft_map
   <concept>` or `rft_graph <id>` and open its file only when in doubt. With `--full` you review
   the whole tree, or one part of it, instead. Start from the map (`rft_map`, `rft_map <concept>`): the summaries say what
