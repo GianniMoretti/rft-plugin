@@ -1,6 +1,6 @@
 ---
 name: rft-manual
-description: Operating manual of the Reasoning Flow Tree, the tree of experiment (E..), direction (D..), reference (R..) and theory (T..) notes that records a research project's reasoning, grouped into concepts (lines of research) that can link the code repositories they run on. Use in a project with .rft/config.json whenever an experiment is planned, launched or finished, an idea or question comes up (even a rejected one), a paper or literature review is read, a new field comes up (offer a literature search first), a definition, method or taxonomy is written down, an idea is dropped or moved, a branch belongs under another note (move it), a new line of research opens (propose a concept, ask for its code), work starts on an experiment whose concept links code, or the user asks about the tree, the vault, its concepts, its code or what was tried.
+description: Operating manual of the Reasoning Flow Tree, the tree of experiment (E..), direction (D..), reference (R..) and theory (T..) notes that records a research project's reasoning, grouped into concepts (lines of research) that can link the code repositories they run on. Use in a project with .rft/config.json whenever an experiment is planned, launched or finished, an idea or question comes up (even a rejected one), a paper or literature review is read, a new field comes up (offer a literature search first), a definition, method or taxonomy is written down, an idea is dropped or moved, a branch belongs under another note (move it), a new line of research opens (propose a concept, ask for its code), work starts on an experiment whose concept links code, or the user asks about the tree, the vault, its concepts, its code or what was tried (start from rft_map).
 ---
 
 # Reasoning Flow Tree (rft)
@@ -170,6 +170,33 @@ The tree should start from what is already known, not from scratch.
   none, say so: it is a sign a search is missing.
 - Never invent a citation, an author, a year or a result.
 
+## The project map
+
+A large tree is a knowledge base: read it in layers, not file by file.
+
+1. **`rft_map`**: the project map, each concept with its state and counts, and the experiments
+   in progress. A tree of more than 60 notes starts each session from it.
+2. **`rft_map <concept>`**: the concept's digest (state, key results, dead ends, open questions),
+   its sub-concepts, and its notes one per line with their summaries.
+3. **The note's file**, only for the detail you need.
+
+What keeps the layers useful:
+
+- **Every note has a one-line `summary:`** that you write: what the note is about and, once
+  known, what it found, with the key number ("Mixup on CIFAR-100 1k: +2.1±0.4 top-1, gap closes
+  at 10k"); for a dropped direction, why. Give it to `rft_add_node`; update it when the result
+  arrives (`rft_set_status` with `summary`) or with `rft_set_summary`. Never put an expected
+  result in it.
+- **Each concept can have a digest** in the vault's `map/` folder, written with
+  `rft_set_digest(concept, state, text)`: the state in one or two sentences, then
+  `## Key results`, `## Dead ends`, `## Open questions`, each point with note ids. Write it from
+  the notes, never from memory. It is stamped with the state of the concept's notes (ids,
+  statuses, titles, summaries); when they change, `rft_map` and `rft_validate` say it is out of
+  date. Rewrite it after a piece of work that changes the concept, or when you have read its
+  notes and it is missing or out of date.
+- **`/rft-summarize [concept]`** writes the missing summaries and digests of an existing tree,
+  concept by concept (a one-off job on a large tree).
+
 ## Restructuring the tree
 
 A note's parent is where the reasoning came from; a concept is the line of research it belongs
@@ -180,7 +207,8 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
   `## History`, so the path that led to it stays readable (the tree view's **Came from** draws
   it).
 - **`/rft-rebalance [concept or id]`** asks you to review the whole tree, or one part of it, and
-  propose moves. Read the notes of the branches you consider, not only their titles. Answer
+  propose moves. Start from the map (`rft_map`, `rft_map <concept>`): the summaries say what
+  each note is; open a note's file only when its summary leaves a move in doubt. Answer
   with a short numbered table (note, parent now, new parent, why), say what you would leave as
   it is, and wait: apply only the moves the user confirms, each with its `why`, then run
   `rft_validate`. When in doubt, leave a note where the reasoning produced it. Propose a new
@@ -238,7 +266,10 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 | tool | use |
 |---|---|
 | `rft_add_node` | create a note (next free id, sanitised title, template sections, linked under its parent) |
-| `rft_set_status` | change a status, optionally appending real results or the reason |
+| `rft_set_status` | change a status, optionally appending real results or the reason, and updating the summary |
+| `rft_set_summary` | set the one-line summary of one or more notes |
+| `rft_map` | the project map, or one concept's digest and notes with their summaries |
+| `rft_set_digest` | write a concept's digest (state, key results, dead ends, open questions) |
 | `rft_move_node` | move a note and its subtree under another parent, keeping its origin, after the user agrees |
 | `rft_set_refs` | replace the reference notes a note builds on (`refs:`) |
 | `rft_search` | search every note (titles, tags, concepts, text), best first with the matching line; filters by type, status, concept, tag |
@@ -256,7 +287,8 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 | `rft_sync` | regenerate children / up / down, the tree in `00 Index.md`, the canvas |
 
 Before proposing an experiment or an idea, `rft_search` whether the tree already has it; to
-answer "what did we try on X", search first and read only the notes that match.
+answer "what did we try on X", look at the map and search first, and read only the notes that
+match.
 
 Editing note bodies (What, Why, Result, ...) with the ordinary file tools is fine. After editing
 notes by hand — above all a `parent:` field — run `rft_sync`, then `rft_validate`, and fix every
@@ -268,6 +300,7 @@ folder and every link to it change together.
 ## Note layout
 
 Frontmatter: `id`, `type` (`experiment` | `direction` | `reference` | `theory`), `status`, `date` (YYYY-MM-DD),
+`summary: "<one line>"`,
 `parent: "[[<parent name>]]"` (`""` for the root), `children`, `up`, `down`,
 `tags: [<project>, <type>, <topical tags...>, <status>]`, and on a note that starts a
 concept `concept: "<name>"`, `concept_summary: "<one line>"` and, when it links code,

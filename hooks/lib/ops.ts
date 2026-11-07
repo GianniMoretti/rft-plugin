@@ -14,6 +14,7 @@ import {
   withChildListed, withChildUnlisted, withCodeSection, withLinksRenamed, withMove, withRefs, withStatus,
   withTopicalTags, writeConfig,
 } from './vault'
+import { cleanSummary, withSummary } from './map'
 
 export const today = (now = new Date()) =>
   `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
@@ -43,6 +44,7 @@ export async function initVault(io: Io, opts: { project: string; question: strin
   if (opts.vault) config.vault = opts.vault
   // a new tree asks for references from the start; an adopted one opts in later
   config.requireRefs = true
+  config.requireSummaries = true
   const v = config.vault
   let hasNotes = false
   for (const sub of Object.values(SUBDIR)) {
@@ -58,6 +60,7 @@ export async function initVault(io: Io, opts: { project: string; question: strin
   for (const t of NODE_TYPES) await ensure(`templates/_${t}.md`, TEMPLATES[t](opts.project))
   if (hasNotes) {
     delete config.requireRefs
+    delete config.requireSummaries
     config.mermaid = await io.exists(join(v, MERMAID))
     const loaded = await load(io, config)
     // the project's name as the notes already spell it: the most common first tag
@@ -114,6 +117,8 @@ export type AddInput = {
   tags?: string[]
   /** Ids or names of the notes it builds on (references). */
   refs?: string[]
+  /** One line on what the note is (and, for a result, what it found). */
+  summary?: string
 }
 
 /** Note names for references given by id or name; unknown ones refused. */
@@ -167,7 +172,8 @@ export async function addNode(io: Io, loaded: Loaded, input: AddInput, env?: Cod
       : ' Read the code as it is now (the current commit and uncommitted changes) and write how this note relates to it with rft_set_code.')
   }
   const refs = refNames(tree, input.refs ?? [])
-  const text = noteText(id, { ...input, sections, title, status, refs }, config.project, parentName)
+  const summary = input.summary?.trim() ? cleanSummary(input.summary) : undefined
+  const text = noteText(id, { ...input, sections, title, status, refs, summary }, config.project, parentName)
   await io.write(join(config.vault, path), text)
   const prefix = TYPES[input.type].prefix
   config.lastId[prefix] = Math.max(config.lastId[prefix] ?? 0, Number(id.slice(1)))
@@ -184,7 +190,7 @@ export async function addNode(io: Io, loaded: Loaded, input: AddInput, env?: Cod
   const node = fresh.tree.nodes[id]!
   return {
     ...node,
-    report: `Created ${path}${parent ? ` under ${parentName}` : ' as the root'} (status ${status}). Updated ${report.changed.length} derived file(s).${codeSaid}`,
+    report: `Created ${path}${parent ? ` under ${parentName}` : ' as the root'} (status ${status}). Updated ${report.changed.length} derived file(s).${codeSaid}${summary ? '' : ' It has no summary: give it one line with rft_set_summary.'}`,
   }
 }
 
@@ -338,17 +344,21 @@ export function tagsReport(loaded: Loaded): string {
     : 'No topical tags yet: pick 1-3 short lowercase kebab-case ones per note.'
 }
 
-export async function setStatus(io: Io, loaded: Loaded, ref: string, status: string, note?: string): Promise<string> {
+export async function setStatus(io: Io, loaded: Loaded, ref: string, status: string, note?: string, summary?: string): Promise<string> {
   const id = resolveId(loaded.tree, ref)
   if (!id) throw new RftError(`"${ref}" is not a note of the tree`)
   if (!(STATUSES as readonly string[]).includes(status)) throw new RftError(`status must be one of ${STATUSES.join(', ')}`)
   const n = loaded.tree.nodes[id]!
   const prev = loaded.texts[id]!
-  await io.write(join(loaded.config.vault, n.path), withStatus(prev, n, status, note))
+  let next = withStatus(prev, n, status, note)
+  if (summary?.trim()) next = withSummary(next, summary)
+  await io.write(join(loaded.config.vault, n.path), next)
   const fresh = await load(io, loaded.config)
   const report = await sync(io, fresh)
   Object.assign(loaded, fresh)
-  return `${n.name}: ${n.status} → ${status}${note ? ' (note added)' : ''}. Updated ${report.changed.length} derived file(s).`
+  const nudge = !summary?.trim() && note?.trim() && (status === 'done' || status === 'dropped')
+    ? ' Update its one-line summary with what it found (rft_set_summary).' : ''
+  return `${n.name}: ${n.status} → ${status}${note ? ' (note added)' : ''}${summary?.trim() ? ', summary updated' : ''}. Updated ${report.changed.length} derived file(s).${nudge}`
 }
 
 /**
@@ -699,13 +709,16 @@ function codeContext(tree: Tree, where: { cwd?: string; root?: string; home?: st
  * `where`: the session's folder and the tree's (and the home folder), to say which concept's code
  * the session runs in.
  */
-export function rulesText(tree: Tree, config: Config, vault = config.vault, where: { cwd?: string; root?: string; home?: string } = {}): string {
-  let lines = groupedTree(tree).split('\n')
-  if (lines.length > MAX_LINES) lines = [...lines.slice(0, MAX_LINES), `… ${lines.length - MAX_LINES} more (rft_tree shows them)`]
+export function rulesText(tree: Tree, config: Config, vault = config.vault, where: { cwd?: string; root?: string; home?: string } = {}, map?: string): string {
+  let lines = (map ?? groupedTree(tree)).split('\n')
+  if (lines.length > MAX_LINES) lines = [...lines.slice(0, MAX_LINES), `… ${lines.length - MAX_LINES} more (${map ? 'rft_map' : 'rft_tree'} shows them)`]
   return `# Reasoning Flow Tree (rft) is active in this project
 
 The reasoning of this research project is kept as a tree of Obsidian notes in \`${vault}/\`: one note per experiment (E.., something run or computed), per direction (D.., an idea, question or hypothesis, rejected ones included), per reference (R.., a paper, method or literature review that was read: its summary and your comments) and per theory note (T.., the project's own definitions, methods, taxonomies and arguments, built on the other notes), each with exactly one parent; D00 is the starting question. The notes are the source of truth. Keep the tree up to date as you work, with the rft tools:
 
+- Read the tree in layers, not file by file: rft_map gives the project map (each concept and where it stands), rft_map <concept> a concept's digest and its notes with one-line summaries, rft_search finds notes on a subject. Open a note's file only when you need its detail.
+- Every note has a one-line \`summary:\` you write: what it is about and, once known, what it found (with the key number). Pass summary to rft_add_node; when a result arrives or a direction is dropped, update it (rft_set_status summary, or rft_set_summary). Keep it specific: it is what you and later sessions read instead of the note.
+- Each concept can have a digest (vault \`map/\`): its state, key results, dead ends, open questions. After a piece of work changes a concept (a result, a dropped line, a new branch), or when rft_map says its digest is missing or out of date and you have read its notes, rewrite it with rft_set_digest.
 - Before launching an experiment (a training run, a grid, a numerical check, a measurement, a literature search for a yes or no answer), create its node first: rft_add_node with type experiment, parent = the direction it tests, status planned or running, and What / Why filled.
 - When it finishes or gives a partial result, write the real numbers in its note (Result, with spread over seeds and what failed; Directions found; Code / data: commit, script, results folder, machine), then rft_set_status. Record only results that were actually obtained, never expected or invented ones.
 - Every new idea or question, from a result, a reference, the user or a discussion, even if rejected: rft_add_node with type direction, parent = the note it comes from. Rejected ideas get status discussed; abandoned ones dropped; moved ones moved, with the reason (rft_set_status note).
@@ -723,9 +736,9 @@ The reasoning of this research project is kept as a tree of Obsidian notes in \`
 - Code: a concept can link the code repositories its work runs on (\`concept_repos:\` on its starting note; on the root note, the whole project's). Its notes work with its own repos first, then those of the concepts above it. When you create a concept, ask the user whether code for it already exists and where; link it with rft_set_repos (never guess a path), then read the code and give the concept's experiments and directions a ## Code section with rft_set_code.
 - The ## Code section of an experiment or direction says how it relates to the code: entry points, files, functions, configs, what has to change (a short pointer for a direction). Write it from the code as it is now (the current commit and uncommitted changes), not as an older note saw it; rft_set_code records the commit it was checked against. Before working on such an experiment (planning, launching, analysing), call rft_code: it lists what changed since that commit; read the changes and update the references with rft_set_code.
 - Results go in the experiment's own note: read the run's outputs where its repo keeps them, process them (seeds aggregated, tables) and write the numbers in Result; record how to reproduce them (the commit of the run, the command and config, where the raw outputs are, how they were processed) with rft_set_code's reproduce.
-- The rft-manual skill is the full manual; rft_tree shows the current tree.
+- The rft-manual skill is the full manual; rft_map shows the project map, rft_tree the whole tree.
 ${codeContext(tree, where)}
-The tree at the start of this session${Object.keys(tree.concepts ?? {}).length > 1 ? ', by concept (← parent, when not the line above)' : ''}:
+${map ? 'The project map at the start of this session (each concept with its state; rft_map <concept> for its notes)' : `The tree at the start of this session${Object.keys(tree.concepts ?? {}).length > 1 ? ', by concept (← parent, when not the line above)' : ''}`}:
 ${lines.join('\n')}`
 }
 

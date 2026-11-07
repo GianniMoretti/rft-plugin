@@ -1,7 +1,7 @@
 # Roadmap
 
 Planned work, split into release packages in the order they should ship. Each
-package is one minor version (the current release is 0.15.0, which also brings Alex's
+package is one minor version (the current release is 0.16.0, which also brings Alex's
 changes: note types, light theme, LaTeX, images, code repos) and lists what it contains, how it
 could be done, and when it is done. A package builds only on the ones before it.
 
@@ -15,7 +15,10 @@ could be done, and when it is done. A package builds only on the ones before it.
 | 0.13.0 | Paper collection (done) | 0.11.0 |
 | 0.14.0 | Search index (done) | – |
 | 0.15.0 | Alex's PR #4 merged (done) | – |
-| 0.16.0 | Knowledge graph (design note written) | 0.14.0 |
+| 0.16.0 | Project map (done) | 0.14.0 |
+| 0.17.0 | Recall | 0.16.0 |
+| 0.18.0 | Cheaper rebalancing | 0.16.0 |
+| 0.19.0 | State of knowledge | 0.16.0 |
 
 ---
 
@@ -110,13 +113,55 @@ The simple first step towards fast access to the whole tree.
 Done when: `rft_search` answers "what did we try on X" from the index on a large vault, and the
 index is rebuilt after every edit.
 
-## 0.16.0 — Knowledge graph
+## From a tree to a knowledge base
 
-- **Connect the tree to a knowledge-graph store** (e.g. Graphiti or a similar graph memory), if
-  the search index turns out not to be enough. Still to be scoped: which store, what goes in
-  (notes, results, references, concepts as nodes and edges), and how it stays in sync with the
-  markdown notes.
+Once a vault holds hundreds of notes, it is no longer only a record of how the reasoning went:
+it is the knowledge base Claude works from, and what steers the next step. Reading it note by
+note then costs more tokens with every session. The packages from 0.16 on make it readable in
+layers, keep what is known now apart from the history, and make it answer questions directly.
+The design is in [design/knowledge-base.md](design/knowledge-base.md); it replaces the earlier
+knowledge-graph note ([design/knowledge-graph.md](design/knowledge-graph.md)), whose `rft_graph`
+idea is part of 0.17. Code graphs (e.g. graphify) can run beside rft and are out of scope.
 
-Done when: scoped in a design note first; the implementation follows from it. The note is
-[design/knowledge-graph.md](design/knowledge-graph.md): it proposes an `rft_graph` query tool over
-the graph the notes already form, and a Graphiti bridge only if cross-project memory is wanted.
+## 0.16.0 — Project map (done)
+
+- **A one-line summary on every note** (`summary:` in the frontmatter), written by Claude when
+  it creates the note and updated when a result arrives (`rft_add_node`, `rft_set_status`,
+  `rft_set_summary`).
+- **A digest per concept** (`map/<id> <concept>.md` in the vault): the state of that line of
+  research, key results, dead ends, open questions. Claude writes it (`rft_set_digest`); the
+  plugin knows when it is out of date (a fingerprint of the concept's notes).
+- **`rft_map`**: the project map (each concept with its state) or one concept (its digest and
+  one line per note). Claude reads it before opening note files.
+- **A layered session start**: a large tree is injected as the project map instead of the list
+  of titles; a small tree stays as it is.
+- **`/rft-summarize`**: writes the missing summaries and digests of an existing vault.
+
+Done when: on a replica of a real research vault, the session-start context and the tokens of a typical
+question ("what do we know about X") are measured before and after.
+
+## 0.17.0 — Recall
+
+- `rft_search` weighs summaries and answers compactly (summary, where in the tree, the matching
+  line), so a question is answered without opening files.
+- A hook that, when Claude is about to grep or read inside the vault, points it to `rft_search`
+  and `rft_map` first.
+- A "have we tried this?" check before an experiment is planned: similar experiments and dead
+  ends, from search and digests.
+- Graph questions (`rft_graph`): a note's neighbourhood, what cites a reference, the path from
+  D00 to a note.
+
+## 0.18.0 — Cheaper rebalancing
+
+- Candidates first: notes whose text and references sit closer to another concept than to their
+  own (similarity over summaries and refs, clustering of the note graph), with their summaries.
+  `/rft-rebalance` proposes moves from that short list; `--full` keeps the old behaviour.
+- Measured on the replica against 0.10's rebalancing.
+
+## 0.19.0 — State of knowledge
+
+- "What we know" in each digest kept current; a result that overturns another marks it
+  (`superseded_by:`), so an old result is not relied on.
+- `/rft-next`: open directions not explored, experiments proposed and never run, open
+  questions, by concept.
+- The validator flags concepts grown too large to read in one digest, and suggests a split.

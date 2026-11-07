@@ -81,6 +81,8 @@ export type RftNode = {
   origin?: string[]
   /** The notes it builds on, usually references (`refs:`). */
   refs?: string[]
+  /** One line on what the note is and, once known, what it found (`summary:`, written by Claude). */
+  summary?: string
 }
 
 export type Tree = {
@@ -135,6 +137,8 @@ export type Config = {
   webPort?: number
   /** Warn about experiments and directions with no `refs:` (on for new vaults, off for adopted ones). */
   requireRefs?: boolean
+  /** Warn about each note with no `summary:` (on for new vaults; adopted ones get one counting line). */
+  requireSummaries?: boolean
 }
 
 export type Io = {
@@ -434,6 +438,8 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
         tags: topicalTags(parseTags(fm.tags), config.project, fmType),
         concept: ROOT_CONCEPT,
       }
+      const summary = unquoteJson(fm.summary)
+      if (summary) nodes[id]!.summary = summary
       texts[id] = text
       parentRef[id] = linkTarget(fm.parent)
       originRef[id] = linksIn(fm.origin)
@@ -488,6 +494,15 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
 
 /** A frontmatter value without the quotes YAML allows around it. */
 export const unquote = (v: string | undefined) => (v ?? '').trim().replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1').trim()
+
+/** A value written with JSON.stringify (escapes and all), or any other quoted or bare one. */
+export function unquoteJson(v: string | undefined): string {
+  const t = (v ?? '').trim()
+  if (/^".*"$/.test(t)) {
+    try { return String(JSON.parse(t)).trim() } catch { /* not JSON: as written */ }
+  }
+  return unquote(t)
+}
 
 /** What a note's frontmatter says of a concept: its name (empty when it declares none), summary, repos. */
 export type Declaration = { name: string; summary: string; repos?: string[] }
@@ -1058,6 +1073,8 @@ export type NewNode = {
   tags?: string[]
   /** Names of the notes it builds on (references). */
   refs?: string[]
+  /** One line on what the note is (and what it found). */
+  summary?: string
 }
 
 /** `taken`: ids in use beyond the loaded ones, e.g. notes another session added since. */
@@ -1085,6 +1102,7 @@ export function noteText(id: string, n: NewNode, project: string, parentName: st
   const topical = topicalTags((n.tags ?? []).map(sanitiseTag).filter(Boolean), project, n.type)
   const head = [
     '---', `id: ${id}`, `type: ${n.type}`, `status: ${status}`, `date: ${n.date}`,
+    ...(n.summary?.trim() ? [`summary: ${JSON.stringify(n.summary.trim().replace(/\s+/g, ' '))}`] : []),
     `parent: ${parentName ? `"[[${parentName}]]"` : '""'}`, 'children: []', 'up: ""', 'down: []',
     `tags: ${tagsLine(project, n.type, topical, status)}`, ...(n.refs?.length ? [`refs: ${linkList(n.refs)}`] : []), '---', '',
     `# ${id} · ${n.title}`, '',

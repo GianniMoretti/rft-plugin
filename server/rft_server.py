@@ -154,6 +154,17 @@ def unquote(value: str | None) -> str:
     return v.strip()
 
 
+def unquote_json(value: str | None) -> str:
+    """A value written with JSON.stringify (escapes and all), or any other quoted or bare one."""
+    v = (value or "").strip()
+    if len(v) >= 2 and v[0] == v[-1] == '"':
+        try:
+            return str(json.loads(v)).strip()
+        except ValueError:
+            pass
+    return unquote(v)
+
+
 def parse_repos(value: str | None) -> list[str]:
     """The paths of a `concept_repos:` value, a one-line list: `["/a/b", "../c"]` (or YAML's
     `['/a/b', ../c]`). Commas alone separate: a path may hold spaces."""
@@ -315,6 +326,9 @@ class Vault:
                 refs[nid] = link_target(fm.get("parent"))
                 origins[nid] = link_targets(fm.get("origin"))
                 refs_of[nid] = link_targets(fm.get("refs"))
+                summary = unquote_json(fm.get("summary"))
+                if summary:
+                    nodes[nid]["summary"] = summary
                 pdf = link_target(fm.get("pdf"))
                 if pdf:
                     nodes[nid]["pdf"] = pdf

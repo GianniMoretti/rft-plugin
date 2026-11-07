@@ -1,6 +1,6 @@
 # Design note: a knowledge graph for the tree
 
-Status: proposal (roadmap 0.16.0). Nothing here is built yet.
+Status: superseded by [knowledge-base.md](knowledge-base.md) (0.16–0.19); `rft_graph` is part of 0.17.
 
 ## The question
 

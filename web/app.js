@@ -414,6 +414,9 @@
     renderRefs(n)
     renderCode(document.getElementById('drawer-code'), n.concept)
     document.getElementById('drawer-meta').textContent = `${n.type} · ${MARK[n.status] || ''} ${n.status}${n.date ? ' · ' + n.date : ''}${n.tags && n.tags.length ? ' · #' + n.tags.join(' #') : ''}`
+    const summary = document.getElementById('drawer-summary')
+    summary.textContent = n.summary || ''
+    summary.hidden = !n.summary
     const article = document.getElementById('note')
     article.innerHTML = '<p class="missing">Loading…</p>'
     let body = null, version = null

@@ -227,6 +227,18 @@ class ServerTest(unittest.TestCase):
         finally:
             p.unlink()
 
+    def test_summary(self):
+        self.assertEqual(rft_server.unquote_json('"Sweep of \\"alpha\\", 3 seeds"'), 'Sweep of "alpha", 3 seeds')
+        self.assertEqual(rft_server.unquote_json("plain"), "plain")
+        p = self.vault / "directions" / "D02 Summed.md"
+        p.write_text(note("D02", "direction", "idea", "D01 Next idea", "Summed").replace("date: 2026-01-01\n", 'date: 2026-01-01\nsummary: "One \\"line\\""\n'))
+        try:
+            nodes = {n["id"]: n for n in json.loads(self.get("/api/tree")[2])["nodes"]}
+            self.assertEqual(nodes["D02"]["summary"], 'One "line"')
+            self.assertNotIn("summary", nodes["D01"])
+        finally:
+            p.unlink()
+
     def test_references_and_theory_notes(self):
         ref = self.vault / "references" / "R01 A paper.md"
         thy = self.vault / "theory" / "T01 A definition.md"
