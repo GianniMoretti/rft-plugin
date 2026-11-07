@@ -45,6 +45,6 @@ describe('search', () => {
     expect(search(l, '', { concept: 'D01', status: 'running' }).map(h => h.id)).toEqual(['E02'])
     expect(search(l, '', { tag: 'regularisation' }).map(h => h.id)).toEqual(['E03'])
     expect(searchReport(l, 'nothing like this')).toBe('No note matches "nothing like this".')
-    expect(searchReport(l, 'smoothing', {}, 1)).toContain('concept Better variants')
+    expect(searchReport(l, 'smoothing', {}, 1)).toContain('(planned, ← D01, Better variants)')
   })
 })

@@ -180,6 +180,17 @@ A large tree is a knowledge base: read it in layers, not file by file.
    its sub-concepts, and its notes one per line with their summaries.
 3. **The note's file**, only for the detail you need.
 
+To answer a question, search instead of reading: **`rft_search`** answers with each matching
+note's summary, where it sits and, when it adds something, the line that matched, and puts first
+the concepts whose digest matches; **`rft_graph <id>`** gives a note's neighbours (parent,
+children, the notes beside it, what it builds on, what cites it, where it was before a move), or
+with `mode: path` how the reasoning reached it from the top. Do not grep the vault: a Grep, Glob
+or shell search of it gets a reminder until one of these tools has been used in the session.
+
+**Have we tried this?** `rft_add_node` answers with the notes already in the tree that are close
+to the new one (title and summary). If one of them already answers it, or a dead end ruled it
+out, say so to the user before running anything.
+
 What keeps the layers useful:
 
 - **Every note has a one-line `summary:`** that you write: what the note is about and, once
@@ -272,7 +283,8 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 | `rft_set_digest` | write a concept's digest (state, key results, dead ends, open questions) |
 | `rft_move_node` | move a note and its subtree under another parent, keeping its origin, after the user agrees |
 | `rft_set_refs` | replace the reference notes a note builds on (`refs:`) |
-| `rft_search` | search every note (titles, tags, concepts, text), best first with the matching line; filters by type, status, concept, tag |
+| `rft_search` | search every note (titles, summaries, tags, concepts, text), best first with each summary, matching concepts first; filters by type, status, concept, tag |
+| `rft_graph` | a note's neighbours (parent, children, siblings, refs, cited by, origin), or the path from the top to it |
 | `rft_collect_papers` | download the open-access PDFs of reference notes into `papers/<concept>/`, in the background |
 | `rft_set_tags` | replace a note's topical tags |
 | `rft_set_type` | change the type of a note made with the wrong one (new id, file moved, links renamed) |

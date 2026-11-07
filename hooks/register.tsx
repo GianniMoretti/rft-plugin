@@ -1,6 +1,6 @@
 // rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-concepts, /rft-literature, /rft-rebalance,
 // /rft-summarize, /rft-view), the model's tools (rft_add_node, rft_set_status, rft_set_summary, rft_map, rft_set_digest, rft_move_node, rft_set_refs, rft_search,
-// rft_collect_papers, rft_set_tags, rft_set_type, rft_set_concept, rft_concepts, rft_set_repos, rft_code,
+// rft_graph, // rft_collect_papers, rft_set_tags, rft_set_type, rft_set_concept, rft_concepts, rft_set_repos, rft_code,
 // rft_set_code, rft_tags, rft_tree, rft_validate, rft_sync), the operating rules
 // injected into the system prompt, the outline pane, and the web view: /rft starts a local
 // server (server/rft_server.py) for the interactive tree page (web/), and makes the notes that
@@ -17,7 +17,9 @@ import { addNode, codeReport, conceptsReport, exportHtml, initVault, loadActive,
 import { ASSET_PATHS } from './lib/page'
 import type { Config, Io, Loaded, NodeType, Tree } from './lib/vault'
 import { OPEN_HOSTS, planPapers } from './lib/papers'
-import { searchReport } from './lib/search'
+import { searchReport, similarNotes } from './lib/search'
+import { graphReport } from './lib/graph'
+import { RECALL_HINT, searchesVault } from './lib/recall'
 import { SMALL_TREE, mapGaps, mapReport, mapWarnings, projectMap, readDigests, resolveConcept, setDigest, setSummaries } from './lib/map'
 import { LEGEND, MARK, NODE_TYPES, bodyOf, counts, countsLine, isAbsolute, join, locate, readConfig, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
 
@@ -214,6 +216,18 @@ const TOOLS = {
       },
     },
   },
+  rft_graph: {
+    description:
+      'A note\'s place in the tree, one line per note with its summary: around (default) its parent, children, the notes beside it, what it builds on (refs), what cites it, where it was before a move; path, how the reasoning reached it from the top. Use it for "what came out of E12", "what builds on R03", "how did we get to D40".',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id (e.g. E12) or full name of the note.' },
+        mode: { type: 'string', enum: ['around', 'path'], description: 'around (default) or path.' },
+      },
+      required: ['id'],
+    },
+  },
   rft_collect_papers: {
     description:
       'Download the papers of reference notes into the vault, in the background: from arXiv (an arXiv id or link under Source) and from open-access proceedings (a PDF link), into papers/<concept>/<year> <first author> <title>.pdf, each linked from its note (pdf:). Also moves saved PDFs when a note\'s concept changed. Returns at once; never downloads from paywalled publishers. Use after a literature search, or when asked.',
@@ -297,6 +311,9 @@ const TOOLS = {
 // Module state: reset on a reload, when `session.start` runs again and sets it anew.
 // The rules for the system prompt are fixed at activation so the prompt cache holds.
 let rules: string | null = null
+// the vault's folder and the session's, for the recall hint; whether rft_search, rft_map or
+// rft_graph was used yet this session (the hint stops then)
+let recall: { vault: string; cwd: string; used: boolean } | null = null
 let poller: { cancel: () => void } | null = null
 // a prompt a command wants Claude to answer, submitted by the poller
 let pendingPrompt: string | null = null
@@ -343,6 +360,7 @@ async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> 
   let s: RftSnapshot | null = null
   let config: Config | null = null
   let h: Here | null = null
+  recall = null
   try {
     s = await refresh($, true)
     h = await mustHere($)
@@ -360,6 +378,7 @@ async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> 
       } catch { /* the list of notes instead */ }
     }
     rules = rulesText(treeOf(s), config, shownVault(h, config), { cwd: h.cwd, root: h.root, home: await homeOf($) }, map)
+    recall = { vault: resolvePath(h.root, vaultOf(h, config)), cwd: h.cwd, used: false }
   }
   // each registration on its own, so one refusal leaves the rest working
   for (const [name, spec] of Object.entries(TOOLS)) {
@@ -466,7 +485,8 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
         type: i.type as NodeType, title: String(i.title ?? ''), parent: str(i.parent) ?? null,
         status: str(i.status), date: today(), sections, code: str(i.code), tags: strings(i.tags), refs: strings(i.refs), summary: str(i.summary),
       }, await codeEnv($, h))
-      return `${node.report}\nId: ${node.id}\nNote: ${join(shownVault(h, loaded.config), node.path)}`
+      const similar = similarNotes(loaded, node.id)
+      return `${node.report}\nId: ${node.id}\nNote: ${join(shownVault(h, loaded.config), node.path)}${similar ? `\n${similar}` : ''}`
     }
     case 'rft_set_repos':
       return setRepos(io, loaded, await codeEnv($, h), String(i.id ?? ''), strings(i.repos))
@@ -480,7 +500,9 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       return setRefs(io, loaded, String(i.id ?? ''), strings(i.refs))
     case 'rft_search':
       return searchReport(loaded, str(i.query) ?? '', { type: str(i.type), status: str(i.status), concept: str(i.concept), tag: str(i.tag) },
-        typeof i.limit === 'number' && i.limit > 0 ? Math.min(50, Math.floor(i.limit)) : 10)
+        typeof i.limit === 'number' && i.limit > 0 ? Math.min(50, Math.floor(i.limit)) : 10, await readDigests(io, loaded))
+    case 'rft_graph':
+      return graphReport(loaded, String(i.id ?? ''), i.mode === 'path' ? 'path' : 'around')
     case 'rft_collect_papers':
       return collectPapers($, h, loaded, strings(i.ids))
     case 'rft_set_tags':
@@ -1019,6 +1041,7 @@ export const register: Register = (on, options) => {
   on('tool.call', async ($, e, next) => {
     const tool = String(e.tool)
     if (tool.startsWith('mcp__rft__')) {
+      if (recall && /^mcp__rft__rft_(search|map|graph)$/.test(tool)) recall.used = true
       try {
         const out = await runTool($, tool.slice('mcp__rft__'.length), e as unknown as Record<string, unknown>)
         await refresh($, true)
@@ -1029,7 +1052,10 @@ export const register: Register = (on, options) => {
     }
     const ran = await next(e)
     if (rules && !READ_ONLY.test(tool)) await poll($)
-
+    // a search of the notes before the tree's own search: point to it, until it is used
+    if (recall && !recall.used && !ran.deny && !ran.isError && searchesVault(tool, e as unknown as Record<string, unknown>, recall.vault, recall.cwd)) {
+      return { ...ran, context: [...(ran.context ?? []), RECALL_HINT] }
+    }
     return ran
   }).catch(($, e, next) =>
     next.called ? next(e) : String(e.tool).startsWith('mcp__rft__') ? answer('rft: the tool failed', true) : next(e))

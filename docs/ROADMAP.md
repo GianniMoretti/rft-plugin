@@ -1,7 +1,7 @@
 # Roadmap
 
 Planned work, split into release packages in the order they should ship. Each
-package is one minor version (the current release is 0.16.0, which also brings Alex's
+package is one minor version (the current release is 0.17.0, which also brings Alex's
 changes: note types, light theme, LaTeX, images, code repos) and lists what it contains, how it
 could be done, and when it is done. A package builds only on the ones before it.
 
@@ -16,7 +16,7 @@ could be done, and when it is done. A package builds only on the ones before it.
 | 0.14.0 | Search index (done) | – |
 | 0.15.0 | Alex's PR #4 merged (done) | – |
 | 0.16.0 | Project map (done) | 0.14.0 |
-| 0.17.0 | Recall | 0.16.0 |
+| 0.17.0 | Recall (done) | 0.16.0 |
 | 0.18.0 | Cheaper rebalancing | 0.16.0 |
 | 0.19.0 | State of knowledge | 0.16.0 |
 
@@ -140,7 +140,7 @@ idea is part of 0.17. Code graphs (e.g. graphify) can run beside rft and are out
 Done when: on a replica of a real research vault, the session-start context and the tokens of a typical
 question ("what do we know about X") are measured before and after.
 
-## 0.17.0 — Recall
+## 0.17.0 — Recall (done)
 
 - `rft_search` weighs summaries and answers compactly (summary, where in the tree, the matching
   line), so a question is answered without opening files.
@@ -150,6 +150,9 @@ question ("what do we know about X") are measured before and after.
   ends, from search and digests.
 - Graph questions (`rft_graph`): a note's neighbourhood, what cites a reference, the path from
   D00 to a note.
+
+Done when: on the replica, a question answered by search is measured against the same question
+before (tokens, turns).
 
 ## 0.18.0 — Cheaper rebalancing
 
