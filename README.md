@@ -123,6 +123,9 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_tree` | prints the tree or a subtree |
   | `rft_validate` | checks ids, types, statuses, titles, parents, broken wikilinks, derived fields |
   | `rft_sync` | regenerates children / up / down, the index tree and the canvas after hand edits |
+  | `rft_comments` | a note's comments and suggestions, or the notes with open threads |
+  | `rft_comment` | replies in a thread (or closes a suggestion it made in the note), or starts a comment on a quote |
+  | `rft_suggest` | proposes new text for a quote, or the text an open suggestion asks for; you accept or reject it |
 
 - **The outline pane** opens as a sidebar at session start in the terminal and VS Code where the
   surface docks panes (turn this off with the `autoOpen` option), and with `/rft list`: an indented, coloured outline of the tree, the same on
@@ -179,6 +182,37 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   stays, the type's missing sections are added, and every link to it is renamed. Like
   **Add child**, the session that ran `/rft` does it with `rft_set_type`'s code, at no model turn.
   The root stays a direction.
+- **Footnotes** show as in a book's margin: a mark `[^1]` in the text, its text on a line
+  `[^1]: …` (indented lines continue it), or inline `^[…]`, as Obsidian writes them. Each mark is
+  numbered in reading order and has a number in the drawer's right margin; hover either (or tap
+  it) to read the footnote, links and LaTeX included. Select text and choose **Footnote** to add
+  one: its mark goes after the selection, its text at the end of the note.
+- **Comments and suggestions**, as in Overleaf, discuss a part of a note before anyone edits it.
+  Select text in the drawer and choose:
+  - **Comment**: a question or remark on that text;
+  - **Suggest**: new text for it (the markdown as written, to change), or, with the text left
+    as it is, what should change in words, for Claude to write.
+
+  Open threads are marked in the text (a suggestion as the old text struck through and the new
+  text after it) and listed under the note, where you **Reply**, **Resolve** a comment, **Accept**
+  a suggestion (its new text is written into the note) or **Reject** it. Closed threads stay in
+  the note's **History**, and **Reopen** brings one back.
+  - **Ask Claude** (on a thread, or **Post and ask Claude** / **Post and suggest** when posting) sends the thread to the session that
+    ran `/rft`, as a turn of its own. Claude answers only when asked. It answers in the thread: a
+    comment gets a reply and no edit. A suggestion on a note that is not locked is made in the
+    note and closed as *applied*. On a locked note Claude writes the new text as a suggestion
+    for you to accept.
+  - A thread keeps its quote and the text around it, so it is found again after the note is
+    edited. When the quoted text itself changed, the thread says what it now reads, and its
+    suggestion can no longer be accepted. When the text is gone, the thread says so.
+  - The threads live beside the notes, one file per note: `vault/.comments/<id>.json`, a dot
+    folder Obsidian leaves alone. They follow a note whose type (and id) changes.
+- **Lock** (the padlock in the drawer) makes a note yours: `locked: true` in its frontmatter.
+  Claude then changes nothing in its text, only suggests changes, which you accept. The plugin
+  refuses Claude's Edit and Write on a locked note, shell commands that write to it and name its
+  file (as far as a command shows that), and `rft_set_status` notes and `rft_set_code` on it.
+  Status, tags and the tree's derived fields still change. Your own edits in the drawer are not
+  affected, and neither are Obsidian's.
 - Hover a node to highlight its path to the root; **search** (Enter jumps to the next match).
 - **Filters** opens a side panel: topical tags (with counts, matching **any** or **all**), type,
   status (the same filter as clicking the legend), and a date range. Notes that do not match
@@ -293,10 +327,11 @@ vault, and the image files notes embed: one inside the vault to anyone who can r
 one outside it (anywhere on disk) only to the page carrying the key below, so another user of
 the machine cannot read your files through it, nor learn whether one exists. An image is sent
 with a policy that runs nothing in it, an SVG's scripts included. It answers only requests for
-a loopback host name. It writes one thing, a note's text
-from **Edit**, its frontmatter kept as it is; a new note from **Add child**, or a note's new type
-from **Change type**, it asks the session that started it to make (a line on its output, which the
-plugin reads). It does any of these only for
+a loopback host name. It writes a note's text from **Edit**, **Footnote** or an accepted
+suggestion, its frontmatter kept as it is; the `locked:` line from the padlock; and a note's
+comments file in `vault/.comments/`. A new note from **Add child**, or a note's new type from
+**Change type**, it asks the session that started it to make, and **Ask Claude** to answer (a
+line on its output, which the plugin reads). It does any of these only for
 the page itself carrying the project's key, which the address `/rft` prints holds (`?token=…`):
 neither another web page nor another user of the machine can change or add a note. Open that address once and the browser
 remembers the key, which stays the same across restarts (kept, readable by you alone, in
@@ -374,9 +409,12 @@ session with the plugin loaded from this folder.
   the server's lifecycle).
 - `hooks/lib/vault.ts`: the vault model; `hooks/lib/ops.ts` the operations; `hooks/lib/page.ts`
   the standalone page.
+- `hooks/lib/comments.ts`: comments, suggestions and locked notes, as Claude's tools see them.
 - `web/`: the tree view (`index.html`, `app.js`, `app.css`; `filters.js`, `layout.js` and
-  `concepts.js` hold the pure filter, radial layout and concept logic; `theme.js` the light and dark
-  themes; vendored d3), one codebase for the live view and `/rft-view`.
+  `concepts.js` hold the pure filter, radial layout and concept logic; `markdown.js` the note
+  renderer, footnotes and the map from the page back to the note's text; `theme.js` the light and
+  dark themes; vendored d3), one codebase for the live view and `/rft-view`, which shows the
+  threads read-only.
 - `server/rft_server.py`: the local server (Python standard library).
 - `skills/rft-manual/SKILL.md`: the manual; `tests/`: the mod's tests on an in-memory vault, the
   outline pane on every surface, and the server's tests.

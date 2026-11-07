@@ -1,9 +1,10 @@
 // The rft web view: the reasoning tree as a tidy tree on an infinite canvas (d3), with notes in
 // a side drawer. It runs in two ways: served by server/rft_server.py, where it polls
 // `api/tree`, reads notes from `api/note` and writes a note's edited text back to it, asks
-// `api/node` for a new note under the one shown and `api/type` to change its type; or
-// inlined into a standalone tree.html by /rft-view, where `window.RFT_DATA` holds the tree and
-// every note's text, and nothing is edited.
+// `api/node` for a new note under the one shown and `api/type` to change its type, and keeps a
+// note's discussion (comments, suggestions) with `api/comment` and its lock with `api/lock`; or
+// inlined into a standalone tree.html by /rft-view, where `window.RFT_DATA` holds the tree,
+// every note's text and its threads, and nothing is edited.
 (function () {
   'use strict'
 
@@ -383,19 +384,29 @@
     renderCode(document.getElementById('drawer-code'), n.concept)
     document.getElementById('drawer-meta').textContent = `${n.type} · ${MARK[n.status] || ''} ${n.status}${n.date ? ' · ' + n.date : ''}${n.tags && n.tags.length ? ' · #' + n.tags.join(' #') : ''}`
     const article = document.getElementById('note')
-    article.innerHTML = '<p class="missing">Loading…</p>'
-    let body = null, version = null
+    // the note shown again (it, or another, changed): drawn anew only once read, and only when it differs
+    const isSame = shown != null && shown.id === id
+    if (!isSame) {
+      article.innerHTML = '<p class="missing">Loading…</p>'
+      threadsBox.hidden = true
+      closeComposer()
+      hideSelBar()
+    }
+    let got = null
     try {
-      if (EMBED) body = EMBED.bodies ? EMBED.bodies[id] : null
-      else {
+      if (EMBED) {
+        const body = EMBED.bodies ? EMBED.bodies[id] : null
+        if (body != null) got = noteOf({ id, body, locked: n.locked, threads: (EMBED.comments && EMBED.comments[id]) || [] })
+      } else {
         const res = await fetch(`api/note?id=${encodeURIComponent(id)}`, { cache: 'no-store' })
-        if (res.ok) ({ body, version } = await res.json())
+        if (res.ok) got = noteOf(await res.json())
       }
-    } catch (e) { body = null }
+    } catch (e) { got = null }
     if (selected !== id || editing) return
-    shown = body == null ? null : { id, body, version }
+    if (isSame && sameNote(got, shown)) return
+    shown = got
     showEditButton()
-    article.innerHTML = body == null ? '<p class="missing">The note could not be read.</p>' : markdown(body, id)
+    showNote()
   }
 
   function go(id) {
@@ -424,6 +435,7 @@
     addBtn.hidden = Boolean(EMBED) || editing != null || !byId.has(selected)
     // the root stays a direction
     typeBtn.hidden = Boolean(EMBED) || editing != null || !byId.has(selected) || !byId.get(selected).parent
+    showLock()
   }
 
   function setEditorMsg(text, isError = false, isConflict = false) {
@@ -439,6 +451,10 @@
     editing = { id: note.id, version: note.version, lead, text: note.body.slice(lead.length), newer: null }
     closeAdder()
     closeRetyper()
+    closeComposer()
+    hideSelBar()
+    fnPop.hidden = true
+    threadsBox.hidden = true
     textBox.value = editing.text
     textBox.readOnly = false
     noKey.hidden = true
@@ -457,7 +473,9 @@
     editor.hidden = true
     article.hidden = false
     drawer.classList.remove('editing')
+    threadsBox.hidden = !(shown && shown.threads.length)
     showEditButton()
+    layoutSidenotes()
   }
 
   /** Closes the editor, asking first when it holds changes; false when the user keeps them. */
@@ -509,8 +527,9 @@
   document.getElementById('note-overwrite').addEventListener('click', () => save(true))
   document.getElementById('note-reload').addEventListener('click', () => {
     if (!editing || !editing.newer) return
-    shown = editing.newer
-    article.innerHTML = markdown(shown.body, shown.id)
+    // the threads are read again with the note once it is saved or left
+    shown = { ...editing.newer, locked: Boolean(shown && shown.locked), threads: [] }
+    showNote()
     openEditor(shown)
   })
   textBox.addEventListener('keydown', ev => {
@@ -855,6 +874,9 @@
     if (!leaveEditor()) return
     closeAdder()
     closeRetyper()
+    closeComposer()
+    hideSelBar()
+    fnPop.hidden = true
     document.getElementById('drawer').hidden = true
     selected = null
     gNodes.selectAll('g.node').attr('class', n => nodeClass(n.data))
@@ -1213,9 +1235,10 @@
   document.getElementById('cmode').addEventListener('click', () => setMode(following(CMODES, conceptMode)))
   document.getElementById('view-toggle').addEventListener('click', () => setView(view === 'concepts' ? 'tree' : 'concepts'))
 
-  // ---------------------------------------------------------------- markdown (the subset notes use)
+  // ---------------------------------------------------------------- markdown (web/markdown.js)
 
-  const escH = t => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  const M = window.RftMarkdown
+  const escH = M.escH
   function idForLink(target) {
     const t = target.trim()
     for (const n of tree.nodes) if (n.name === t) return n.id
@@ -1229,18 +1252,6 @@
     } catch (e) { /* below */ }
     return `<code class="math">${escH(display ? `$$${src}$$` : `$${src}$`)}</code>`
   }
-  // what the other inline rules must not touch: `code` first, as it binds tightest (a $ in it
-  // stays a $), then, as Obsidian reads them, \$ (a dollar), $$display math$$ and $inline math$,
-  // whose dollars have no space just inside them and no digit just after ("$5 and $10" is text)
-  const CODE = /`([^`]+)`/g
-  const MATH = /\\\$|\$\$([^\u0000]+?)\$\$|\$(?=[^\s$])((?:\\[^\u0000]|[^\\$\u0000])+?)(?<!\s)\$(?!\d)/g
-  // images as Obsidian embeds them: ![[name.png]], ![[name.png|400]] (a width, or 400x300) and
-  // ![alt](path.png), ![alt|400](<a path with spaces.png>); the server finds the file. In a
-  // table the | is written \|
-  const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i
-  const WIKI_IMAGE = /!\[\[([^\]\n]+)\]\]/g
-  const MD_IMAGE = /!\[([^\]\n]*)\]\(\s*(<[^>\n]+>|[^)\s]+)(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\s*\)/g
-  const sizeOf = o => /^\s*(\d+)(?:x(\d+))?\s*$/.exec(o)
   let mdNote = null // the note markdown() renders: its images are found from its folder
   /** An image of the note shown, as the server serves it; a mention in the standalone page. */
   function image(src, alt, size) {
@@ -1253,90 +1264,584 @@
     return `<a class="image" href="${escH(url)}" target="_blank" rel="noopener noreferrer" title="Open at full size">` +
       `<img src="${escH(url)}" alt="${escH(alt)}" data-label="${escH(label)}" loading="lazy"${dims}></a>`
   }
-  /** `![[inner]]` as an image, or null when it embeds something else (a note, a PDF). */
-  function wikiImage(inner) {
-    const [target, ...opts] = inner.split(/\\?\|/)
-    if (!IMAGE_EXT.test(target.trim())) return null
-    const alt = opts.find(o => !sizeOf(o))
-    return image(target.trim(), alt ? alt.trim() : '', opts.map(sizeOf).find(Boolean))
-  }
-  /** `![alt](src)`: a local image, a link to a remote one (the page fetches nothing from elsewhere). */
-  function mdImage(alt, src) {
-    const [text, ...opts] = alt.split(/\\?\|/)
-    src = src.replace(/^<(.*)>$/, '$1')
-    if (/^https?:/i.test(src)) return `<a href="${escH(src)}" target="_blank" rel="noopener noreferrer">(image: ${escH(text.trim() || src)})</a>`
-    let path = src
-    try { path = decodeURIComponent(src) } catch (e) { /* a % of its own */ }
-    if (!IMAGE_EXT.test(path)) return `<em>(embedded: ${escH(text.trim() || path)})</em>`
-    return image(path, text.trim(), opts.map(sizeOf).find(Boolean))
-  }
-  function inline(t) {
-    const held = []
-    const hold = html => `\u0000${held.push(html) - 1}\u0000`
-    t = t.replace(CODE, (m, code) => hold(`<code>${escH(code)}</code>`))
-      .replace(WIKI_IMAGE, (m, inner) => { const html = wikiImage(inner); return html == null ? m : hold(html) })
-      .replace(MD_IMAGE, (m, alt, src) => hold(mdImage(alt, src)))
-      .replace(MATH, (m, display, math) => hold(display != null ? tex(display, true) : math != null ? tex(math, false) : '$'))
-    return escH(t)
-      .replace(/!\[\[([^\]]+)\]\]/g, '<em>(embedded: $1)</em>')
-      .replace(/\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g, (m, target, alias) => {
-        const id = idForLink(target.replace(/&amp;/g, '&'))
-        const label = alias || target
-        return id ? `<a data-go="${id}">${label}</a>` : `<span class="missing">${label}</span>`
-      })
-      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-      .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>')
-      .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
-      .replace(/\u0000(\d+)\u0000/g, (m, i) => held[i])
-  }
+  const md = M.make({ tex, image, link: idForLink })
+  let footnotes = [] // the footnotes of the note markdown() rendered last: { label, n, html }
   function markdown(src, noteId) {
     mdNote = noteId || null
-    const out = []
-    let list = 0, inCode = false, table = false, para = []
-    let math = null // the lines of a $$ block opened on a line of its own, until its closing $$
-    // a line ending in two spaces breaks the line, as in Obsidian
-    const flush = () => {
-      if (para.length) out.push(`<p>${para.map((l, i) => inline(l.replace(/\s+$/, '')) + (i < para.length - 1 ? (/ {2}$/.test(l) ? '<br>' : ' ') : '')).join('')}</p>`)
-      para = []
+    const r = md.render(src)
+    footnotes = r.notes
+    return r.html
+  }
+
+  // ---------------------------------------------------------------- the note's discussion: footnotes, comments, suggestions, lock
+
+  // A selection in the note becomes a range of its text (web/markdown.js maps one to the other),
+  // and the bar under it starts a comment, a suggestion or a footnote there. Threads are kept by
+  // the server beside the note (api/comment); the open ones are marked in the text, every one is
+  // listed under it, the closed ones as history. A footnote is written into the note itself.
+
+  const threadsBox = document.getElementById('threads')
+  const selBar = document.getElementById('sel-bar')
+  const selMsg = document.getElementById('sel-msg')
+  const composer = document.getElementById('composer')
+  const composerKind = document.getElementById('composer-kind')
+  const composerQuote = document.getElementById('composer-quote')
+  const composerRepl = document.getElementById('composer-repl')
+  const composerReplLabel = document.getElementById('composer-repl-label')
+  const composerText = document.getElementById('composer-text')
+  const composerPost = document.getElementById('composer-post')
+  const composerAsk = document.getElementById('composer-ask')
+  const composerMsg = document.getElementById('composer-msg')
+  const fnPop = document.getElementById('fn-pop')
+  const lockBtn = document.getElementById('drawer-lock')
+  const CONTEXT = 40 // characters kept on each side of a quote, as the server keeps them
+  const drafts = new Map() // replies being written, by `${note} ${thread}`, kept across redraws
+  const threadErrors = new Map() // what a thread's last action ran into, by `${note} ${thread}`
+  const composerDrafts = {} // what was typed in the composer, by kind, until it is posted
+  let anchor = null // the selection the bar and the composer act on: { id, start, end, quote, prefix, suffix, version, rect }
+  let composing = null // comment | suggestion | footnote, while the composer is open
+  let posting = false
+  let historyOpen = false
+  let shownFor = null // the note the drawer drew last, to keep its scroll position on a redraw
+  const mdm = M.make({ tex, image: (src, alt) => `<em class="missing">(image: ${escH(alt || src)})</em>`, link: idForLink })
+  const noteOf = r => ({ id: r.id, body: r.body, version: r.version || null, locked: Boolean(r.locked), threads: Array.isArray(r.threads) ? r.threads : [] })
+  const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s)
+  const who = by => (by === 'claude' ? 'Claude' : 'You')
+  const STATE = { resolved: 'Resolved', accepted: 'Accepted', rejected: 'Rejected', applied: 'Applied by Claude' }
+  const sameNote = (a, b) => a && b && a.id === b.id && a.body === b.body && a.locked === b.locked && JSON.stringify(a.threads) === JSON.stringify(b.threads)
+
+  /** The note in the drawer, drawn: its text, its open threads marked, its footnotes in the margin, its threads below. */
+  function showNote() {
+    const top = shownFor === (shown && shown.id) ? drawer.scrollTop : 0
+    hideSelBar()
+    fnPop.hidden = true
+    if (!shown) {
+      article.innerHTML = '<p class="missing">The note could not be read.</p>'
+      threadsBox.hidden = true
+      shownFor = null
+      return
     }
-    const close = () => { flush(); while (list > 0) { out.push('</ul>'); list-- } if (table) { out.push('</table>'); table = false } }
-    for (const raw of src.split('\n')) {
-      if (math) {
-        const end = raw.indexOf('$$')
-        if (end < 0) { math.push(raw); continue }
-        out.push(`<div class="math-block">${tex([...math, raw.slice(0, end)].join('\n'), true)}</div>`)
-        math = null
-        if (raw.slice(end + 2).trim()) para.push(raw.slice(end + 2))
+    article.innerHTML = markdown(shown.body, shown.id)
+    markThreads()
+    const layer = document.createElement('div')
+    layer.className = 'sidenotes'
+    article.append(layer)
+    layoutSidenotes()
+    renderThreads()
+    showLock()
+    shownFor = shown.id
+    drawer.scrollTop = top
+  }
+
+  // ------------------------------------------------ where the page is in the note's text
+
+  const runKind = span => (span.hasAttribute('data-raw') ? 'raw' : span.hasAttribute('data-whole') ? 'whole' : 'text')
+  const runCellsOf = span => M.runCells(shown.body.slice(+span.dataset.s, +span.dataset.e), runKind(span))
+  const cellsText = cs => cs.map(c => (c.atom ? '\u0000' : c.ch)).join('')
+  /** A run's visible pieces in the page, in order: its text nodes, and its atoms as one each. */
+  function unitsOf(span) {
+    if (span.hasAttribute('data-whole')) return [{ node: span, atom: true, start: 0, len: 1 }]
+    const out = []
+    let n = 0
+    const walk = el => {
+      for (const c of el.childNodes) {
+        if (c.nodeType === 3) { out.push({ node: c, atom: false, start: n, len: c.length }); n += c.length }
+        else if (c.nodeType === 1 && !c.hasAttribute('data-skip')) {
+          if (c.hasAttribute('data-atom')) { out.push({ node: c, atom: true, start: n, len: 1 }); n += 1 }
+          else walk(c)
+        }
+      }
+    }
+    walk(span)
+    return out
+  }
+  const unitsText = us => us.map(u => (u.atom ? '\u0000' : u.node.data)).join('')
+  /** How many visible pieces of a run come before the boundary (node, offset) inside it. */
+  function visBefore(us, node, offset, isEnd) {
+    for (const u of us) {
+      if (u.atom && (u.node === node || u.node.contains(node))) return u.start + (isEnd ? 1 : 0)
+      if (!u.atom && u.node === node) return u.start + offset
+    }
+    const p = document.createRange()
+    p.setStart(node, offset)
+    for (const u of us) {
+      const r = document.createRange()
+      r.selectNode(u.node)
+      if (p.compareBoundaryPoints(Range.START_TO_START, r) <= 0) return u.start
+    }
+    return us.reduce((n, u) => n + u.len, 0)
+  }
+
+  /** The selection in the note as a range of its text, trimmed of space; { error } when the page cannot say. */
+  function selectionAnchor() {
+    const sel = window.getSelection()
+    if (!shown || !sel || sel.isCollapsed || !sel.rangeCount) return null
+    const range = sel.getRangeAt(0)
+    if (!article.contains(range.commonAncestorContainer)) return null
+    const spans = [...article.querySelectorAll('.src')].filter(s => range.intersectsNode(s))
+    if (!spans.length) return null
+    const point = (span, node, offset, isEnd) => {
+      const cs = runCellsOf(span), us = unitsOf(span)
+      if (unitsText(us) !== cellsText(cs)) return null
+      const base = +span.dataset.s
+      const vis = span.contains(node) ? visBefore(us, node, offset, isEnd) : isEnd ? cs.length : 0
+      return base + M.sourceAt(cs, vis, isEnd, +span.dataset.e - base)
+    }
+    let start = point(spans[0], range.startContainer, range.startOffset, false)
+    let end = point(spans[spans.length - 1], range.endContainer, range.endOffset, true)
+    if (start == null || end == null) return { error: 'This part could not be matched to the note\'s text; select the plain text around it.' }
+    const body = shown.body
+    while (start < end && /\s/.test(body[start])) start++
+    while (end > start && /\s/.test(body[end - 1])) end--
+    if (end <= start) return null
+    const rects = range.getClientRects()
+    return {
+      id: shown.id, start, end, version: shown.version, quote: body.slice(start, end),
+      prefix: body.slice(Math.max(0, start - CONTEXT), start), suffix: body.slice(end, end + CONTEXT),
+      rect: rects.length ? rects[rects.length - 1] : range.getBoundingClientRect(),
+    }
+  }
+
+  /** Wraps each piece of the page the note's text [s, e) stands for in what `make()` makes; the first and last wrap. */
+  function markRange(s, e, make) {
+    let first = null, last = null
+    for (const span of article.querySelectorAll('.src')) {
+      const base = +span.dataset.s
+      if (+span.dataset.e <= s || base >= e) continue
+      const cs = runCellsOf(span), us = unitsOf(span)
+      if (unitsText(us) !== cellsText(cs)) continue // no mark rather than a wrong one
+      const got = M.cellsIn(cs, s - base, e - base)
+      if (!got) continue
+      if (span.hasAttribute('data-whole')) {
+        const m = make()
+        span.classList.add(...m.classList)
+        span.dataset.thread = m.dataset.thread
+        first = first || span
+        last = span
         continue
       }
-      if (!inCode && /^\s*\$\$/.test(raw) && !raw.trim().slice(2).includes('$$')) { close(); math = [raw.trim().slice(2)]; continue }
-      if (raw.startsWith('```')) { close(); out.push(inCode ? '</pre>' : '<pre>'); inCode = !inCode; continue }
-      if (inCode) { out.push(escH(raw)); continue }
-      const h = /^(#{1,6})\s+(.*)$/.exec(raw)
-      const li = /^(\s*)[-*]\s+(.*)$/.exec(raw)
-      if (h) { close(); const l = Math.min(h[1].length, 2); out.push(`<h${l}>${inline(h[2])}</h${l}>`) }
-      else if (li) {
-        flush()
-        if (table) { out.push('</table>'); table = false }
-        const depth = Math.floor(li[1].replace(/\t/g, '    ').length / 2) + 1
-        while (list < depth) { out.push('<ul>'); list++ }
-        while (list > depth) { out.push('</ul>'); list-- }
-        out.push(`<li>${inline(li[2])}</li>`)
-      } else if (/^\|.*\|\s*$/.test(raw)) {
-        if (/^\|[\s:|-]+\|\s*$/.test(raw)) continue
-        if (!table) { close(); out.push('<table>'); table = true }
-        out.push('<tr>' + raw.trim().slice(1, -1).split(/(?<!\\)\|/).map(c => `<td>${inline(c.trim())}</td>`).join('') + '</tr>')
-      } else if (raw.trim() === '') close()
-      else if (list && /^\s+\S/.test(raw) && out[out.length - 1].endsWith('</li>')) {
-        // an indented line continues the list item above
-        out[out.length - 1] = out[out.length - 1].slice(0, -5) + ' ' + inline(raw.trim()) + '</li>'
-      } else { if (list || table) close(); para.push(raw) }
+      for (const u of us) {
+        const a = Math.max(got[0], u.start), b = Math.min(got[1], u.start + u.len)
+        if (a >= b) continue
+        let node = u.node
+        if (!u.atom) {
+          if (b - u.start < node.length) node.splitText(b - u.start)
+          if (a > u.start) node = node.splitText(a - u.start)
+        }
+        const m = make()
+        node.replaceWith(m)
+        m.append(node)
+        first = first || m
+        last = m
+      }
     }
-    close()
-    if (inCode) out.push('</pre>')
-    if (math) out.push(`<div class="math-block">${tex(math.join('\n'), true)}</div>`)
-    return out.join('\n')
+    return { first, last }
   }
+
+  function markThreads() {
+    for (const t of shown.threads) {
+      if (t.state !== 'open' || !t.at) continue
+      const cls = `c-mark ${t.kind}${t.exact ? '' : ' moved'}`
+      const { last } = markRange(t.at[0], t.at[1], () => {
+        const m = document.createElement('mark')
+        m.className = cls
+        m.dataset.thread = t.id
+        m.title = t.kind === 'comment' ? 'A comment: click to read it' : 'A suggestion: click to read it'
+        return m
+      })
+      if (last && t.kind === 'suggestion' && t.exact && t.replacement) {
+        const ins = document.createElement('ins')
+        ins.className = 'c-ins'
+        ins.setAttribute('data-skip', '')
+        ins.dataset.thread = t.id
+        ins.textContent = t.replacement
+        last.after(ins)
+      }
+    }
+  }
+
+  // ------------------------------------------------ footnotes in the margin
+
+  function layoutSidenotes() {
+    const layer = article.querySelector(':scope > .sidenotes')
+    if (!layer || article.hidden) return
+    layer.textContent = ''
+    const box = article.getBoundingClientRect()
+    let below = -Infinity
+    for (const sup of article.querySelectorAll('.src sup.fn-ref')) {
+      const r = sup.getBoundingClientRect()
+      if (!r.height) continue
+      const top = Math.max(r.top - box.top - 2, below)
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.className = 'sidenote'
+      b.textContent = sup.textContent
+      b.dataset.fn = sup.dataset.fn
+      b.style.top = `${top}px`
+      b.setAttribute('aria-label', `Footnote ${sup.textContent}`)
+      layer.append(b)
+      below = top + b.offsetHeight + 3
+    }
+  }
+  let layoutQueued = false
+  new ResizeObserver(() => {
+    if (layoutQueued) return
+    layoutQueued = true
+    requestAnimationFrame(() => { layoutQueued = false; layoutSidenotes() })
+  }).observe(article)
+
+  let popTimer = 0
+  let popFor = null
+  function showFootnote(el) {
+    const f = footnotes.find(x => x.label === el.dataset.fn)
+    if (!f) return
+    clearTimeout(popTimer)
+    popFor = el
+    fnPop.innerHTML = `<span class="fn-n">${f.n}</span>${f.html}`
+    fnPop.hidden = false
+    const r = el.getBoundingClientRect(), d = drawer.getBoundingClientRect()
+    fnPop.style.top = `${r.bottom - d.top + drawer.scrollTop + 4}px`
+    const w = fnPop.offsetWidth
+    fnPop.style.left = `${Math.min(Math.max(8, r.right - d.left - w), drawer.clientWidth - w - 8)}px`
+  }
+  const hideFootnote = (wait = 200) => {
+    clearTimeout(popTimer)
+    popTimer = setTimeout(() => { fnPop.hidden = true; popFor = null }, wait)
+  }
+  const FN = '.sidenote, #note sup.fn-ref'
+  drawer.addEventListener('mouseover', ev => { const el = ev.target.closest(FN); if (el) showFootnote(el) })
+  drawer.addEventListener('mouseout', ev => {
+    const el = ev.target.closest(FN)
+    if (el && !(ev.relatedTarget && el.contains(ev.relatedTarget))) hideFootnote()
+  })
+  fnPop.addEventListener('mouseenter', () => clearTimeout(popTimer))
+  fnPop.addEventListener('mouseleave', () => hideFootnote())
+  fnPop.addEventListener('click', ev => {
+    const a = ev.target.closest('a[data-go]')
+    if (a) { ev.preventDefault(); fnPop.hidden = true; go(a.dataset.go) }
+  })
+
+  // ------------------------------------------------ the bar under a selection, and the composer
+
+  function place(el, rect) {
+    const d = drawer.getBoundingClientRect()
+    el.style.top = `${rect.bottom - d.top + drawer.scrollTop + 6}px`
+    const w = el.offsetWidth
+    el.style.left = `${Math.min(Math.max(8, rect.left - d.left), Math.max(8, drawer.clientWidth - w - 8))}px`
+  }
+
+  function hideSelBar() {
+    selBar.hidden = true
+  }
+
+  function onSelectionEnd() {
+    if (EMBED || editing || composing || drawer.hidden) return
+    const a = selectionAnchor()
+    if (!a) { hideSelBar(); return }
+    selMsg.textContent = a.error || ''
+    for (const b of selBar.querySelectorAll('button')) b.hidden = Boolean(a.error)
+    if (!a.error) anchor = a
+    selBar.hidden = false
+    const sel = window.getSelection()
+    const rects = sel.rangeCount ? sel.getRangeAt(0).getClientRects() : []
+    place(selBar, a.rect || rects[rects.length - 1])
+  }
+  article.addEventListener('mouseup', () => setTimeout(onSelectionEnd, 0))
+  article.addEventListener('keyup', ev => { if (ev.shiftKey) onSelectionEnd() })
+  document.addEventListener('selectionchange', () => {
+    const s = window.getSelection()
+    if (!s || s.isCollapsed) hideSelBar()
+  })
+  // a press on the bar keeps the selection
+  selBar.addEventListener('mousedown', ev => ev.preventDefault())
+  selBar.addEventListener('click', ev => {
+    const b = ev.target.closest('button[data-compose]')
+    if (b) openComposer(b.dataset.compose)
+  })
+
+  function setComposerMsg(text, isError = false) {
+    composerMsg.textContent = text
+    composerMsg.classList.toggle('error', isError)
+  }
+
+  function openComposer(kind) {
+    if (!anchor) return
+    if (!editKey()) { noKey.hidden = false; hideSelBar(); return }
+    composing = kind
+    composer.dataset.kind = kind
+    composerKind.textContent = kind === 'comment' ? 'Comment' : kind === 'suggestion' ? 'Suggestion' : 'Footnote'
+    composerQuote.textContent = clip(anchor.quote, 400)
+    composerRepl.hidden = composerReplLabel.hidden = kind !== 'suggestion'
+    composerRepl.value = kind === 'suggestion' ? anchor.quote : ''
+    composerText.value = composerDrafts[kind] || ''
+    composerText.placeholder = kind === 'comment' ? 'Your comment'
+      : kind === 'suggestion' ? 'Why; or, with the text above left as it is, what should change (Claude writes it when you ask)'
+        : 'The footnote, shown in the margin'
+    composerAsk.hidden = kind === 'footnote'
+    composerAsk.textContent = kind === 'suggestion' ? 'Post and suggest' : 'Post and ask Claude'
+    composerAsk.title = kind === 'suggestion'
+      ? 'Post it and ask Claude to make the change, or, on a locked note, to write it for you to accept: a turn of the session that ran /rft'
+      : 'Post it and ask Claude to answer it: a turn of the session that ran /rft'
+    composerPost.textContent = kind === 'footnote' ? 'Add footnote' : 'Post'
+    setComposerMsg('')
+    hideSelBar()
+    composer.hidden = false
+    place(composer, anchor.rect)
+    composer.style.left = ''
+    ;(kind === 'suggestion' ? composerRepl : composerText).focus()
+  }
+
+  function closeComposer() {
+    composer.hidden = true
+    composing = null
+    anchor = null
+  }
+
+  /** Sends one change of the discussion; the answer, refused or not, is the note as it now is, drawn. */
+  async function send(payload) {
+    try {
+      const res = await fetch('api/comment', {
+        method: 'POST',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'X-RFT-Token': editKey() },
+        body: JSON.stringify(payload),
+      })
+      const reply = await res.json().catch(() => ({}))
+      if (reply && typeof reply.body === 'string' && selected === payload.id && !editing) {
+        shown = noteOf(reply)
+        showNote()
+      }
+      return res.ok ? { ok: true, note: reply } : { ok: false, error: reply.error || `the server answered ${res.status}` }
+    } catch (e) {
+      return { ok: false, error: 'the server is not answering' }
+    }
+  }
+
+  async function post(andAsk) {
+    if (!composing || !anchor || posting) return
+    const kind = composing, a = anchor
+    const text = composerText.value.trim()
+    posting = true
+    try {
+      if (kind === 'footnote') {
+        if (!text) { setComposerMsg('Write the footnote.', true); return }
+        if (!shown || shown.id !== a.id || shown.version !== a.version) { composerDrafts[kind] = text; setComposerMsg('The note changed meanwhile: select the text again.', true); return }
+        setComposerMsg('Adding…')
+        const res = await fetch(`api/note?id=${encodeURIComponent(a.id)}`, {
+          method: 'PUT',
+          cache: 'no-store',
+          headers: { 'Content-Type': 'application/json', 'X-RFT-Token': editKey() },
+          body: JSON.stringify({ body: M.withFootnote(shown.body, a.end, text).text, version: a.version }),
+        })
+        const reply = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          composerDrafts[kind] = text
+          setComposerMsg(res.status === 409 ? 'Not added: the note changed meanwhile (Claude or another editor); select the text again.' : `Not added: ${reply.error || `the server answered ${res.status}`}.`, true)
+          return
+        }
+        delete composerDrafts[kind]
+        closeComposer()
+        await select(a.id)
+        return
+      }
+      const payload = { id: a.id, action: 'new', kind, quote: a.quote, prefix: a.prefix, suffix: a.suffix, text }
+      if (kind === 'suggestion') payload.replacement = composerRepl.value
+      if (kind === 'comment' && !text) { setComposerMsg('Write the comment.', true); return }
+      if (kind === 'suggestion' && composerRepl.value === a.quote && !text) { setComposerMsg('Change the text, or say what should change.', true); return }
+      setComposerMsg('Posting…')
+      const r = await send(payload)
+      if (!r.ok) { composerDrafts[kind] = text; setComposerMsg(`Not posted: ${r.error}.`, true); return }
+      delete composerDrafts[kind]
+      closeComposer()
+      const made = r.note.threads[r.note.threads.length - 1]
+      if (made && andAsk) await act(a.id, made.id, 'ask')
+      if (made) focusThread(made.id)
+    } catch (e) {
+      setComposerMsg('Not posted: the server is not answering.', true)
+    } finally {
+      posting = false
+    }
+  }
+
+  composer.addEventListener('submit', ev => { ev.preventDefault(); post(false) })
+  composerAsk.addEventListener('click', () => post(true))
+  document.getElementById('composer-cancel').addEventListener('click', () => {
+    if (composing) composerDrafts[composing] = composerText.value.trim()
+    closeComposer()
+  })
+  composer.addEventListener('keydown', ev => {
+    if (ev.key === 'Escape') { ev.preventDefault(); if (composing) composerDrafts[composing] = composerText.value.trim(); closeComposer() }
+    if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); post(false) }
+  })
+
+  // ------------------------------------------------ the threads under the note
+
+  const draftKey = tid => `${shown ? shown.id : ''} ${tid}`
+
+  function card(t) {
+    const isOpen = t.state === 'open'
+    const can = !EMBED
+    const kind = t.kind === 'comment' ? 'Comment' : t.replacement == null ? 'Suggestion · in words' : 'Suggestion'
+    const state = isOpen ? (t.at ? (t.exact ? '' : 'the text changed') : 'the text is gone')
+      : `${STATE[t.state] || t.state}${t.closed && t.state !== 'applied' ? ` · ${escH(t.closed.at)}` : t.closed ? ` · ${escH(t.closed.at)}` : ''}`
+    const change = t.kind !== 'suggestion' ? ''
+      : t.replacement == null
+        ? `<div class="t-note muted">No new text yet${isOpen ? ': Ask Claude to write it, or reply' : ''}.</div>`
+        : `<div class="t-change"><div class="muted">Replace with</div><div class="t-repl">${t.replacement ? escH(clip(t.replacement, 1200)) : '<em class="muted">(nothing: delete the text)</em>'}</div></div>`
+    const where = !isOpen ? ''
+      : !t.at ? `<div class="t-warn">The text this ${t.kind} is on is no longer in the note.</div>`
+        : !t.exact ? `<div class="t-warn">The text changed since; that part now reads: <q>${escH(clip(shown.body.slice(t.at[0], t.at[1]), 240))}</q></div>` : ''
+    const msgs = (t.messages || []).map(m =>
+      `<li class="by-${m.by === 'claude' ? 'claude' : 'you'}"><div class="t-who">${who(m.by)} <time>${escH(m.at || '')}</time></div><div class="t-text">${mdm.render(m.text || '').html}</div></li>`).join('')
+    const asked = isOpen && t.asked ? `<div class="t-asked">Claude is answering… <span class="muted">(asked ${escH(String(t.asked).slice(11) || t.asked)})</span></div>` : ''
+    const err = threadErrors.get(draftKey(t.id))
+    let bar = ''
+    if (can && isOpen) {
+      const accept = t.kind === 'suggestion'
+        ? `<button type="button" data-act="accept" class="primary"${t.replacement == null || !t.exact ? ' disabled' : ''} title="${t.replacement == null ? 'There is no new text to write yet' : !t.exact ? 'The text changed since the suggestion' : 'Write the new text into the note'}">Accept</button><button type="button" data-act="reject">Reject</button>`
+        : '<button type="button" data-act="resolve" title="Settled: it goes to the history">Resolve</button>'
+      bar = `<textarea rows="2" placeholder="Reply" aria-label="Reply"></textarea>
+        <div class="t-bar"><button type="button" data-act="reply" title="Ctrl+Enter">Reply</button><button type="button" data-act="ask" title="Ask Claude to answer this thread (with your reply, if you wrote one): a turn of the session that ran /rft">${t.asked ? 'Ask again' : 'Ask Claude'}</button>${accept}</div>`
+    } else if (can) bar = '<div class="t-bar"><button type="button" data-act="reopen">Reopen</button></div>'
+    return `<div class="thread ${t.kind} ${escH(t.state)}" data-thread="${escH(t.id)}">
+      <div class="t-head"><span><span class="t-kind">${kind}</span> <span class="muted">${state}</span></span>${isOpen && t.at ? '<button type="button" class="linkish" data-act="show" title="Show it in the text">show</button>' : ''}</div>
+      <blockquote class="t-quote">${escH(clip(t.quote || '', 300))}</blockquote>${change}${where}
+      ${msgs ? `<ol class="t-msgs">${msgs}</ol>` : ''}${asked}${err ? `<div class="t-error">${escH(err)}</div>` : ''}${bar}
+    </div>`
+  }
+
+  function renderThreads() {
+    const ts = shown ? shown.threads : []
+    threadsBox.hidden = !ts.length || editing != null
+    if (!ts.length) { threadsBox.innerHTML = ''; return }
+    const focused = document.activeElement && threadsBox.contains(document.activeElement) && document.activeElement.tagName === 'TEXTAREA'
+      ? { tid: document.activeElement.closest('.thread').dataset.thread, at: document.activeElement.selectionStart } : null
+    const open = ts.filter(t => t.state === 'open').sort((a, b) => (a.at ? a.at[0] : Infinity) - (b.at ? b.at[0] : Infinity))
+    const closed = ts.filter(t => t.state !== 'open').reverse()
+    threadsBox.innerHTML = `<div class="threads-head"><b>Discussion</b> <span class="muted">${open.length} open${closed.length ? `, ${closed.length} closed` : ''}</span></div>` +
+      open.map(card).join('') +
+      (closed.length ? `<details class="history"${historyOpen ? ' open' : ''}><summary>History (${closed.length})</summary>${closed.map(card).join('')}</details>` : '')
+    for (const box of threadsBox.querySelectorAll('.thread textarea')) {
+      box.value = drafts.get(draftKey(box.closest('.thread').dataset.thread)) || ''
+    }
+    if (focused) {
+      const box = threadsBox.querySelector(`.thread[data-thread="${CSS.escape(focused.tid)}"] textarea`)
+      if (box) { box.focus(); box.setSelectionRange(focused.at, focused.at) }
+    }
+  }
+
+  function focusThread(tid) {
+    const el = threadsBox.querySelector(`.thread[data-thread="${CSS.escape(tid)}"]`)
+    if (!el) return
+    const d = el.closest('details')
+    if (d) { d.open = true; historyOpen = true }
+    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    el.classList.remove('flash')
+    void el.offsetWidth
+    el.classList.add('flash')
+  }
+
+  function showMark(tid) {
+    const m = article.querySelector(`[data-thread="${CSS.escape(tid)}"]`)
+    if (!m) return
+    m.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    setActive(tid)
+    setTimeout(() => setActive(null), 1500)
+  }
+
+  function setActive(tid) {
+    for (const m of article.querySelectorAll('[data-thread]')) m.classList.toggle('active', m.dataset.thread === tid)
+  }
+
+  async function act(id, tid, action, extra = {}) {
+    threadErrors.delete(`${id} ${tid}`)
+    const r = await send({ id, thread: tid, action, ...extra })
+    if (!r.ok) {
+      threadErrors.set(`${id} ${tid}`, `Not done: ${r.error}.`)
+      if (shown && shown.id === id) renderThreads()
+    }
+    return r
+  }
+
+  threadsBox.addEventListener('click', async ev => {
+    const link = ev.target.closest('a[data-go]')
+    if (link) { ev.preventDefault(); go(link.dataset.go); return }
+    const b = ev.target.closest('button[data-act]')
+    if (!b || !shown) return
+    const tid = b.closest('.thread').dataset.thread
+    const what = b.dataset.act
+    if (what === 'show') { showMark(tid); return }
+    if (!editKey()) { noKey.hidden = false; return }
+    const id = shown.id
+    const box = b.closest('.thread').querySelector('textarea')
+    const text = box ? box.value.trim() : ''
+    if (what === 'reply' && !text) { box.focus(); return }
+    if (what === 'accept' && !window.confirm('Write the new text into the note?')) return
+    b.disabled = true
+    if ((what === 'reply' || what === 'ask') && text) {
+      const r = await act(id, tid, 'reply', { text })
+      if (!r.ok) return
+      drafts.delete(`${id} ${tid}`)
+      if (box) box.value = ''
+    }
+    if (what !== 'reply') await act(id, tid, what)
+  })
+  threadsBox.addEventListener('input', ev => {
+    if (ev.target.tagName === 'TEXTAREA') drafts.set(draftKey(ev.target.closest('.thread').dataset.thread), ev.target.value)
+  })
+  threadsBox.addEventListener('keydown', ev => {
+    if (ev.target.tagName !== 'TEXTAREA' || ev.key !== 'Enter' || !(ev.ctrlKey || ev.metaKey)) return
+    ev.preventDefault()
+    ev.target.closest('.thread').querySelector('button[data-act="reply"]').click()
+  })
+  threadsBox.addEventListener('toggle', ev => { if (ev.target.matches('details.history')) historyOpen = ev.target.open }, true)
+  threadsBox.addEventListener('mouseover', ev => { const c = ev.target.closest('.thread'); setActive(c ? c.dataset.thread : null) })
+  threadsBox.addEventListener('mouseleave', () => setActive(null))
+  article.addEventListener('click', ev => {
+    if (ev.target.closest('a[data-go]')) return
+    const fn = ev.target.closest('.sidenote, sup.fn-ref')
+    // a touch has no hover: a tap on a footnote's mark shows it
+    if (fn) { if (popFor === fn && !fnPop.hidden) hideFootnote(0); else showFootnote(fn); return }
+    const m = ev.target.closest('[data-thread]')
+    const sel = window.getSelection()
+    if (m && (!sel || sel.isCollapsed)) focusThread(m.dataset.thread)
+  })
+
+  // ------------------------------------------------ the lock
+
+  function showLock() {
+    lockBtn.hidden = Boolean(EMBED) || editing != null || !shown || shown.id !== selected
+    const on = Boolean(shown && shown.locked)
+    lockBtn.setAttribute('aria-pressed', String(on))
+    lockBtn.querySelector('.lock-open').classList.toggle('on', !on)
+    lockBtn.querySelector('.lock-closed').classList.toggle('on', on)
+    const label = on ? 'Locked: Claude only suggests changes to this note, and you accept them. Click to unlock.'
+      : 'Lock the note: Claude then only suggests changes to it, and you accept them'
+    lockBtn.title = label
+    lockBtn.setAttribute('aria-label', on ? 'Unlock' : 'Lock')
+  }
+
+  lockBtn.addEventListener('click', async () => {
+    if (!shown) return
+    if (!editKey()) { noKey.hidden = false; return }
+    const id = shown.id, locked = !shown.locked
+    lockBtn.disabled = true
+    try {
+      const res = await fetch('api/lock', {
+        method: 'POST',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'X-RFT-Token': editKey() },
+        body: JSON.stringify({ id, locked }),
+      })
+      const reply = await res.json().catch(() => ({}))
+      if (res.ok && selected === id && !editing) { shown = noteOf(reply); showNote() }
+      else if (!res.ok) window.alert(`Not ${locked ? 'locked' : 'unlocked'}: ${reply.error || `the server answered ${res.status}`}.`)
+    } catch (e) {
+      window.alert('The server is not answering.')
+    } finally {
+      lockBtn.disabled = false
+    }
+  })
 
   // ---------------------------------------------------------------- start
 

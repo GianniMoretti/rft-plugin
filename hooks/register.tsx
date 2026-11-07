@@ -1,9 +1,11 @@
 // rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-view), the model's
 // tools (rft_add_node, rft_set_status, rft_set_tags, rft_set_type, rft_set_concept, rft_concepts, rft_set_repos,
-// rft_code, rft_set_code, rft_tags, rft_tree, rft_validate, rft_sync), the operating rules
-// injected into the system prompt, the outline pane, and the web view: /rft starts a local
-// server (server/rft_server.py) for the interactive tree page (web/), and makes the notes that
-// page adds (addFromView). Everything is
+// rft_code, rft_set_code, rft_tags, rft_tree, rft_validate, rft_sync, rft_comments, rft_comment,
+// rft_suggest), the operating rules injected into the system prompt, the outline pane, and the
+// web view: /rft starts a local server (server/rft_server.py) for the interactive tree page
+// (web/), makes the notes that page adds (fromView), and asks Claude to answer the threads the
+// user asks it to (askFromView). Claude's own edits of a locked note are refused (lockedEdit).
+// Everything is
 // inert without `.rft/config.json` in the session's folder or a folder above it; that config
 // may be a link (`{"tree": "../notes"}`) to a tree kept elsewhere.
 
@@ -11,8 +13,9 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { RftSnapshot } from '../types'
+import { COMMENTS_DIR, askText, comment as addComment, commentsReport, isLocked, readComments, suggest as addSuggestion } from './lib/comments'
 import type { CodeEnv, Git } from './lib/ops'
-import { addNode, codeReport, conceptsReport, exportHtml, initVault, loadActive, rulesText, setCode, setConcept, setRepos, setStatus, setTags, setType, tagsReport, today, treeReport } from './lib/ops'
+import { addNode, codeReport, conceptsReport, exportHtml, initVault, loadActive, lockedText, rulesText, setCode, setConcept, setRepos, setStatus, setTags, setType, tagsReport, today, treeReport } from './lib/ops'
 import { ASSET_PATHS } from './lib/page'
 import type { Config, Io, NodeType, Tree } from './lib/vault'
 import { LEGEND, MARK, NODE_TYPES, bodyOf, counts, countsLine, isAbsolute, join, locate, readConfig, resolvePath, rooted, signatureOf, sync, validate } from './lib/vault'
@@ -203,14 +206,52 @@ const TOOLS = {
       properties: { relayout: { type: 'boolean', description: 'Discard manual moves of canvas cards.' } },
     },
   },
+  rft_comments: {
+    description:
+      'The comments and suggestions on a note: threads on a part of its text, written by the user in the tree view, or by you. Each with its quote, state, replacement, messages, and whether the quoted text is still in the note. Without id: the notes with open threads. Answer a thread when the user asks you to (the tree view\'s Ask Claude sends you the thread).',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'Id (e.g. E12) or full name of the note; omit for every note with open threads.' } },
+    },
+  },
+  rft_comment: {
+    description:
+      'Write in a note\'s discussion, never in the note itself. With thread: your reply in that thread; on an open suggestion of a note that is not locked, once you made the change in the note yourself, applied: true closes it (text: what you changed). Without thread: a new comment on quote, the exact text of the note it is about.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id (e.g. E12) or full name of the note.' },
+        thread: { type: 'string', description: 'The thread to answer, e.g. c3.' },
+        quote: { type: 'string', description: 'A new comment: the exact text of the note below its frontmatter, markdown included, occurring once in it.' },
+        text: { type: 'string', description: 'The reply or comment (markdown), short: the user reads it in the note drawer.' },
+        applied: { type: 'boolean', description: 'On a suggestion thread: you made the change in the note yourself; closes the thread.' },
+      },
+      required: ['id'],
+    },
+  },
+  rft_suggest: {
+    description:
+      'Propose a change to a note\'s text without making it: the user accepts or rejects it in the tree view, and an accepted one is written into the note. The only way to change a locked note. With thread: the replacement for that open suggestion (an instruction gets its text, or a revised one). Without thread: a new suggestion replacing quote with replacement.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id (e.g. E12) or full name of the note.' },
+        thread: { type: 'string', description: 'The suggestion thread to answer, e.g. c3.' },
+        quote: { type: 'string', description: 'A new suggestion: the exact text to replace, below the frontmatter, markdown included, occurring once in the note.' },
+        replacement: { type: 'string', description: 'The new text for the quote, in markdown (an empty string deletes it).' },
+        text: { type: 'string', description: 'Optional: why, in a line or two.' },
+      },
+      required: ['id', 'replacement'],
+    },
+  },
 } as const
 
 // Module state: reset on a reload, when `session.start` runs again and sets it anew.
 // The rules for the system prompt are fixed at activation so the prompt cache holds.
 let rules: string | null = null
 let poller: { cancel: () => void } | null = null
-// a prompt a command wants Claude to answer, submitted by the poller
-let pendingPrompt: string | null = null
+// prompts for Claude to answer, from a command or the tree view, submitted by the poller
+const pendingPrompts: string[] = []
 const registeredTools = new Set<string>()
 
 const EMPTY: RftSnapshot = { isActive: false, vault: '', project: '', nodes: {}, roots: [], concepts: {}, signature: '', problems: [], error: null }
@@ -395,6 +436,12 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       if (v.warnings.length) lines.push('Warnings:', ...v.warnings.map(x => `- ${x}`))
       return lines.join('\n')
     }
+    case 'rft_comments':
+      return commentsReport(io, loaded, str(i.id))
+    case 'rft_comment':
+      return addComment(io, loaded, { id: String(i.id ?? ''), thread: str(i.thread), quote: typeof i.quote === 'string' ? i.quote : undefined, text: i.text, applied: i.applied === true })
+    case 'rft_suggest':
+      return addSuggestion(io, loaded, { id: String(i.id ?? ''), thread: str(i.thread), quote: typeof i.quote === 'string' ? i.quote : undefined, replacement: i.replacement, text: i.text })
     case 'rft_sync': {
       const r = await sync(io, loaded, { relayout: i.relayout === true })
       return r.changed.length
@@ -478,6 +525,7 @@ async function spawnServer($: EngineInterface, argv: string[]): Promise<string> 
           for (const l of lines) {
             const m = /RFT_SERVER_URL (\S+)/.exec(l)
             if (m) found(m[1]!)
+            else if (l.startsWith(ASK)) void askFromView($, l.slice(ASK.length))
             else {
               const asked = FROM_VIEW.find(a => l.startsWith(a.line))
               if (asked) void fromView($, asked, l.slice(asked.line.length))
@@ -521,6 +569,27 @@ async function fromView($: EngineInterface, asked: (typeof FROM_VIEW)[number], r
     await refresh($, true)
   } catch (err) {
     $.ui.toast(`rft: the tree view could not ${asked.what} (${message(err)})`)
+  }
+}
+
+const ASK = 'RFT_ASK '
+
+/**
+ * A thread the user asks Claude to answer from the tree view (its Ask Claude, relayed by the
+ * server): a prompt with the thread, submitted by the poller as a turn of its own.
+ */
+async function askFromView($: EngineInterface, request: string): Promise<void> {
+  try {
+    const r = JSON.parse(request) as Record<string, unknown>
+    const h = await mustHere($)
+    const loaded = await loadActive(h.io)
+    const id = String(r.id ?? '')
+    const n = loaded.tree.nodes[id]
+    if (!n) throw new Error(`"${id}" is not a note of the tree`)
+    const c = await readComments(h.io, loaded.config.vault, id)
+    pendingPrompts.push(askText(loaded, c, id, String(r.thread ?? ''), join(shownVault(h, loaded.config), n.path)))
+  } catch (err) {
+    $.ui.toast(`rft: the tree view could not ask Claude (${message(err)})`)
   }
 }
 
@@ -617,15 +686,58 @@ const webHelp = (url: string) => {
   ].join('\n')
 }
 
-/** Submits a prompt a command queued; called from the poller, outside any command's dispatch. */
+/** Submits the prompts a command or the tree view queued; called from the poller, outside any command's dispatch. */
 async function submitPending($: EngineInterface): Promise<void> {
-  const text = pendingPrompt
-  if (!text) return
-  pendingPrompt = null
+  while (pendingPrompts.length) {
+    const text = pendingPrompts.shift()!
+    try {
+      await $.prompt.submit({ text })
+    } catch (err) {
+      $.ui.toast(`rft: could not ask Claude (${message(err)}); ask it yourself, e.g. "${text.split('\n')[0]!.slice(0, 80)}"`)
+    }
+  }
+}
+
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+// a shell command that may write a file: a redirection, an in-place editor, a move, copy or
+// removal, a script
+const SHELL_WRITES = /(^|[^<>&0-9])>{1,2}(?!&)|\b(tee|mv|cp|rm|truncate|dd|python3?|node|ruby|perl|sed\s[^|;&]*-i|awk\s[^|;&]*-i)\b/
+const COMMENTS_BY_HAND = `The tree view and the rft tools write the comments files (${COMMENTS_DIR}/): use rft_comment and rft_suggest.`
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/**
+ * Why Claude may not make this tool call, or null: it would edit a locked note (Edit, Write; a
+ * shell command that writes and names the note's file, as far as the command shows it), or a
+ * comments file by hand.
+ */
+async function lockedEdit($: EngineInterface, e: Record<string, unknown>): Promise<string | null> {
+  const tool = String(e.tool)
+  if (!EDIT_TOOLS.has(tool) && tool !== 'Bash') return null
+  const s = await read($, snapshot)
+  if (!s?.isActive || !s.vault) return null
+  const vault = resolvePath(s.vault, '.')
+  if (tool === 'Bash') {
+    const cmd = String(e.command ?? '')
+    if (!SHELL_WRITES.test(cmd)) return null
+    if (cmd.includes(`${COMMENTS_DIR}/`)) return COMMENTS_BY_HAND
+    for (const n of Object.values(s.nodes)) {
+      if (!n.locked) continue
+      const word = escapeRe(n.title.split(' ')[0] ?? '')
+      const named = cmd.includes(n.name) || new RegExp(`\\b${n.id}(?:[*?]|(?:\\\\ | )${word})`).test(cmd)
+      if (named) return lockedText(n)
+    }
+    return null
+  }
+  const raw = e.file_path ?? e.notebook_path
+  if (typeof raw !== 'string') return null
+  const abs = resolvePath(resolvePath(await $.session.cwd(), '.'), raw)
+  if (abs.startsWith(`${vault}/${COMMENTS_DIR}/`)) return COMMENTS_BY_HAND
+  const n = Object.values(s.nodes).find(x => join(vault, x.path) === abs)
+  if (!n) return null
   try {
-    await $.prompt.submit({ text })
-  } catch (err) {
-    $.ui.toast(`rft: could not ask Claude (${message(err)}); ask it yourself, e.g. "propose concepts for the tree"`)
+    return isLocked(await $.fs.read(abs)) ? lockedText(n) : null
+  } catch {
+    return null
   }
 }
 
@@ -746,7 +858,7 @@ export const register: Register = (on, options) => {
       if (e.args.trim() !== 'suggest') return { text: conceptsReport(loaded) }
       // a prompt cannot be submitted from the command's own hook (the turn would wait on it), and a
       // timer started here ends with it: the session's poller submits it at its next tick
-      pendingPrompt = SUGGEST_CONCEPTS
+      pendingPrompts.push(SUGGEST_CONCEPTS)
       return { text: `${conceptsReport(loaded)}\n\nClaude will propose a concept split in a moment; nothing changes until you confirm it.` }
     } catch (err) {
       return { text: message(err) }
@@ -769,6 +881,7 @@ export const register: Register = (on, options) => {
         filters: await $.fs.read(join(root, ASSET_PATHS.filters)),
         layout: await $.fs.read(join(root, ASSET_PATHS.layout)),
         concepts: await $.fs.read(join(root, ASSET_PATHS.concepts)),
+        markdown: await $.fs.read(join(root, ASSET_PATHS.markdown)),
         theme: await $.fs.read(join(root, ASSET_PATHS.theme)),
       }
       const path = await exportHtml(io, loaded, assets)
@@ -793,6 +906,10 @@ export const register: Register = (on, options) => {
       } catch (err) {
         return answer(err instanceof Error ? err.message : String(err), true)
       }
+    }
+    if (rules) {
+      const why = await lockedEdit($, e as unknown as Record<string, unknown>)
+      if (why) return { deny: why }
     }
     const ran = await next(e)
     if (rules && !READ_ONLY.test(tool)) await poll($)

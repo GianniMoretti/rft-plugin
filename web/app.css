@@ -175,3 +175,66 @@ button.linkish { border: 0; background: none; color: var(--accent); padding: 0; 
 .cfocus:hover { text-decoration: underline; }
 /* a halo behind the concept tree's text, so links that pass under it stay readable */
 .cname, .ccount, .cfocus { paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
+/* the note's discussion: footnotes in the margin, threads marked in the text and listed under it */
+#note { position: relative; padding-right: 28px; }
+#note .sidenotes { position: absolute; top: 0; right: 0; width: 22px; }
+#note .sidenote { position: absolute; right: 0; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px;
+  font-size: 11px; line-height: 18px; text-align: center; border: 1px solid var(--accent); color: var(--accent);
+  background: var(--panel); cursor: help; }
+#note .sidenote:hover { background: var(--accent); color: var(--panel); }
+#note sup.fn-ref { color: var(--accent); font-size: 0.72em; font-weight: 600; padding: 0 1px; cursor: help; }
+#note .fn-orphans { margin-top: 14px; padding-top: 6px; border-top: 1px solid var(--line); font-size: 0.88em; color: var(--muted); }
+#note .fn-orphans p { margin: 4px 0; }
+.fn-pop { position: absolute; z-index: 6; max-width: min(340px, 80%); padding: 7px 10px; border-radius: 8px;
+  background: var(--panel); border: 1px solid var(--line); box-shadow: 0 6px 20px rgb(0 0 0 / 0.18); font-size: 0.9em; }
+.fn-pop .fn-n { color: var(--accent); font-weight: 700; margin-right: 6px; }
+.fn-pop a { color: var(--accent); cursor: pointer; }
+#note mark.c-mark, #note .math-block.c-mark { color: inherit; border-radius: 2px; cursor: pointer;
+  background: color-mix(in srgb, var(--planned) 30%, transparent); }
+#note mark.c-mark.suggestion, #note .math-block.c-mark.suggestion { background: color-mix(in srgb, var(--dropped) 15%, transparent);
+  text-decoration: line-through; text-decoration-color: var(--dropped); }
+#note mark.c-mark.moved { background: transparent; outline: 1px dashed var(--muted); text-decoration: none; }
+#note mark.c-mark.active, #note .c-mark.active, #note ins.c-ins.active { outline: 2px solid var(--accent); }
+#note ins.c-ins { text-decoration: none; margin-left: 2px; padding: 0 2px; border-radius: 2px; white-space: pre-wrap;
+  background: color-mix(in srgb, var(--done) 20%, transparent); border-bottom: 1px solid var(--done); }
+.sel-bar { position: absolute; z-index: 5; display: flex; align-items: center; gap: 4px; padding: 4px; border-radius: 8px;
+  background: var(--panel); border: 1px solid var(--line); box-shadow: 0 6px 20px rgb(0 0 0 / 0.18); font-size: 13px; }
+.sel-bar[hidden], .composer[hidden], .fn-pop[hidden], #threads[hidden] { display: none; }
+.sel-bar #sel-msg { max-width: 260px; font-size: 12px; }
+.composer { position: absolute; z-index: 5; left: 12px; right: 12px; display: flex; flex-direction: column; gap: 6px;
+  padding: 8px 10px; border-radius: 8px; background: var(--panel); border: 1px solid var(--accent);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.22); font-size: 0.92em; }
+.composer textarea, .thread textarea { width: 100%; min-height: 3.2em; resize: vertical; padding: 5px 8px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--fg); font: inherit; font-size: 0.95em; }
+#composer-repl { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.composer textarea:focus, .thread textarea:focus { outline: none; border-color: var(--accent); }
+#composer-msg.error { color: var(--dropped); }
+.t-quote { margin: 0; padding: 1px 8px; border-left: 3px solid var(--line); color: var(--muted); font-size: 0.9em;
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 7.5em; overflow: auto; }
+#threads { margin-top: 18px; padding-top: 8px; border-top: 1px solid var(--line); }
+.threads-head { margin-bottom: 4px; }
+.thread { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--line); border-left: 3px solid var(--planned); font-size: 0.92em; }
+.thread.suggestion { border-left-color: var(--dropped); }
+.thread:not(.open) { border-left-color: var(--line); }
+.thread.flash { animation: rft-thread-flash 1.4s ease-out; }
+@keyframes rft-thread-flash { 0% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: 0 0 0 0 transparent; } }
+.t-head { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+.t-kind { font-weight: 600; }
+.t-change .t-repl { margin-top: 2px; padding: 2px 6px; border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere;
+  background: color-mix(in srgb, var(--done) 14%, transparent); }
+.t-msgs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.t-msgs li { padding-left: 8px; border-left: 3px solid var(--line); }
+.t-msgs li.by-claude { border-left-color: var(--accent); }
+.t-who { font-size: 0.85em; color: var(--muted); }
+.t-who time { margin-left: 4px; }
+.t-text p, .t-text ul { margin: 2px 0; }
+.t-text ul { padding-left: 1.2em; }
+.t-text a { color: var(--accent); cursor: pointer; }
+.t-warn { font-size: 0.88em; color: var(--running); }
+.t-asked { font-size: 0.88em; color: var(--accent); }
+.t-error { font-size: 0.88em; color: var(--dropped); }
+.t-bar { display: flex; flex-wrap: wrap; gap: 4px; }
+details.history > summary { cursor: pointer; color: var(--muted); margin: 6px 0; }
+details.history .thread { opacity: 0.85; }
+#drawer-lock[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }

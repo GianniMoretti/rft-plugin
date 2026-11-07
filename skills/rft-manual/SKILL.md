@@ -1,6 +1,6 @@
 ---
 name: rft-manual
-description: Operating manual of the Reasoning Flow Tree, the tree of experiment (E..), direction (D..), reference (R..) and theory (T..) notes that records a research project's reasoning, grouped into concepts (lines of research) that can link the code repositories they run on. Use in a project with .rft/config.json whenever an experiment is planned, launched or finished, an idea or question comes up (even a rejected one), a paper or literature review is read, a definition, method or taxonomy is written down, an idea is dropped or moved, a new line of research opens (propose a concept, ask for its code), work starts on an experiment whose concept links code, or the user asks about the tree, the vault, its concepts, its code or what was tried.
+description: Operating manual of the Reasoning Flow Tree, the tree of experiment (E..), direction (D..), reference (R..) and theory (T..) notes that records a research project's reasoning, grouped into concepts (lines of research) that can link the code repositories they run on. Use in a project with .rft/config.json whenever an experiment is planned, launched or finished, an idea or question comes up (even a rejected one), a paper or literature review is read, a definition, method or taxonomy is written down, an idea is dropped or moved, a new line of research opens (propose a concept, ask for its code), work starts on an experiment whose concept links code, the user asks Claude to answer a comment or suggestion from the tree view, a note is locked, or the user asks about the tree, the vault, its concepts, its code or what was tried.
 ---
 
 # Reasoning Flow Tree (rft)
@@ -192,6 +192,9 @@ concept_repos: ["/home/me/code/sfree", "../code/train-utils"]
 | `rft_tree` | the current tree, or the subtree of one node (`root`, `depth`) |
 | `rft_validate` | errors (bad ids, statuses, titles, missing parents, broken links) and warnings |
 | `rft_sync` | regenerate children / up / down, the tree in `00 Index.md`, the canvas |
+| `rft_comments` | a note's comments and suggestions (open ones in full, the history in short), or the notes with open threads |
+| `rft_comment` | reply in a thread (`applied: true` closes a suggestion you made in an unlocked note), or start a comment on a `quote` |
+| `rft_suggest` | propose new text for a `quote`, or the replacement an open suggestion asks for; the user accepts it |
 
 Editing note bodies (What, Why, Result, ...) with the ordinary file tools is fine. After editing
 notes by hand — above all a `parent:` field — run `rft_sync`, then `rft_validate`, and fix every
@@ -199,6 +202,35 @@ error. Never edit `up:` / `down:` by hand, nor the list under `## The tree` in t
 
 A note made with the wrong type is fixed with `rft_set_type`, never renamed by hand: its id, its
 folder and every link to it change together.
+
+## Locked notes, comments and suggestions
+
+- **A locked note** (`locked: true` in its frontmatter; the user sets it with the padlock in the
+  tree view) is the user's: never change its text. Edit, Write and shell commands that write to
+  it are refused, and so are `rft_set_status` with a note and `rft_set_code` on it. Propose each
+  change with `rft_suggest {id, quote, replacement}`, one per passage; the user accepts or rejects
+  it in the tree view, and an accepted one is written into the note. Its status, tags and derived
+  fields still change through the rft tools. Never unlock a note: that is the user's alone.
+- **The discussion of a note** is kept beside it, in `<vault>/.comments/<id>.json`, written by
+  the tree view and the rft tools only (never by hand). A thread is on a part of the text, its
+  quote (the note's markdown as written), found again after edits from the text around it:
+  - a **comment** discusses that part before any edit;
+  - a **suggestion** has new text for it, or says in words what should change (an instruction,
+    with no replacement yet).
+- **Answer a thread only when the user asks**: the tree view's **Ask Claude** sends you the thread
+  as a prompt. Answer in the thread, not in the chat:
+  - a comment: read what the question needs, reply with `rft_comment {id, thread, text}`, and do
+    not edit the note; propose a change with `rft_suggest` if one is needed;
+  - a suggestion on a locked note: write the new text with `rft_suggest {id, thread,
+    replacement, text}`; the user accepts it;
+  - a suggestion on a note that is not locked: make the change in the note yourself, then close the
+    thread with `rft_comment {id, thread, applied: true, text: what you changed}`;
+  - unclear or wrong: reply with `rft_comment` and change nothing.
+- **Quotes** are exact text of the note below its frontmatter, markdown included, occurring once
+  in it: quote more of the text around it when a phrase repeats.
+- **Footnotes** are part of the note, as Obsidian writes them: a mark `[^1]` and its text on a line
+  `[^1]: …` at the end (indented lines continue it), or inline `^[…]`. The tree view shows them in
+  the margin. Keep them when you edit a note.
 
 ## Note layout
 
@@ -211,6 +243,7 @@ concept `concept: "<name>"`, `concept_summary: "<one line>"` and, when it links 
 sections — experiments: What, Why, Result, Directions found; directions: Idea, Why, Status;
 references: Source, Summary, Method, Key results, Relevance, Directions found; theory notes:
 Statement, Builds on, Explanation, Open questions, Status — and last **Children in the tree**, a list of links to the children.
+A locked note has `locked: true`; footnote texts (`[^1]: …`) come after the sections.
 In a concept with code, experiments and directions also have a **Code** section, before Result
 (experiments) or Status (directions).
 
@@ -227,5 +260,6 @@ gets a direction node.
 `/rft` starts the interactive tree view (a local page; the user opens its address in a
 browser) and the outline pane; `/rft text` prints the tree; `/rft-view` writes a standalone
 `<vault>/tree.html`; Obsidian shows `Reasoning tree.canvas`. The user can edit a note's text
-(not its frontmatter) and add notes, with their default status, in the tree view, so re-read a
-note before changing it, and the tree (`rft_tree`) before relying on the copy you were given.
+(not its frontmatter), add notes with their default status, lock a note, add footnotes, and
+comment on and suggest changes to a note's text in the tree view, so re-read a note before
+changing it, and the tree (`rft_tree`) before relying on the copy you were given.

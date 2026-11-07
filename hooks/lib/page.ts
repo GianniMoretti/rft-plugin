@@ -5,7 +5,7 @@
 import type { Tree } from './vault'
 import { bodyOf, conceptOrder, tagCounts } from './vault'
 
-export type PageAssets = { html: string; css: string; js: string; d3: string; katex: string; katexCss: string; filters: string; layout: string; concepts: string; theme: string }
+export type PageAssets = { html: string; css: string; js: string; d3: string; katex: string; katexCss: string; filters: string; layout: string; concepts: string; markdown: string; theme: string }
 
 export const ASSET_PATHS = {
   html: 'web/index.html',
@@ -14,6 +14,7 @@ export const ASSET_PATHS = {
   filters: 'web/filters.js',
   layout: 'web/layout.js',
   concepts: 'web/concepts.js',
+  markdown: 'web/markdown.js',
   theme: 'web/theme.js',
   d3: 'web/vendor/d3.v7.9.0.min.js',
   katex: 'web/vendor/katex.v0.16.22.min.js',
@@ -28,10 +29,11 @@ export const treeJson = (tree: Tree, project: string, version: string) => ({
 
 const script = (code: string) => `<script>${code.replace(/<\/script/gi, '<\\/script')}</script>`
 
-export function staticPage(a: PageAssets, tree: Tree, texts: Record<string, string>, project: string, version: string): string {
+/** `comments`: each note's threads, placed in its body as the server's api/note places them, shown read-only. */
+export function staticPage(a: PageAssets, tree: Tree, texts: Record<string, string>, project: string, version: string, comments: Record<string, unknown[]> = {}): string {
   const bodies: Record<string, string> = {}
   for (const id of Object.keys(tree.nodes)) bodies[id] = bodyOf(texts[id] ?? '')
-  const data = JSON.stringify({ tree: treeJson(tree, project, version), bodies }).replace(/</g, '\\u003c')
+  const data = JSON.stringify({ tree: treeJson(tree, project, version), bodies, comments }).replace(/</g, '\\u003c')
   // function replacements: the inlined code may hold `$&` and the like
   return a.html
     .replace(/<script src="theme\.js" data-rft-inline><\/script>/, () => script(a.theme))
@@ -42,5 +44,6 @@ export function staticPage(a: PageAssets, tree: Tree, texts: Record<string, stri
     .replace(/<script src="filters\.js" data-rft-inline><\/script>/, () => script(a.filters))
     .replace(/<script src="layout\.js" data-rft-inline><\/script>/, () => script(a.layout))
     .replace(/<script src="concepts\.js" data-rft-inline><\/script>/, () => script(a.concepts))
+    .replace(/<script src="markdown\.js" data-rft-inline><\/script>/, () => script(a.markdown))
     .replace(/<script src="app\.js" data-rft-inline><\/script>/, () => script(`window.RFT_DATA = ${data};`) + script(a.js))
 }
