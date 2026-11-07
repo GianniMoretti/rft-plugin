@@ -113,3 +113,26 @@ index is rebuilt after every edit.
   markdown notes.
 
 Done when: scoped in a design note first; the implementation follows from it.
+
+---
+
+## Backlog
+
+Ideas for possible future work, not scheduled in a package yet.
+
+- **Answer threads in a subagent.** Today **Ask Claude** submits the thread as a turn of the
+  session that ran `/rft` (`askFromView` queues it, `submitPending` calls `$.prompt.submit`),
+  so every answer adds rows to the main chat. Instead, start a background subagent with
+  `$.agent.spawn({ prompt: askText(...) })`, perhaps of a type of the plugin's own
+  (`$.agent.register`, hidden from the model with `agent.offer`), and toast when its
+  `turn.complete` arrives. The answer lands in the thread, as now. Unlike `/btw`, it needs tools
+  (`rft_comment`, `rft_suggest`, Edit). The prompt from `askText` already holds what the
+  subagent needs, so a fresh agent should do; a fork would also see the conversation. It would
+  also start at once, without waiting for the session to be idle.
+  To check first: whether the finished subagent still leaves a task notification in the main
+  chat (if so, drop it in a `prompt.submit` hook); whether it gets the plugin's tools; whether
+  its Edit of an unlocked note is refused when it cannot ask for permission (the lock guard, a
+  `tool.call` hook, holds in subagents too); and what two asks on one note at once should do.
+
+  Done when: Ask Claude on a comment and on a suggestion each answer in the thread, and the
+  main transcript (ctrl+o) shows no new row.
