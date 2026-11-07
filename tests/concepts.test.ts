@@ -9,7 +9,7 @@ import '../web/filters.js'
 
 import { conceptsReport, groupedTree, setConcept } from '../hooks/lib/ops'
 import { treeJson } from '../hooks/lib/page'
-import { ROOT_CONCEPT, front, load, readConfig, validate } from '../hooks/lib/vault'
+import { ROOT_CONCEPT, conceptPath, front, load, readConfig, validate } from '../hooks/lib/vault'
 import { D00, D01, E01, E02, MemoryFs, demoFiles } from './fixture'
 
 /** Adds `concept:` (and a summary) to a note of the fixture, after its tags. */
@@ -26,6 +26,9 @@ const nested = () => {
   withConcept(files, `vault/directions/${D01}.md`, 'Variants')
   return files
 }
+
+// the same, with the root note D00 starting a concept too
+const rooted = () => withConcept(nested(), `vault/directions/${D00}.md`, 'Feature geometry', 'The whole study')
 
 const loadFrom = async (files: Record<string, string>) => {
   const fs = new MemoryFs(files)
@@ -107,6 +110,51 @@ describe('concepts in the vault', () => {
       `… ${E02}`,
     ].join('\n'))
   })
+
+  test('a concept on the only root note is the root concept, with no project level above it', async () => {
+    const { loaded } = await loadFrom(rooted())
+    const c = loaded.tree.concepts!
+    expect(Object.keys(c).sort()).toEqual(['D01', 'E01', 'root'])
+    expect(c.root).toMatchObject({ name: 'Feature geometry', summary: 'The whole study', root: 'D00', parent: null, depth: 0, children: ['E01'], count: 1, total: 4 })
+    expect(c.E01).toMatchObject({ parent: 'root', depth: 1 })
+    expect(c.D01).toMatchObject({ parent: 'E01', depth: 2 })
+    expect(loaded.tree.nodes.D00!.concept).toBe(ROOT_CONCEPT)
+    expect(conceptPath(c, 'D01').map(id => c[id]!.name)).toEqual(['Feature geometry', 'Checks', 'Variants'])
+    const report = conceptsReport(loaded)
+    expect(report.startsWith('3 concept(s)')).toBe(true)
+    expect(report).toContain('\n- Feature geometry [@D00] 1 note(s) (+3 in sub-concepts)')
+    expect(report).toContain('\n  - Checks [@E01] 1 note(s)')
+    expect(report).not.toContain('project root')
+    expect(groupedTree(loaded.tree).split('\n').filter(l => l.startsWith('## '))).toEqual([
+      '## Feature geometry (from D00) — The whole study',
+      '## Feature geometry › Checks (from E01) — The first checks',
+      '## Feature geometry › Checks › Variants (from D01)',
+    ])
+  })
+
+  test('with a second root note, the project level stays above the root note\'s concept', async () => {
+    const files = rooted()
+    // E02 points at a parent that does not exist: a second root
+    files[`vault/experiments/${E02}.md`] = files[`vault/experiments/${E02}.md`]!.replace(/^parent: .*$/m, 'parent: "[[X99 Gone]]"')
+    const { loaded } = await loadFrom(files)
+    const c = loaded.tree.concepts!
+    expect(loaded.tree.roots).toEqual(['D00', 'E02'])
+    expect(c.root).toMatchObject({ name: 'demo', root: null, children: ['D00'], count: 1, total: 4 })
+    expect(c.D00).toMatchObject({ name: 'Feature geometry', parent: 'root', depth: 1 })
+    expect(conceptPath(c, 'D01')).toEqual(['root', 'D00', 'E01', 'D01'])
+  })
+
+  test('rft_set_concept on the root note sets, renames and removes the root concept', async () => {
+    const { fs, io, loaded } = await loadFrom(nested())
+    const path = `vault/directions/${D00}.md`
+    expect(await setConcept(io, loaded, 'D00', 'Feature geometry')).toBe('D00 Does the thing work now starts the concept "Feature geometry". It holds 1 note(s) (4 with its sub-concepts). Ask the user whether code for this line of research already exists on this machine, and where; if so, link it with rft_set_repos (never guess a path).')
+    expect(front(fs.read(path)).concept).toBe('"Feature geometry"')
+    expect(loaded.tree.concepts!.root!.name).toBe('Feature geometry')
+    expect(await setConcept(io, loaded, 'D00', 'Geometry')).toContain('concept "Feature geometry" renamed to "Geometry". It holds 1 note(s)')
+    expect(await setConcept(io, loaded, 'D00', null)).toContain('no longer starts the concept "Geometry"')
+    expect(front(fs.read(path)).concept).toBeUndefined()
+    expect(loaded.tree.concepts!.root).toMatchObject({ name: 'demo', root: null, children: ['E01'] })
+  })
 })
 
 type Node = { id: string; parent: string | null; children: string[]; concept: string; status: string; type: string; date: string; tags: string[]; conceptPath?: string[] }
@@ -181,5 +229,16 @@ describe('concepts in the web view', () => {
     const tree = await apiTree()
     expect([...CW.subtree(tree, 'D01')].sort()).toEqual(['D01', 'D02', 'E02'])
     expect(CW.pathOf(CW.annotate(tree) as Map<string, unknown>, 'D01')).toEqual(['root', 'E01', 'D01'])
+  })
+
+  test('with a concept on the root note, a concept path starts at that concept', async () => {
+    const { loaded } = await loadFrom(rooted())
+    const tree = treeJson(loaded.tree, 'demo', 'v1') as unknown as Tree
+    const concepts = CW.annotate(tree) as Map<string, { name: string }>
+    const names = (id: string) => CW.pathOf(concepts, id).map(c => concepts.get(c)!.name)
+    expect(names('D01')).toEqual(['Feature geometry', 'Checks', 'Variants'])
+    expect(tree.nodes.find(n => n.id === 'D00')!.conceptPath).toEqual(['root'])
+    // the root concept covers every note: no colour, like the project root
+    expect(CW.colourOf(concepts, 'root')).toBeNull()
   })
 })

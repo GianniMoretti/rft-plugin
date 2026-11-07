@@ -2,17 +2,23 @@
 """The rft web view's server: local, standard library only.
 
 Serves the page (web/), the tree of the vault as JSON, and the text of one note at a time, and
-writes one thing: the body of a note, its frontmatter kept as it is. A new note it never writes
-itself: it asks the session that runs it, with a line `RFT_ADD_NODE {"parent", "type", "title"}`
-on stdout, and the plugin makes it as the rft_add_node tool does (no model turn), then answers
-the new id once the note is on disk. It binds 127.0.0.1 only, takes requests only for a loopback
+writes one thing: the body of a note, its frontmatter kept as it is. A new note, or a note's new type, 
+it never writes itself: it asks the session that runs it, with a
+line `RFT_ADD_NODE {"parent", "type", "title"}` or `RFT_SET_TYPE {"id", "type"}` on stdout, and the
+plugin makes the change as the rft_add_node or rft_set_type tool does (no model turn), then answers
+the note's id once it is on disk. It binds 127.0.0.1 only, takes requests only for a loopback
 host name (so a web page elsewhere cannot reach it through DNS rebinding), serves nothing but an
 allow-list of page files, and reads or writes a note only by its id, in a markdown file that
 resolves inside one of the vault's note folders (experiments/, directions/, references/,
-theory/). A write (PUT api/note, POST api/node) must also come from the page itself (its
+theory/). AA write (PUT api/note, POST api/node, POST api/type) must also come from the page itself (its
 Origin) and carry the vault's key, which is in the address the server prints, so neither
 another web page nor another user of the machine can change a note. The key is kept in the
 user's cache, readable by them alone, so it stays the same across restarts.
+
+It also serves the images a note embeds (GET api/image?note=<id>&src=<as written>), found as
+Obsidian finds them: by path, from the note's folder or the vault's top, else by name, nearest
+the note, in the vault and then in the Obsidian vault around it (the folder that holds
+`.obsidian/`). Only image files, and one outside the vault only for a request carrying the key.
 
     python3 rft_server.py --vault /abs/project/vault --web /abs/plugin/web [--port 0] [--project NAME]
 
@@ -51,8 +57,12 @@ PAGE_FILES = {
     "/filters.js": ("filters.js", "text/javascript; charset=utf-8"),
     "/layout.js": ("layout.js", "text/javascript; charset=utf-8"),
     "/concepts.js": ("concepts.js", "text/javascript; charset=utf-8"),
+    "/theme.js": ("theme.js", "text/javascript; charset=utf-8"),
     "/vendor/d3.v7.9.0.min.js": ("vendor/d3.v7.9.0.min.js", "text/javascript; charset=utf-8"),
     "/vendor/LICENSE-d3.txt": ("vendor/LICENSE-d3.txt", "text/plain; charset=utf-8"),
+    "/vendor/katex.v0.16.22.min.js": ("vendor/katex.v0.16.22.min.js", "text/javascript; charset=utf-8"),
+    "/vendor/katex.v0.16.22.min.css": ("vendor/katex.v0.16.22.min.css", "text/css; charset=utf-8"),
+    "/vendor/LICENSE-katex.txt": ("vendor/LICENSE-katex.txt", "text/plain; charset=utf-8"),
 }
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 ID_RE = re.compile(r"^[EDRT]\d+$")
@@ -60,6 +70,16 @@ MAX_NOTE_BYTES = 2_000_000
 MAX_NODE_BYTES = 10_000
 NODE_WAIT_S = 10.0  # how long a new note may take the session to make
 SETTLE_S = 0.3  # how long the notes stay as they are before a new one counts as made
+IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+               ".webp": "image/webp", ".avif": "image/avif", ".bmp": "image/bmp", ".svg": "image/svg+xml"}
+MAX_IMAGE_BYTES = 50_000_000
+RESCAN_S = 5.0  # a name not found looks through the folders again at most this often
+MAX_SCAN_FILES = 2_000_000  # the most files a search by name looks through
+SKIP_DIRS = {"node_modules", "__pycache__"}  # with every dot folder: never searched by name
+PAGE_CSP = ("default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; "
+            "connect-src 'self'; frame-ancestors 'self'")
+# an image runs nothing, even an SVG opened on its own
+IMAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
 
 
 # ------------------------------------------------------------------ the vault
@@ -134,25 +154,57 @@ def unquote(value: str | None) -> str:
     return v.strip()
 
 
+def parse_repos(value: str | None) -> list[str]:
+    """The paths of a `concept_repos:` value, a one-line list: `["/a/b", "../c"]` (or YAML's
+    `['/a/b', ../c]`). Commas alone separate: a path may hold spaces."""
+    v = (value or "").strip()
+    if not v:
+        return []
+    items: list = []
+    try:
+        x = json.loads(v)
+        items = [p for p in x if isinstance(p, str)] if isinstance(x, list) else [x] if isinstance(x, str) else []
+    except ValueError:
+        items = (v[1:-1] if v.startswith("[") and v.endswith("]") else v).split(",")
+    out: list[str] = []
+    for p in items:
+        p = unquote(p)
+        if p and p not in out:
+            out.append(p)
+    return out
+
+
 def compute_concepts(nodes: dict[str, dict], roots: list[str], project: str,
-                     decl: dict[str, tuple[str, str]]) -> list[dict]:
+                     decl: dict[str, tuple], root_repos: dict[str, list[str]] | None = None) -> list[dict]:
     """Concepts, inherited down the tree: a note belongs to its nearest ancestor (or itself)
     declaring `concept:`, else to the project root concept. Sets each node's `concept` and
-    returns the concepts depth first, the root concept first."""
-    def make(cid, name, summary, root, parent, depth):
+    returns the concepts depth first, the root concept first. When the only root note declares
+    a concept, that concept is the root one: the project above it would hold no note.
+    `decl`: name, summary and, optionally, the repos (`concept_repos:`) per declaring note;
+    `root_repos`: the repos of notes that declare no concept, which count on the only root note
+    alone, as the project's."""
+    def make(cid, name, summary, root, parent, depth, repos=()):
         return {"id": cid, "name": name, "summary": summary, "root": root, "parent": parent, "children": [],
-                "depth": depth, "count": 0, "total": 0, "statuses": {}}
+                "depth": depth, "count": 0, "total": 0, "statuses": {}, "repos": list(repos)}
 
-    concepts = {ROOT_CONCEPT: make(ROOT_CONCEPT, project, "", None, None, 0)}
+    def parts(d):
+        return d[0], d[1], (list(d[2]) if len(d) > 2 else [])
+
+    only = roots[0] if len(roots) == 1 and roots[0] in nodes else None
+    top = only if only in decl else None
+    if top:
+        concepts = {ROOT_CONCEPT: make(ROOT_CONCEPT, *parts(decl[top])[:2], top, None, 0, parts(decl[top])[2])}
+    else:
+        concepts = {ROOT_CONCEPT: make(ROOT_CONCEPT, project, "", None, None, 0, (root_repos or {}).get(only, []))}
     stack = [(r, ROOT_CONCEPT) for r in reversed(roots)]
     while stack:
         nid, current = stack.pop()
         n = nodes.get(nid)
         if n is None:
             continue
-        if nid in decl:
-            name, summary = decl[nid]
-            concepts[nid] = make(nid, name, summary, nid, current, concepts[current]["depth"] + 1)
+        if nid in decl and nid != top:
+            name, summary, repos = parts(decl[nid])
+            concepts[nid] = make(nid, name, summary, nid, current, concepts[current]["depth"] + 1, repos)
             concepts[current]["children"].append(nid)
             current = nid
         n["concept"] = current
@@ -180,6 +232,23 @@ def link_target(value: str | None) -> str | None:
 
 def link_targets(value: str | None) -> list[str]:
     return [m.strip() for m in re.findall(r"\[\[([^\]|#]+)", value or "")]
+def obsidian_root(folder: Path) -> Path | None:
+    """The Obsidian vault the folder is in: the nearest folder, itself or above, holding `.obsidian/`."""
+    return next((d for d in (folder, *folder.parents) if (d / ".obsidian").is_dir()), None)
+
+
+def is_image(path: Path) -> bool:
+    return path.suffix.lower() in IMAGE_TYPES
+
+
+def distance(a: Path, b: Path) -> int:
+    """The steps from folder `a` to folder `b`: up to their common folder, then down."""
+    common = 0
+    for x, y in zip(a.parts, b.parts):
+        if x != y:
+            break
+        common += 1
+    return len(a.parts) + len(b.parts) - 2 * common
 
 
 class Vault:
@@ -192,9 +261,14 @@ class Vault:
         self.ident = hashlib.sha256(str(self.root).encode()).hexdigest()[:16]
         self._lock = threading.Lock()
         self._write_lock = threading.Lock()
-        self._add_lock = threading.Lock()
+        self._ask_lock = threading.Lock()
         self._sig: str | None = None
         self._tree: dict | None = None
+        # the folders an image is searched in by name: the vault, then the Obsidian vault around it
+        outer = obsidian_root(self.root)
+        self.image_tops = [self.root] + ([outer] if outer and outer != self.root else [])
+        self._names: dict[Path, tuple[float, dict[str, list[tuple[str, str]]]]] = {}
+        self._names_lock = threading.Lock()
 
     def signature(self) -> str:
         parts = []
@@ -219,7 +293,8 @@ class Vault:
         refs: dict[str, str | None] = {}
         origins: dict[str, list[str]] = {}
         refs_of: dict[str, list[str]] = {}
-        decl: dict[str, tuple[str, str]] = {}
+        decl: dict[str, tuple[str, str, list[str]]] = {}
+        repos_only: dict[str, list[str]] = {}
         for sub, kind in SUBDIRS.items():
             d = self.root / sub
             if not d.is_dir():
@@ -244,9 +319,13 @@ class Vault:
                 if pdf:
                     nodes[nid]["pdf"] = pdf
                 cname = unquote(fm.get("concept"))
+                repos = parse_repos(fm.get("concept_repos"))
                 if cname:
-                    decl[nid] = (cname, unquote(fm.get("concept_summary")))
+                    decl[nid] = (cname, unquote(fm.get("concept_summary")), repos)
+                elif repos:
+                    repos_only[nid] = repos
         by_name = {n["name"]: n["id"] for n in nodes.values()}
+
         def ids(names):
             return [i for i in (by_name.get(r) or (id_of(r) if id_of(r) in nodes else None) for r in names) if i]
 
@@ -280,7 +359,7 @@ class Vault:
             for t in n["tags"]:
                 counts[t] = counts.get(t, 0) + 1
         tags = [{"tag": t, "count": c} for t, c in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
-        concepts = compute_concepts(nodes, roots, self.project, decl)
+        concepts = compute_concepts(nodes, roots, self.project, decl, repos_only)
         return {"project": self.project, "version": sig, "nodes": list(nodes.values()), "roots": roots, "tags": tags,
                 "concepts": concepts}
 
@@ -315,6 +394,72 @@ class Vault:
         return {"id": nid, "name": path.name[:-3], "body": body_of(data.decode("utf-8", errors="replace")),
                 "version": version_of(data)}
 
+    def inside(self, path: Path) -> bool:
+        return self.root in path.parents
+
+    def image(self, nid: str, src: str) -> Path | None:
+        """The image file note `nid` embeds as `src` (`![[src]]` or `![](src)`), resolved, as
+        Obsidian finds it: a path on disk; else from the note's folder, the vault's top or the
+        Obsidian vault's; else by name, the file whose path ends as `src` does that lies nearest
+        the note, first in the vault, then in the Obsidian vault. None when there is none."""
+        note = self.note_path(nid)
+        src = (src or "").strip()
+        if note is None or not src or "\x00" in src or len(src) > 4096:
+            return None
+        if src.lower().startswith("file://"):
+            src = src[len("file://"):]
+        if not is_image(Path(src)):
+            return None
+        inner = src.lstrip("/")  # Obsidian reads `/a.png` from its vault's top
+        tries = ([Path(src)] if Path(src).is_absolute() else []) + [note.parent / inner, *(t / inner for t in self.image_tops)]
+        parts = [p for p in Path(inner).parts if p not in (".", "..")]
+        try:
+            found = next((p for p in tries if p.is_file()), None)
+            for top in self.image_tops if parts else ():
+                found = found or self._by_name(top, parts, note.parent)
+            path = found.resolve() if found else None
+        except OSError:  # a name too long, a folder it may not read
+            return None
+        # a link named .png that leads to anything else is not an image
+        return path if path and is_image(path) else None
+
+    def _by_name(self, top: Path, parts: list[str], near: Path) -> Path | None:
+        """The image under `top` whose path ends in `parts`, nearest folder `near`."""
+        want = [p.lower() for p in parts]
+        for fresh in (False, True):
+            hits = []
+            for folder, name in self._image_names(top, fresh).get(want[-1], []):
+                f = Path(folder)
+                tail = f.parts[len(f.parts) - (len(want) - 1):] if len(want) > 1 else ()
+                if [x.lower() for x in tail] == want[:-1] and (f / name).is_file():
+                    hits.append(f / name)
+            if hits:
+                return min(hits, key=lambda p: (distance(near, p.parent), str(p)))
+        return None
+
+    def _image_names(self, top: Path, fresh: bool) -> dict[str, list[tuple[str, str]]]:
+        """The image files under `top` by lowercase name, kept until a name is not found
+        (`fresh`): then looked for again, in the vault at once (an image just pasted), in the
+        Obsidian vault, often far larger, once the last look is older than RESCAN_S. Dot
+        folders, SKIP_DIRS and links to folders are left out."""
+        with self._names_lock:
+            kept = self._names.get(top)
+            wait = 0 if top == self.root else RESCAN_S
+            if kept and (not fresh or time.monotonic() - kept[0] < wait):
+                return kept[1]
+            names: dict[str, list[tuple[str, str]]] = {}
+            seen = 0
+            for folder, dirs, files in os.walk(top):
+                dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in SKIP_DIRS)
+                for f in files:
+                    if os.path.splitext(f)[1].lower() in IMAGE_TYPES:
+                        names.setdefault(f.lower(), []).append((folder, f))
+                seen += len(files)
+                if seen > MAX_SCAN_FILES:
+                    break
+            self._names[top] = (time.monotonic(), names)
+            return names
+
     def write_body(self, nid: str, body: str, version: str | None) -> tuple[int, dict]:
         """Replaces a note's body, keeping its frontmatter byte for byte. Refused, with the note as
         it is now, when the file changed since `version` (None: write anyway)."""
@@ -348,6 +493,24 @@ class Vault:
                 tmp.unlink(missing_ok=True)
         return 200, {"id": nid, "version": version_of(out)}
 
+    def _wait(self, found) -> dict | None:
+        """The note `found` picks out of the tree's nodes once the session has made the change,
+        answered once the notes are quiet; None when NODE_WAIT_S passes first."""
+        deadline = time.monotonic() + NODE_WAIT_S
+        while time.monotonic() < deadline:
+            time.sleep(0.1)
+            n = found(self.tree()["nodes"])
+            if n:
+                # the session goes on to write the notes' derived fields, the new one's `up:` too:
+                # answered once the notes are quiet, so the page opens the note as it then stays
+                sig, quiet = self.signature(), time.monotonic()
+                while time.monotonic() - quiet < SETTLE_S and time.monotonic() < deadline:
+                    time.sleep(0.1)
+                    if (now := self.signature()) != sig:
+                        sig, quiet = now, time.monotonic()
+                return n
+        return None
+
     def add_node(self, parent: str, kind: str, title: str, ask) -> tuple[int, dict]:
         """A new note under `parent`, made by the session: `ask` hands it the request, and the
         answer is the note's id once it is on disk. One request at a time, so each finds its own."""
@@ -355,37 +518,61 @@ class Vault:
             return 400, {"error": f"type must be one of {', '.join(TYPES)}"}
         if not re.search(r"\w", title):
             return 400, {"error": "the title needs a letter or a digit"}
-        with self._add_lock:
+        with self._ask_lock:
             before = {n["id"] for n in self.tree()["nodes"]}
             if parent not in before:
                 return 404, {"error": "no such parent note"}
             try:
-                ask({"parent": parent, "type": kind, "title": title})
+                ask("RFT_ADD_NODE", {"parent": parent, "type": kind, "title": title})
             except (OSError, ValueError):
                 return 503, {"error": "the Claude Code session that ran /rft is gone"}
-            deadline = time.monotonic() + NODE_WAIT_S
-            while time.monotonic() < deadline:
-                time.sleep(0.1)
-                new = [n for n in self.tree()["nodes"]
-                       if n["id"] not in before and n["parent"] == parent and n["type"] == kind]
-                if new:
-                    n = next((n for n in new if n["title"] == " ".join(title.split())), new[0])
-                    # the session goes on to write the notes' derived fields, the new one's `up:` too:
-                    # answered once the notes are quiet, so the page opens the note as it then stays
-                    sig, quiet = self.signature(), time.monotonic()
-                    while time.monotonic() - quiet < SETTLE_S and time.monotonic() < deadline:
-                        time.sleep(0.1)
-                        if (now := self.signature()) != sig:
-                            sig, quiet = now, time.monotonic()
-                    return 201, {"id": n["id"], "name": n["name"]}
+
+            def found(nodes):
+                new = [n for n in nodes if n["id"] not in before and n["parent"] == parent and n["type"] == kind]
+                return next((n for n in new if n["title"] == " ".join(title.split())), new[0]) if new else None
+
+            n = self._wait(found)
+            if n:
+                return 201, {"id": n["id"], "name": n["name"]}
         return 504, {"error": f"the Claude Code session did not add the note within {NODE_WAIT_S:g} s; "
                               "it may still appear (is the session that ran /rft still open?)"}
+    
+    def set_type(self, nid: str, kind: str, ask) -> tuple[int, dict]:
+        """A note's type changed by the session, which gives it the next id of the type, moves its
+        file and renames the links to it: the answer is the new id once the old note is gone."""
+        if kind not in TYPES:
+            return 400, {"error": f"type must be one of {', '.join(TYPES)}"}
+        with self._ask_lock:
+            before = {n["id"]: n for n in self.tree()["nodes"]}
+            old = before.get(nid)
+            if old is None:
+                return 404, {"error": "no such note"}
+            if old["type"] == kind:
+                return 400, {"error": f"the note is already of type {kind}"}
+            if old["parent"] is None and kind != "direction":
+                return 400, {"error": "the root of the tree stays a direction"}
+            try:
+                ask("RFT_SET_TYPE", {"id": nid, "type": kind})
+            except (OSError, ValueError):
+                return 503, {"error": "the Claude Code session that ran /rft is gone"}
+
+            def found(nodes):
+                if any(n["id"] == nid for n in nodes):
+                    return None
+                return next((n for n in nodes if n["id"] not in before and n["type"] == kind
+                             and n["title"] == old["title"]), None)
+
+            n = self._wait(found)
+            if n:
+                return 200, {"id": n["id"], "name": n["name"]}
+        return 504, {"error": f"the Claude Code session did not change the note's type within {NODE_WAIT_S:g} s; "
+                              "it may still change (is the session that ran /rft still open?)"}
 
 
     def move_node(self, nid: str, parent: str, ask) -> tuple[int, dict]:
         """Moves a note and its subtree under `parent`, done by the session as for add_node; the
         answer comes once the note's parent is the new one and the notes are quiet."""
-        with self._add_lock:
+        with self._ask_lock:
             nodes = {n["id"]: n for n in self.tree()["nodes"]}
             if nid not in nodes or parent not in nodes:
                 return 404, {"error": "no such note"}
@@ -399,7 +586,7 @@ class Vault:
                     return 400, {"error": "a note cannot move under its own subtree"}
                 p = nodes[p]["parent"] if p in nodes else None
             try:
-                ask({"op": "move", "id": nid, "parent": parent})
+                ask("RFT_MOVE_NODE", {"id": nid, "parent": parent})
             except (OSError, ValueError):
                 return 503, {"error": "the Claude Code session that ran /rft is gone"}
             deadline = time.monotonic() + NODE_WAIT_S
@@ -417,13 +604,10 @@ class Vault:
                               "is the session that ran /rft still open?"}
 
 
-def ask_session(request: dict) -> None:
-    """Hands a request to the plugin, which reads this process's stdout line by line: a move
-    ({"op": "move", ...}) or a new note."""
-    if request.get("op") == "move":
-        print(f"RFT_MOVE_NODE {json.dumps({k: v for k, v in request.items() if k != 'op'})}", flush=True)
-    else:
-        print(f"RFT_ADD_NODE {json.dumps(request)}", flush=True)
+
+def ask_session(verb: str, request: dict) -> None:
+    """Hands a request to the plugin, which reads this process's stdout line by line."""
+    print(f"{verb} {json.dumps(request)}", flush=True)
 
 
 # ------------------------------------------------------------------ http
@@ -446,12 +630,43 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
-            self.send_header("Content-Security-Policy",
-                             "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-                             "connect-src 'self'; frame-ancestors 'self'")
+            self.send_header("Content-Security-Policy", PAGE_CSP)
             self.end_headers()
             if not head_only:
                 self.wfile.write(body)
+
+        def _image(self, q: dict, head_only: bool):
+            """GET api/image?note=<id>&src=<as the note writes it>[&token=<key>]: the image, when
+            it is in the vault or the request carries the key. Without the key, an image that is
+            not in the vault is refused whether it exists or not, so nothing outside can be probed."""
+            one = lambda k: (q.get(k) or [""])[0]
+            path = vault.image(one("note"), one("src"))
+            keyed = bool(token) and secrets.compare_digest(one("token").encode(), token.encode())
+            if path is None or not (keyed or vault.inside(path)):
+                if keyed:
+                    return self._send(404, b"no such image", "text/plain", head_only)
+                return self._send(403, b"not in the vault: an image from elsewhere needs the key in the address /rft printed",
+                                  "text/plain; charset=utf-8", head_only)
+            try:
+                st = path.stat()
+                if st.st_size > MAX_IMAGE_BYTES:
+                    return self._send(413, b"the image is too large", "text/plain", head_only)
+                # the browser asks again each time, and the image comes again only once it changed
+                tag = f'"{st.st_mtime_ns:x}-{st.st_size:x}"'
+                same = self.headers.get("If-None-Match") == tag
+                data = b"" if head_only or same else path.read_bytes()
+            except OSError:
+                return self._send(404, b"no such image", "text/plain", head_only)
+            self.send_response(304 if same else 200)
+            if not same:
+                self.send_header("Content-Type", IMAGE_TYPES[path.suffix.lower()])
+                self.send_header("Content-Length", str(len(data) if data else st.st_size))
+            for k, v in (("Cache-Control", "private, no-cache"), ("ETag", tag), ("X-Content-Type-Options", "nosniff"),
+                         ("Referrer-Policy", "no-referrer"), ("Content-Security-Policy", IMAGE_CSP)):
+                self.send_header(k, v)
+            self.end_headers()
+            if data:
+                self.wfile.write(data)
 
         def _json(self, status: int, obj, head_only=False):
             self._send(status, json.dumps(obj, ensure_ascii=False).encode(), "application/json; charset=utf-8", head_only)
@@ -483,6 +698,8 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 nid = (parse_qs(url.query).get("id") or [""])[0]
                 note = vault.note(nid)
                 return self._json(200, note, head_only) if note else self._json(404, {"error": "no such note"}, head_only)
+            if route == "/api/image":
+                return self._image(parse_qs(url.query), head_only)
             if route == "/api/paper":
                 path = vault.paper((parse_qs(url.query).get("id") or [""])[0])
                 if path is None:
@@ -541,9 +758,10 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             return self._json(*vault.write_body(nid, req["body"], version))
 
         def do_POST(self):
-            """POST api/node {"parent": "<id>", "type": one of TYPES, "title": "..."}:
-            a new note under `parent`, with the default status, made by the session.
-            POST api/move {"id": "<id>", "parent": "<id>"}: the note and its subtree under `parent`."""
+            """POST api/node {"parent": "<id>", "type": one of TYPES, "title": "..."}: a new note
+            under `parent`, with the default status; POST api/type {"id": "<id>", "type": one of
+            TYPES}: the note's type changed; POST api/move {"id": "<id>", "parent": "<id>"}: the note
+            and its subtree under `parent`. The session makes each."""
             if urlsplit(self.path).path == "/api/move":
                 got = self._write_request("/api/move", MAX_NODE_BYTES)
                 if got is None:
@@ -552,6 +770,14 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 if not all(isinstance(req.get(k), str) for k in ("id", "parent")):
                     return self._json(400, {"error": "expected {id, parent}"})
                 return self._json(*vault.move_node(req["id"], req["parent"], ask))
+            if urlsplit(self.path).path == "/api/type":
+                got = self._write_request("/api/type", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                _, req = got
+                if not all(isinstance(req.get(k), str) for k in ("id", "type")):
+                    return self._json(400, {"error": "expected {id, type}"})
+                return self._json(*vault.set_type(req["id"], req["type"], ask))
             got = self._write_request("/api/node", MAX_NODE_BYTES)
             if got is None:
                 return

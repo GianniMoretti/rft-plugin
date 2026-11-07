@@ -1,8 +1,10 @@
-// rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-concepts, /rft-rebalance, /rft-view), the model's
-// tools (rft_add_node, rft_set_status, rft_move_node, rft_set_refs, rft_search, rft_collect_papers, rft_set_tags, rft_tags, rft_tree, rft_validate, rft_sync), the operating rules
+// rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-concepts, /rft-literature, /rft-rebalance,
+// /rft-view), the model's tools (rft_add_node, rft_set_status, rft_move_node, rft_set_refs, rft_search,
+// rft_collect_papers, rft_set_tags, rft_set_type, rft_set_concept, rft_concepts, rft_set_repos, rft_code,
+// rft_set_code, rft_tags, rft_tree, rft_validate, rft_sync), the operating rules
 // injected into the system prompt, the outline pane, and the web view: /rft starts a local
 // server (server/rft_server.py) for the interactive tree page (web/), and makes the notes that
-// page adds or moves (addFromView, moveFromView). Everything is
+// page adds, retypes or moves (fromView). Everything is
 // inert without `.rft/config.json` in the session's folder or a folder above it; that config
 // may be a link (`{"tree": "../notes"}`) to a tree kept elsewhere.
 
@@ -10,7 +12,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { RftSnapshot } from '../types'
-import { addNode, conceptsReport, exportHtml, initVault, loadActive, moveNode, rulesText, setConcept, setRefs, setStatus, setTags, tagsReport, today, treeReport } from './lib/ops'
+import type { CodeEnv, Git } from './lib/ops'
+import { addNode, codeReport, conceptsReport, exportHtml, initVault, loadActive, moveNode, rulesText, setCode, setConcept, setRefs, setRepos, setStatus, setTags, setType, tagsReport, today, treeReport } from './lib/ops'
 import { ASSET_PATHS } from './lib/page'
 import type { Config, Io, Loaded, NodeType, Tree } from './lib/vault'
 import { OPEN_HOSTS, planPapers } from './lib/papers'
@@ -32,6 +35,11 @@ const ioOf = ($: EngineInterface): Io => ({
   write: (path, text) => $.fs.write(path, text),
   list: path => $.fs.list(path),
   exists: path => $.fs.exists(path),
+  remove: async path => {
+    const argv = /^[A-Za-z]:/.test(path) ? ['cmd', '/c', 'del', '/f', '/q', path.replace(/\//g, '\\')] : ['rm', '-f', '--', path]
+    const r = await $.process.run(argv)
+    if (r.exitCode !== 0 || (await $.fs.exists(path))) throw new Error(r.stderr.trim() || `${argv[0]} left the file in place`)
+  },
 })
 
 /** The tree a session works on: its files and folder, the link that led there, the session's folder. */
@@ -64,7 +72,7 @@ const treeOf = (s: RftSnapshot): Tree => ({ nodes: s.nodes, roots: s.roots, conc
 const TOOLS = {
   rft_add_node: {
     description:
-      'Add a node to the reasoning tree: an experiment (something run or computed), a direction (an idea, question or hypothesis, rejected ones included), a reference (a paper, method or literature review that was read, summarised and commented, with a source that can be checked) or a theory note (a definition, method, taxonomy or argument of the project\'s own, built on the other notes). Assigns the next free id, sanitises the title, writes the note from the template, links it under its parent and regenerates the index and canvas. Create an experiment BEFORE launching it (status planned or running).',
+      'Add a node to the reasoning tree: an experiment (something run or computed), a direction (an idea, question or hypothesis, rejected ones included), a reference (a paper, method or literature review that was read, summarised and commented, with a source that can be checked) or a theory note (a definition, method, taxonomy or argument of the project\'s own, built on the other notes). Assigns the next free id, sanitises the title, writes the note from the template, links it under its parent and regenerates the index and canvas. Create an experiment BEFORE launching it (status planned or running). In a concept that links code, an experiment or direction gets a ## Code section with the repos\' current commits: read the code first and pass its description as sections.Code, or write it after with rft_set_code.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -82,6 +90,40 @@ const TOOLS = {
         refs: { type: 'array', items: { type: 'string' }, description: 'Ids of the reference notes (R..) it builds on: for an experiment, the paper(s) whose setup it starts from; for a direction, the work it extends. Add missing references first.' },
       },
       required: ['type', 'title'],
+    },
+  },
+  rft_set_repos: {
+    description:
+      'Link code repositories on this machine to a concept: the folders holding the code its experiments and directions run on. Set on the note that starts the concept, or on the root note for code of the whole project. A sub-concept\'s notes work with its own repos first, then with those inherited from the concepts above. Replaces the list; an empty list removes it. Use the path the user gives; never guess one. Answers each repo\'s git state, whether sessions started there reach this tree, and the notes that now need a ## Code section (rft_set_code).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id (e.g. D04) of the note that starts the concept, or of the root note.' },
+        repos: { type: 'array', items: { type: 'string' }, description: 'Repository folders: absolute, ~/..., or relative to the tree\'s folder (the one holding .rft/). Highest priority first.' },
+      },
+      required: ['id', 'repos'],
+    },
+  },
+  rft_code: {
+    description:
+      'The code context of a note: the repos its concept links (its own first, then inherited), each one\'s branch and commit now, the commit its ## Code section was last checked against, and the commits and changed files since (uncommitted changes included). Call it before working on an experiment (planning, launching, analysing results) or relying on a note\'s code references.',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'Id (e.g. E12) or full name of the note.' } },
+      required: ['id'],
+    },
+  },
+  rft_set_code: {
+    description:
+      'Write or update the ## Code section of a note whose concept links code: how the experiment or direction relates to the code (entry points, files, functions, configs, what has to change; a short pointer for a direction), checked against the code as it is now. Records each repo\'s current commit, so rft_code can list later changes. reproduce, for an experiment with results: the commit of the run, the command and config, where the raw outputs are and how they were processed into Result. text or reproduce left out keeps what the section holds.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id (e.g. E12) or full name of the note.' },
+        text: { type: 'string', description: 'How the note relates to the code (markdown).' },
+        reproduce: { type: 'string', description: 'How to reproduce the note\'s results from the code (markdown).' },
+      },
+      required: ['id'],
     },
   },
   rft_set_status: {
@@ -159,9 +201,21 @@ const TOOLS = {
       required: ['id', 'tags'],
     },
   },
+  rft_set_type: {
+    description:
+      'Change the type of a note made with the wrong one (e.g. an experiment that is really a direction). The note gets the next free id of the new type (the old id is not reused) and moves to that type\'s folder; its text is kept, the type\'s missing sections are added, and every link to it in the vault is renamed. Regenerates the index and canvas. The root D00 stays a direction.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id (e.g. E12) or full name of the note.' },
+        type: { type: 'string', enum: NODE_TYPES, description: 'The type the note should have.' },
+      },
+      required: ['id', 'type'],
+    },
+  },
   rft_set_concept: {
     description:
-      'Make a note the start of a concept (a line of research: the note and its subtree, until a sub-concept starts), rename it, or remove it with name null. Only after the user has confirmed the concept: propose first, never apply silently.',
+      'Make a note the start of a concept (a line of research: the note and its subtree, until a sub-concept starts), rename it, or remove it with name null. Only after the user has confirmed the concept: propose first, never apply silently. For a new concept, also ask whether code for it already exists on this machine, and where (rft_set_repos).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -261,7 +315,7 @@ async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> 
   } catch (err) {
     failed.push(`reading the vault (${message(err)})`)
   }
-  if (s && config && h) rules = rulesText(treeOf(s), config, shownVault(h, config))
+  if (s && config && h) rules = rulesText(treeOf(s), config, shownVault(h, config), { cwd: h.cwd, root: h.root, home: await homeOf($) })
   // each registration on its own, so one refusal leaves the rest working
   for (const [name, spec] of Object.entries(TOOLS)) {
     if (registeredTools.has(name)) continue
@@ -328,6 +382,27 @@ const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : undefined)
 const answer = (text: string, isError = false) =>
   isError ? { isError: true as const, result: text, text } : { result: text, text }
 
+/** Git in a folder, through the host: no shell, the repo's hooks off. */
+const gitOf = ($: EngineInterface): Git => async (dir, args) => {
+  try {
+    const r = await $.process.run(['git', '-C', dir, ...args], { timeoutMs: 20000 })
+    return { ok: r.exitCode === 0, out: r.stdout, err: r.stderr }
+  } catch (err) {
+    return { ok: false, out: '', err: message(err) }
+  }
+}
+
+async function homeOf($: EngineInterface): Promise<string | undefined> {
+  try {
+    return (await $.env.get('HOME')) || undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** How the tools reach the code of the tree's concepts. */
+const codeEnv = async ($: EngineInterface, h: Here): Promise<CodeEnv> => ({ root: h.root, git: gitOf($), home: await homeOf($), date: today() })
+
 /** Runs one of the rft tools; its text is the tool's result. */
 async function runTool($: EngineInterface, name: string, i: Record<string, unknown>): Promise<string> {
   const h = await mustHere($)
@@ -344,9 +419,15 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       const node = await addNode(io, loaded, {
         type: i.type as NodeType, title: String(i.title ?? ''), parent: str(i.parent) ?? null,
         status: str(i.status), date: today(), sections, code: str(i.code), tags: strings(i.tags), refs: strings(i.refs),
-      })
+      }, await codeEnv($, h))
       return `${node.report}\nId: ${node.id}\nNote: ${join(shownVault(h, loaded.config), node.path)}`
     }
+    case 'rft_set_repos':
+      return setRepos(io, loaded, await codeEnv($, h), String(i.id ?? ''), strings(i.repos))
+    case 'rft_code':
+      return codeReport(io, loaded, await codeEnv($, h), String(i.id ?? ''))
+    case 'rft_set_code':
+      return setCode(io, loaded, await codeEnv($, h), String(i.id ?? ''), typeof i.text === 'string' ? i.text : undefined, typeof i.reproduce === 'string' ? i.reproduce : undefined)
     case 'rft_move_node':
       return moveNode(io, loaded, String(i.id ?? ''), String(i.parent ?? ''), today(), str(i.why))
     case 'rft_set_refs':
@@ -358,6 +439,8 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       return collectPapers($, h, loaded, strings(i.ids))
     case 'rft_set_tags':
       return setTags(io, loaded, String(i.id ?? ''), strings(i.tags))
+    case 'rft_set_type':
+      return setType(io, loaded, String(i.id ?? ''), String(i.type ?? ''))
     case 'rft_set_concept':
       return setConcept(io, loaded, String(i.id ?? ''), typeof i.name === 'string' ? i.name : null, typeof i.summary === 'string' ? i.summary : undefined)
     case 'rft_concepts':
@@ -369,7 +452,7 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
     case 'rft_tree':
       return treeReport(loaded, { root: str(i.root), depth: typeof i.depth === 'number' ? i.depth : undefined, vault: shownVault(h, loaded.config) })
     case 'rft_validate': {
-      const v = await validate(io, loaded)
+      const v = await validate(io, loaded, { root: h.root, home: await homeOf($) })
       const lines = [v.errors.length
         ? `FAILED: ${v.errors.length} error(s), ${v.warnings.length} warning(s).`
         : `OK: no errors, ${v.warnings.length} warning(s).`]
@@ -413,7 +496,8 @@ async function foldAll($: EngineInterface, ids: string[]): Promise<void> {
 
 // ---------------------------------------------------------------- the web view's server
 
-// the running server, one per session; a reload of the module kills the child with it
+// the running server, one per session and kept across a /clear; a reload of the module kills the
+// child with it
 let server: { url: string; stop: () => void } | null = null
 
 /** Starts the web view's server, or answers the running one's URL. */
@@ -459,8 +543,10 @@ async function spawnServer($: EngineInterface, argv: string[]): Promise<string> 
           for (const l of lines) {
             const m = /RFT_SERVER_URL (\S+)/.exec(l)
             if (m) found(m[1]!)
-            else if (l.startsWith(ADD_NODE)) void addFromView($, l.slice(ADD_NODE.length))
-            else if (l.startsWith(MOVE_NODE)) void moveFromView($, l.slice(MOVE_NODE.length))
+            else {
+              const asked = FROM_VIEW.find(a => l.startsWith(a.line))
+              if (asked) void fromView($, asked, l.slice(asked.line.length))
+            }
           }
         } else err += chunk.text
       }
@@ -487,32 +573,20 @@ async function spawnServer($: EngineInterface, argv: string[]): Promise<string> 
   }
 }
 
-const ADD_NODE = 'RFT_ADD_NODE '
+const FROM_VIEW = [
+  { line: 'RFT_ADD_NODE ', tool: 'rft_add_node', fields: ['type', 'parent', 'title'], what: 'add a note' },
+  { line: 'RFT_SET_TYPE ', tool: 'rft_set_type', fields: ['id', 'type'], what: "change a note's type" },
+  { line: 'RFT_MOVE_NODE ', tool: 'rft_move_node', fields: ['id', 'parent'], what: 'move a note' },
+] as const
 
-/**
- * A note the tree view adds (POST api/node, relayed by the server): made by rft_add_node's code
- * with the type, parent and title alone, so its status is the default, and no model turn is spent.
- */
-async function addFromView($: EngineInterface, request: string): Promise<void> {
+/** A change the tree view asks for (POST api/node, api/type or api/move, relayed by the server). */
+async function fromView($: EngineInterface, asked: (typeof FROM_VIEW)[number], request: string): Promise<void> {
   try {
     const r = JSON.parse(request) as Record<string, unknown>
-    await runTool($, 'rft_add_node', { type: r.type, parent: r.parent, title: r.title })
+    await runTool($, asked.tool, Object.fromEntries(asked.fields.map(f => [f, r[f]])))
     await refresh($, true)
   } catch (err) {
-    $.ui.toast(`rft: the tree view could not add a note (${message(err)})`)
-  }
-}
-
-const MOVE_NODE = 'RFT_MOVE_NODE '
-
-/** A move the tree view asks for (POST api/move, relayed by the server): rft_move_node's code. */
-async function moveFromView($: EngineInterface, request: string): Promise<void> {
-  try {
-    const r = JSON.parse(request) as Record<string, unknown>
-    await runTool($, 'rft_move_node', { id: r.id, parent: r.parent })
-    await refresh($, true)
-  } catch (err) {
-    $.ui.toast(`rft: the tree view could not move a note (${message(err)})`)
+    $.ui.toast(`rft: the tree view could not ${asked.what} (${message(err)})`)
   }
 }
 
@@ -681,7 +755,7 @@ const literaturePrompt = (subject: string, where: string | null) => `Run a thoro
 /** The rebalancing request; `scope` (a concept name or a note id) narrows it to one part of the tree. */
 const rebalancePrompt = (scope: string) => `Propose a rebalancing of the reasoning tree (rft-manual skill, "Restructuring the tree")${scope ? `, limited to ${JSON.stringify(scope)} (a concept or a note: consider the branches in it, and moves into it or out of it)` : ''}. Over time some branches grow out of one line of research but belong to another: an experiment hung under the note that happened to come before it, an idea that opened a different line, a branch that would sit better under another concept. Read the tree with rft_tree and rft_concepts, then read the notes of the branches you consider (their Idea, Why, What, Result), not only the titles. For each branch that clearly belongs elsewhere, propose one move: the note to move (its subtree goes with it), its parent now, the new parent, and why in one line. Keep the tree's history in mind: a note that came out of a result stays where the reasoning produced it unless it really is part of another line; when in doubt, leave it. Moves only: if a new concept would help, say so separately (rft_set_concept, after the user agrees). Present the moves as a short numbered table, say what you would leave as it is, and ask me which moves to apply. Do not call rft_move_node until I say yes; then apply only the moves I confirm, each with its why, and finish with rft_validate.`
 
-const SUGGEST_CONCEPTS = `Propose a split of the reasoning tree into concepts (rft-manual skill, "Concepts"). Read the current tree with rft_tree and rft_concepts. Suggest 2 to 6 concepts, nested at most two levels: for each, the note that starts it (usually the direction that opened that line of research), a short readable name for the line of research, in words as in a heading (e.g. "Strong augmentation", not a tag like strong-augmentation; never a single experiment), and a one-line summary; say which notes stay in the project root and why. Present the proposal as a short table and ask me to confirm or change it. Do not call rft_set_concept until I say yes.`
+const SUGGEST_CONCEPTS = `Propose a split of the reasoning tree into concepts (rft-manual skill, "Concepts"). Read the current tree with rft_tree and rft_concepts. Suggest 2 to 6 concepts, nested at most two levels: for each, the note that starts it (usually the direction that opened that line of research), a short readable name for the line of research, in words as in a heading (e.g. "Strong augmentation", not a tag like strong-augmentation; never a single experiment), and a one-line summary; say which notes stay in the project root and why. Present the proposal as a short table and ask me to confirm or change it, and for each concept whether code for it already exists on this machine and where. Do not call rft_set_concept until I say yes, nor rft_set_repos before I give a path.`
 
 const NOT_ACTIVE = 'RFT is not active in this project. Run /rft-init [starting question] to set it up.'
 
@@ -698,17 +772,21 @@ export const register: Register = (on, options) => {
 
   // a /clear (or /resume) ends the session and goes on in a fresh one with no session.start: its
   // state starts empty and session.end stopped the poll, so the tree is taken up again here; the
-  // commands, the tools and an open pane are still there
+  // commands, the tools, an open pane and, after a /clear, the tree view's server are still there
   on('classic.SessionStart', async ($, e, next) => {
     if (e.source === 'clear' || e.source === 'resume') await start($, false)
+    const url = server?.url
+    if (e.source === 'clear' && url) await update($, webUrl, () => url)
 
     return next(e)
   })
 
+  // a /clear goes on in the same folder, so the tree view's server, and a browser tab on it, live
+  // on; any other end stops it (a resume may go on in another folder)
   on('session.end', async ($, e, next) => {
     poller?.cancel()
     poller = null
-    await stopServer($)
+    if (e.reason !== 'clear') await stopServer($)
 
     return next(e)
   })
@@ -840,9 +918,12 @@ export const register: Register = (on, options) => {
         css: await $.fs.read(join(root, ASSET_PATHS.css)),
         js: await $.fs.read(join(root, ASSET_PATHS.js)),
         d3: await $.fs.read(join(root, ASSET_PATHS.d3)),
+        katex: await $.fs.read(join(root, ASSET_PATHS.katex)),
+        katexCss: await $.fs.read(join(root, ASSET_PATHS.katexCss)),
         filters: await $.fs.read(join(root, ASSET_PATHS.filters)),
         layout: await $.fs.read(join(root, ASSET_PATHS.layout)),
         concepts: await $.fs.read(join(root, ASSET_PATHS.concepts)),
+        theme: await $.fs.read(join(root, ASSET_PATHS.theme)),
       }
       const path = await exportHtml(io, loaded, assets)
 

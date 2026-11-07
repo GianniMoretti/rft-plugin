@@ -1,7 +1,7 @@
 // The rft web view: the reasoning tree as a tidy tree on an infinite canvas (d3), with notes in
 // a side drawer. It runs in two ways: served by server/rft_server.py, where it polls
-// `api/tree`, reads notes from `api/note` and writes a note's edited text back to it, and asks
-// `api/node` for a new note under the one shown; or
+// `api/tree`, reads notes from `api/note` and writes a note's edited text back to it, asks
+// `api/node` for a new note under the one shown and `api/type` to change its type; or
 // inlined into a standalone tree.html by /rft-view, where `window.RFT_DATA` holds the tree and
 // every note's text, and nothing is edited.
 (function () {
@@ -44,6 +44,7 @@
   let adding = false
   let moving = false
   let showOrigins = false
+  let retyping = false
 
   // ---------------------------------------------------------------- persistence
 
@@ -65,6 +66,7 @@
   const zoom = d3.zoom().scaleExtent([0.03, 6]).on('zoom', ev => {
     viewport.attr('transform', ev.transform)
     k = ev.transform.k
+    if (ev.sourceEvent) setViewNext('fit')
     scheduleLabels()
     clearTimeout(saveTimer)
     saveTimer = setTimeout(() => store.set('view', { x: ev.transform.x, y: ev.transform.y, k: ev.transform.k }), 250)
@@ -98,8 +100,6 @@
       if (fq.has('tags')) filters = F.normalise({ ...filters, tags: fq.get('tags').split(',').filter(Boolean) })
       if (fq.has('hide')) filters = F.normalise({ ...filters, mode: 'hide' })
       setFont(new URLSearchParams(location.search).get('font') || store.get('font', 1), false)
-      document.title = `${tree.project} · reasoning tree`
-      document.getElementById('title').textContent = `${tree.project} — the reasoning tree`
       buildLegend()
       setLegendOpen(store.get('legendOpen', true))
       showOrigins = Boolean(store.get('origins', false)) || q.get('origins') === 'on'
@@ -115,10 +115,21 @@
     buildCrumbs()
     syncConceptButtons()
     syncOriginsButton()
+    syncTitle()
     const c = { direction: 0, experiment: 0, reference: 0, theory: 0 }
     for (const n of tree.nodes) c[n.type] = (c[n.type] || 0) + 1
     document.getElementById('counts').textContent =
       `${c.direction} directions · ${c.experiment} experiments · ${c.reference} references · ${c.theory} theory notes`
+  }
+
+  /** The page's title: the root note's concept when it declares one, else the project. */
+  function syncTitle() {
+    const top = concepts.get(C.ROOT)
+    const project = `${tree.project} — the reasoning tree`
+    const h1 = document.getElementById('title')
+    h1.textContent = top && top.root ? top.name : project
+    h1.title = top && top.root ? `${project}${top.summary ? ': ' + top.summary : ''}` : ''
+    document.title = top && top.root ? top.name : `${tree.project} · reasoning tree`
   }
 
   function ancestors(id) {
@@ -227,6 +238,7 @@
     drawConcepts(pos, dur)
     drawOrigins(pos, dur)
     updateLabels()
+    syncFoldButton()
   }
 
   /**
@@ -374,6 +386,7 @@
     if (!p) return
     const t = animate ? svg.transition().duration(450) : svg
     t.call(zoom.translateTo, p.p[0], p.p[1])
+    setViewNext('fit')
   }
 
   function fit(animate = true) {
@@ -383,12 +396,13 @@
     const s = Math.max(0.03, Math.min(2, 0.9 * Math.min(w / (box.width + 80), h / (box.height + 80))))
     const t = d3.zoomIdentity.translate(w / 2, h / 2).scale(s).translate(-(box.x + box.width / 2), -(box.y + box.height / 2))
     ;(animate ? svg.transition().duration(450) : svg).call(zoom.transform, t)
+    setViewNext('centre')
   }
 
   async function select(id) {
     // the note being edited stays as it is; another one only once its changes are saved or dropped
     if (editing && (editing.id === id || !leaveEditor())) return
-    if (id !== selected) { closeAdder(); closeMover() }
+    if (id !== selected) { closeAdder(); closeMover(); closeRetyper() }
     selected = id
     showEditButton()
     gNodes.selectAll('g.node').attr('class', n => nodeClass(n.data))
@@ -398,6 +412,7 @@
     renderConceptPath(document.getElementById('drawer-concept'), n.concept, 'Focus on this concept')
     renderOrigin(n)
     renderRefs(n)
+    renderCode(document.getElementById('drawer-code'), n.concept)
     document.getElementById('drawer-meta').textContent = `${n.type} · ${MARK[n.status] || ''} ${n.status}${n.date ? ' · ' + n.date : ''}${n.tags && n.tags.length ? ' · #' + n.tags.join(' #') : ''}`
     const article = document.getElementById('note')
     article.innerHTML = '<p class="missing">Loading…</p>'
@@ -412,7 +427,7 @@
     if (selected !== id || editing) return
     shown = body == null ? null : { id, body, version }
     showEditButton()
-    article.innerHTML = body == null ? '<p class="missing">The note could not be read.</p>' : markdown(body)
+    article.innerHTML = body == null ? '<p class="missing">The note could not be read.</p>' : markdown(body, id)
   }
 
   function go(id) {
@@ -440,6 +455,8 @@
     if (editBtn.hidden) noKey.hidden = true
     addBtn.hidden = Boolean(EMBED) || editing != null || !byId.has(selected)
     moveBtn.hidden = addBtn.hidden || !byId.get(selected).parent
+    // the root stays a direction
+    typeBtn.hidden = Boolean(EMBED) || editing != null || !byId.has(selected) || !byId.get(selected).parent
   }
 
   function setEditorMsg(text, isError = false, isConflict = false) {
@@ -454,6 +471,8 @@
     const lead = /^\n*/.exec(note.body)[0] // the blank line under the frontmatter is kept, not shown
     editing = { id: note.id, version: note.version, lead, text: note.body.slice(lead.length), newer: null }
     closeAdder()
+    closeRetyper()
+    closeMover()
     textBox.value = editing.text
     textBox.readOnly = false
     noKey.hidden = true
@@ -525,7 +544,7 @@
   document.getElementById('note-reload').addEventListener('click', () => {
     if (!editing || !editing.newer) return
     shown = editing.newer
-    article.innerHTML = markdown(shown.body)
+    article.innerHTML = markdown(shown.body, shown.id)
     openEditor(shown)
   })
   textBox.addEventListener('keydown', ev => {
@@ -553,6 +572,8 @@
 
   function openAdder() {
     if (!editKey()) { noKey.hidden = false; return }
+    closeRetyper()
+    closeMover()
     // an experiment tests a direction; a direction comes out of an experiment, a reference or a theory note
     addType.value = byId.get(selected).type === 'direction' ? 'experiment' : 'direction'
     addTitle.value = ''
@@ -629,6 +650,7 @@
   function openMover() {
     if (!editKey()) { noKey.hidden = false; return }
     closeAdder()
+    closeRetyper()
     const list = document.getElementById('move-targets')
     list.innerHTML = ''
     for (const n of moveTargets(selected)) {
@@ -764,6 +786,86 @@
     drawOrigins(positions)
   })
 
+  // ---------------------------------------------------------------- changing the type of the note shown
+
+  const typeBtn = document.getElementById('drawer-type')
+  const retyper = document.getElementById('retyper')
+  const retypeType = document.getElementById('retype-type')
+  const retypeHint = document.getElementById('retype-hint')
+  const retypeMsg = document.getElementById('retype-msg')
+  const PREFIX = { experiment: 'E', direction: 'D', reference: 'R', theory: 'T' }
+
+  function setRetypeMsg(text, isError = false) {
+    retypeMsg.textContent = text
+    retypeMsg.classList.toggle('error', isError)
+  }
+
+  function showRetypeHint() {
+    retypeHint.textContent = `${selected} gets the next ${PREFIX[retypeType.value]} id; its text stays, and links to it follow.`
+  }
+
+  function openRetyper() {
+    if (!editKey()) { noKey.hidden = false; return }
+    closeAdder()
+    closeMover()
+    const type = byId.get(selected).type
+    for (const o of retypeType.options) o.disabled = o.value === type
+    // the commonest mistake: a direction made as an experiment, or the other way round
+    retypeType.value = type === 'direction' ? 'experiment' : 'direction'
+    showRetypeHint()
+    setRetypeMsg('')
+    retyper.hidden = false
+    retypeType.focus()
+  }
+
+  function closeRetyper() {
+    retyper.hidden = true
+  }
+
+  /** Asks the server to change the type of the note shown (the session does it), then shows it under its new id. */
+  async function retype() {
+    const id = selected
+    if (!id || retyping) return
+    const wasFolded = collapsed.has(id)
+    retyping = true
+    retypeType.disabled = true
+    setRetypeMsg('Changing…')
+    try {
+      const res = await fetch('api/type', {
+        method: 'POST',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'X-RFT-Token': editKey() },
+        body: JSON.stringify({ id, type: retypeType.value }),
+      })
+      const reply = await res.json().catch(() => ({}))
+      if (!res.ok) { setRetypeMsg(`Not changed: ${reply.error || `the server answered ${res.status}`}.`, true); return }
+      closeRetyper()
+      // a folded branch stays folded under its new id (a poll meanwhile may have redrawn it unfolded)
+      if (wasFolded) { collapsed.delete(id); collapsed.add(reply.id); store.set('collapsed', [...collapsed]) }
+      const version = tree.version
+      await poll()
+      if (wasFolded && tree.version === version) render(true)
+      // the user may have moved on meanwhile
+      if (selected !== id || editing || !byId.has(reply.id)) return
+      reveal(reply.id)
+      centreOn(reply.id)
+      await select(reply.id)
+    } catch (e) {
+      setRetypeMsg('Not changed: the server is not answering.', true)
+    } finally {
+      retyping = false
+      retypeType.disabled = false
+    }
+  }
+
+  typeBtn.addEventListener('click', () => (retyper.hidden ? openRetyper() : closeRetyper()))
+  retypeType.addEventListener('change', showRetypeHint)
+  retyper.addEventListener('submit', ev => { ev.preventDefault(); retype() })
+  document.getElementById('retype-cancel').addEventListener('click', () => closeRetyper())
+  retyper.addEventListener('keydown', ev => {
+    if (ev.key === 'Escape') { ev.preventDefault(); closeRetyper() }
+  })
+
   // ---------------------------------------------------------------- search, filter, legend
 
   const searchBox = document.getElementById('search')
@@ -882,18 +984,30 @@
   document.getElementById('filters-toggle').addEventListener('click', () => togglePanel(panel.hidden))
   document.getElementById('filters-close').addEventListener('click', () => togglePanel(false))
 
+  // the toolbar's toggles show the current state (or the action a click does) and name the
+  // next one in their tooltip
+  const LAYOUTS = ['td', 'lr', 'radial']
+  const LAYOUT_NAME = { td: 'Top-down', lr: 'Left-right', radial: 'Radial' }
+  const following = (list, v) => list[(list.indexOf(v) + 1) % list.length]
+  /** Shows the symbol of `v` on a toggle, and says in words what it is. */
+  function showValue(b, v, words) {
+    b.querySelectorAll('[data-v]').forEach(s => s.classList.toggle('on', s.dataset.v === v))
+    b.title = words
+    b.setAttribute('aria-label', words)
+  }
   function syncLayoutButtons() {
-    document.querySelectorAll('[data-layout]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.layout === layoutKind)))
+    const b = document.getElementById('layout')
+    showValue(b, layoutKind, `Layout: ${LAYOUT_NAME[layoutKind]} (click: ${LAYOUT_NAME[following(LAYOUTS, layoutKind)]})`)
   }
 
-  document.querySelectorAll('[data-layout]').forEach(b => b.addEventListener('click', () => {
-    layoutKind = b.dataset.layout
+  document.getElementById('layout').addEventListener('click', () => {
+    layoutKind = following(LAYOUTS, layoutKind)
     store.set('layout', layoutKind)
     syncLayoutButtons()
     render(true)
     if (view === 'concepts') drawConceptTree()
     setTimeout(() => fit(true), 420)
-  }))
+  })
   function setFont(value, save = true) {
     const v = Number(value)
     font = FONT_STEPS.reduce((a, b) => (Math.abs(b - v) < Math.abs(a - v) ? b : a), 1)
@@ -905,18 +1019,37 @@
   const stepFont = d => setFont(FONT_STEPS[Math.max(0, Math.min(FONT_STEPS.length - 1, FONT_STEPS.indexOf(font) + d))])
   document.getElementById('font-down').addEventListener('click', () => stepFont(-1))
   document.getElementById('font-up').addEventListener('click', () => stepFont(1))
-  document.getElementById('fit').addEventListener('click', () => fit(true))
+  // Fit, then Centre on root, then Fit again; a pan or zoom by hand brings it back to Fit
+  let viewNext = 'fit'
+  function setViewNext(v) {
+    if (v === viewNext) return
+    viewNext = v
+    const b = document.getElementById('fit')
+    showValue(b, v, v === 'fit' ? 'Fit: show the whole tree' : 'Centre on the root')
+  }
   const topId = () => (focus ? concepts.get(focus).root : tree.roots[0])
-  document.getElementById('centre').addEventListener('click', () => tree && topId() && centreOn(topId()))
-  document.getElementById('expand').addEventListener('click', () => { collapsed.clear(); store.set('collapsed', []); render(true) })
-  document.getElementById('collapse').addEventListener('click', () => {
-    collapsed = new Set(tree.nodes.filter(n => n.parent && n.children.length).map(n => n.id))
+  document.getElementById('fit').addEventListener('click', () => {
+    if (viewNext === 'fit') fit(true)
+    else if (tree && topId()) centreOn(topId())
+  })
+  // Expand all while a drawn branch is folded, else Collapse all
+  const foldedDrawn = () => [...collapsed].some(id => positions.has(id) && byId.has(id) && byId.get(id).children.length)
+  function syncFoldButton() {
+    const b = document.getElementById('fold-all')
+    const expand = foldedDrawn()
+    showValue(b, expand ? 'expand' : 'collapse', expand ? 'Expand every branch' : 'Collapse every branch below the root')
+    b.disabled = !expand && !tree.nodes.some(n => n.parent && n.children.length)
+  }
+  document.getElementById('fold-all').addEventListener('click', () => {
+    if (!tree) return
+    collapsed = foldedDrawn() ? new Set() : new Set(tree.nodes.filter(n => n.parent && n.children.length).map(n => n.id))
     store.set('collapsed', [...collapsed])
     render(true)
   })
   document.getElementById('drawer-close').addEventListener('click', () => {
     if (!leaveEditor()) return
     closeAdder()
+    closeRetyper()
     document.getElementById('drawer').hidden = true
     selected = null
     gNodes.selectAll('g.node').attr('class', n => nodeClass(n.data))
@@ -925,6 +1058,21 @@
     const a = ev.target.closest('a[data-go]')
     if (a) { ev.preventDefault(); go(a.dataset.go) }
   })
+  // an image that does not come says why in its place: the server answers 404 when there is
+  // none, 403 to a page without the key when it is not in the vault (it may be elsewhere)
+  document.getElementById('note').addEventListener('error', async ev => {
+    const img = ev.target
+    if (!(img instanceof HTMLImageElement) || !img.dataset.label) return
+    let status = 0
+    try { status = (await fetch(img.src, { method: 'HEAD', cache: 'no-store' })).status } catch (e) { /* the server is gone */ }
+    const label = img.dataset.label
+    const span = document.createElement('span')
+    span.className = 'missing'
+    span.textContent = status === 404 ? `(missing image: ${label})`
+      : status === 403 ? `(${label}: not in the vault; open the address /rft printed to show images from elsewhere)`
+        : `(${label} could not be shown)`
+    ;(img.closest('a.image') || img).replaceWith(span)
+  }, true)
   window.addEventListener('resize', () => scheduleLabels())
 
   // ---------------------------------------------------------------- concepts
@@ -1046,8 +1194,13 @@
     setTimeout(() => fit(true), 420)
   }
 
+  const CMODES = ['off', 'regions', 'arrows']
+  const CMODE_NAME = { off: 'off', regions: 'regions', arrows: 'arrows' }
+  const CMODE_HINT = { off: 'no overlay', regions: 'a soft region behind each concept', arrows: 'links coloured by concept' }
   function syncConceptButtons() {
-    document.querySelectorAll('[data-cmode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.cmode === conceptMode)))
+    const b = document.getElementById('cmode')
+    const next = following(CMODES, conceptMode)
+    showValue(b, conceptMode, `Concept overlay: ${CMODE_NAME[conceptMode]}, ${CMODE_HINT[conceptMode]} (click: ${CMODE_NAME[next]})`)
     const t = document.getElementById('view-toggle')
     t.setAttribute('aria-pressed', String(view === 'concepts'))
     t.textContent = view === 'concepts' ? 'Reasoning tree' : 'Concept tree'
@@ -1066,6 +1219,28 @@
       if (colour) a.style.color = colour
       a.addEventListener('click', ev => { ev.preventDefault(); setFocus(cid === C.ROOT ? null : cid) })
       box.appendChild(a)
+    })
+  }
+
+  /** The code repos of a note's concept, its own first, then inherited; nothing when it links none. */
+  function renderCode(box, id) {
+    const cid = concepts.has(id) ? id : C.ROOT
+    const repos = C.reposOf(concepts, cid)
+    box.innerHTML = ''
+    box.hidden = !repos.length
+    if (!repos.length) return
+    box.append(repos.length === 1 ? 'Code: ' : 'Code, by priority: ')
+    repos.forEach((r, i) => {
+      if (i) box.append(', ')
+      const code = document.createElement('code')
+      code.textContent = r.path
+      box.appendChild(code)
+      if (r.concept !== cid) {
+        const from = document.createElement('span')
+        from.className = 'muted'
+        from.textContent = ` (from ${concepts.get(r.concept).name})`
+        box.appendChild(from)
+      }
     })
   }
 
@@ -1181,13 +1356,15 @@
     const node = cviewport.append('g').selectAll('g').data(top.descendants()).join('g')
       .attr('class', 'cnode').attr('transform', n => `translate(${n.p[0]},${n.p[1]})`)
       .on('click', (ev, n) => { ev.stopPropagation(); openConcept(n.data.id) })
-    node.append('title').text(n => `${n.data.name}${n.data.summary ? ' — ' + n.data.summary : ''}`)
+    const repos = c => c.repos || []
+    const baseName = p => p.replace(/\/+$/, '').split('/').pop() || p
+    node.append('title').text(n => `${n.data.name}${n.data.summary ? ' — ' + n.data.summary : ''}${repos(n.data).length ? '\nCode: ' + repos(n.data).join(', ') : ''}`)
     node.append('circle').attr('r', n => radius(n.data))
       .attr('fill', n => C.colourOf(concepts, n.data.id) || 'var(--panel)')
       .attr('stroke', n => (n.data.id === C.ROOT ? 'var(--muted)' : 'none'))
     node.append('text').attr('class', 'cname').attr('y', n => radius(n.data) + 20).attr('text-anchor', 'middle').text(n => n.data.name)
     node.append('text').attr('class', 'ccount muted').attr('y', n => radius(n.data) + 38).attr('text-anchor', 'middle')
-      .text(n => `${n.data.total} note${n.data.total === 1 ? '' : 's'}${n.data.total > n.data.count ? ` (${n.data.count} own)` : ''}`)
+      .text(n => `${n.data.total} note${n.data.total === 1 ? '' : 's'}${n.data.total > n.data.count ? ` (${n.data.count} own)` : ''}${repos(n.data).length ? ` · code: ${repos(n.data).map(baseName).join(', ')}` : ''}`)
     // the stacked bar of statuses, the concept with its sub-concepts
     const BAR = 130
     node.each(function (n) {
@@ -1228,7 +1405,7 @@
     setTimeout(() => flashConcept(id), 450)
   }
 
-  document.querySelectorAll('[data-cmode]').forEach(b => b.addEventListener('click', () => setMode(b.dataset.cmode)))
+  document.getElementById('cmode').addEventListener('click', () => setMode(following(CMODES, conceptMode)))
   document.getElementById('view-toggle').addEventListener('click', () => setView(view === 'concepts' ? 'tree' : 'concepts'))
 
   // ---------------------------------------------------------------- markdown (the subset notes use)
@@ -1240,9 +1417,62 @@
     const id = t.split(' ')[0]
     return byId.has(id) ? id : null
   }
+  /** TeX as HTML, by KaTeX; the source as code when KaTeX is missing or gives up. */
+  function tex(src, display) {
+    try {
+      if (window.katex) return window.katex.renderToString(src, { displayMode: display, throwOnError: false, strict: 'ignore' })
+    } catch (e) { /* below */ }
+    return `<code class="math">${escH(display ? `$$${src}$$` : `$${src}$`)}</code>`
+  }
+  // what the other inline rules must not touch: `code` first, as it binds tightest (a $ in it
+  // stays a $), then, as Obsidian reads them, \$ (a dollar), $$display math$$ and $inline math$,
+  // whose dollars have no space just inside them and no digit just after ("$5 and $10" is text)
+  const CODE = /`([^`]+)`/g
+  const MATH = /\\\$|\$\$([^\u0000]+?)\$\$|\$(?=[^\s$])((?:\\[^\u0000]|[^\\$\u0000])+?)(?<!\s)\$(?!\d)/g
+  // images as Obsidian embeds them: ![[name.png]], ![[name.png|400]] (a width, or 400x300) and
+  // ![alt](path.png), ![alt|400](<a path with spaces.png>); the server finds the file. In a
+  // table the | is written \|
+  const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i
+  const WIKI_IMAGE = /!\[\[([^\]\n]+)\]\]/g
+  const MD_IMAGE = /!\[([^\]\n]*)\]\(\s*(<[^>\n]+>|[^)\s]+)(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\s*\)/g
+  const sizeOf = o => /^\s*(\d+)(?:x(\d+))?\s*$/.exec(o)
+  let mdNote = null // the note markdown() renders: its images are found from its folder
+  /** An image of the note shown, as the server serves it; a mention in the standalone page. */
+  function image(src, alt, size) {
+    const label = alt || src.split('/').pop()
+    if (EMBED || !mdNote) return `<em class="missing">(image: ${escH(label)})</em>`
+    const key = editKey()
+    const url = `api/image?note=${encodeURIComponent(mdNote)}&src=${encodeURIComponent(src)}` +
+      (key ? `&token=${encodeURIComponent(key)}` : '')
+    const dims = size ? ` width="${size[1]}"` + (size[2] ? ` height="${size[2]}"` : '') : ''
+    return `<a class="image" href="${escH(url)}" target="_blank" rel="noopener noreferrer" title="Open at full size">` +
+      `<img src="${escH(url)}" alt="${escH(alt)}" data-label="${escH(label)}" loading="lazy"${dims}></a>`
+  }
+  /** `![[inner]]` as an image, or null when it embeds something else (a note, a PDF). */
+  function wikiImage(inner) {
+    const [target, ...opts] = inner.split(/\\?\|/)
+    if (!IMAGE_EXT.test(target.trim())) return null
+    const alt = opts.find(o => !sizeOf(o))
+    return image(target.trim(), alt ? alt.trim() : '', opts.map(sizeOf).find(Boolean))
+  }
+  /** `![alt](src)`: a local image, a link to a remote one (the page fetches nothing from elsewhere). */
+  function mdImage(alt, src) {
+    const [text, ...opts] = alt.split(/\\?\|/)
+    src = src.replace(/^<(.*)>$/, '$1')
+    if (/^https?:/i.test(src)) return `<a href="${escH(src)}" target="_blank" rel="noopener noreferrer">(image: ${escH(text.trim() || src)})</a>`
+    let path = src
+    try { path = decodeURIComponent(src) } catch (e) { /* a % of its own */ }
+    if (!IMAGE_EXT.test(path)) return `<em>(embedded: ${escH(text.trim() || path)})</em>`
+    return image(path, text.trim(), opts.map(sizeOf).find(Boolean))
+  }
   function inline(t) {
+    const held = []
+    const hold = html => `\u0000${held.push(html) - 1}\u0000`
+    t = t.replace(CODE, (m, code) => hold(`<code>${escH(code)}</code>`))
+      .replace(WIKI_IMAGE, (m, inner) => { const html = wikiImage(inner); return html == null ? m : hold(html) })
+      .replace(MD_IMAGE, (m, alt, src) => hold(mdImage(alt, src)))
+      .replace(MATH, (m, display, math) => hold(display != null ? tex(display, true) : math != null ? tex(math, false) : '$'))
     return escH(t)
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
       .replace(/!\[\[([^\]]+)\]\]/g, '<em>(embedded: $1)</em>')
       .replace(/\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g, (m, target, alias) => {
         const id = idForLink(target.replace(/&amp;/g, '&'))
@@ -1252,10 +1482,13 @@
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
       .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>')
       .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+      .replace(/\u0000(\d+)\u0000/g, (m, i) => held[i])
   }
-  function markdown(src) {
+  function markdown(src, noteId) {
+    mdNote = noteId || null
     const out = []
     let list = 0, inCode = false, table = false, para = []
+    let math = null // the lines of a $$ block opened on a line of its own, until its closing $$
     // a line ending in two spaces breaks the line, as in Obsidian
     const flush = () => {
       if (para.length) out.push(`<p>${para.map((l, i) => inline(l.replace(/\s+$/, '')) + (i < para.length - 1 ? (/ {2}$/.test(l) ? '<br>' : ' ') : '')).join('')}</p>`)
@@ -1263,6 +1496,15 @@
     }
     const close = () => { flush(); while (list > 0) { out.push('</ul>'); list-- } if (table) { out.push('</table>'); table = false } }
     for (const raw of src.split('\n')) {
+      if (math) {
+        const end = raw.indexOf('$$')
+        if (end < 0) { math.push(raw); continue }
+        out.push(`<div class="math-block">${tex([...math, raw.slice(0, end)].join('\n'), true)}</div>`)
+        math = null
+        if (raw.slice(end + 2).trim()) para.push(raw.slice(end + 2))
+        continue
+      }
+      if (!inCode && /^\s*\$\$/.test(raw) && !raw.trim().slice(2).includes('$$')) { close(); math = [raw.trim().slice(2)]; continue }
       if (raw.startsWith('```')) { close(); out.push(inCode ? '</pre>' : '<pre>'); inCode = !inCode; continue }
       if (inCode) { out.push(escH(raw)); continue }
       const h = /^(#{1,6})\s+(.*)$/.exec(raw)
@@ -1278,7 +1520,7 @@
       } else if (/^\|.*\|\s*$/.test(raw)) {
         if (/^\|[\s:|-]+\|\s*$/.test(raw)) continue
         if (!table) { close(); out.push('<table>'); table = true }
-        out.push('<tr>' + raw.trim().slice(1, -1).split('|').map(c => `<td>${inline(c.trim())}</td>`).join('') + '</tr>')
+        out.push('<tr>' + raw.trim().slice(1, -1).split(/(?<!\\)\|/).map(c => `<td>${inline(c.trim())}</td>`).join('') + '</tr>')
       } else if (raw.trim() === '') close()
       else if (list && /^\s+\S/.test(raw) && out[out.length - 1].endsWith('</li>')) {
         // an indented line continues the list item above
@@ -1287,6 +1529,7 @@
     }
     close()
     if (inCode) out.push('</pre>')
+    if (math) out.push(`<div class="math-block">${tex(math.join('\n'), true)}</div>`)
     return out.join('\n')
   }
 

@@ -18,6 +18,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import rft_server  # noqa: E402
@@ -55,8 +56,8 @@ class ServerTest(unittest.TestCase):
         cls.asked = []  # the requests handed to the session
         cls.answer = None  # what the session does with one: nothing, unless a test says
 
-        def ask(request):
-            cls.asked.append(request)
+        def ask(verb, request):
+            cls.asked.append((verb, request))
             if cls.answer:
                 cls.answer(request)
 
@@ -121,6 +122,20 @@ class ServerTest(unittest.TestCase):
         p.write_bytes((text or note(nid, "direction", "idea", "D00 Root question", "Scratch")).encode())
         self.addCleanup(p.unlink)
         return p
+    
+    def retyped_note(self):
+        """A direction of its own, D08, and the session that makes it the experiment E08."""
+        old = self.vault / "directions" / "D08 Retyped.md"
+        new = self.vault / "experiments" / "E08 Retyped.md"
+        old.write_text(note("D08", "direction", "idea", "D00 Root question", "Retyped"))
+        self.addCleanup(old.unlink, missing_ok=True)
+        self.addCleanup(new.unlink, missing_ok=True)
+
+        def plugin(request):
+            new.write_text(note("E08", request["type"], "idea", "D00 Root question", "Retyped"))
+            old.unlink()
+
+        return plugin
 
     def test_tree_json(self):
         status, ctype, body = self.get("/api/tree")
@@ -149,6 +164,51 @@ class ServerTest(unittest.TestCase):
         self.assertEqual((runs["name"], runs["summary"], runs["root"], runs["parent"]), ("Runs", "About Runs", "E01", "root"))
         self.assertEqual((runs["count"], runs["total"], runs["statuses"]), (2, 2, {"running": 1, "idea": 1}))
         self.assertEqual(root["total"], 4)
+
+    def test_concept_on_the_only_root_note_is_the_root_concept(self):
+        def nodes():
+            return {"D00": {"status": "done", "children": ["E01"]}, "E01": {"status": "running", "children": ["D01"]},
+                    "D01": {"status": "idea", "children": []}, "E02": {"status": "idea", "children": []}}
+        decl = {"D00": ("Geometry", "The study"), "E01": ("Runs", "")}
+        # one root note: its concept is the root one, with no project level above
+        n = nodes()
+        root, runs = rft_server.compute_concepts(n, ["D00"], "demo", decl)
+        self.assertEqual((root["id"], root["name"], root["summary"], root["root"], root["parent"], root["children"]),
+                         ("root", "Geometry", "The study", "D00", None, ["E01"]))
+        self.assertEqual((root["count"], root["total"]), (1, 3))
+        self.assertEqual((runs["parent"], runs["depth"]), ("root", 1))
+        self.assertEqual((n["D00"]["concept"], n["D01"]["concept"]), ("root", "E01"))
+        # a second root note: the project holds it, above the root note's concept
+        n = nodes()
+        root, geometry, runs = rft_server.compute_concepts(n, ["D00", "E02"], "demo", decl)
+        self.assertEqual((root["name"], root["root"], root["children"], root["count"]), ("demo", None, ["D00"], 1))
+        self.assertEqual((geometry["id"], geometry["parent"], geometry["depth"], runs["depth"]), ("D00", "root", 1, 2))
+
+    def test_concept_repos(self):
+        # a one-line list, JSON or YAML; commas alone separate, a path once
+        self.assertEqual(rft_server.parse_repos('["/a b/c", "../d", "/a b/c"]'), ["/a b/c", "../d"])
+        self.assertEqual(rft_server.parse_repos("['/a', ../b]"), ["/a", "../b"])
+        self.assertEqual(rft_server.parse_repos("/one/path"), ["/one/path"])
+        self.assertEqual(rft_server.parse_repos(None), [])
+        # each concept carries its own; repos on the only root note without a concept are the project's
+        nodes = {"D00": {"status": "done", "children": ["E01"]}, "E01": {"status": "running", "children": []}}
+        root, runs = rft_server.compute_concepts(nodes, ["D00"], "demo", {"E01": ("Runs", "", ["/code/runs"])}, {"D00": ["/code/all"]})
+        self.assertEqual((root["repos"], runs["repos"]), (["/code/all"], ["/code/runs"]))
+        # a two-part declaration, as before, has none
+        root, runs = rft_server.compute_concepts(nodes, ["D00"], "demo", {"E01": ("Runs", "")})
+        self.assertEqual((root["repos"], runs["repos"]), ([], []))
+        # read from the notes: concept_repos on a note that starts a concept, and on the root note
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            (vault / "directions").mkdir()
+            (vault / "experiments").mkdir()
+            root_note = note("D00", "direction", "done", "", "Root").replace("---\n\n#", 'concept_repos: ["/code/all"]\n---\n\n#', 1)
+            run_note = note("E01", "experiment", "running", "D00 Root", "Run", concept="Runs").replace(
+                "---\n\n#", 'concept_repos: ["../code/runs", "/code/b"]\n---\n\n#', 1)
+            (vault / "directions" / "D00 Root.md").write_text(root_note)
+            (vault / "experiments" / "E01 Run.md").write_text(run_note)
+            root, runs = rft_server.Vault(vault, "demo").tree()["concepts"]
+            self.assertEqual((root["repos"], runs["repos"]), (["/code/all"], ["../code/runs", "/code/b"]))
 
     def test_tag_parsing(self):
         self.assertEqual(rft_server.parse_tags('[demo, "theory", #cluster]'), ["demo", "theory", "cluster"])
@@ -215,7 +275,10 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.get("/")[0], 200)
         self.assertEqual(self.get("/app.js")[0], 200)
         self.assertEqual(self.get("/layout.js")[0], 200)
+        self.assertEqual(self.get("/theme.js")[0], 200)
         self.assertEqual(self.get("/vendor/d3.v7.9.0.min.js")[0], 200)
+        self.assertEqual(self.get("/vendor/katex.v0.16.22.min.js")[0], 200)
+        self.assertEqual(self.get("/vendor/katex.v0.16.22.min.css")[0], 200)
         for p in ["/../server/rft_server.py", "/vendor/../../server/rft_server.py", "/%2e%2e/%2e%2e/etc/passwd",
                   "/00%20Index.md", "/vault/00%20Index.md", "/.rft/config.json", "/api", "/app.js/../index.html"]:
             self.assertEqual(self.get(p)[0], 404, p)
@@ -329,7 +392,7 @@ class ServerTest(unittest.TestCase):
         status, res = self.post({"parent": "E01", "type": "direction", "title": "  Then this  "})
         self.assertEqual((status, res), (201, {"id": "D07", "name": "D07 Then this"}))
         # the session is asked for the type, the parent and the title alone: the status is its default
-        self.assertEqual(self.asked, [{"parent": "E01", "type": "direction", "title": "Then this"}])
+        self.assertEqual(self.asked, [("RFT_ADD_NODE", {"parent": "E01", "type": "direction", "title": "Then this"})])
         nodes = {n["id"]: n for n in json.loads(self.get("/api/tree")[2])["nodes"]}
         self.assertEqual(nodes["D07"]["parent"], "E01")
 
@@ -394,7 +457,7 @@ class ServerTest(unittest.TestCase):
     def test_move_asks_the_session_and_answers_once_moved(self):
         self.session(self.mover)
         self.assertEqual(self.move({"id": "D01", "parent": "D00"}), (200, {"id": "D01", "parent": "D00"}))
-        self.assertEqual(self.asked, [{"op": "move", "id": "D01", "parent": "D00"}])
+        self.assertEqual(self.asked, [("RFT_MOVE_NODE", {"id": "D01", "parent": "D00"})])
         nodes = {n["id"]: n for n in json.loads(self.get("/api/tree")[2])["nodes"]}
         self.assertEqual((nodes["D01"]["parent"], nodes["D01"]["origin"]), ("D00", ["E01"]))
         self.assertNotIn("origin", nodes["E01"])
@@ -437,8 +500,28 @@ class ServerTest(unittest.TestCase):
     def test_move_line_on_stdout(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            rft_server.ask_session({"op": "move", "id": "D01", "parent": "D00"})
+            rft_server.ask_session("RFT_MOVE_NODE", {"id": "D01", "parent": "D00"})
         self.assertEqual(out.getvalue(), 'RFT_MOVE_NODE {"id": "D01", "parent": "D00"}\n')
+
+    def test_set_type_asks_the_session_and_answers_the_new_id(self):
+        self.session(self.retyped_note())
+        status, res = self.write("POST", "/api/type", {"id": "D08", "type": "experiment"})
+        self.assertEqual((status, res), (200, {"id": "E08", "name": "E08 Retyped"}))
+        self.assertEqual(self.asked, [("RFT_SET_TYPE", {"id": "D08", "type": "experiment"})])
+        ids = {n["id"] for n in json.loads(self.get("/api/tree")[2])["nodes"]}
+        self.assertIn("E08", ids)
+        self.assertNotIn("D08", ids)
+
+    def test_set_type_bad_requests_reach_no_session(self):
+        self.session(self.retyped_note())
+        ok = {"id": "D08", "type": "experiment"}
+        for payload, status in [({**ok, "type": "note"}, 400), ({**ok, "type": "direction"}, 400),
+                                ({"id": "D00", "type": "experiment"}, 400), ({**ok, "id": "D42"}, 404),
+                                ({**ok, "id": "../secret"}, 404), ({"id": "D08"}, 400), (["D08"], 400)]:
+            self.assertEqual(self.write("POST", "/api/type", payload)[0], status, payload)
+        self.assertEqual(self.write("POST", "/api/type", ok, key=None)[0], 403)
+        self.assertEqual(self.write("POST", "/api/type", ok, origin="http://evil.example")[0], 403)
+        self.assertEqual(self.asked, [])
 
     def start(self, cache):
         """The server as the plugin runs it, its cache in `cache`: its process, port and key."""
@@ -501,6 +584,130 @@ def fetch(port, path):
         return status, json.loads(body)
     except OSError:
         return None, None
+
+
+class ImageTest(unittest.TestCase):
+    """The images a note embeds: found as Obsidian finds them, the ones outside the vault only with the key."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        obs = Path(cls.tmp.name) / "obs"  # an Obsidian vault, the tree's vault inside it
+        vault = obs / "proj" / "vault"
+        for d in [obs / ".obsidian", obs / "pics", obs / ".trash", obs / "proj" / "code" / "results",
+                  vault / "directions", vault / "experiments" / "attachments", vault / "experiments" / "figs"]:
+            d.mkdir(parents=True, exist_ok=True)
+        (vault / "directions" / "D00 Root.md").write_text(note("D00", "direction", "done", "", "Root"))
+        (vault / "experiments" / "E01 Run.md").write_text(note("E01", "experiment", "done", "D00 Root", "Run"))
+        cls.files = {
+            "pasted": vault / "experiments" / "attachments" / "Pasted image 20260101.png",
+            "near": vault / "experiments" / "attachments" / "dup.png",
+            "far": obs / "pics" / "dup.png",
+            "spaced": vault / "experiments" / "figs" / "loss plot.png",
+            "shared": obs / "pics" / "shared.jpg",
+            "code": obs / "proj" / "code" / "results" / "fig3.png",
+            "trash": obs / ".trash" / "binned.png",
+            "svg": vault / "experiments" / "figs" / "chart.svg",
+        }
+        for name, p in cls.files.items():
+            p.write_bytes(b"\x89PNG " + name.encode())
+        (obs / "secret.txt").write_text("secret")
+        os.symlink(obs / "secret.txt", vault / "experiments" / "figs" / "secret.png")
+        cls.obs, cls.vault = obs, vault
+        handler = rft_server.make_handler(rft_server.Vault(vault, "demo"), WEB, KEY)
+        cls.server = rft_server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        cls.port = cls.server.server_address[1]
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.tmp.cleanup()
+
+    def image(self, src, key=None, note_id="E01", headers=(), host=None):
+        """The status, headers and body of the image note `note_id` embeds as `src`."""
+        q = f"/api/image?note={note_id}&src={quote(src, safe="")}" + (f"&token={key}" if key else "")
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.putrequest("GET", q, skip_host=True)
+        c.putheader("Host", host or f"127.0.0.1:{self.port}")
+        for k, v in headers:
+            c.putheader(k, v)
+        c.endheaders()
+        r = c.getresponse()
+        body = r.read()
+        c.close()
+        return r.status, dict(r.getheaders()), body
+
+    def assertServes(self, src, name, key=None):
+        status, h, body = self.image(src, key)
+        self.assertEqual(status, 200, src)
+        self.assertEqual(body, b"\x89PNG " + name.encode(), src)
+        return h
+
+    def test_in_the_vault_without_the_key(self):
+        # by name, as Obsidian pastes it (attachments/ beside the note), and by a path from the note
+        h = self.assertServes("Pasted image 20260101.png", "pasted")
+        self.assertEqual(h["Content-Type"], "image/png")
+        self.assertServes("figs/loss plot.png", "spaced")
+        self.assertServes("./attachments/dup.png", "near")
+        self.assertServes("experiments/figs/loss plot.png", "spaced")  # from the vault's top
+        self.assertServes("PASTED IMAGE 20260101.PNG", "pasted")  # names match in any case
+
+    def test_the_nearest_of_two_names(self):
+        self.assertServes("dup.png", "near")
+        self.assertServes("pics/dup.png", "far", KEY)  # a path picks the other one
+
+    def test_outside_the_vault_only_with_the_key(self):
+        code = str(self.files["code"])
+        for src, name in [("shared.jpg", "shared"), ("results/fig3.png", "code"), (code, "code"),
+                          ("file://" + code, "code"), ("../../code/results/fig3.png", "code"), ("/pics/shared.jpg", "shared")]:
+            self.assertEqual(self.image(src)[0], 403, src)
+            self.assertEqual(self.image(src, "wrong-key")[0], 403, src)
+            self.assertServes(src, name, KEY)
+        self.assertEqual(self.image("shared.jpg", KEY)[1]["Content-Type"], "image/jpeg")
+
+    def test_nothing_to_probe_without_the_key(self):
+        # a missing image and one outside the vault get the same answer without the key
+        self.assertEqual(self.image("nowhere.png")[0], 403)
+        self.assertEqual(self.image("/no/such/dir/x.png")[0], 403)
+        self.assertEqual(self.image("nowhere.png", KEY)[0], 404)
+
+    def test_images_only(self):
+        for src in [str(self.obs / "secret.txt"), "figs/secret.png", "../../../secret.txt", "E01 Run.md",
+                    "../directions/D00 Root.md", "", "figs/", "figs/loss plot.png\x00.png"]:
+            self.assertEqual(self.image(src, KEY)[0], 404, repr(src))
+        self.assertEqual(self.image("binned.png", KEY)[0], 404)  # dot folders are not searched by name
+        for nid in ["E99", "X01", "../E01", ""]:
+            self.assertEqual(self.image("dup.png", KEY, note_id=nid)[0], 404, nid)
+
+    def test_an_svg_runs_nothing(self):
+        h = self.assertServes("chart.svg", "svg")
+        self.assertEqual(h["Content-Type"], "image/svg+xml")
+        self.assertIn("sandbox", h["Content-Security-Policy"])
+        self.assertIn("default-src 'none'", h["Content-Security-Policy"])
+        self.assertEqual(h["X-Content-Type-Options"], "nosniff")
+
+    def test_sent_again_only_once_changed(self):
+        h = self.assertServes("dup.png", "near")
+        status, again, body = self.image("dup.png", headers=[("If-None-Match", h["ETag"])])
+        self.assertEqual((status, body), (304, b""))
+        self.assertEqual(again["ETag"], h["ETag"])
+
+    def test_an_image_just_added_is_found(self):
+        self.assertServes("dup.png", "near")  # the vault's names are now known
+        p = self.vault / "experiments" / "attachments" / "new.png"
+        p.write_bytes(b"\x89PNG new")
+        self.addCleanup(p.unlink)
+        self.assertServes("new.png", "new")
+
+    def test_loopback_hosts_only(self):
+        self.assertEqual(self.image("dup.png", KEY, host="evil.example")[0], 403)
+
+    def test_no_obsidian_vault_around(self):
+        # the vault is all there is to search by name
+        self.assertEqual(rft_server.Vault(self.vault, "demo").image_tops, [self.vault.resolve(), self.obs.resolve()])
+        with tempfile.TemporaryDirectory() as t:
+            self.assertEqual(rft_server.Vault(Path(t), "demo").image_tops, [Path(t).resolve()])
 
 
 class SharedPortTest(unittest.TestCase):

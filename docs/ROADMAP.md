@@ -1,7 +1,8 @@
 # Roadmap
 
 Planned work, split into release packages in the order they should ship. Each
-package is one minor version (the current release is 0.14.0) and lists what it contains, how it
+package is one minor version (the current release is 0.15.0, which also brings Alex's
+changes: note types, light theme, LaTeX, images, code repos) and lists what it contains, how it
 could be done, and when it is done. A package builds only on the ones before it.
 
 | Version | Package | Depends on |
@@ -13,7 +14,8 @@ could be done, and when it is done. A package builds only on the ones before it.
 | 0.12.0 | Literature-driven workflow (done) | 0.11.0 |
 | 0.13.0 | Paper collection (done) | 0.11.0 |
 | 0.14.0 | Search index (done) | – |
-| 0.15.0 | Knowledge graph (design note written) | 0.14.0 |
+| 0.15.0 | Alex's PR #4 merged (done) | – |
+| 0.16.0 | Knowledge graph (design note written) | 0.14.0 |
 
 ---
 
@@ -108,7 +110,7 @@ The simple first step towards fast access to the whole tree.
 Done when: `rft_search` answers "what did we try on X" from the index on a large vault, and the
 index is rebuilt after every edit.
 
-## 0.15.0 — Knowledge graph
+## 0.16.0 — Knowledge graph
 
 - **Connect the tree to a knowledge-graph store** (e.g. Graphiti or a similar graph memory), if
   the search index turns out not to be enough. Still to be scoped: which store, what goes in

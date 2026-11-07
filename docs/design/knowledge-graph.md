@@ -1,6 +1,6 @@
 # Design note: a knowledge graph for the tree
 
-Status: proposal (roadmap 0.15.0). Nothing here is built yet.
+Status: proposal (roadmap 0.16.0). Nothing here is built yet.
 
 ## The question
 
@@ -66,5 +66,5 @@ drift from the notes.
 
 ## Decision
 
-To take with the user: build `rft_graph` (step 1) as 0.15.0, and leave the Graphiti bridge until
+To take with the user: build `rft_graph` (step 1) as 0.16.0, and leave the Graphiti bridge until
 the cross-project question has a yes.

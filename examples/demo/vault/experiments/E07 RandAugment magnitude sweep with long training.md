@@ -1,5 +1,5 @@
 ---
-id: E03
+id: E07
 type: experiment
 status: done
 date: 2026-03-14
@@ -10,16 +10,21 @@ down: ["[[D03 Why augmentation fails at 1k images]]", "[[D04 Mixup as an alterna
 tags: [small-data-regularisation, experiment, augmentation, cifar, done]
 ---
 
-# E03 · RandAugment magnitude sweep with long training
+# E07 · RandAugment magnitude sweep with long training
 
 **Parent:** [[D02 Strong augmentation closes the gap]]  
-**Status:** done · **Date:** 2026-03-14
+**Status:** done · **Date:** 2026-03-14  
+**Code / data:** commit, script, results folder, machine
 
 ## What
 Magnitude 5, 9, 15; 200 epochs; 5 seeds per size.
 
+## Why
+
 ## Result
 At magnitude 15 the gap closes at 5k and 10k images, but not at 1k (still 1.9 ± 0.7 points).
+
+## Directions found
 
 ## Children in the tree
 - [[D03 Why augmentation fails at 1k images]]
