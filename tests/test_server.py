@@ -3,7 +3,9 @@ adding a note through the session, and their safety.
 
     python3 -m unittest discover -s tests -p "test_*.py"
 """
+import contextlib
 import http.client
+import io
 import json
 import os
 import queue
@@ -222,6 +224,28 @@ class ServerTest(unittest.TestCase):
             after = json.loads(self.get("/api/tree")[2])
             self.assertNotEqual(after["version"], before)
             self.assertIn("D02", [n["id"] for n in after["nodes"]])
+        finally:
+            p.unlink()
+
+    def test_summary(self):
+        self.assertEqual(rft_server.unquote_json('"Sweep of \\"alpha\\", 3 seeds"'), 'Sweep of "alpha", 3 seeds')
+        self.assertEqual(rft_server.unquote_json("plain"), "plain")
+        p = self.vault / "directions" / "D02 Summed.md"
+        p.write_text(note("D02", "direction", "idea", "D01 Next idea", "Summed").replace("date: 2026-01-01\n", 'date: 2026-01-01\nsummary: "One \\"line\\""\n'))
+        try:
+            nodes = {n["id"]: n for n in json.loads(self.get("/api/tree")[2])["nodes"]}
+            self.assertEqual(nodes["D02"]["summary"], 'One "line"')
+            self.assertNotIn("summary", nodes["D01"])
+        finally:
+            p.unlink()
+
+    def test_superseded_by(self):
+        p = self.vault / "directions" / "D02 Overturned.md"
+        p.write_text(note("D02", "direction", "idea", "D01 Next idea", "Overturned").replace("date: 2026-01-01\n", 'date: 2026-01-01\nsuperseded_by: "[[D01 Next idea]]"\n'))
+        try:
+            nodes = {n["id"]: n for n in json.loads(self.get("/api/tree")[2])["nodes"]}
+            self.assertEqual(nodes["D02"]["supersededBy"], "D01")
+            self.assertNotIn("supersededBy", nodes["D01"])
         finally:
             p.unlink()
 
@@ -604,6 +628,66 @@ class ServerTest(unittest.TestCase):
 
         self.session(gone)
         self.assertEqual(self.post({"parent": "D00", "type": "direction", "title": "Lost"})[0], 503)
+
+    def mover(self, request):
+        """The session as the server sees it for a move: the note's `parent:` now names the new one."""
+        p = self.vault / "directions" / "D01 Next idea.md"
+        before = p.read_text()
+        self.addCleanup(p.write_text, before)
+        names = {"D00": "D00 Root question", "E01": "E01 First run"}
+        p.write_text(before.replace('parent: "[[E01 First run]]"', f'parent: "[[{names[request["parent"]]}]]"\norigin: ["[[E01 First run]]"]'))
+
+    def move(self, payload, **kw):
+        return self.write("POST", "/api/move", payload, **kw)
+
+    def test_move_asks_the_session_and_answers_once_moved(self):
+        self.session(self.mover)
+        self.assertEqual(self.move({"id": "D01", "parent": "D00"}), (200, {"id": "D01", "parent": "D00"}))
+        self.assertEqual(self.asked, [("RFT_MOVE_NODE", {"id": "D01", "parent": "D00"})])
+        nodes = {n["id"]: n for n in json.loads(self.get("/api/tree")[2])["nodes"]}
+        self.assertEqual((nodes["D01"]["parent"], nodes["D01"]["origin"]), ("D00", ["E01"]))
+        self.assertNotIn("origin", nodes["E01"])
+
+    def test_serves_a_reference_pdf_from_papers_only(self):
+        papers = self.vault / "papers" / "Runs"
+        papers.mkdir(parents=True)
+        (papers / "2020 Doe A paper.pdf").write_bytes(b"%PDF-1.4 x")
+        self.addCleanup(lambda: ((papers / "2020 Doe A paper.pdf").unlink(), papers.rmdir(), papers.parent.rmdir()))
+        p = self.vault / "directions" / "D01 Next idea.md"
+        before = p.read_text()
+        self.addCleanup(p.write_text, before)
+        p.write_text(before.replace("tags:", 'pdf: "[[papers/Runs/2020 Doe A paper.pdf]]"\ntags:'))
+        status, ctype, body = self.get("/api/paper?id=D01")
+        self.assertEqual((status, ctype, body), (200, "application/pdf", b"%PDF-1.4 x"))
+        self.assertEqual(self.get("/api/paper?id=E01")[0], 404)
+        for target in ["../secret.md", "directions/D01 Next idea.md", "papers/../../secret.md"]:
+            p.write_text(before.replace("tags:", f'pdf: "[[{target}]]"\ntags:'))
+            self.assertEqual(self.get("/api/paper?id=D01")[0], 404, target)
+
+    def test_refs_are_read_as_ids(self):
+        p = self.vault / "directions" / "D01 Next idea.md"
+        before = p.read_text()
+        self.addCleanup(p.write_text, before)
+        p.write_text(before.replace("tags:", 'refs: ["[[E01 First run]]", "[[R99 Gone]]"]\ntags:'))
+        nodes = {n["id"]: n for n in json.loads(self.get("/api/tree")[2])["nodes"]}
+        self.assertEqual(nodes["D01"]["refs"], ["E01"])
+        self.assertNotIn("refs", nodes["E01"])
+
+    def test_move_bad_requests_reach_no_session(self):
+        self.session(self.mover)
+        for payload, status in [({"id": "D01"}, 400), ({"id": "D01", "parent": 3}, 400), ({"id": "D42", "parent": "D00"}, 404),
+                                ({"id": "D00", "parent": "E01"}, 400), ({"id": "D01", "parent": "E01"}, 400),
+                                ({"id": "E01", "parent": "D01"}, 400), ({"id": "E01", "parent": "E01"}, 400)]:
+            self.assertEqual(self.move(payload)[0], status, payload)
+        self.assertEqual(self.move({"id": "D01", "parent": "D00"}, key=None)[0], 403)
+        self.assertEqual(self.move({"id": "D01", "parent": "D00"}, origin="http://evil.example")[0], 403)
+        self.assertEqual(self.asked, [])
+
+    def test_move_line_on_stdout(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rft_server.ask_session("RFT_MOVE_NODE", {"id": "D01", "parent": "D00"})
+        self.assertEqual(out.getvalue(), 'RFT_MOVE_NODE {"id": "D01", "parent": "D00"}\n')
 
     def test_set_type_asks_the_session_and_answers_the_new_id(self):
         self.session(self.retyped_note())

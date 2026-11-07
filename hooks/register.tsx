@@ -1,10 +1,11 @@
-// rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-view), the model's
-// tools (rft_add_node, rft_set_status, rft_set_tags, rft_set_type, rft_set_concept, rft_concepts, rft_set_repos,
-// rft_code, rft_set_code, rft_tags, rft_tree, rft_validate, rft_sync, rft_comments, rft_comment,
-// rft_suggest), the operating rules injected into the system prompt, the outline pane, and the
-// web view: /rft starts a local server (server/rft_server.py) for the interactive tree page
-// (web/), makes the notes that page adds (fromView), and asks Claude to answer the threads the
-// user asks it to (askFromView). Claude's own edits of a locked note are refused (lockedEdit).
+// rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-concepts, /rft-literature, /rft-rebalance,
+// /rft-summarize, /rft-next, /rft-view), the model's tools (rft_add_node, rft_set_status, rft_set_summary, rft_map, rft_set_digest, rft_move_node, rft_set_refs, rft_search,
+// rft_graph, rft_supersede, rft_next, rft_collect_papers, rft_set_tags, rft_set_type, rft_set_concept, rft_concepts, rft_set_repos, rft_code,
+// rft_set_code, rft_tags, rft_tree, rft_validate, rft_sync, rft_comments, rft_comment, rft_suggest), the operating rules
+// injected into the system prompt, the outline pane, and the web view: /rft starts a local
+// server (server/rft_server.py) for the interactive tree page (web/), makes the notes that
+// page adds, retypes or moves (fromView), and asks Claude to answer the threads the user asks
+// it to (askFromView). Claude's own edits of a locked note are refused (lockedEdit).
 // Everything is
 // inert without `.rft/config.json` in the session's folder or a folder above it; that config
 // may be a link (`{"tree": "../notes"}`) to a tree kept elsewhere.
@@ -15,10 +16,17 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { RftSnapshot } from '../types'
 import { COMMENTS_DIR, askText, comment as addComment, commentsReport, isLocked, readComments, suggest as addSuggestion } from './lib/comments'
 import type { CodeEnv, Git } from './lib/ops'
-import { addNode, codeReport, conceptsReport, exportHtml, initVault, loadActive, lockedText, rulesText, setCode, setConcept, setRepos, setStatus, setTags, setType, tagsReport, today, treeReport } from './lib/ops'
+import { addNode, codeReport, conceptsReport, exportHtml, initVault, loadActive, lockedText, moveNode, rulesText, setCode, setConcept, setRefs, setRepos, setStatus, setTags, setType, tagsReport, today, treeReport } from './lib/ops'
 import { ASSET_PATHS } from './lib/page'
-import type { Config, Io, NodeType, Tree } from './lib/vault'
-import { LEGEND, MARK, NODE_TYPES, bodyOf, counts, countsLine, isAbsolute, join, locate, readConfig, resolvePath, rooted, signatureOf, sync, validate } from './lib/vault'
+import type { Config, Io, Loaded, NodeType, Tree } from './lib/vault'
+import { OPEN_HOSTS, planPapers } from './lib/papers'
+import { searchReport, similarNotes } from './lib/search'
+import { graphReport } from './lib/graph'
+import { candidates, candidatesReport } from './lib/rebalance'
+import { nextReport, supersede } from './lib/knowledge'
+import { RECALL_HINT, searchesVault } from './lib/recall'
+import { SMALL_TREE, mapGaps, mapReport, mapWarnings, projectMap, readDigests, resolveConcept, setDigest, setSummaries } from './lib/map'
+import { LEGEND, MARK, NODE_TYPES, bodyOf, counts, countsLine, isAbsolute, join, locate, readConfig, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
 
 const PANE = 'rft-tree'
 const TITLE = 'Reasoning tree'
@@ -87,6 +95,8 @@ const TOOLS = {
         code: { type: 'string', description: 'Experiment: commit, script, results folder, machine.' },
         sections: { type: 'object', additionalProperties: { type: 'string' }, description: 'Other sections by heading, e.g. {"Status": "..."}. A reference has Source, Summary, Method, Key results, Relevance; a theory note Statement, Builds on, Explanation, Open questions.' },
         tags: { type: 'array', items: { type: 'string' }, description: '1-3 short topical tags, lowercase kebab-case, reused from rft_tags when they fit (the project, type and status tags are added anyway).' },
+        refs: { type: 'array', items: { type: 'string' }, description: 'Ids of the reference notes (R..) it builds on: for an experiment, the paper(s) whose setup it starts from; for a direction, the work it extends. Add missing references first.' },
+        summary: { type: 'string', description: 'One line (at most 240 characters) on what the note is about, specific enough to read instead of the note: what is tested and on what, the idea, the paper\'s main claim. Always give it.' },
       },
       required: ['type', 'title'],
     },
@@ -134,8 +144,124 @@ const TOOLS = {
         id: { type: 'string', description: 'Id (e.g. E12) or full name of the note.' },
         status: { type: 'string', enum: ['planned', 'running', 'done', 'idea', 'dropped', 'discussed', 'moved'] },
         note: { type: 'string', description: 'Optional text to append (real results, or the reason).' },
+        summary: { type: 'string', description: 'The note\'s one-line summary, updated with what it found (the key number) or why it was dropped.' },
       },
       required: ['id', 'status'],
+    },
+  },
+  rft_set_summary: {
+    description:
+      'Set the one-line summary (summary: in the frontmatter) of one or more notes: what the note is about and, once known, what it found, with the key number. Summaries are what rft_map and later sessions read instead of the notes, so make them specific. Takes many at once, for filling in an existing tree.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        summaries: { type: 'object', additionalProperties: { type: 'string' }, description: 'Note id → one line (at most 240 characters), e.g. {"E12": "Mixup on CIFAR-100 1k: +2.1±0.4 top-1 over the baseline, gap closes at 10k"}.' },
+      },
+      required: ['summaries'],
+    },
+  },
+  rft_map: {
+    description:
+      'The tree in layers, cheaper than reading notes. Without concept: the project map, each concept with its state (from its digest) and counts, and the experiments in progress. With a concept: its digest (state, key results, dead ends, open questions), its sub-concepts, and its notes one per line with their summaries. Read it before opening note files; it says when a digest is missing or out of date.',
+    inputSchema: {
+      type: 'object',
+      properties: { concept: { type: 'string', description: 'A concept, by name or the id of the note that starts it; omit for the project map.' } },
+    },
+  },
+  rft_supersede: {
+    description:
+      'Mark a note whose result a newer one overturns (superseded_by: in its frontmatter, and a dated History line): a corrected number, a bug found in the run, a better-controlled rerun that changes the conclusion. rft_map, rft_search and rft_graph then show it as superseded, so nobody builds on the old result. Without by, clears the mark. Then update the concept\'s digest.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'The note whose result no longer holds (id or full name).' },
+        by: { type: 'string', description: 'The note whose result holds instead; omit to clear the mark.' },
+        why: { type: 'string', description: 'A few words: what changed (kept in the History line).' },
+      },
+      required: ['id'],
+    },
+  },
+  rft_next: {
+    description:
+      'What is still open, concept by concept: experiments running, experiments planned and never run, directions with nothing tried under them (oldest first, with their age), and the open questions of the digests. Use it when asked what to do next, or before proposing new work, so open threads are picked up before new ones are opened.',
+    inputSchema: {
+      type: 'object',
+      properties: { concept: { type: 'string', description: 'A concept (name or start note id): it and its sub-concepts; omit for the whole tree.' } },
+    },
+  },
+  rft_set_digest: {
+    description:
+      'Write the digest of a concept (vault map/): where that line of research stands, for whoever reads it next instead of its notes. Write it from the notes (rft_map <concept>, then the files you need), never from memory. Stamped with the state of its notes, so rft_map can say when it goes out of date.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        concept: { type: 'string', description: 'The concept, by name or the id of the note that starts it.' },
+        state: { type: 'string', description: 'One or two sentences: where the line of research stands now (what holds, what is being tried).' },
+        text: { type: 'string', description: 'Markdown sections: ## Key results (numbers, with the note ids), ## Dead ends (what was ruled out and why, with ids), ## Open questions (and the notes that hold them). Short: a page at most.' },
+      },
+      required: ['concept', 'state', 'text'],
+    },
+  },
+  rft_move_node: {
+    description:
+      'Move a note and its whole subtree under another parent, when it belongs to another line of research. The note keeps where it came from (origin: and a dated History line), the old parent stops listing it, the new one lists it, and the index and canvas follow. Only after the user has agreed to the move.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id (e.g. E12) or full name of the note to move.' },
+        parent: { type: 'string', description: 'Id or full name of the new parent; not the note itself or a note below it.' },
+        why: { type: 'string', description: 'Optional: why it moves, a few words kept in its History line.' },
+      },
+      required: ['id', 'parent'],
+    },
+  },
+  rft_set_refs: {
+    description:
+      'Replace the references a note builds on (refs: in its frontmatter, links to R notes): the paper(s) behind an experiment\'s setup or a direction\'s idea. Add a missing paper first as a reference note.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id (e.g. E12) or full name of the note.' },
+        refs: { type: 'array', items: { type: 'string' }, description: 'Ids of the reference notes (an empty list removes them).' },
+      },
+      required: ['id', 'refs'],
+    },
+  },
+  rft_search: {
+    description:
+      'Search every note of the tree (titles, tags, concepts and text) and get the best matches with the line that matched: use it to find what was tried, measured or read on a subject before reading files one by one, or before proposing an experiment that may already exist. Filters narrow by type, status, concept or tag; with filters alone it lists the newest notes that pass.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Words to look for, e.g. "label smoothing calibration".' },
+        type: { type: 'string', enum: NODE_TYPES },
+        status: { type: 'string', enum: ['planned', 'running', 'done', 'idea', 'dropped', 'discussed', 'moved'] },
+        concept: { type: 'string', description: 'A concept, by name or start note id: its notes and its sub-concepts\'.' },
+        tag: { type: 'string', description: 'A topical tag.' },
+        limit: { type: 'number', description: 'How many notes at most (default 10).' },
+      },
+    },
+  },
+  rft_graph: {
+    description:
+      'A note\'s place in the tree, one line per note with its summary: around (default) its parent, children, the notes beside it, what it builds on (refs), what cites it, where it was before a move; path, how the reasoning reached it from the top. Use it for "what came out of E12", "what builds on R03", "how did we get to D40".',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id (e.g. E12) or full name of the note.' },
+        mode: { type: 'string', enum: ['around', 'path'], description: 'around (default) or path.' },
+      },
+      required: ['id'],
+    },
+  },
+  rft_collect_papers: {
+    description:
+      'Download the papers of reference notes into the vault, in the background: from arXiv (an arXiv id or link under Source) and from open-access proceedings (a PDF link), into papers/<concept>/<year> <first author> <title>.pdf, each linked from its note (pdf:). Also moves saved PDFs when a note\'s concept changed. Returns at once; never downloads from paywalled publishers. Use after a literature search, or when asked.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ids: { type: 'array', items: { type: 'string' }, description: 'Reference notes (ids); omit for every reference in the tree.' },
+      },
     },
   },
   rft_set_tags: {
@@ -249,6 +375,9 @@ const TOOLS = {
 // Module state: reset on a reload, when `session.start` runs again and sets it anew.
 // The rules for the system prompt are fixed at activation so the prompt cache holds.
 let rules: string | null = null
+// the vault's folder and the session's, for the recall hint; whether rft_search, rft_map or
+// rft_graph was used yet this session (the hint stops then)
+let recall: { vault: string; cwd: string; used: boolean } | null = null
 let poller: { cancel: () => void } | null = null
 // prompts for Claude to answer, from a command or the tree view, submitted by the poller
 const pendingPrompts: string[] = []
@@ -295,6 +424,7 @@ async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> 
   let s: RftSnapshot | null = null
   let config: Config | null = null
   let h: Here | null = null
+  recall = null
   try {
     s = await refresh($, true)
     h = await mustHere($)
@@ -302,7 +432,18 @@ async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> 
   } catch (err) {
     failed.push(`reading the vault (${message(err)})`)
   }
-  if (s && config && h) rules = rulesText(treeOf(s), config, shownVault(h, config), { cwd: h.cwd, root: h.root, home: await homeOf($) })
+  if (s && config && h) {
+    // a large tree starts from the project map; a small one from its list of notes
+    let map: string | undefined
+    if (Object.keys(s.nodes).length > SMALL_TREE) {
+      try {
+        const loaded = await loadActive(h.io)
+        map = projectMap(loaded, await readDigests(h.io, loaded))
+      } catch { /* the list of notes instead */ }
+    }
+    rules = rulesText(treeOf(s), config, shownVault(h, config), { cwd: h.cwd, root: h.root, home: await homeOf($) }, map)
+    recall = { vault: resolvePath(h.root, vaultOf(h, config)), cwd: h.cwd, used: false }
+  }
   // each registration on its own, so one refusal leaves the rest working
   for (const [name, spec] of Object.entries(TOOLS)) {
     if (registeredTools.has(name)) continue
@@ -351,6 +492,10 @@ async function registerCommands($: EngineInterface): Promise<void> {
   await attempt('rft', () => $.command.register({ name: 'rft', description: 'Open the interactive tree view (/rft list: the outline pane, /rft text: print it, /rft stop: stop the server)', argumentHint: '[list|text|stop]' }))
   await attempt('rft-init', () => $.command.register({ name: 'rft-init', description: 'Activate the Reasoning Flow Tree in this project and create its vault', argumentHint: '[starting question]' }))
   await attempt('rft-concepts', () => $.command.register({ name: 'rft-concepts', description: 'Print the concept tree (/rft-concepts suggest: ask Claude to propose a concept split)', argumentHint: '[suggest]' }))
+  await attempt('rft-literature', () => $.command.register({ name: 'rft-literature', description: 'Ask Claude for a literature search on a topic, a note or a concept, ending in reference notes', argumentHint: '<topic, note id or concept>' }))
+  await attempt('rft-rebalance', () => $.command.register({ name: 'rft-rebalance', description: 'Ask Claude to propose moving branches under the line of research they belong to; nothing moves until you confirm', argumentHint: '[concept or note id] [--full]' }))
+  await attempt('rft-next', () => $.command.register({ name: 'rft-next', description: 'What is still open, by concept: running and planned experiments, unexplored directions, open questions', argumentHint: '[concept]' }))
+  await attempt('rft-summarize', () => $.command.register({ name: 'rft-summarize', description: 'Ask Claude to write the missing one-line note summaries and concept digests (the project map)', argumentHint: '[concept]' }))
   await attempt('rft-view', () => $.command.register({ name: 'rft-view', description: 'Write a standalone HTML view of the tree to <vault>/tree.html' }))
   if (failed.length) reportFailures($, failed)
 }
@@ -403,9 +548,10 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       if (str(i.result)) sections.Result = String(i.result)
       const node = await addNode(io, loaded, {
         type: i.type as NodeType, title: String(i.title ?? ''), parent: str(i.parent) ?? null,
-        status: str(i.status), date: today(), sections, code: str(i.code), tags: strings(i.tags),
+        status: str(i.status), date: today(), sections, code: str(i.code), tags: strings(i.tags), refs: strings(i.refs), summary: str(i.summary),
       }, await codeEnv($, h))
-      return `${node.report}\nId: ${node.id}\nNote: ${join(shownVault(h, loaded.config), node.path)}`
+      const similar = similarNotes(loaded, node.id)
+      return `${node.report}\nId: ${node.id}\nNote: ${join(shownVault(h, loaded.config), node.path)}${similar ? `\n${similar}` : ''}`
     }
     case 'rft_set_repos':
       return setRepos(io, loaded, await codeEnv($, h), String(i.id ?? ''), strings(i.repos))
@@ -413,6 +559,17 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       return codeReport(io, loaded, await codeEnv($, h), String(i.id ?? ''))
     case 'rft_set_code':
       return setCode(io, loaded, await codeEnv($, h), String(i.id ?? ''), typeof i.text === 'string' ? i.text : undefined, typeof i.reproduce === 'string' ? i.reproduce : undefined)
+    case 'rft_move_node':
+      return moveNode(io, loaded, String(i.id ?? ''), String(i.parent ?? ''), today(), str(i.why))
+    case 'rft_set_refs':
+      return setRefs(io, loaded, String(i.id ?? ''), strings(i.refs))
+    case 'rft_search':
+      return searchReport(loaded, str(i.query) ?? '', { type: str(i.type), status: str(i.status), concept: str(i.concept), tag: str(i.tag) },
+        typeof i.limit === 'number' && i.limit > 0 ? Math.min(50, Math.floor(i.limit)) : 10, await readDigests(io, loaded))
+    case 'rft_graph':
+      return graphReport(loaded, String(i.id ?? ''), i.mode === 'path' ? 'path' : 'around')
+    case 'rft_collect_papers':
+      return collectPapers($, h, loaded, strings(i.ids))
     case 'rft_set_tags':
       return setTags(io, loaded, String(i.id ?? ''), strings(i.tags))
     case 'rft_set_type':
@@ -424,11 +581,26 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
     case 'rft_tags':
       return tagsReport(loaded)
     case 'rft_set_status':
-      return setStatus(io, loaded, String(i.id ?? ''), String(i.status ?? ''), str(i.note))
+      return setStatus(io, loaded, String(i.id ?? ''), String(i.status ?? ''), str(i.note), str(i.summary))
+    case 'rft_set_summary': {
+      const given: Record<string, string> = {}
+      for (const [k, v] of Object.entries((i.summaries as Record<string, unknown> | undefined) ?? {})) if (typeof v === 'string') given[k] = v
+      if (!Object.keys(given).length) throw new Error('summaries is empty: give {"<id>": "<one line>"}')
+      return setSummaries(io, loaded, given)
+    }
+    case 'rft_supersede':
+      return supersede(io, loaded, String(i.id ?? ''), str(i.by) ?? null, str(i.why), today())
+    case 'rft_next':
+      return nextReport(io, loaded, today(), str(i.concept))
+    case 'rft_map':
+      return mapReport(io, loaded, str(i.concept))
+    case 'rft_set_digest':
+      return setDigest(io, loaded, String(i.concept ?? ''), String(i.state ?? ''), String(i.text ?? ''), today())
     case 'rft_tree':
       return treeReport(loaded, { root: str(i.root), depth: typeof i.depth === 'number' ? i.depth : undefined, vault: shownVault(h, loaded.config) })
     case 'rft_validate': {
       const v = await validate(io, loaded, { root: h.root, home: await homeOf($) })
+      v.warnings.push(...(await mapWarnings(io, loaded)))
       const lines = [v.errors.length
         ? `FAILED: ${v.errors.length} error(s), ${v.warnings.length} warning(s).`
         : `OK: no errors, ${v.warnings.length} warning(s).`]
@@ -559,9 +731,10 @@ async function spawnServer($: EngineInterface, argv: string[]): Promise<string> 
 const FROM_VIEW = [
   { line: 'RFT_ADD_NODE ', tool: 'rft_add_node', fields: ['type', 'parent', 'title'], what: 'add a note' },
   { line: 'RFT_SET_TYPE ', tool: 'rft_set_type', fields: ['id', 'type'], what: "change a note's type" },
+  { line: 'RFT_MOVE_NODE ', tool: 'rft_move_node', fields: ['id', 'parent'], what: 'move a note' },
 ] as const
 
-/** A change the tree view asks for (POST api/node or api/type, relayed by the server). */
+/** A change the tree view asks for (POST api/node, api/type or api/move, relayed by the server). */
 async function fromView($: EngineInterface, asked: (typeof FROM_VIEW)[number], request: string): Promise<void> {
   try {
     const r = JSON.parse(request) as Record<string, unknown>
@@ -593,18 +766,69 @@ async function askFromView($: EngineInterface, request: string): Promise<void> {
   }
 }
 
-/**
- * A note the tree view adds (POST api/node, relayed by the server): made by rft_add_node's code
- * with the type, parent and title alone, so its status is the default, and no model turn is spent.
- */
-async function addFromView($: EngineInterface, request: string): Promise<void> {
-  try {
-    const r = JSON.parse(request) as Record<string, unknown>
-    await runTool($, 'rft_add_node', { type: r.type, parent: r.parent, title: r.title })
-    await refresh($, true)
-  } catch (err) {
-    $.ui.toast(`rft: the tree view could not add a note (${message(err)})`)
-  }
+// ---------------------------------------------------------------- papers
+
+const PAPER = 'RFT_PAPER '
+const PAPERS_DONE = 'RFT_PAPERS_DONE '
+
+/** Starts the background download of reference papers (server/rft_papers.py); answers at once. */
+async function collectPapers($: EngineInterface, h: Here, loaded: Loaded, ids: string[]): Promise<string> {
+  const plan = planPapers(loaded, ids.map(id => resolveId(loaded.tree, id) ?? id))
+  const lines: string[] = []
+  const fetches = plan.jobs.filter(j => j.op === 'fetch').length
+  const moves = plan.jobs.length - fetches
+  if (plan.jobs.length) {
+    const args = [join($.plugin.root, 'server/rft_papers.py'), '--vault', vaultOf(h, loaded.config), '--jobs', JSON.stringify(plan.jobs), '--hosts', OPEN_HOSTS.join(',')]
+    let started = false
+    for (const python of ['python3', 'python']) {
+      try { runPapers($, h, $.process.spawn({ argv: [python, ...args] })); started = true; break } catch { /* the next one */ }
+    }
+    if (!started) throw new Error('collecting papers needs Python 3 on PATH')
+    lines.push(`Started in the background: ${fetches} paper(s) to download${moves ? `, ${moves} to move to their concept's folder` : ''}. Each note gets a pdf: link when its file is saved; a toast says when all are done.`)
+  } else lines.push('Nothing to download or move.')
+  if (plan.saved.length) lines.push(`Already saved: ${plan.saved.join(', ')}.`)
+  if (plan.skipped.length) lines.push('Not downloaded:', ...plan.skipped.map(s => `- ${s.id}: ${s.why}`))
+  return lines.join('\n')
+}
+
+/** Follows the downloader: links each saved file from its note, one note at a time, then reports. */
+function runPapers($: EngineInterface, h: Here, child: ReturnType<EngineInterface['process']['spawn']>): void {
+  let chain = Promise.resolve()
+  const failed: string[] = []
+  void (async () => {
+    let line = ''
+    try {
+      for await (const chunk of child) {
+        if (chunk.stream !== 'stdout') continue
+        const lines = (line + chunk.text).split('\n')
+        line = lines.pop()!
+        for (const l of lines) {
+          if (l.startsWith(PAPER)) {
+            const r = JSON.parse(l.slice(PAPER.length)) as { id: string; ok: boolean; file?: string; error?: string }
+            if (!r.ok) { failed.push(`${r.id} (${r.error})`); continue }
+            chain = chain.then(() => linkPaper(h, r.id, r.file!)).catch(err => { failed.push(`${r.id} (${message(err)})`) })
+          } else if (l.startsWith(PAPERS_DONE)) {
+            const d = JSON.parse(l.slice(PAPERS_DONE.length)) as { ok: number; failed: number }
+            await chain
+            $.ui.toast(`rft: ${d.ok} paper(s) saved in the vault's papers/ folder${failed.length ? `; not saved: ${failed.join(', ')}` : ''}`)
+            await refresh($, true)
+          }
+        }
+      }
+    } catch (err) {
+      $.ui.toast(`rft: collecting papers stopped (${message(err)})`)
+    }
+  })()
+}
+
+/** Writes `pdf: "[[<file>]]"` into the reference note (read afresh: the user may have edited it). */
+async function linkPaper(h: Here, id: string, file: string): Promise<void> {
+  const loaded = await loadActive(h.io)
+  const n = loaded.tree.nodes[id]
+  if (!n) return
+  const text = loaded.texts[id]!
+  const next = setField(text, 'pdf', `"[[${file}]]"`, 'tags')
+  if (next !== text) await h.io.write(join(loaded.config.vault, n.path), next)
 }
 
 async function stopServer($: EngineInterface): Promise<boolean> {
@@ -741,6 +965,21 @@ async function lockedEdit($: EngineInterface, e: Record<string, unknown>): Promi
   }
 }
 
+/**
+ * The literature search: `subject` is a topic in words, a note id or a concept name; the
+ * references go under that note, the concept's start note, or the note the topic belongs to.
+ */
+const literaturePrompt = (subject: string, where: string | null) => `Run a thorough literature search on ${JSON.stringify(subject)} for this project (rft-manual skill, "Literature"). ${where ? `Place the references under ${where}.` : 'First find where it belongs in the tree (rft_tree, rft_concepts): the note or concept it is about; if it opens a new field, ask me where to put it before adding notes.'} Use the search tools you have (web search, deep research, arXiv); prefer peer-reviewed papers, well-known preprints and surveys, the most cited and the most recent. Read each source before writing about it. For each key paper (usually 4 to 10), add one reference note with rft_add_node (type reference): Source with a link that can be checked (DOI, arXiv id or URL), Summary, Method, Key results as the paper reports them (with the table or section), and under Relevance what it means for this project; status done once summarised from the paper itself, planned if only found. Never invent a citation or a result. Once the notes are written, call rft_collect_papers with their ids: it saves the open-access PDFs in the background. Then give me a short synthesis: what is known, what is open, which setups an experiment could start from; list the directions it suggests and ask which ones to add. Do not add directions or experiments until I say which.`
+
+/** The rebalancing request; `scope` (a concept name or a note id) narrows it to one part of the tree. */
+const rebalancePrompt = (scope: string) => `Propose a rebalancing of the reasoning tree (rft-manual skill, "Restructuring the tree")${scope ? `, limited to ${JSON.stringify(scope)} (a concept or a note: consider the branches in it, and moves into it or out of it)` : ''}. Over time some branches grow out of one line of research but belong to another: an experiment hung under the note that happened to come before it, an idea that opened a different line, a branch that would sit better under another concept. Start from the map: rft_map, then rft_map <concept> for the concepts involved (their digests and one-line note summaries); read a note's file only when its summary leaves the move in doubt. For each branch that clearly belongs elsewhere, propose one move: the note to move (its subtree goes with it), its parent now, the new parent, and why in one line. Keep the tree's history in mind: a note that came out of a result stays where the reasoning produced it unless it really is part of another line; when in doubt, leave it. Moves only: if a new concept would help, say so separately (rft_set_concept, after the user agrees). Present the moves as a short numbered table, say what you would leave as it is, and ask me which moves to apply. Do not call rft_move_node until I say yes; then apply only the moves I confirm, each with its why, and finish with rft_validate.`
+
+/** The rebalancing request from the plugin's short list of candidates. */
+const candidatesPrompt = (scope: string, list: string) => `Propose a rebalancing of the reasoning tree (rft-manual skill, "Restructuring the tree")${scope ? `, limited to ${JSON.stringify(scope)}` : ''}. The plugin compared every note with the concepts (its title, summary, tags and references against each concept's notes) and found these candidates, notes that sit closer to another concept than to their own:\n\n${list}\n\nJudge only these; do not survey the rest of the tree. The weak candidates, if any, are listed one line each: most of them stay where they are, so look further only at those whose line suggests a real misplacement (a note about one line of research hung under another). For each candidate you look at, check it against the two concepts (rft_map <concept> if their state is not clear to you, rft_graph <id> for its neighbours) and open a note's file only when that leaves the move in doubt. The fit is a hint from shared words, not a verdict: a note that came out of a result stays where the reasoning produced it unless it really is part of another line; when in doubt, leave it. For each move you keep: the note to move (its subtree goes with it), its parent now, the new parent (the nearest note named is a start, pick the right one), and why in one line. Moves only: if a new concept would help, say so separately (rft_set_concept, after the user agrees). Present the moves as a short numbered table, say which candidates you would leave and why in a few words, and ask me which moves to apply. Do not call rft_move_node until I say yes; then apply only the moves I confirm, each with its why, and finish with rft_validate.`
+
+/** The back-fill of the map: summaries of the notes without one, then the digests, concept by concept. */
+const summarizePrompt = (scope: string) => `Fill in the project map of the reasoning tree${scope ? ` for the concept ${JSON.stringify(scope)} and its sub-concepts` : ''} (rft-manual skill, "The project map"). Work concept by concept, the smallest sub-concepts first: call rft_map <concept> to see its notes and which have no summary; read those notes (their Idea, What, Why, Result, Summary, Relevance, Statement: the parts that say what the note is and what it found, not the boilerplate) and set a one-line summary for each with rft_set_summary, many per call (at most 20). A summary says what the note is about and, if it has one, its result with the key number; for a dropped or discussed direction, why. Never invent a result: when the note has none, say what it tests. Then, with all its summaries set, write the concept's digest with rft_set_digest: its state in one or two sentences, then ## Key results, ## Dead ends and ## Open questions, each point with the note ids. Go on to the next concept without asking me, and at the end run rft_validate and tell me how many summaries and digests you wrote.`
+
 const SUGGEST_CONCEPTS = `Propose a split of the reasoning tree into concepts (rft-manual skill, "Concepts"). Read the current tree with rft_tree and rft_concepts. Suggest 2 to 6 concepts, nested at most two levels: for each, the note that starts it (usually the direction that opened that line of research), a short readable name for the line of research, in words as in a heading (e.g. "Strong augmentation", not a tag like strong-augmentation; never a single experiment), and a one-line summary; say which notes stay in the project root and why. Present the proposal as a short table and ask me to confirm or change it, and for each concept whether code for it already exists on this machine and where. Do not call rft_set_concept until I say yes, nor rft_set_repos before I give a path.`
 
 const NOT_ACTIVE = 'RFT is not active in this project. Run /rft-init [starting question] to set it up.'
@@ -865,6 +1104,70 @@ export const register: Register = (on, options) => {
     }
   })
 
+  on('command.run', { command: 'rft-literature' }, async ($, e) => {
+    try {
+      const loaded = await loadActive((await mustHere($)).io)
+      const subject = e.args.trim()
+      if (!subject) return { text: 'Usage: /rft-literature <topic, note id or concept>, e.g. /rft-literature D12 or /rft-literature "mixup on small data".' }
+      // a note id, or a concept by name: its references go there
+      const id = resolveId(loaded.tree, subject)
+      const concept = Object.values(loaded.tree.concepts ?? {}).find(c => c.root && c.name.toLowerCase() === subject.toLowerCase())
+      const where = id ? loaded.tree.nodes[id]!.name : concept ? `${loaded.tree.nodes[concept.root!]!.name} (the start of the concept "${concept.name}")` : null
+      pendingPrompts.push(literaturePrompt(id ? `${loaded.tree.nodes[id]!.title}` : concept ? concept.name : subject, where))
+      return { text: `Claude will search the literature on ${where ?? JSON.stringify(subject)} in a moment and add what it reads as reference notes; directions and experiments only after you choose.` }
+    } catch (err) {
+      return { text: message(err) }
+    }
+  })
+
+  on('command.run', { command: 'rft-rebalance' }, async ($, e) => {
+    try {
+      const loaded = await loadActive((await mustHere($)).io)
+      if (Object.keys(loaded.tree.nodes).length < 3) return { text: 'The tree has too few notes to rebalance.' }
+      // --full: Claude reads the map of the whole tree; otherwise it judges the plugin's candidates
+      const full = /(^|\s)--full(\s|$)/.test(e.args)
+      const scope = e.args.replace(/(^|\s)--full(?=\s|$)/, ' ').trim()
+      if (full) pendingPrompts.push(rebalancePrompt(scope))
+      else {
+        const list = candidates(loaded, { scope: scope || undefined })
+        if (!list.length) return { text: `${conceptsReport(loaded)}\n\nNo note sits clearly closer to another concept than to its own${scope ? ` in ${scope}` : ''}: nothing to propose. /rft-rebalance --full asks Claude to look at the whole tree anyway.` }
+        pendingPrompts.push(candidatesPrompt(scope, candidatesReport(loaded, list)))
+      }
+      // submitted by the poller, as for /rft-concepts suggest
+      return { text: `${conceptsReport(loaded)}\n\nClaude will propose moves in a moment, as a table${full ? '' : ', from the candidates the plugin found'}; nothing moves until you confirm.` }
+    } catch (err) {
+      return { text: message(err) }
+    }
+  })
+
+  on('command.run', { command: 'rft-next' }, async ($, e) => {
+    try {
+      const io = (await mustHere($)).io
+      return { text: await nextReport(io, await loadActive(io), today(), e.args.trim() || undefined) }
+    } catch (err) {
+      return { text: message(err) }
+    }
+  })
+
+  on('command.run', { command: 'rft-summarize' }, async ($, e) => {
+    try {
+      const io = (await mustHere($)).io
+      const loaded = await loadActive(io)
+      const scope = e.args.trim()
+      const c = scope ? resolveConcept(loaded.tree, scope) : null
+      if (scope && !c) return { text: `"${scope}" is not a concept: /rft-concepts lists them.` }
+      const gaps = await mapGaps(io, loaded, c ?? undefined)
+      if (!gaps.notes && !gaps.digests.length) return { text: `The map${c ? ` of "${c.name}"` : ''} is complete: every note has a summary and every concept a current digest.` }
+      pendingPrompts.push(summarizePrompt(c ? c.name : ''))
+      return {
+        text: `To write${c ? ` in "${c.name}"` : ''}: ${gaps.notes} note summar${gaps.notes === 1 ? 'y' : 'ies'} and ${gaps.digests.length} digest(s)${gaps.digests.length ? ` (${gaps.digests.slice(0, 8).join(', ')}${gaps.digests.length > 8 ? ', …' : ''})` : ''}. ` +
+          'Claude will start in a moment, concept by concept. It reads every note without a summary once, so on a large tree this is a long, one-off job; /rft-summarize <concept> does one line of research at a time.',
+      }
+    } catch (err) {
+      return { text: message(err) }
+    }
+  })
+
   on('command.run', { command: 'rft-view' }, async $ => {
     try {
       const h = await mustHere($)
@@ -899,6 +1202,7 @@ export const register: Register = (on, options) => {
   on('tool.call', async ($, e, next) => {
     const tool = String(e.tool)
     if (tool.startsWith('mcp__rft__')) {
+      if (recall && /^mcp__rft__rft_(search|map|graph)$/.test(tool)) recall.used = true
       try {
         const out = await runTool($, tool.slice('mcp__rft__'.length), e as unknown as Record<string, unknown>)
         await refresh($, true)
@@ -913,7 +1217,10 @@ export const register: Register = (on, options) => {
     }
     const ran = await next(e)
     if (rules && !READ_ONLY.test(tool)) await poll($)
-
+    // a search of the notes before the tree's own search: point to it, until it is used
+    if (recall && !recall.used && !ran.deny && !ran.isError && searchesVault(tool, e as unknown as Record<string, unknown>, recall.vault, recall.cwd)) {
+      return { ...ran, context: [...(ran.context ?? []), RECALL_HINT] }
+    }
     return ran
   }).catch(($, e, next) =>
     next.called ? next(e) : String(e.tool).startsWith('mcp__rft__') ? answer('rft: the tool failed', true) : next(e))

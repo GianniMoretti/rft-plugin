@@ -7,11 +7,15 @@ import type { PageAssets } from './page'
 import { staticPage } from './page'
 import type { CodeRepo, Concept, Config, Io, Loaded, NodeType, RftNode, Tree } from './vault'
 import {
-  CODE, CONFIG_PATH, ID_RE, bodyOf, INDEX, LEGEND, MERMAID, NODE_TYPES, STATUSES, SUBDIR, TEMPLATES, TYPES,
-  MARK, ROOT_CONCEPT, CANVAS, renameLinks, retyped, withCardRenamed, withLinksRenamed, compactTree, conceptOrder, conceptPath, counts, countsLine, defaultConfig, front, idOf, indexTemplate,
-  codeRepos, codeSection, declaredConcept, isAbsolute, isInGit, isNodeType, join, load, locate, needsCode, nextId, noteText, orList, readConfig, removeField, repoAbs, reposLine, resolveId, sanitiseTitle, setField, statusSummary,
-  sync, tagCounts, unquote, validate, walk, withChildListed, withCodeSection, withStatus, withTopicalTags, writeConfig,
+  CANVAS, CODE, CONFIG_PATH, ID_RE, INDEX, LEGEND, MARK, MERMAID, NODE_TYPES, ROOT_CONCEPT, STATUSES, SUBDIR,
+  TEMPLATES, TYPES, bodyOf, codeRepos, codeSection, compactTree, conceptOrder, conceptPath, counts, countsLine,
+  declaredConcept, defaultConfig, front, idOf, indexTemplate, isAbsolute, isInGit, isNodeType, join, load, locate,
+  needsCode, nextId, noteText, orList, readConfig, removeField, renameLinks, repoAbs, reposLine, resolveId, retyped,
+  sanitiseTitle, setField, statusSummary, subtreeOf, sync, tagCounts, unquote, validate, walk, withCardRenamed,
+  withChildListed, withChildUnlisted, withCodeSection, withLinksRenamed, withMove, withRefs, withStatus,
+  withTopicalTags, writeConfig,
 } from './vault'
+import { cleanSummary, withSummary } from './map'
 
 /** Why Claude may not change a locked note's text, and what it does instead. */
 export const lockedText = (n: { id: string; name: string }, instead = `propose the change with rft_suggest {id: "${n.id}", quote: the exact text to replace, replacement}`) =>
@@ -43,6 +47,9 @@ export async function initVault(io: Io, opts: { project: string; question: strin
   }
   const config = defaultConfig(opts.project)
   if (opts.vault) config.vault = opts.vault
+  // a new tree asks for references from the start; an adopted one opts in later
+  config.requireRefs = true
+  config.requireSummaries = true
   const v = config.vault
   let hasNotes = false
   for (const sub of Object.values(SUBDIR)) {
@@ -57,6 +64,8 @@ export async function initVault(io: Io, opts: { project: string; question: strin
   }
   for (const t of NODE_TYPES) await ensure(`templates/_${t}.md`, TEMPLATES[t](opts.project))
   if (hasNotes) {
+    delete config.requireRefs
+    delete config.requireSummaries
     config.mermaid = await io.exists(join(v, MERMAID))
     const loaded = await load(io, config)
     // the project's name as the notes already spell it: the most common first tag
@@ -111,6 +120,21 @@ export type AddInput = {
   sections?: Record<string, string>
   code?: string
   tags?: string[]
+  /** Ids or names of the notes it builds on (references). */
+  refs?: string[]
+  /** One line on what the note is (and, for a result, what it found). */
+  summary?: string
+}
+
+/** Note names for references given by id or name; unknown ones refused. */
+function refNames(tree: Tree, refs: string[]): string[] {
+  const out: string[] = []
+  for (const r of refs) {
+    const id = resolveId(tree, r)
+    if (!id) throw new RftError(`reference "${r}" is not a note of the tree (add it first with rft_add_node, type reference)`)
+    if (!out.includes(tree.nodes[id]!.name)) out.push(tree.nodes[id]!.name)
+  }
+  return out
 }
 
 /**
@@ -152,7 +176,9 @@ export async function addNode(io: Io, loaded: Loaded, input: AddInput, env?: Cod
       ? ` The ${CODE} section holds your description, checked against these commits.`
       : ' Read the code as it is now (the current commit and uncommitted changes) and write how this note relates to it with rft_set_code.')
   }
-  const text = noteText(id, { ...input, sections, title, status }, config.project, parentName)
+  const refs = refNames(tree, input.refs ?? [])
+  const summary = input.summary?.trim() ? cleanSummary(input.summary) : undefined
+  const text = noteText(id, { ...input, sections, title, status, refs, summary }, config.project, parentName)
   await io.write(join(config.vault, path), text)
   const prefix = TYPES[input.type].prefix
   config.lastId[prefix] = Math.max(config.lastId[prefix] ?? 0, Number(id.slice(1)))
@@ -169,7 +195,7 @@ export async function addNode(io: Io, loaded: Loaded, input: AddInput, env?: Cod
   const node = fresh.tree.nodes[id]!
   return {
     ...node,
-    report: `Created ${path}${parent ? ` under ${parentName}` : ' as the root'} (status ${status}). Updated ${report.changed.length} derived file(s).${codeSaid}`,
+    report: `Created ${path}${parent ? ` under ${parentName}` : ' as the root'} (status ${status}). Updated ${report.changed.length} derived file(s).${codeSaid}${summary ? '' : ' It has no summary: give it one line with rft_set_summary.'}`,
   }
 }
 
@@ -196,6 +222,21 @@ export async function setTags(io: Io, loaded: Loaded, ref: string, tags: string[
   Object.assign(loaded, fresh)
   const now = fresh.tree.nodes[id]!.tags
   return `${n.name}: tags ${now.length ? now.join(', ') : '(none)'}${n.tags.join() !== now.join() ? ` (were ${n.tags.join(', ') || 'none'})` : ''}.`
+}
+
+/** Replaces the notes a note builds on (`refs:`); an empty list removes them. */
+export async function setRefs(io: Io, loaded: Loaded, ref: string, refs: string[]): Promise<string> {
+  const id = resolveId(loaded.tree, ref)
+  if (!id) throw new RftError(`"${ref}" is not a note of the tree`)
+  const n = loaded.tree.nodes[id]!
+  const names = refNames(loaded.tree, refs)
+  if (names.includes(n.name)) throw new RftError(`${n.name} cannot reference itself`)
+  await io.write(join(loaded.config.vault, n.path), withRefs(loaded.texts[id]!, names))
+  const fresh = await load(io, loaded.config)
+  Object.assign(loaded, fresh)
+  const odd = (fresh.tree.nodes[id]!.refs ?? []).filter(r => fresh.tree.nodes[r]!.type !== 'reference')
+  return `${n.name}: ${names.length ? `refs ${names.map(x => idOf(x)).join(', ')}` : 'no refs'}.` +
+    (odd.length ? ` Note: ${odd.join(', ')} ${odd.length === 1 ? 'is' : 'are'} not a reference.` : '')
 }
 
 // ---------------------------------------------------------------- concepts
@@ -308,18 +349,56 @@ export function tagsReport(loaded: Loaded): string {
     : 'No topical tags yet: pick 1-3 short lowercase kebab-case ones per note.'
 }
 
-export async function setStatus(io: Io, loaded: Loaded, ref: string, status: string, note?: string): Promise<string> {
+export async function setStatus(io: Io, loaded: Loaded, ref: string, status: string, note?: string, summary?: string): Promise<string> {
   const id = resolveId(loaded.tree, ref)
   if (!id) throw new RftError(`"${ref}" is not a note of the tree`)
   if (!(STATUSES as readonly string[]).includes(status)) throw new RftError(`status must be one of ${STATUSES.join(', ')}`)
   const n = loaded.tree.nodes[id]!
   const prev = loaded.texts[id]!
   if (note && isLocked(prev)) throw new RftError(lockedText(n, 'set the status without a note, and propose the text with rft_suggest'))
-  await io.write(join(loaded.config.vault, n.path), withStatus(prev, n, status, note))
+  let next = withStatus(prev, n, status, note)
+  if (summary?.trim()) next = withSummary(next, summary)
+  await io.write(join(loaded.config.vault, n.path), next)
   const fresh = await load(io, loaded.config)
   const report = await sync(io, fresh)
   Object.assign(loaded, fresh)
-  return `${n.name}: ${n.status} → ${status}${note ? ' (note added)' : ''}. Updated ${report.changed.length} derived file(s).`
+  const nudge = !summary?.trim() && note?.trim() && (status === 'done' || status === 'dropped')
+    ? ' Update its one-line summary with what it found (rft_set_summary).' : ''
+  return `${n.name}: ${n.status} → ${status}${note ? ' (note added)' : ''}${summary?.trim() ? ', summary updated' : ''}. Updated ${report.changed.length} derived file(s).${nudge}`
+}
+
+/**
+ * Moves a note and its subtree under another parent. The note keeps where it came from
+ * (`origin:` and a `## History` line); the old parent stops listing it, the new one lists it,
+ * and the derived files follow. Concepts move with their notes.
+ */
+export async function moveNode(io: Io, loaded: Loaded, ref: string, parentRef: string, date: string, why?: string): Promise<string> {
+  const { tree, config } = loaded
+  const id = resolveId(tree, ref)
+  if (!id) throw new RftError(`"${ref}" is not a note of the tree`)
+  const to = resolveId(tree, parentRef)
+  if (!to) throw new RftError(`the new parent "${parentRef}" is not a note of the tree`)
+  const n = tree.nodes[id]!
+  if (!n.parent) throw new RftError(`${n.name} is a root of the tree: it has no parent to move away from`)
+  if (n.parent === to) throw new RftError(`${n.name} is already under ${tree.nodes[to]!.name}`)
+  const sub = subtreeOf(tree, id)
+  if (sub.has(to)) throw new RftError(`${tree.nodes[to]!.name} is ${to === id ? 'the note itself' : 'below the note'}: a note cannot move under its own subtree`)
+  const old = tree.nodes[n.parent]!
+  const conceptWas = tree.concepts?.[n.concept]?.name
+  await io.write(join(config.vault, n.path), withMove(loaded.texts[id]!, old.name, tree.nodes[to]!.name, date, why))
+  const prev = loaded.texts[old.id]!
+  const next = withChildUnlisted(prev, n.name)
+  if (next !== prev) await io.write(join(config.vault, old.path), next)
+  const fresh = await load(io, config)
+  const report = await sync(io, fresh)
+  Object.assign(loaded, fresh)
+  const conceptNow = fresh.tree.concepts?.[fresh.tree.nodes[id]!.concept]?.name
+  const lines = [
+    `Moved ${n.name}${sub.size > 1 ? ` and the ${sub.size - 1} note(s) below it` : ''} from ${old.name} to ${fresh.tree.nodes[to]!.name}.`,
+    `Its origin keeps ${old.id}. Updated ${report.changed.length} derived file(s).`,
+  ]
+  if (conceptWas !== conceptNow) lines.push(`Its concept is now "${conceptNow}" (was "${conceptWas}").`)
+  return lines.join('\n')
 }
 
 // ---------------------------------------------------------------- code
@@ -638,31 +717,40 @@ function codeContext(tree: Tree, where: { cwd?: string; root?: string; home?: st
  * `where`: the session's folder and the tree's (and the home folder), to say which concept's code
  * the session runs in.
  */
-export function rulesText(tree: Tree, config: Config, vault = config.vault, where: { cwd?: string; root?: string; home?: string } = {}): string {
-  let lines = groupedTree(tree).split('\n')
-  if (lines.length > MAX_LINES) lines = [...lines.slice(0, MAX_LINES), `… ${lines.length - MAX_LINES} more (rft_tree shows them)`]
+export function rulesText(tree: Tree, config: Config, vault = config.vault, where: { cwd?: string; root?: string; home?: string } = {}, map?: string): string {
+  let lines = (map ?? groupedTree(tree)).split('\n')
+  if (lines.length > MAX_LINES) lines = [...lines.slice(0, MAX_LINES), `… ${lines.length - MAX_LINES} more (${map ? 'rft_map' : 'rft_tree'} shows them)`]
   return `# Reasoning Flow Tree (rft) is active in this project
 
 The reasoning of this research project is kept as a tree of Obsidian notes in \`${vault}/\`: one note per experiment (E.., something run or computed), per direction (D.., an idea, question or hypothesis, rejected ones included), per reference (R.., a paper, method or literature review that was read: its summary and your comments) and per theory note (T.., the project's own definitions, methods, taxonomies and arguments, built on the other notes), each with exactly one parent; D00 is the starting question. The notes are the source of truth. Keep the tree up to date as you work, with the rft tools:
 
+- Read the tree in layers, not file by file: rft_map gives the project map (each concept and where it stands), rft_map <concept> a concept's digest and its notes with one-line summaries, rft_search finds notes on a subject (answering with their summaries), rft_graph <id> a note's neighbours or the path to it. Open a note's file only when you need its detail; do not grep the vault.
+- Every note has a one-line \`summary:\` you write: what it is about and, once known, what it found (with the key number). Pass summary to rft_add_node; when a result arrives or a direction is dropped, update it (rft_set_status summary, or rft_set_summary). Keep it specific: it is what you and later sessions read instead of the note.
+- Each concept can have a digest (vault \`map/\`): its state, key results, dead ends, open questions. After a piece of work changes a concept (a result, a dropped line, a new branch), or when rft_map says its digest is missing or out of date and you have read its notes, rewrite it with rft_set_digest.
+- When a result overturns an earlier one (a corrected number, a bug in the run, a better-controlled rerun), mark the old note with rft_supersede (id, by, why) and update the concept's digest: a note shown as [superseded by …] is not to be built on.
+- When asked what to do next, or before opening new work, call rft_next: running and planned experiments, directions with nothing tried under them, the digests' open questions.
 - Before launching an experiment (a training run, a grid, a numerical check, a measurement, a literature search for a yes or no answer), create its node first: rft_add_node with type experiment, parent = the direction it tests, status planned or running, and What / Why filled.
 - When it finishes or gives a partial result, write the real numbers in its note (Result, with spread over seeds and what failed; Directions found; Code / data: commit, script, results folder, machine), then rft_set_status. Record only results that were actually obtained, never expected or invented ones.
 - Every new idea or question, from a result, a reference, the user or a discussion, even if rejected: rft_add_node with type direction, parent = the note it comes from. Rejected ideas get status discussed; abandoned ones dropped; moved ones moved, with the reason (rft_set_status note).
+- Literature first. When the work turns to a field or question the tree does not cover yet, ASK the user whether to run a thorough literature search before experimenting (the user can also run /rft-literature <topic>), so the work starts from prior results. When you propose a new concept, offer a search for it too; its reference notes go under the concept's start note.
 - A paper, method or literature review that was read: rft_add_node with type reference, parent = the note that led to it (a review may hold one reference per key paper). Fill Source with a link that can be checked (DOI, arXiv id or URL), Summary, Method, Key results as the source reports them (and where), and your reading under Relevance. Only sources actually read: never invent a citation, or a result the source does not report. Status planned = to read, running = reading, done = summarised, dropped = not relevant.
 - A definition, method, taxonomy, proof or argument of the project's own: rft_add_node with type theory, parent = the note it builds on most, every other note it builds on linked under Builds on. Status idea = draft, running = being worked out, done = settled, dropped = refuted.
+- Experiments and directions name what they build on: refs (rft_add_node's refs, or rft_set_refs) links the reference notes (R..) behind them, above all the paper(s) whose setup an experiment starts from (baseline, data, protocol). A paper that is not in the tree yet becomes a reference note first.
 - Give every new note 1-3 short topical tags (lowercase kebab-case, e.g. \`ablation\`, \`optimisation\`), reusing the ones rft_tags lists before inventing new ones; rft_set_tags changes them. Do not retro-tag old notes unless asked.
 - Statuses: ${STATUSES.join(', ')}. Marks: ${LEGEND}.
 - The tools assign ids (never reused) and strip ^ # | [ ] from titles. After editing notes by hand, run rft_sync (children / up / down, 00 Index.md, the canvas) and rft_validate.
 - A note made with the wrong type: rft_set_type (the next id of the new type, the file moved, every link renamed), never a rename by hand.
 - Concepts group the tree into lines of research: a note with \`concept:\` starts one, its subtree inherits it until a sub-concept starts. When a direction opens a new line of research, PROPOSE a short concept name to the user; apply it with rft_set_concept only after they confirm, never silently. rft_concepts shows the concept tree.
+- A branch that sits under the wrong line of research: propose moving it, and once the user agrees use rft_move_node (the subtree follows, the note keeps its origin and a History line). Never move a note by editing its parent: by hand.
+- To find what was tried, measured or read on a subject, use rft_search (titles, summaries, tags, concepts and text, best first, with the concepts whose digest matches) before reading note files one by one; check it before proposing an experiment that may already exist. rft_add_node also lists the close notes already in the tree: if one already answers or ruled out the new one, tell the user.
 - Code: a concept can link the code repositories its work runs on (\`concept_repos:\` on its starting note; on the root note, the whole project's). Its notes work with its own repos first, then those of the concepts above it. When you create a concept, ask the user whether code for it already exists and where; link it with rft_set_repos (never guess a path), then read the code and give the concept's experiments and directions a ## Code section with rft_set_code.
 - The ## Code section of an experiment or direction says how it relates to the code: entry points, files, functions, configs, what has to change (a short pointer for a direction). Write it from the code as it is now (the current commit and uncommitted changes), not as an older note saw it; rft_set_code records the commit it was checked against. Before working on such an experiment (planning, launching, analysing), call rft_code: it lists what changed since that commit; read the changes and update the references with rft_set_code.
 - Results go in the experiment's own note: read the run's outputs where its repo keeps them, process them (seeds aggregated, tables) and write the numbers in Result; record how to reproduce them (the commit of the run, the command and config, where the raw outputs are, how they were processed) with rft_set_code's reproduce.
 - A note with \`locked: true\` in its frontmatter is the user's: never change its text (Edit, Write and shell writes to it are refused, and so are rft_set_status notes and rft_set_code on it). Propose each change with rft_suggest {id, quote, replacement}; the user accepts or rejects it in the tree view. Its status, tags and derived fields still change through the rft tools.
 - The user discusses notes in the tree view: comments and suggestions on a part of a note's text (rft_comments lists them). Answer a thread only when the user asks you to: the tree view's Ask Claude sends it to you, and you answer in the thread with rft_comment or rft_suggest, not in the chat.
-- The rft-manual skill is the full manual; rft_tree shows the current tree.
+- The rft-manual skill is the full manual; rft_map shows the project map, rft_tree the whole tree.
 ${codeContext(tree, where)}
-The tree at the start of this session${Object.keys(tree.concepts ?? {}).length > 1 ? ', by concept (← parent, when not the line above)' : ''}:
+${map ? 'The project map at the start of this session (each concept with its state; rft_map <concept> for its notes)' : `The tree at the start of this session${Object.keys(tree.concepts ?? {}).length > 1 ? ', by concept (← parent, when not the line above)' : ''}`}:
 ${lines.join('\n')}`
 }
 

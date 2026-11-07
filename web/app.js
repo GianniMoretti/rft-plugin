@@ -43,6 +43,8 @@
   let editing = null // while a note's text is edited: { id, version, lead, text (as opened), newer (on a conflict) }
   let saving = false
   let adding = false
+  let moving = false
+  let showOrigins = false
   let retyping = false
 
   // ---------------------------------------------------------------- persistence
@@ -102,6 +104,8 @@
       setDrawerWidth(store.get('drawerWidth', null), false)
       buildLegend()
       setLegendOpen(store.get('legendOpen', true))
+      showOrigins = Boolean(store.get('origins', false)) || q.get('origins') === 'on'
+      syncOriginsButton()
       syncLayoutButtons()
       togglePanel(new URLSearchParams(location.search).get('panel') === 'filters' || Boolean(store.get('filtersOpen', false)))
     }
@@ -112,6 +116,7 @@
     buildConceptLegend()
     buildCrumbs()
     syncConceptButtons()
+    syncOriginsButton()
     syncTitle()
     const c = { direction: 0, experiment: 0, reference: 0, theory: 0 }
     for (const n of tree.nodes) c[n.type] = (c[n.type] || 0) + 1
@@ -233,8 +238,33 @@
     all.transition().duration(dur).attr('transform', n => `translate(${pos.get(n.data.id).p})`)
     gLinks.selectAll('path.link').attr('class', l => `link${matchSet.has(l.target.data.id) ? '' : ' dim'}`)
     drawConcepts(pos, dur)
+    drawOrigins(pos, dur)
     updateLabels()
     syncFoldButton()
+  }
+
+  /**
+   * The dashed "came from" links: from the parent a moved note last had to the note, while both
+   * are drawn. Faint, behind the tree's own links, and only when the toggle is on.
+   */
+  function drawOrigins(pos, dur = 0) {
+    const data = showOrigins
+      ? tree.nodes.filter(n => n.origin && n.origin.length && pos.has(n.id))
+        .map(n => ({ id: n.id, from: n.origin[n.origin.length - 1] }))
+        .filter(o => pos.has(o.from) && o.from !== byId.get(o.id).parent)
+      : []
+    const bent = o => {
+      // a gentle arc, so it does not lie on a tree link it crosses
+      const [x1, y1] = pos.get(o.from).p, [x2, y2] = pos.get(o.id).p
+      const mx = (x1 + x2) / 2, my = (y1 + y2) / 2, dx = x2 - x1, dy = y2 - y1
+      return `M${x1},${y1}Q${mx - dy * 0.18},${my + dx * 0.18} ${x2},${y2}`
+    }
+    const sel = d3.select('#origins').selectAll('path.origin').data(data, o => o.id)
+    sel.exit().remove()
+    sel.enter().append('path').attr('opacity', 0).merge(sel)
+      .attr('class', o => `origin${matchSet.has(o.id) || matchSet.has(o.from) ? '' : ' dim'}`)
+      .attr('d', bent)
+      .transition().delay(dur).duration(200).attr('opacity', null)
   }
 
   function nodeClass(d) {
@@ -374,7 +404,7 @@
   async function select(id) {
     // the note being edited stays as it is; another one only once its changes are saved or dropped
     if (editing && (editing.id === id || !leaveEditor())) return
-    if (id !== selected) { closeAdder(); closeRetyper() }
+    if (id !== selected) { closeAdder(); closeMover(); closeRetyper() }
     selected = id
     showEditButton()
     gNodes.selectAll('g.node').attr('class', n => nodeClass(n.data))
@@ -382,8 +412,24 @@
     const drawer = document.getElementById('drawer')
     drawer.hidden = false
     renderConceptPath(document.getElementById('drawer-concept'), n.concept, 'Focus on this concept')
+    renderOrigin(n)
+    renderRefs(n)
     renderCode(document.getElementById('drawer-code'), n.concept)
     document.getElementById('drawer-meta').textContent = `${n.type} · ${MARK[n.status] || ''} ${n.status}${n.date ? ' · ' + n.date : ''}${n.tags && n.tags.length ? ' · #' + n.tags.join(' #') : ''}`
+    const summary = document.getElementById('drawer-summary')
+    summary.textContent = n.summary || ''
+    summary.hidden = !n.summary
+    const over = document.getElementById('drawer-superseded')
+    over.replaceChildren()
+    const newer = n.supersededBy && byId.get(n.supersededBy)
+    over.hidden = !newer
+    if (newer) {
+      const a = document.createElement('a')
+      a.textContent = newer.name
+      a.title = 'Go to this note'
+      a.addEventListener('click', ev => { ev.preventDefault(); go(newer.id) })
+      over.append('Superseded by ', a, ': its result no longer holds.')
+    }
     const article = document.getElementById('note')
     // the note shown again (it, or another, changed): drawn anew only once read, and only when it differs
     const isSame = shown != null && shown.id === id
@@ -436,6 +482,7 @@
     hlBtn.hidden = editBtn.hidden
     hlHint.hidden = !highlighting || hlBtn.hidden
     addBtn.hidden = Boolean(EMBED) || editing != null || !byId.has(selected)
+    moveBtn.hidden = addBtn.hidden || !byId.get(selected).parent
     // the root stays a direction
     typeBtn.hidden = Boolean(EMBED) || editing != null || !byId.has(selected) || !byId.get(selected).parent
     showLock()
@@ -459,6 +506,7 @@
     hideSelBar()
     fnPop.hidden = true
     threadsBox.hidden = true
+    closeMover()
     textBox.value = editing.text
     textBox.readOnly = false
     noKey.hidden = true
@@ -562,6 +610,7 @@
   function openAdder() {
     if (!editKey()) { noKey.hidden = false; return }
     closeRetyper()
+    closeMover()
     // an experiment tests a direction; a direction comes out of an experiment, a reference or a theory note
     addType.value = byId.get(selected).type === 'direction' ? 'experiment' : 'direction'
     addTitle.value = ''
@@ -615,6 +664,165 @@
     if (ev.key === 'Escape') { ev.preventDefault(); closeAdder() }
   })
 
+  // ---------------------------------------------------------------- moving the note shown
+
+  const moveBtn = document.getElementById('drawer-move')
+  const mover = document.getElementById('mover')
+  const moveTo = document.getElementById('move-to')
+  const moveMsg = document.getElementById('move-msg')
+
+  function setMoveMsg(text, isError = false) {
+    moveMsg.textContent = text
+    moveMsg.classList.toggle('error', isError)
+  }
+
+  /** The notes the one shown may move under: not itself, nothing below it, not its parent now. */
+  function moveTargets(id) {
+    const below = new Set()
+    const go = k => { below.add(k); (byId.get(k)?.children || []).forEach(go) }
+    go(id)
+    return tree.nodes.filter(n => !below.has(n.id) && n.id !== byId.get(id).parent)
+  }
+
+  function openMover() {
+    if (!editKey()) { noKey.hidden = false; return }
+    closeAdder()
+    closeRetyper()
+    const list = document.getElementById('move-targets')
+    list.innerHTML = ''
+    for (const n of moveTargets(selected)) {
+      const o = document.createElement('option')
+      o.value = n.name
+      list.appendChild(o)
+    }
+    moveTo.value = ''
+    setMoveMsg('')
+    mover.hidden = false
+    moveTo.focus()
+  }
+
+  function closeMover() {
+    mover.hidden = true
+    setMoveMsg('')
+  }
+
+  /** The note a typed target names: its full name, or the id it starts with. */
+  function targetOf(text) {
+    const t = text.trim()
+    const exact = tree.nodes.find(n => n.name === t)
+    if (exact) return exact.id
+    const id = t.split(/\s+/)[0].toUpperCase()
+    return byId.has(id) ? id : null
+  }
+
+  /** Asks the server to move the note shown (the session does it), then shows it in its new place. */
+  async function moveShown() {
+    const id = selected
+    if (!id || moving) return
+    const parent = targetOf(moveTo.value)
+    if (!parent) { setMoveMsg('Pick a note from the list (or type its id).', true); return }
+    if (!moveTargets(id).some(n => n.id === parent)) { setMoveMsg('Not there: the note itself, a note below it, or where it already is.', true); return }
+    moving = true
+    moveTo.readOnly = true
+    setMoveMsg('Moving…')
+    try {
+      const res = await fetch('api/move', {
+        method: 'POST',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'X-RFT-Token': editKey() },
+        body: JSON.stringify({ id, parent }),
+      })
+      const reply = await res.json().catch(() => ({}))
+      if (!res.ok) { setMoveMsg(`Not moved: ${reply.error || `the server answered ${res.status}`}.`, true); return }
+      closeMover()
+      await poll()
+      if (selected !== id || editing) return
+      reveal(id)
+      centreOn(id)
+      await select(id)
+    } catch (e) {
+      setMoveMsg('Not moved: the server is not answering.', true)
+    } finally {
+      moving = false
+      moveTo.readOnly = false
+    }
+  }
+
+  moveBtn.addEventListener('click', () => (mover.hidden ? openMover() : closeMover()))
+  mover.addEventListener('submit', ev => { ev.preventDefault(); moveShown() })
+  document.getElementById('move-cancel').addEventListener('click', () => closeMover())
+  mover.addEventListener('keydown', ev => {
+    if (ev.key === 'Escape') { ev.preventDefault(); closeMover() }
+  })
+
+  /** "Came from" in the drawer: the past parents of a moved note, oldest first, as links. */
+  function renderOrigin(n) {
+    const box = document.getElementById('drawer-origin')
+    const past = (n.origin || []).filter(id => byId.has(id))
+    box.hidden = !past.length
+    box.innerHTML = ''
+    if (!past.length) return
+    box.append('Came from ')
+    past.forEach((id, i) => {
+      if (i) box.append(' → ')
+      const a = document.createElement('a')
+      a.textContent = byId.get(id).name
+      a.title = 'Go to this note'
+      a.addEventListener('click', ev => { ev.preventDefault(); go(id) })
+      box.appendChild(a)
+    })
+    box.append(' → here')
+  }
+
+  /** The notes it builds on (`refs:`), and for a reference the notes that cite it, as links. */
+  function renderRefs(n) {
+    const box = document.getElementById('drawer-refs')
+    box.innerHTML = ''
+    const line = (label, ids) => {
+      if (!ids.length) return
+      const row = document.createElement('div')
+      row.append(label)
+      ids.forEach((id, i) => {
+        if (i) row.append(', ')
+        const a = document.createElement('a')
+        a.textContent = byId.get(id).name
+        a.title = 'Go to this note'
+        a.addEventListener('click', ev => { ev.preventDefault(); go(id) })
+        row.appendChild(a)
+      })
+      box.appendChild(row)
+    }
+    if (n.pdf && !EMBED) {
+      const row = document.createElement('div')
+      const a = document.createElement('a')
+      a.textContent = `Open the paper (${n.pdf.split('/').pop()})`
+      a.href = `api/paper?id=${encodeURIComponent(n.id)}`
+      a.target = '_blank'
+      a.rel = 'noopener'
+      row.appendChild(a)
+      box.appendChild(row)
+    }
+    line('Builds on ', (n.refs || []).filter(id => byId.has(id)))
+    line('Cited by ', tree.nodes.filter(m => (m.refs || []).includes(n.id)).map(m => m.id))
+    box.hidden = !box.childElementCount
+  }
+
+  function syncOriginsButton() {
+    const b = document.getElementById('origins-toggle')
+    b.setAttribute('aria-pressed', String(showOrigins))
+    const moved = tree ? tree.nodes.filter(n => n.origin && n.origin.length).length : 0
+    b.title = moved
+      ? `Dashed links from where each moved note came from (${moved} moved)`
+      : 'Dashed links from where each moved note came from (no note has moved yet)'
+  }
+
+  document.getElementById('origins-toggle').addEventListener('click', () => {
+    showOrigins = !showOrigins
+    store.set('origins', showOrigins)
+    syncOriginsButton()
+    drawOrigins(positions)
+  })
+
   // ---------------------------------------------------------------- changing the type of the note shown
 
   const typeBtn = document.getElementById('drawer-type')
@@ -636,6 +844,7 @@
   function openRetyper() {
     if (!editKey()) { noKey.hidden = false; return }
     closeAdder()
+    closeMover()
     const type = byId.get(selected).type
     for (const o of retypeType.options) o.disabled = o.value === type
     // the commonest mistake: a direction made as an experiment, or the other way round

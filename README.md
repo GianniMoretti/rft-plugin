@@ -9,7 +9,10 @@ interactive tree (pan, zoom, click a node to read it) in a browser.
 - **Directions (D..)**: ideas, questions, hypotheses, including the ones rejected, so the tree
   also says why a path was not taken. **D00** is the starting question.
 - **References (R..)**: papers, methods and literature reviews that were read: a summary, a
-  source that can be checked, and what they mean for the project.
+  source that can be checked, and what they mean for the project. Experiments and directions
+  link the references they build on (`refs:`), so every result can be traced to the papers
+  behind it. When the work turns to a new field or concept, Claude offers a literature search
+  first (`/rft-literature` asks for one directly).
 - **Theory (T..)**: the project's own definitions, methods, taxonomies and arguments, built on
   the directions, experiments and references.
 - **Concepts**: named lines of research. A note can start one, and its subtree belongs to it
@@ -110,8 +113,18 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
 
   | tool | does |
   |---|---|
-  | `rft_add_node` | creates a note with the next free id, a sanitised title (no `^ # \| [ ]`), the template sections, and links it under its parent |
+  | `rft_add_node` | creates a note with the next free id, a sanitised title (no `^ # \| [ ]`), the template sections, and links it under its parent; it answers with the notes already in the tree close to the new one ("have we tried this?") |
   | `rft_set_status` | changes a status (frontmatter, tag, Status line), optionally appending results or the reason |
+  | `rft_move_node` | moves a note and its subtree under another parent, after you agree; the note keeps its past parents (`origin:`) and a dated `## History` line |
+  | `rft_set_refs` | replaces the reference notes a note builds on (`refs:`); `rft_add_node` takes `refs` too |
+  | `rft_search` | searches every note (titles and one-line summaries weigh most, then tags and concepts, then the text) and answers the best matches with their summary, where they sit and, when it adds something, the line that matched; concepts whose digest matches come first; filters by type, status, concept and tag. Built from the notes at each call, so never out of date, and nothing is stored |
+  | `rft_graph` | a note's place in the tree, one line per note with its summary: its parent, children, the notes beside it, what it builds on, what cites it, where it was before a move; or the path the reasoning took from the top to it |
+  | `rft_map` | the project map: each concept with its state (from its digest) and the experiments in progress; or one concept, with its digest and its notes one per line with their summaries. Claude reads it before opening note files |
+  | `rft_set_summary` | sets the one-line `summary:` of one or more notes (Claude writes one for every note, and updates it when a result arrives) |
+  | `rft_set_digest` | writes a concept's digest in the vault's `map/` folder: state, key results, dead ends, open questions; the map says when it is out of date |
+  | `rft_supersede` | marks a note whose result a newer one overturns (`superseded_by:` and a History line); the map, search, graph and tree view show it as superseded, so the old number is not built on |
+  | `rft_next` | what is still open, by concept: experiments running, planned and never run, directions with nothing tried under them (with their age), and the digests' open questions |
+  | `rft_collect_papers` | downloads, in the background, the open-access PDFs of reference notes (arXiv, OpenReview, PMLR, ACL Anthology, NeurIPS/CVF proceedings, ...) into `vault/papers/<concept>/<year> <first author> <title>.pdf`, linked from each note (`pdf:`); saved PDFs follow their concept. Never from paywalled publishers |
   | `rft_set_tags` | replaces a note's topical tags (lowercase kebab-case), keeping the project, type and status tags |
   | `rft_set_type` | changes the type of a note made with the wrong one: the next free id of the new type, the file moved to that type's folder, the type's sections (no text lost), every link to it renamed |
   | `rft_tags` | lists the topical tags in use with counts, so Claude reuses them |
@@ -225,6 +238,12 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   file (as far as a command shows that), and `rft_set_status` notes and `rft_set_code` on it.
   Status, tags and the tree's derived fields still change. Your own edits in the drawer are not
   affected, and neither are Obsidian's.
+- The drawer lists the references a note **builds on**, and on a reference the notes that
+  **cite** it, each a link to its node; a reference whose paper was saved links its PDF.
+- **Move** (an arrow out of a node, in the drawer) moves the note shown, and every note below it, under another note:
+  pick it from the list (or type its id), **Move** or Enter. As with **Add child**, the plugin
+  makes the move with `rft_move_node`'s code. A moved note shows where it came from at the top
+  of the drawer, and **Came from** draws a faint dashed link from its previous parent.
 - Hover a node to highlight its path to the root; **search** (Enter jumps to the next match).
 - **Filters** opens a side panel: topical tags (with counts, matching **any** or **all**), type,
   status (the same filter as clicking the legend), and a date range. Notes that do not match
@@ -338,12 +357,13 @@ the page, the tree as JSON and the text of one note at a time, read by its id fr
 vault, and the image files notes embed: one inside the vault to anyone who can read the notes,
 one outside it (anywhere on disk) only to the page carrying the key below, so another user of
 the machine cannot read your files through it, nor learn whether one exists. An image is sent
-with a policy that runs nothing in it, an SVG's scripts included. It answers only requests for
+with a policy that runs nothing in it, an SVG's scripts included. A reference's saved PDF is
+served only from the vault's `papers/` folder. It answers only requests for
 a loopback host name. It writes a note's text from **Edit**, **Footnote**, **Highlight** or an
 accepted suggestion, its frontmatter kept as it is; the `locked:` line from the padlock; and a note's
-comments file in `vault/.comments/`. A new note from **Add child**, or a note's new type from
-**Change type**, it asks the session that started it to make, and **Ask Claude** to answer (a
-line on its output, which the plugin reads). It does any of these only for
+comments file in `vault/.comments/`. A new note from **Add child**, a note's new type from
+**Change type**, or a move from **Move**, it asks the session that started it to make, and **Ask
+Claude** to answer (a line on its output, which the plugin reads). It does any of these only for
 the page itself carrying the project's key, which the address `/rft` prints holds (`?token=…`):
 neither another web page nor another user of the machine can change or add a note. Open that address once and the browser
 remembers the key, which stays the same across restarts (kept, readable by you alone, in
@@ -373,6 +393,10 @@ needs no network.
 | `/rft-init [starting question]` | activate RFT here and create (or adopt) the vault |
 | `/rft-concepts` | print the concept tree |
 | `/rft-concepts suggest` | ask Claude to propose a concept split; nothing changes until you confirm |
+| `/rft-literature <topic, id or concept>` | ask Claude for a literature search: one reference note per key paper read, under the note or concept it is about, then a synthesis and the directions it suggests (added only once you choose) |
+| `/rft-rebalance [concept or id] [--full]` | ask Claude to propose moving branches under the line of research they belong to, as a table of moves; only the ones you confirm are made, each keeping its origin. The plugin first finds the candidates (notes whose words and references sit closer to another concept than to their own) and Claude judges only those; `--full` has Claude review the whole tree instead |
+| `/rft-next [concept]` | print what is still open, by concept: running and planned experiments, unexplored directions, open questions (no model turn) |
+| `/rft-summarize [concept]` | ask Claude to write the missing note summaries and concept digests of an existing tree, concept by concept (a one-off job) |
 | `/rft-view` | write `vault/tree.html`: the same tree view as one standalone file, every note inside (images as placeholders), to open anywhere or share |
 
 The plugin registers these commands when a session starts, so the desktop app's slash-command
@@ -390,12 +414,14 @@ and it runs. The terminal's typeahead lists them.
 
 ```json
 { "version": 1, "vault": "vault", "project": "my-project", "canvas": true, "mermaid": false,
-  "lastId": { "E": 12, "D": 9 }, "webPort": 0 }
+  "lastId": { "E": 12, "D": 9 }, "webPort": 0, "requireRefs": true }
 ```
 
 `mermaid: true` also writes `Reasoning tree (diagram).md`, a Mermaid flowchart Obsidian draws
 natively. `lastId` keeps ids from being reused after a note is deleted. `webPort` fixes the
-tree view's port (0: a free one), handy for a standing `ssh -L` forward. A config that holds
+tree view's port (0: a free one), handy for a standing `ssh -L` forward. `requireRefs: true`
+(set by `/rft-init` on a new vault, off on an adopted one) makes `rft_validate` warn about
+experiments and directions in work that name no reference. A config that holds
 only `tree` is a link to a tree in another folder (see above). The code a concept runs on is
 linked in its note, not in the config (see Code repos).
 

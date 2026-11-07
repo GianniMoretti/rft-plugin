@@ -243,6 +243,17 @@ def unquote(value: str | None) -> str:
     return v.strip()
 
 
+def unquote_json(value: str | None) -> str:
+    """A value written with JSON.stringify (escapes and all), or any other quoted or bare one."""
+    v = (value or "").strip()
+    if len(v) >= 2 and v[0] == v[-1] == '"':
+        try:
+            return str(json.loads(v)).strip()
+        except ValueError:
+            pass
+    return unquote(v)
+
+
 def parse_repos(value: str | None) -> list[str]:
     """The paths of a `concept_repos:` value, a one-line list: `["/a/b", "../c"]` (or YAML's
     `['/a/b', ../c]`). Commas alone separate: a path may hold spaces."""
@@ -319,6 +330,8 @@ def link_target(value: str | None) -> str | None:
     return m.group(1).strip() if m else None
 
 
+def link_targets(value: str | None) -> list[str]:
+    return [m.strip() for m in re.findall(r"\[\[([^\]|#]+)", value or "")]
 def obsidian_root(folder: Path) -> Path | None:
     """The Obsidian vault the folder is in: the nearest folder, itself or above, holding `.obsidian/`."""
     return next((d for d in (folder, *folder.parents) if (d / ".obsidian").is_dir()), None)
@@ -383,6 +396,9 @@ class Vault:
     def _load(self, sig: str) -> dict:
         nodes: dict[str, dict] = {}
         refs: dict[str, str | None] = {}
+        origins: dict[str, list[str]] = {}
+        refs_of: dict[str, list[str]] = {}
+        superseded: dict[str, list[str]] = {}
         decl: dict[str, tuple[str, str, list[str]]] = {}
         repos_only: dict[str, list[str]] = {}
         for sub, kind in SUBDIRS.items():
@@ -403,6 +419,16 @@ class Vault:
                               "tags": topical_tags(parse_tags(fm.get("tags")), self.project, ftype),
                               "concept": ROOT_CONCEPT, "locked": is_locked(fm), "threads": 0}
                 refs[nid] = link_target(fm.get("parent"))
+                origins[nid] = link_targets(fm.get("origin"))
+                refs_of[nid] = link_targets(fm.get("refs"))
+                newer = link_target(fm.get("superseded_by"))
+                superseded[nid] = [newer] if newer else []
+                summary = unquote_json(fm.get("summary"))
+                if summary:
+                    nodes[nid]["summary"] = summary
+                pdf = link_target(fm.get("pdf"))
+                if pdf:
+                    nodes[nid]["pdf"] = pdf
                 cname = unquote(fm.get("concept"))
                 repos = parse_repos(fm.get("concept_repos"))
                 if cname:
@@ -412,6 +438,18 @@ class Vault:
         for n in nodes.values():
             n["threads"] = sum(1 for t in self._threads(n["id"])["threads"] if t.get("state") == "open")
         by_name = {n["name"]: n["id"] for n in nodes.values()}
+
+        def ids(names):
+            return [i for i in (by_name.get(r) or (id_of(r) if id_of(r) in nodes else None) for r in names) if i]
+
+        for n in nodes.values():
+            for key, names in (("origin", origins), ("refs", refs_of)):
+                found = ids(names.get(n["id"], []))
+                if found:
+                    n[key] = found
+            newer = ids(superseded.get(n["id"], []))
+            if newer and newer[0] != n["id"]:
+                n["supersededBy"] = newer[0]
         for n in nodes.values():
             ref = refs.get(n["id"])
             pid = by_name.get(ref) or (id_of(ref) if ref and id_of(ref) in nodes else None) if ref else None
@@ -452,6 +490,17 @@ class Vault:
         allowed = [(self.root / s).resolve() for s in SUBDIRS]
         inside = any(path.parent == a for a in allowed)
         return path if inside and path.suffix == ".md" and path.is_file() else None
+
+    def paper(self, nid: str) -> Path | None:
+        """The PDF a reference note links (`pdf:`), only when it is a PDF file in the vault's papers/."""
+        if not ID_RE.match(nid or ""):
+            return None
+        node = next((n for n in self.tree()["nodes"] if n["id"] == nid), None)
+        if not node or not node.get("pdf"):
+            return None
+        path = (self.root / node["pdf"]).resolve()
+        papers = (self.root / "papers").resolve()
+        return path if papers in path.parents and path.suffix.lower() == ".pdf" and path.is_file() else None
 
     def note(self, nid: str) -> dict | None:
         """A note as the page shows it: its body, version, whether it is locked, and its threads,
@@ -793,6 +842,42 @@ class Vault:
                               "it may still change (is the session that ran /rft still open?)"}
 
 
+    def move_node(self, nid: str, parent: str, ask) -> tuple[int, dict]:
+        """Moves a note and its subtree under `parent`, done by the session as for add_node; the
+        answer comes once the note's parent is the new one and the notes are quiet."""
+        with self._ask_lock:
+            nodes = {n["id"]: n for n in self.tree()["nodes"]}
+            if nid not in nodes or parent not in nodes:
+                return 404, {"error": "no such note"}
+            if not nodes[nid]["parent"]:
+                return 400, {"error": "the root of the tree cannot move"}
+            if nodes[nid]["parent"] == parent:
+                return 400, {"error": "the note is already there"}
+            p = parent
+            while p:
+                if p == nid:
+                    return 400, {"error": "a note cannot move under its own subtree"}
+                p = nodes[p]["parent"] if p in nodes else None
+            try:
+                ask("RFT_MOVE_NODE", {"id": nid, "parent": parent})
+            except (OSError, ValueError):
+                return 503, {"error": "the Claude Code session that ran /rft is gone"}
+            deadline = time.monotonic() + NODE_WAIT_S
+            while time.monotonic() < deadline:
+                time.sleep(0.1)
+                now = next((n for n in self.tree()["nodes"] if n["id"] == nid), None)
+                if now and now["parent"] == parent:
+                    sig, quiet = self.signature(), time.monotonic()
+                    while time.monotonic() - quiet < SETTLE_S and time.monotonic() < deadline:
+                        time.sleep(0.1)
+                        if (later := self.signature()) != sig:
+                            sig, quiet = later, time.monotonic()
+                    return 200, {"id": nid, "parent": parent}
+        return 504, {"error": f"the Claude Code session did not move the note within {NODE_WAIT_S:g} s; "
+                              "is the session that ran /rft still open?"}
+
+
+
 def ask_session(verb: str, request: dict) -> None:
     """Hands a request to the plugin, which reads this process's stdout line by line."""
     print(f"{verb} {json.dumps(request)}", flush=True)
@@ -888,6 +973,11 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 return self._json(200, note, head_only) if note else self._json(404, {"error": "no such note"}, head_only)
             if route == "/api/image":
                 return self._image(parse_qs(url.query), head_only)
+            if route == "/api/paper":
+                path = vault.paper((parse_qs(url.query).get("id") or [""])[0])
+                if path is None:
+                    return self._send(404, b"no saved paper", "text/plain", head_only)
+                return self._send(200, path.read_bytes(), "application/pdf", head_only)
             return self._send(404, b"not found", "text/plain", head_only)
 
         def _refuse(self):
@@ -943,7 +1033,8 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
         def do_POST(self):
             """POST api/node {"parent": "<id>", "type": one of TYPES, "title": "..."}: a new note
             under `parent`, with the default status; POST api/type {"id": "<id>", "type": one of
-            TYPES}: the note's type changed. The session makes either. POST api/comment {"id":
+            TYPES}: the note's type changed; POST api/move {"id": "<id>", "parent": "<id>"}: the note
+            and its subtree under `parent`. The session makes each. POST api/comment {"id":
             "<id>", "action": ...}: a change to the note's discussion (Vault.comment); POST api/lock
             {"id": "<id>", "locked": bool}."""
             route = urlsplit(self.path).path
@@ -963,6 +1054,14 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 if not isinstance(req.get("id"), str) or not isinstance(req.get("locked"), bool):
                     return self._json(400, {"error": "expected {id, locked: true or false}"})
                 return self._json(*vault.set_locked(req["id"], req["locked"]))
+            if route == "/api/move":
+                got = self._write_request("/api/move", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                _, req = got
+                if not all(isinstance(req.get(k), str) for k in ("id", "parent")):
+                    return self._json(400, {"error": "expected {id, parent}"})
+                return self._json(*vault.move_node(req["id"], req["parent"], ask))
             if route == "/api/type":
                 got = self._write_request("/api/type", MAX_NODE_BYTES)
                 if got is None:

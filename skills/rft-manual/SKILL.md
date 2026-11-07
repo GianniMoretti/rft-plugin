@@ -1,6 +1,6 @@
 ---
 name: rft-manual
-description: Operating manual of the Reasoning Flow Tree, the tree of experiment (E..), direction (D..), reference (R..) and theory (T..) notes that records a research project's reasoning, grouped into concepts (lines of research) that can link the code repositories they run on. Use in a project with .rft/config.json whenever an experiment is planned, launched or finished, an idea or question comes up (even a rejected one), a paper or literature review is read, a definition, method or taxonomy is written down, an idea is dropped or moved, a new line of research opens (propose a concept, ask for its code), work starts on an experiment whose concept links code, the user asks Claude to answer a comment or suggestion from the tree view, a note is locked, or the user asks about the tree, the vault, its concepts, its code or what was tried.
+description: Operating manual of the Reasoning Flow Tree, the tree of experiment (E..), direction (D..), reference (R..) and theory (T..) notes that records a research project's reasoning, grouped into concepts (lines of research) that can link the code repositories they run on. Use in a project with .rft/config.json whenever an experiment is planned, launched or finished, an idea or question comes up (even a rejected one), a paper or literature review is read, a new field comes up (offer a literature search first), a definition, method or taxonomy is written down, an idea is dropped or moved, a branch belongs under another note (move it), a new line of research opens (propose a concept, ask for its code), work starts on an experiment whose concept links code, the user asks Claude to answer a comment or suggestion from the tree view, a note is locked, or the user asks about the tree, the vault, its concepts, its code or what was tried (start from rft_map).
 ---
 
 # Reasoning Flow Tree (rft)
@@ -141,11 +141,118 @@ concept_repos: ["/home/me/code/sfree", "../code/train-utils"]
   that starts no concept, and notes whose Code section is missing or names repos the concept no
   longer links.
 
+## Literature
+
+The tree should start from what is already known, not from scratch.
+
+- **A new field: ask first.** When the work turns to a field, method or question the tree does
+  not cover yet (no reference or concept about it), ask the user whether to run a thorough
+  literature search before planning experiments. Do not start the search unasked: it takes
+  time.
+- **A new concept: offer a search.** When you propose a concept, offer a literature search for
+  it; once agreed, its reference notes go under the concept's start note.
+- **`/rft-literature <topic, note id or concept>`** asks for the search directly. Search with the
+  tools you have (web search, deep research, arXiv); read each source before writing about it;
+  add one reference note per key paper (usually 4 to 10) under the note or concept it is about,
+  with **Source** (DOI, arXiv id or URL), **Summary**, **Method**, **Key results** as reported
+  and **Relevance**; `done` once summarised from the paper itself, `planned` if only found.
+  Then call `rft_collect_papers` with the new notes' ids, give a short synthesis (known, open,
+  setups to start from) and list the directions it suggests: add them only once the user
+  chooses.
+- **Papers in the vault.** `rft_collect_papers(ids?)` downloads, in the background, the PDFs of
+  reference notes whose **Source** has an arXiv id or link, or a PDF link on an open-access
+  host (OpenReview, PMLR, ACL Anthology, NeurIPS and CVF proceedings, JMLR, bioRxiv...), into
+  `papers/<concept>/<year> <first author> <title>.pdf`, and links each from its note with
+  `pdf:`. Run again after concepts change: saved PDFs move to their concept's folder. It never
+  downloads from paywalled publishers; for those, the note keeps its DOI.
+- **Experiments start from a paper.** A proposed experiment says which reference's setup it
+  starts from (baseline, data, protocol) and links it in `refs` (rule 5 below). If there is
+  none, say so: it is a sign a search is missing.
+- Never invent a citation, an author, a year or a result.
+
+## The project map
+
+A large tree is a knowledge base: read it in layers, not file by file.
+
+1. **`rft_map`**: the project map, each concept with its state and counts, and the experiments
+   in progress. A tree of more than 60 notes starts each session from it.
+2. **`rft_map <concept>`**: the concept's digest (state, key results, dead ends, open questions),
+   its sub-concepts, and its notes one per line with their summaries.
+3. **The note's file**, only for the detail you need.
+
+To answer a question, search instead of reading: **`rft_search`** answers with each matching
+note's summary, where it sits and, when it adds something, the line that matched, and puts first
+the concepts whose digest matches; **`rft_graph <id>`** gives a note's neighbours (parent,
+children, the notes beside it, what it builds on, what cites it, where it was before a move), or
+with `mode: path` how the reasoning reached it from the top. Do not grep the vault: a Grep, Glob
+or shell search of it gets a reminder until one of these tools has been used in the session.
+
+**Have we tried this?** `rft_add_node` answers with the notes already in the tree that are close
+to the new one (title and summary). If one of them already answers it, or a dead end ruled it
+out, say so to the user before running anything.
+
+What keeps the layers useful:
+
+- **Every note has a one-line `summary:`** that you write: what the note is about and, once
+  known, what it found, with the key number ("Mixup on CIFAR-100 1k: +2.1±0.4 top-1, gap closes
+  at 10k"); for a dropped direction, why. Give it to `rft_add_node`; update it when the result
+  arrives (`rft_set_status` with `summary`) or with `rft_set_summary`. Never put an expected
+  result in it.
+- **Each concept can have a digest** in the vault's `map/` folder, written with
+  `rft_set_digest(concept, state, text)`: the state in one or two sentences, then
+  `## Key results`, `## Dead ends`, `## Open questions`, each point with note ids. Write it from
+  the notes, never from memory. It is stamped with the state of the concept's notes (ids,
+  statuses, titles, summaries); when they change, `rft_map` and `rft_validate` say it is out of
+  date. Rewrite it after a piece of work that changes the concept, or when you have read its
+  notes and it is missing or out of date.
+- **`/rft-summarize [concept]`** writes the missing summaries and digests of an existing tree,
+  concept by concept (a one-off job on a large tree).
+- **A concept grown past 40 notes of its own** is more than one digest can stand for:
+  `rft_validate` says so; propose a split into sub-concepts at the notes that open its sub-lines.
+
+## State of knowledge
+
+The map says what holds now, not only what was done.
+
+- **A result that overturns another** (a corrected number, a bug found in the run, a
+  better-controlled rerun that changes the conclusion) marks the old note:
+  `rft_supersede(id, by, why)` writes `superseded_by:` and a dated History line. The map, search
+  and graph then show it as `[superseded by …]`; never quote or build on such a result without
+  saying it was overturned. Then rewrite the concept's digest so its key results are the ones
+  that hold. `rft_supersede(id)` without `by` clears the mark.
+- **What is still open**: `rft_next [concept]` (and `/rft-next` for the user) lists, by concept,
+  the experiments running, those planned and never run, the directions with nothing tried under
+  them (oldest first, with their age) and the open questions of the digests. Call it when asked
+  what to do next and before proposing new work: pick up an open thread before opening a new one.
+
+## Restructuring the tree
+
+A note's parent is where the reasoning came from; a concept is the line of research it belongs
+to. Over time the two drift apart: a branch grows out of one note but belongs to another line.
+
+- **Move a branch** with `rft_move_node(id, parent, why)`, after the user agrees. The subtree
+  moves with it, and the note keeps its past parents in `origin:` plus a dated line under
+  `## History`, so the path that led to it stays readable (the tree view's **Came from** draws
+  it).
+- **`/rft-rebalance [concept or id]`** gives you a short list of candidates the plugin found:
+  notes whose title, summary, tags and references sit closer to another concept than to their
+  own, each with its fit to both and the nearest note in the other concept, then one line each for
+  the weak ones (only slightly closer, or naming another concept in the title; most stay). Judge only those
+  (the fit is a hint from shared words, not a verdict); check a candidate with `rft_map
+  <concept>` or `rft_graph <id>` and open its file only when in doubt. With `--full` you review
+  the whole tree, or one part of it, instead. Start from the map (`rft_map`, `rft_map <concept>`): the summaries say what
+  each note is; open a note's file only when its summary leaves a move in doubt. Answer
+  with a short numbered table (note, parent now, new parent, why), say what you would leave as
+  it is, and wait: apply only the moves the user confirms, each with its `why`, then run
+  `rft_validate`. When in doubt, leave a note where the reasoning produced it. Propose a new
+  concept separately, never as part of a move.
+
 ## When to create and update nodes
 
 1. **Before launching an experiment**, create its node: `rft_add_node` with `type: experiment`,
    `parent` = the direction it tests, `status` `planned` (or `running` if it starts now),
-   `what` / `why` filled and its topical `tags`. Do this *before* starting the run, not after.
+   `what` / `why` filled, its topical `tags`, and `refs`: the reference(s) whose setup it starts
+   from (baseline, data, protocol). Do this *before* starting the run, not after.
    In a concept with code, call `rft_code` first and plan from the code as it is now; the note's
    `## Code` section says how the run uses the code.
 2. **When it finishes or gives a partial result**: edit its note to fill **Result** (numbers with
@@ -164,23 +271,45 @@ concept_repos: ["/home/me/code/sfree", "../code/train-utils"]
    project's reading under **Relevance**. Only sources actually read: never invent a citation,
    nor a result the source does not report. Statuses: `planned` to read, `running` reading,
    `done` summarised, `dropped` not relevant (the `note` argument appends to Relevance).
-5. **When a definition, method, taxonomy or argument of the project's own is written down**:
+5. **References on every node.** Experiments and directions name what they build on in `refs:`
+   (links to R notes): `refs` in `rft_add_node`, or `rft_set_refs` later. A paper that is not in
+   the tree yet becomes a reference note first (rule 4). A free-text `## References` section in
+   the body is fine for sources that do not deserve a note. When the config has
+   `"requireRefs": true` (new vaults), `rft_validate` warns about experiments and directions in
+   work with no refs; rejected, dropped and moved ones need none.
+6. **When a definition, method, taxonomy or argument of the project's own is written down**:
    `rft_add_node` with `type: theory`, `parent` = the note it builds on most, and every other
    note it builds on linked under **Builds on**. Statuses: `idea` draft, `running` being worked
    out, `done` settled, `dropped` refuted.
-6. **When an idea is dropped or moved**: `rft_set_status` with `dropped` or `moved` and a `note`
-   saying why, or where it went.
-7. **Record real results only.** Never write expected, invented or rounded-up numbers; if a run
+7. **When an idea is dropped or moved**: `rft_set_status` with `dropped` or `moved` and a `note`
+   saying why, or where it went (`moved`: to another project or idea outside this tree).
+8. **When a branch sits under the wrong line of research** (it grew out of one note but belongs
+   under another, often another concept): propose the move to the user, and only once they agree
+   call `rft_move_node` with the note, the new parent and a few words of `why`. The whole subtree
+   moves with it; the note keeps its old parents in `origin:` and a dated line under
+   `## History`, so where the reasoning came from is not lost. Never move a note by editing its
+   `parent:` by hand: that loses the history.
+9. **Record real results only.** Never write expected, invented or rounded-up numbers; if a run
    failed, say so. Keep the numbers consistent with the project's README and result files: the
    vault is the map, the result files are the record.
-8. The vault is part of the repository: commit it with the work it describes.
+10. The vault is part of the repository: commit it with the work it describes.
 
 ## Tools
 
 | tool | use |
 |---|---|
 | `rft_add_node` | create a note (next free id, sanitised title, template sections, linked under its parent) |
-| `rft_set_status` | change a status, optionally appending real results or the reason |
+| `rft_set_status` | change a status, optionally appending real results or the reason, and updating the summary |
+| `rft_set_summary` | set the one-line summary of one or more notes |
+| `rft_map` | the project map, or one concept's digest and notes with their summaries |
+| `rft_set_digest` | write a concept's digest (state, key results, dead ends, open questions) |
+| `rft_supersede` | mark a note whose result a newer one overturns (`superseded_by:`), or clear the mark |
+| `rft_next` | what is still open by concept: running, planned, unexplored directions, open questions |
+| `rft_move_node` | move a note and its subtree under another parent, keeping its origin, after the user agrees |
+| `rft_set_refs` | replace the reference notes a note builds on (`refs:`) |
+| `rft_search` | search every note (titles, summaries, tags, concepts, text), best first with each summary, matching concepts first; filters by type, status, concept, tag |
+| `rft_graph` | a note's neighbours (parent, children, siblings, refs, cited by, origin), or the path from the top to it |
+| `rft_collect_papers` | download the open-access PDFs of reference notes into `papers/<concept>/`, in the background |
 | `rft_set_tags` | replace a note's topical tags |
 | `rft_set_type` | change the type of a note made with the wrong one (new id, file moved, links renamed) |
 | `rft_tags` | the topical tags in use, with counts: check before inventing one |
@@ -195,6 +324,10 @@ concept_repos: ["/home/me/code/sfree", "../code/train-utils"]
 | `rft_comments` | a note's comments and suggestions (open ones in full, the history in short), or the notes with open threads |
 | `rft_comment` | reply in a thread (`applied: true` closes a suggestion you made in an unlocked note), or start a comment on a `quote` |
 | `rft_suggest` | propose new text for a `quote`, or the replacement an open suggestion asks for; the user accepts it |
+
+Before proposing an experiment or an idea, `rft_search` whether the tree already has it; to
+answer "what did we try on X", look at the map and search first, and read only the notes that
+match.
 
 Editing note bodies (What, Why, Result, ...) with the ordinary file tools is fine. After editing
 notes by hand — above all a `parent:` field — run `rft_sync`, then `rft_validate`, and fix every
@@ -236,14 +369,19 @@ folder and every link to it change together.
 ## Note layout
 
 Frontmatter: `id`, `type` (`experiment` | `direction` | `reference` | `theory`), `status`, `date` (YYYY-MM-DD),
+`summary: "<one line>"`, `superseded_by: "[[<newer note>]]"` when a newer result overturns it,
 `parent: "[[<parent name>]]"` (`""` for the root), `children`, `up`, `down`,
 `tags: [<project>, <type>, <topical tags...>, <status>]`, and on a note that starts a
 concept `concept: "<name>"`, `concept_summary: "<one line>"` and, when it links code,
-`concept_repos: ["<path>", ...]` (on one line). Body:
+`concept_repos: ["<path>", ...]` (on one line); a note that was moved has
+`origin: ["[[<first parent>]]", ...]`, its past parents oldest first; `refs: ["[[R03 …]]", ...]`
+lists the reference notes it builds on; a reference whose paper was saved has
+`pdf: "[[papers/<concept>/<file>.pdf]]"`. Body:
 `# <ID> · <Title>`, the Parent / Status / Date lines (and Code / data for experiments), then the
 sections — experiments: What, Why, Result, Directions found; directions: Idea, Why, Status;
 references: Source, Summary, Method, Key results, Relevance, Directions found; theory notes:
-Statement, Builds on, Explanation, Open questions, Status — and last **Children in the tree**, a list of links to the children.
+Statement, Builds on, Explanation, Open questions, Status — then **History** on a moved note
+(one dated line per move), and last **Children in the tree**, a list of links to the children.
 A locked note has `locked: true`; footnote texts (`[^1]: …`) come after the sections.
 In a concept with code, experiments and directions also have a **Code** section, before Result
 (experiments) or Status (directions).

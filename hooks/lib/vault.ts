@@ -79,6 +79,14 @@ export type RftNode = {
   concept: string
   /** `locked: true` in its frontmatter: the user's to change; Claude only suggests changes to it. */
   locked: boolean
+  /** Its past parents, oldest first (`origin:`, written when the note is moved). */
+  origin?: string[]
+  /** The notes it builds on, usually references (`refs:`). */
+  refs?: string[]
+  /** One line on what the note is and, once known, what it found (`summary:`, written by Claude). */
+  summary?: string
+  /** The note whose result overturns this one's (`superseded_by:`): do not build on this one. */
+  supersededBy?: string
 }
 
 export type Tree = {
@@ -131,6 +139,10 @@ export type Config = {
   lastId: Record<string, number>
   /** The web view's port; 0 or absent: a free one. */
   webPort?: number
+  /** Warn about experiments and directions with no `refs:` (on for new vaults, off for adopted ones). */
+  requireRefs?: boolean
+  /** Warn about each note with no `summary:` (on for new vaults; adopted ones get one counting line). */
+  requireSummaries?: boolean
 }
 
 export type Io = {
@@ -407,6 +419,9 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
   const texts: Record<string, string> = {}
   const problems: string[] = []
   const parentRef: Record<string, string | null> = {}
+  const originRef: Record<string, string[]> = {}
+  const refsRef: Record<string, string[]> = {}
+  const supersededRef: Record<string, string | null> = {}
   for (const [type, sub] of Object.entries(SUBDIR) as [NodeType, string][]) {
     const dir = join(config.vault, sub)
     if (!(await io.exists(dir))) continue
@@ -429,12 +444,26 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
         concept: ROOT_CONCEPT,
         locked: ['true', 'yes'].includes(unquote(fm.locked).toLowerCase()),
       }
+      const summary = unquoteJson(fm.summary)
+      if (summary) nodes[id]!.summary = summary
       texts[id] = text
       parentRef[id] = linkTarget(fm.parent)
+      originRef[id] = linksIn(fm.origin)
+      refsRef[id] = linksIn(fm.refs)
+      supersededRef[id] = linkTarget(fm.superseded_by)
     }
   }
   const byName: Record<string, string> = {}
   for (const n of Object.values(nodes)) byName[n.name] = n.id
+  const idsOf = (refs: string[]) => refs.map(ref => byName[ref] ?? (nodes[idOf(ref)] ? idOf(ref) : null)).filter((id): id is string => id !== null)
+  for (const n of Object.values(nodes)) {
+    const past = idsOf(originRef[n.id]!)
+    if (past.length) n.origin = past
+    const refs = idsOf(refsRef[n.id]!)
+    if (refs.length) n.refs = refs
+    const by = supersededRef[n.id] ? idsOf([supersededRef[n.id]!])[0] : undefined
+    if (by && by !== n.id) n.supersededBy = by
+  }
   for (const n of Object.values(nodes)) {
     const ref = parentRef[n.id]
     if (!ref) continue
@@ -474,6 +503,15 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
 
 /** A frontmatter value without the quotes YAML allows around it. */
 export const unquote = (v: string | undefined) => (v ?? '').trim().replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1').trim()
+
+/** A value written with JSON.stringify (escapes and all), or any other quoted or bare one. */
+export function unquoteJson(v: string | undefined): string {
+  const t = (v ?? '').trim()
+  if (/^".*"$/.test(t)) {
+    try { return String(JSON.parse(t)).trim() } catch { /* not JSON: as written */ }
+  }
+  return unquote(t)
+}
 
 /** What a note's frontmatter says of a concept: its name (empty when it declares none), summary, repos. */
 export type Declaration = { name: string; summary: string; repos?: string[] }
@@ -913,6 +951,10 @@ async function allFiles(io: Io, dir: string, rel = ''): Promise<string[]> {
   return out
 }
 
+/** Experiments and directions being or done carry references; rejected or moved ones need none. */
+export const needsRefs = (n: RftNode) =>
+  (n.type === 'experiment' || n.type === 'direction') && !['discussed', 'dropped', 'moved'].includes(n.status)
+
 /** Whether a folder is in a git repository: it or a folder above it holds `.git`. */
 export async function isInGit(io: Io, abs: string): Promise<boolean> {
   for (let dir = abs; ; dir = resolvePath(dir, '..')) {
@@ -957,6 +999,12 @@ export async function validate(io: Io, loaded: Loaded, opts: { root?: string; ho
       if (!cname) errors.push(`${n.id}: \`concept:\` is empty (give the concept a name, or remove the field)`)
       else if (/[\^#|[\]]/.test(cname)) errors.push(`${n.id}: concept name "${cname}" contains ^ # | [ or ]`)
     } else if (fm.concept_summary !== undefined) warnings.push(`${n.id}: concept_summary without concept`)
+    if (fm.superseded_by !== undefined && !n.supersededBy) warnings.push(`${n.id}: superseded_by names no note of the tree (rft_supersede sets or clears it)`)
+    const notRefs = (n.refs ?? []).filter(r => tree.nodes[r]!.type !== 'reference')
+    if (notRefs.length) warnings.push(`${n.id}: refs ${notRefs.join(', ')} ${notRefs.length === 1 ? 'is not a reference' : 'are not references'} (R notes)`)
+    if (config.requireRefs && needsRefs(n) && !(n.refs ?? []).length && n.parent) {
+      warnings.push(`${n.id}: no references (refs:) — name the paper(s) it builds on with rft_set_refs, or add them first as R notes`)
+    }
     if (fm.concept_repos !== undefined) {
       const isTop = tree.roots.length === 1 && tree.roots[0] === n.id
       if (!unquote(fm.concept) && !isTop) {
@@ -1033,6 +1081,10 @@ export type NewNode = {
   code?: string
   /** Topical tags, sanitised to kebab-case. */
   tags?: string[]
+  /** Names of the notes it builds on (references). */
+  refs?: string[]
+  /** One line on what the note is (and what it found). */
+  summary?: string
 }
 
 /** `taken`: ids in use beyond the loaded ones, e.g. notes another session added since. */
@@ -1060,8 +1112,9 @@ export function noteText(id: string, n: NewNode, project: string, parentName: st
   const topical = topicalTags((n.tags ?? []).map(sanitiseTag).filter(Boolean), project, n.type)
   const head = [
     '---', `id: ${id}`, `type: ${n.type}`, `status: ${status}`, `date: ${n.date}`,
+    ...(n.summary?.trim() ? [`summary: ${JSON.stringify(n.summary.trim().replace(/\s+/g, ' '))}`] : []),
     `parent: ${parentName ? `"[[${parentName}]]"` : '""'}`, 'children: []', 'up: ""', 'down: []',
-    `tags: ${tagsLine(project, n.type, topical, status)}`, '---', '',
+    `tags: ${tagsLine(project, n.type, topical, status)}`, ...(n.refs?.length ? [`refs: ${linkList(n.refs)}`] : []), '---', '',
     `# ${id} · ${n.title}`, '',
     `**Parent:** ${parentLink}  `,
     `**Status:** ${status} · **Date:** ${n.date}${t.code ? '  ' : ''}`,
@@ -1086,6 +1139,60 @@ export function withChildListed(text: string, childName: string): string {
   const start = m.index + '## Children in the tree\n'.length
   const kept = m[1]!.split('\n').filter(l => l.trim() !== '')
   return t.slice(0, start) + [...kept, line].join('\n') + '\n' + t.slice(start + m[1]!.length)
+}
+
+/** Sets `refs:` (note names); an empty list removes the field. */
+export function withRefs(text: string, names: string[]): string {
+  return names.length ? setField(text, 'refs', linkList(names), 'tags') : removeField(text, 'refs')
+}
+
+/** Drops `- [[child]]` from the "Children in the tree" section (the note moved elsewhere). */
+export function withChildUnlisted(text: string, childName: string): string {
+  const t = normalise(text)
+  const m = /## Children in the tree\n([\s\S]*?)(?=\n## |$)/.exec(t)
+  if (!m) return t
+  const start = m.index + '## Children in the tree\n'.length
+  const kept = m[1]!.split('\n').filter(l => !linksIn(l).includes(childName))
+  return t.slice(0, start) + kept.join('\n') + t.slice(start + m[1]!.length)
+}
+
+/**
+ * A note moved from `from` to `to` (both note names): its `parent:` and `**Parent:**` line, the
+ * old parent added at the end of `origin:` (past parents, oldest first), and a dated line under
+ * `## History`, so the reasoning that led to the note stays findable.
+ */
+export function withMove(text: string, from: string, to: string, date: string, why?: string): string {
+  let out = setField(text, 'parent', `"[[${to}]]"`)
+  const past = linksIn(front(out).origin)
+  out = setField(out, 'origin', linkList([...past, from]), 'parent')
+  out = out.replace(/(\*\*Parent:\*\*\s*)(\[\[[^\]]*\]\]|\(root\))/, `$1[[${to}]]`)
+  return withHistory(out, `- ${date}: moved from [[${from}]] to [[${to}]]${why?.trim() ? ` (${why.trim().replace(/\s+/g, ' ')})` : ''}`)
+}
+
+/** A dated line added under `## History` (made before "Children in the tree" when missing). */
+export function withHistory(out: string, line: string): string {
+  const heading = '## History'
+  const at = out.indexOf(`\n${heading}\n`)
+  if (at < 0) {
+    // before "Children in the tree", which stays the last section
+    const kids = out.indexOf('\n## Children in the tree')
+    return kids < 0
+      ? out.replace(/\n*$/, '\n\n') + `${heading}\n${line}\n`
+      : out.slice(0, kids).replace(/\n*$/, '\n\n') + `${heading}\n${line}\n` + out.slice(kids)
+  }
+  const start = at + heading.length + 2
+  const nxt = out.indexOf('\n## ', start - 1)
+  const end = nxt < 0 ? out.length : nxt
+  const sec = out.slice(start, end).replace(/\s+$/, '')
+  return out.slice(0, start) + (sec ? sec + '\n' : '') + line + '\n' + out.slice(end)
+}
+
+/** The ids of `id` and every note below it. */
+export function subtreeOf(tree: Tree, id: string): Set<string> {
+  const out = new Set<string>()
+  const go = (k: string) => { out.add(k); tree.nodes[k]?.children.forEach(go) }
+  go(id)
+  return out
 }
 
 // ---------------------------------------------------------------- changing a note's type

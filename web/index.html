@@ -43,6 +43,11 @@
     <button id="view-toggle" aria-pressed="false" title="A tree whose nodes are the concepts">Concept tree</button>
   </div>
   <div class="group">
+    <button id="origins-toggle" class="icon-btn" aria-pressed="false" aria-label="Came from" title="Came from: dashed links from where each moved note came from">
+      <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="17" r="2.6" fill="currentColor" stroke="none"/><path d="M7 14.5C9 7 15 5 18.5 7.5" stroke-dasharray="2.4 2.4"/><circle cx="19" cy="9" r="2.6" fill="currentColor" stroke="none"/></svg>
+    </button>
+  </div>
+  <div class="group">
     <button id="filters-toggle" aria-expanded="false" aria-controls="filters">Filters</button>
     <span id="filter-status" class="filter-status" hidden><span id="filter-count"></span> · <button id="filters-clear" class="linkish">Clear</button></span>
   </div>
@@ -51,7 +56,7 @@
 </header>
 <nav id="crumbs" hidden aria-label="Concept focus"></nav>
 <main>
-  <svg id="canvas" aria-label="The reasoning tree"><defs><marker id="arrow" viewBox="0 -4 8 8" refX="8" refY="0" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,-4L8,0L0,4Z"></path></marker></defs><g id="viewport"><g id="regions"></g><g id="links"></g><g id="nodes"></g><g id="badges"></g></g></svg>
+  <svg id="canvas" aria-label="The reasoning tree"><defs><marker id="arrow" viewBox="0 -4 8 8" refX="8" refY="0" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,-4L8,0L0,4Z"></path></marker></defs><g id="viewport"><g id="regions"></g><g id="origins"></g><g id="links"></g><g id="nodes"></g><g id="badges"></g></g></svg>
   <svg id="concept-canvas" hidden aria-label="The concept tree"><g id="cviewport"></g></svg>
   <aside id="legend" aria-label="Legend and filter">
     <button id="legend-toggle" class="legend-toggle" aria-expanded="true" title="Show or hide the legend">Legend <span class="caret">▾</span></button>
@@ -126,6 +131,9 @@
         <button id="drawer-add" class="icon-btn" hidden aria-label="Add a child note" title="Add a direction, an experiment, a reference or a theory note under this note">
           <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.6" fill="currentColor" stroke="none"/><path d="M6 9v6a2 2 0 0 0 2 2h2.5"/><path d="M17.5 13.5v7M14 17h7"/></svg>
         </button>
+        <button id="drawer-move" class="icon-btn" hidden aria-label="Move" title="Move this note and the notes below it under another note">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.6" fill="currentColor" stroke="none"/><path d="M6 9v4a3 3 0 0 0 3 3h9"/><path d="M15 13l3 3-3 3"/></svg>
+        </button>
         <button id="drawer-close" title="Close">✕</button>
       </span>
     </div>
@@ -164,6 +172,21 @@
         <span id="retype-msg" class="muted" role="status"></span>
       </div>
     </form>
+    <form id="mover" class="adder" hidden>
+      <div class="adder-row">
+        <input id="move-to" type="text" list="move-targets" autocomplete="off" placeholder="Move under… (id or title)" aria-label="The new parent">
+        <datalist id="move-targets"></datalist>
+      </div>
+      <div class="editor-bar">
+        <button id="move-ok" type="submit" class="primary" title="Move the note and its subtree (Enter)">Move</button>
+        <button id="move-cancel" type="button" title="Esc">Cancel</button>
+        <span id="move-msg" class="muted" role="status"></span>
+      </div>
+    </form>
+    <div id="drawer-summary" class="drawer-summary" hidden></div>
+    <div id="drawer-superseded" class="drawer-superseded" hidden></div>
+    <div id="drawer-origin" class="drawer-origin muted" hidden></div>
+    <div id="drawer-refs" class="drawer-origin muted" hidden></div>
     <article id="note"></article>
     <section id="threads" hidden aria-label="Comments and suggestions"></section>
     <div id="sel-bar" class="sel-bar" hidden role="toolbar" aria-label="On the selected text">
