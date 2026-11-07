@@ -842,9 +842,10 @@ class Vault:
                               "it may still change (is the session that ran /rft still open?)"}
 
 
-    def move_node(self, nid: str, parent: str, ask) -> tuple[int, dict]:
+    def move_node(self, nid: str, parent: str, ask, unlock: bool = False) -> tuple[int, dict]:
         """Moves a note and its subtree under `parent`, done by the session as for add_node; the
-        answer comes once the note's parent is the new one and the notes are quiet."""
+        answer comes once the note's parent is the new one and the notes are quiet. `unlock`: the
+        user agreed in the page to unlock a locked note, which the move then unlocks."""
         with self._ask_lock:
             nodes = {n["id"]: n for n in self.tree()["nodes"]}
             if nid not in nodes or parent not in nodes:
@@ -859,7 +860,7 @@ class Vault:
                     return 400, {"error": "a note cannot move under its own subtree"}
                 p = nodes[p]["parent"] if p in nodes else None
             try:
-                ask("RFT_MOVE_NODE", {"id": nid, "parent": parent})
+                ask("RFT_MOVE_NODE", {"id": nid, "parent": parent, **({"unlock": True} if unlock else {})})
             except (OSError, ValueError):
                 return 503, {"error": "the Claude Code session that ran /rft is gone"}
             deadline = time.monotonic() + NODE_WAIT_S
@@ -1033,7 +1034,7 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
         def do_POST(self):
             """POST api/node {"parent": "<id>", "type": one of TYPES, "title": "..."}: a new note
             under `parent`, with the default status; POST api/type {"id": "<id>", "type": one of
-            TYPES}: the note's type changed; POST api/move {"id": "<id>", "parent": "<id>"}: the note
+            TYPES}: the note's type changed; POST api/move {"id": "<id>", "parent": "<id>", "unlock"?: bool}: the note
             and its subtree under `parent`. The session makes each. POST api/comment {"id":
             "<id>", "action": ...}: a change to the note's discussion (Vault.comment); POST api/lock
             {"id": "<id>", "locked": bool}."""
@@ -1059,9 +1060,9 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 if got is None:
                     return
                 _, req = got
-                if not all(isinstance(req.get(k), str) for k in ("id", "parent")):
-                    return self._json(400, {"error": "expected {id, parent}"})
-                return self._json(*vault.move_node(req["id"], req["parent"], ask))
+                if not all(isinstance(req.get(k), str) for k in ("id", "parent")) or not isinstance(req.get("unlock", False), bool):
+                    return self._json(400, {"error": "expected {id, parent, unlock?: true or false}"})
+                return self._json(*vault.move_node(req["id"], req["parent"], ask, req.get("unlock", False)))
             if route == "/api/type":
                 got = self._write_request("/api/type", MAX_NODE_BYTES)
                 if got is None:

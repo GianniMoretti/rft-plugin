@@ -344,6 +344,9 @@ folder and every link to it change together.
   change with `rft_suggest {id, quote, replacement}`, one per passage; the user accepts or rejects
   it in the tree view, and an accepted one is written into the note. Its status, tags and derived
   fields still change through the rft tools. Never unlock a note: that is the user's alone.
+  `rft_move_node` and `rft_supersede` write a line in its History, so on a locked note the plugin
+  asks the user whether to unlock it; if they keep it locked the call fails and nothing changes:
+  do not retry it, and do not work around it (e.g. by moving its children instead).
 - **The discussion of a note** is kept beside it, in `<vault>/.comments/<id>.json`, written by
   the tree view and the rft tools only (never by hand). A thread is on a part of the text, its
   quote (the note's markdown as written), found again after edits from the text around it:

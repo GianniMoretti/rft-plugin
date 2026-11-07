@@ -39,6 +39,16 @@ export const commentsPath = (vault: string, id: string) => join(vault, COMMENTS_
 /** Whether a note's text says it is locked: the user's to change, Claude's only to suggest changes to. */
 export const isLocked = (text: string) => ['true', 'yes'].includes(unquote(front(text).locked).toLowerCase())
 
+/**
+ * A change that writes a line into a locked note's History (a move, a supersede mark): made only
+ * unlocked, once the user agrees; thrown, before anything is written, while they have not.
+ */
+export class LockedChange extends Error {
+  constructor(readonly node: { id: string; name: string }, readonly change: 'move' | 'supersede') {
+    super(`${node.name} is locked: to ${change === 'move' ? 'move it' : 'mark it as superseded'}, the user must agree to unlock it`)
+  }
+}
+
 /** When a message is written, to the minute, local time. */
 export function stamp(now = new Date()): string {
   const p = (n: number) => String(n).padStart(2, '0')

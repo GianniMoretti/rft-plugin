@@ -2,6 +2,7 @@
 // number is not built on; and what is still open, by concept (rft_next, /rft-next): directions
 // never explored, experiments planned and never run, the open questions of the digests.
 
+import { LockedChange, isLocked } from './comments'
 import type { Digest } from './map'
 import { readDigests, resolveConcept } from './map'
 import type { Io, Loaded, RftNode } from './vault'
@@ -9,19 +10,28 @@ import { MARK, conceptOrder, conceptPath, join, load, removeField, resolveId, se
 
 export class KnowledgeError extends Error {}
 
-/** Marks `ref` as overturned by `by` (or, with no `by`, clears the mark), with a dated History line. */
-export async function supersede(io: Io, loaded: Loaded, ref: string, by: string | null, why: string | undefined, date: string): Promise<string> {
+/**
+ * Marks `ref` as overturned by `by` (or, with no `by`, clears the mark), with a dated History line.
+ * A locked note is changed only unlocked, once the user agrees (`unlock`).
+ */
+export async function supersede(io: Io, loaded: Loaded, ref: string, by: string | null, why: string | undefined, date: string, unlock = false): Promise<string> {
   const { tree, config } = loaded
   const id = resolveId(tree, ref)
   if (!id) throw new KnowledgeError(`"${ref}" is not a note of the tree`)
   const n = tree.nodes[id]!
-  const text = loaded.texts[id]!
+  const wasLocked = isLocked(loaded.texts[id]!)
+  /** The note's text to write into, checked once nothing else refuses the change. */
+  const writable = () => {
+    if (wasLocked && !unlock) throw new LockedChange(n, 'supersede')
+    return wasLocked ? removeField(loaded.texts[id]!, 'locked') : loaded.texts[id]!
+  }
+  const unlocked = wasLocked ? ` ${n.name} is unlocked now: the user agreed.` : ''
   const reason = why?.trim() ? ` (${why.trim().replace(/\s+/g, ' ')})` : ''
   if (!by?.trim()) {
     if (!n.supersededBy) return `${n.name} is not marked as superseded.`
-    await io.write(join(config.vault, n.path), withHistory(removeField(text, 'superseded_by'), `- ${date}: no longer superseded by [[${tree.nodes[n.supersededBy]?.name ?? n.supersededBy}]]${reason}`))
+    await io.write(join(config.vault, n.path), withHistory(removeField(writable(), 'superseded_by'), `- ${date}: no longer superseded by [[${tree.nodes[n.supersededBy]?.name ?? n.supersededBy}]]${reason}`))
     Object.assign(loaded, await load(io, config))
-    return `${n.name} is no longer marked as superseded.`
+    return `${n.name} is no longer marked as superseded.${unlocked}`
   }
   const newer = resolveId(tree, by)
   if (!newer) throw new KnowledgeError(`"${by}" is not a note of the tree`)
@@ -31,11 +41,11 @@ export async function supersede(io: Io, loaded: Loaded, ref: string, by: string 
     if (at === id) throw new KnowledgeError(`${newer} is already superseded, through the chain, by ${id}`)
   }
   const m = tree.nodes[newer]!
-  const out = withHistory(setField(text, 'superseded_by', `"[[${m.name}]]"`, 'summary'), `- ${date}: superseded by [[${m.name}]]${reason}`)
+  const out = withHistory(setField(writable(), 'superseded_by', `"[[${m.name}]]"`, 'summary'), `- ${date}: superseded by [[${m.name}]]${reason}`)
   await io.write(join(config.vault, n.path), out)
   Object.assign(loaded, await load(io, config))
   return `${n.name} is marked as superseded by ${m.name}: its result is no longer to be built on. ` +
-    `Update the digest of its concept (rft_set_digest) so the current result is the one it states${n.summary ? '' : ', and give it a summary'}.`
+    `Update the digest of its concept (rft_set_digest) so the current result is the one it states${n.summary ? '' : ', and give it a summary'}.${unlocked}`
 }
 
 /** The note that holds now, following a chain of superseded results. */

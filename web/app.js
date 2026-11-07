@@ -670,10 +670,22 @@
   const mover = document.getElementById('mover')
   const moveTo = document.getElementById('move-to')
   const moveMsg = document.getElementById('move-msg')
+  const moveOk = document.getElementById('move-ok')
+  let warnedLocked = false // whether the mover open now warned that the note is locked
 
-  function setMoveMsg(text, isError = false) {
+  function setMoveMsg(text, isError = false, isWarning = false) {
     moveMsg.textContent = text
     moveMsg.classList.toggle('error', isError)
+    moveMsg.classList.toggle('warn', isWarning)
+  }
+
+  const shownLocked = () => Boolean(shown && shown.id === selected && shown.locked)
+
+  /** A locked note's History gains a line when it moves, so the move unlocks it: said before the user confirms. */
+  function warnIfLocked() {
+    warnedLocked = shownLocked()
+    moveOk.textContent = warnedLocked ? 'Move and unlock' : 'Move'
+    setMoveMsg(warnedLocked ? 'This note is locked: moving it unlocks it and adds a line to its History.' : '', false, warnedLocked)
   }
 
   /** The notes the one shown may move under: not itself, nothing below it, not its parent now. */
@@ -696,7 +708,7 @@
       list.appendChild(o)
     }
     moveTo.value = ''
-    setMoveMsg('')
+    warnIfLocked()
     mover.hidden = false
     moveTo.focus()
   }
@@ -722,6 +734,9 @@
     const parent = targetOf(moveTo.value)
     if (!parent) { setMoveMsg('Pick a note from the list (or type its id).', true); return }
     if (!moveTargets(id).some(n => n.id === parent)) { setMoveMsg('Not there: the note itself, a note below it, or where it already is.', true); return }
+    // locked or unlocked since the mover opened: say so, and wait for a second confirm
+    const unlock = shownLocked()
+    if (unlock !== warnedLocked) { warnIfLocked(); if (!unlock) setMoveMsg('Unlocked meanwhile: Move again to move it.'); return }
     moving = true
     moveTo.readOnly = true
     setMoveMsg('Moving…')
@@ -730,7 +745,7 @@
         method: 'POST',
         cache: 'no-store',
         headers: { 'Content-Type': 'application/json', 'X-RFT-Token': editKey() },
-        body: JSON.stringify({ id, parent }),
+        body: JSON.stringify(unlock ? { id, parent, unlock } : { id, parent }),
       })
       const reply = await res.json().catch(() => ({}))
       if (!res.ok) { setMoveMsg(`Not moved: ${reply.error || `the server answered ${res.status}`}.`, true); return }

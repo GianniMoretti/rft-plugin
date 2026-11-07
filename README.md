@@ -237,7 +237,11 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   refuses Claude's Edit and Write on a locked note, shell commands that write to it and name its
   file (as far as a command shows that), and `rft_set_status` notes and `rft_set_code` on it.
   Status, tags and the tree's derived fields still change. Your own edits in the drawer are not
-  affected, and neither are Obsidian's.
+  affected, and neither are Obsidian's. Moving a locked note, or marking it superseded, writes a
+  line in its **History**, so it unlocks the note, and only once you agree: the session asks you
+  (Claude cannot answer for you), and the tree view's **Move** says so first (its button becomes
+  **Move and unlock**). If you keep it locked, nothing changes. Its locked parents and the notes
+  below it ask nothing and stay locked: they only get the tree's derived changes.
 - The drawer lists the references a note **builds on**, and on a reference the notes that
   **cite** it, each a link to its node; a reference whose paper was saved links its PDF.
 - **Move** (an arrow out of a node, in the drawer) moves the note shown, and every note below it, under another note:

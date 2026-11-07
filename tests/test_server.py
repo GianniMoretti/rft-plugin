@@ -648,6 +648,11 @@ class ServerTest(unittest.TestCase):
         self.assertEqual((nodes["D01"]["parent"], nodes["D01"]["origin"]), ("D00", ["E01"]))
         self.assertNotIn("origin", nodes["E01"])
 
+    def test_move_relays_the_unlock_the_user_agreed_to_in_the_page(self):
+        self.session(self.mover)
+        self.assertEqual(self.move({"id": "D01", "parent": "D00", "unlock": True})[0], 200)
+        self.assertEqual(self.asked, [("RFT_MOVE_NODE", {"id": "D01", "parent": "D00", "unlock": True})])
+
     def test_serves_a_reference_pdf_from_papers_only(self):
         papers = self.vault / "papers" / "Runs"
         papers.mkdir(parents=True)
@@ -677,7 +682,8 @@ class ServerTest(unittest.TestCase):
         self.session(self.mover)
         for payload, status in [({"id": "D01"}, 400), ({"id": "D01", "parent": 3}, 400), ({"id": "D42", "parent": "D00"}, 404),
                                 ({"id": "D00", "parent": "E01"}, 400), ({"id": "D01", "parent": "E01"}, 400),
-                                ({"id": "E01", "parent": "D01"}, 400), ({"id": "E01", "parent": "E01"}, 400)]:
+                                ({"id": "E01", "parent": "D01"}, 400), ({"id": "E01", "parent": "E01"}, 400),
+                                ({"id": "D01", "parent": "D00", "unlock": "yes"}, 400)]:
             self.assertEqual(self.move(payload)[0], status, payload)
         self.assertEqual(self.move({"id": "D01", "parent": "D00"}, key=None)[0], 403)
         self.assertEqual(self.move({"id": "D01", "parent": "D00"}, origin="http://evil.example")[0], 403)

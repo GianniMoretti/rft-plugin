@@ -14,7 +14,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { RftSnapshot } from '../types'
-import { COMMENTS_DIR, askText, comment as addComment, commentsReport, isLocked, readComments, suggest as addSuggestion } from './lib/comments'
+import { COMMENTS_DIR, LockedChange, askText, comment as addComment, commentsReport, isLocked, readComments, suggest as addSuggestion } from './lib/comments'
 import type { CodeEnv, Git } from './lib/ops'
 import { addNode, codeReport, conceptsReport, exportHtml, initVault, loadActive, lockedText, moveNode, rulesText, setCode, setConcept, setRefs, setRepos, setStatus, setTags, setType, tagsReport, today, treeReport } from './lib/ops'
 import { ASSET_PATHS } from './lib/page'
@@ -170,7 +170,7 @@ const TOOLS = {
   },
   rft_supersede: {
     description:
-      'Mark a note whose result a newer one overturns (superseded_by: in its frontmatter, and a dated History line): a corrected number, a bug found in the run, a better-controlled rerun that changes the conclusion. rft_map, rft_search and rft_graph then show it as superseded, so nobody builds on the old result. Without by, clears the mark. Then update the concept\'s digest.',
+      'Mark a note whose result a newer one overturns (superseded_by: in its frontmatter, and a dated History line): a corrected number, a bug found in the run, a better-controlled rerun that changes the conclusion. rft_map, rft_search and rft_graph then show it as superseded, so nobody builds on the old result. Without by, clears the mark. Then update the concept\'s digest. On a locked note the plugin asks the user to unlock it first; if they keep it locked, nothing changes.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -204,7 +204,7 @@ const TOOLS = {
   },
   rft_move_node: {
     description:
-      'Move a note and its whole subtree under another parent, when it belongs to another line of research. The note keeps where it came from (origin: and a dated History line), the old parent stops listing it, the new one lists it, and the index and canvas follow. Only after the user has agreed to the move.',
+      'Move a note and its whole subtree under another parent, when it belongs to another line of research. The note keeps where it came from (origin: and a dated History line), the old parent stops listing it, the new one lists it, and the index and canvas follow. Only after the user has agreed to the move. A locked note: the plugin asks the user to unlock it first; if they keep it locked, it does not move.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -533,8 +533,39 @@ async function homeOf($: EngineInterface): Promise<string | undefined> {
 /** How the tools reach the code of the tree's concepts. */
 const codeEnv = async ($: EngineInterface, h: Here): Promise<CodeEnv> => ({ root: h.root, git: gitOf($), home: await homeOf($), date: today() })
 
-/** Runs one of the rft tools; its text is the tool's result. */
-async function runTool($: EngineInterface, name: string, i: Record<string, unknown>): Promise<string> {
+const UNLOCK_ASK = {
+  move: { doing: 'Moving it', yes: 'Move and unlock', anyway: 'Move it anyway?', kept: 'it was not moved' },
+  supersede: { doing: 'Marking it as superseded', yes: 'Mark and unlock', anyway: 'Mark it anyway?', kept: 'it was not marked' },
+} as const
+
+/**
+ * A change that unlocks a locked note (a move, a supersede mark: each writes a History line into
+ * its text). Tried locked first; a LockedChange asks the user in the session's own dialog, which
+ * the model cannot answer, unless they agreed already in the tree view (`agreed`). A dismissed
+ * dialog, or a run with no one to ask, keeps the note locked.
+ */
+async function unlocking($: EngineInterface, change: (unlock: boolean) => Promise<string>, agreed = false): Promise<string> {
+  try {
+    return await change(agreed)
+  } catch (err) {
+    if (!(err instanceof LockedChange)) throw err
+    const say = UNLOCK_ASK[err.change]
+    let answer = ''
+    try {
+      answer = await $.ui.ask(`${err.node.name} is locked. ${say.doing} unlocks it and adds a line to its History. ${say.anyway}`,
+        { options: [say.yes, 'Keep it locked'], header: 'Locked note' })
+    } catch { /* dismissed, or no one to ask */ }
+    if (answer !== say.yes) throw new Error(`${err.node.name} is locked and the user kept it locked: ${say.kept}. Do not try again unless the user asks.`)
+    return change(true)
+  }
+}
+
+/**
+ * Runs one of the rft tools; its text is the tool's result. `view`: what the tree view's request
+ * carries beyond the tool's input (that the user agreed there to unlock the note); never the
+ * model's.
+ */
+async function runTool($: EngineInterface, name: string, i: Record<string, unknown>, view: { unlock?: boolean } = {}): Promise<string> {
   const h = await mustHere($)
   const io = h.io
   const loaded = await loadActive(io)
@@ -560,7 +591,7 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
     case 'rft_set_code':
       return setCode(io, loaded, await codeEnv($, h), String(i.id ?? ''), typeof i.text === 'string' ? i.text : undefined, typeof i.reproduce === 'string' ? i.reproduce : undefined)
     case 'rft_move_node':
-      return moveNode(io, loaded, String(i.id ?? ''), String(i.parent ?? ''), today(), str(i.why))
+      return unlocking($, unlock => moveNode(io, loaded, String(i.id ?? ''), String(i.parent ?? ''), today(), str(i.why), unlock), view.unlock)
     case 'rft_set_refs':
       return setRefs(io, loaded, String(i.id ?? ''), strings(i.refs))
     case 'rft_search':
@@ -589,7 +620,7 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       return setSummaries(io, loaded, given)
     }
     case 'rft_supersede':
-      return supersede(io, loaded, String(i.id ?? ''), str(i.by) ?? null, str(i.why), today())
+      return unlocking($, unlock => supersede(io, loaded, String(i.id ?? ''), str(i.by) ?? null, str(i.why), today(), unlock))
     case 'rft_next':
       return nextReport(io, loaded, today(), str(i.concept))
     case 'rft_map':
@@ -734,11 +765,14 @@ const FROM_VIEW = [
   { line: 'RFT_MOVE_NODE ', tool: 'rft_move_node', fields: ['id', 'parent'], what: 'move a note' },
 ] as const
 
-/** A change the tree view asks for (POST api/node, api/type or api/move, relayed by the server). */
+/**
+ * A change the tree view asks for (POST api/node, api/type or api/move, relayed by the server). A
+ * move with `unlock: true` was agreed in the page, which warned that the note is locked.
+ */
 async function fromView($: EngineInterface, asked: (typeof FROM_VIEW)[number], request: string): Promise<void> {
   try {
     const r = JSON.parse(request) as Record<string, unknown>
-    await runTool($, asked.tool, Object.fromEntries(asked.fields.map(f => [f, r[f]])))
+    await runTool($, asked.tool, Object.fromEntries(asked.fields.map(f => [f, r[f]])), { unlock: r.unlock === true })
     await refresh($, true)
   } catch (err) {
     $.ui.toast(`rft: the tree view could not ${asked.what} (${message(err)})`)
