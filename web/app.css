@@ -75,9 +75,18 @@ main { position: relative; flex: 1; min-height: 0; }
 .ring-reference { border-color: var(--reference); }
 .ring-theory { border-color: var(--theory); }
 .hint { margin-top: 6px; }
-#drawer { position: absolute; top: 0; right: 0; bottom: 0; width: min(calc(480px * var(--font-scale)), 92vw);
+/* --drawer-w: the default width, or the one dragged on the drawer's left edge (set on main by app.js) */
+main { --drawer-w: calc(480px * var(--font-scale)); }
+#drawer { position: absolute; top: 0; right: 0; bottom: 0; width: min(var(--drawer-w), 92vw);
   overflow: auto; background: var(--panel); border-left: 1px solid var(--line); padding: 10px 16px 24px;
   font-size: calc(14.5px * var(--font-scale)); line-height: 1.55; }
+#drawer-resize { position: absolute; top: 0; bottom: 0; right: min(var(--drawer-w), 92vw); width: 9px;
+  transform: translateX(50%); cursor: col-resize; z-index: 3; touch-action: none; }
+#drawer[hidden] + #drawer-resize { display: none; }
+#drawer-resize::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 3px; border-radius: 2px; }
+#drawer-resize:hover::after, #drawer-resize:focus-visible::after, body.resizing #drawer-resize::after { background: var(--accent); }
+#drawer-resize:focus-visible { outline: none; }
+body.resizing, body.resizing * { cursor: col-resize !important; user-select: none; }
 .drawer-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .drawer-actions { display: flex; gap: 4px; flex: none; }
 button.primary { border-color: var(--accent); color: var(--accent); }

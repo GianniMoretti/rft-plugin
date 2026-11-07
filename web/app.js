@@ -99,6 +99,7 @@
       if (fq.has('tags')) filters = F.normalise({ ...filters, tags: fq.get('tags').split(',').filter(Boolean) })
       if (fq.has('hide')) filters = F.normalise({ ...filters, mode: 'hide' })
       setFont(new URLSearchParams(location.search).get('font') || store.get('font', 1), false)
+      setDrawerWidth(store.get('drawerWidth', null), false)
       buildLegend()
       setLegendOpen(store.get('legendOpen', true))
       syncLayoutButtons()
@@ -880,6 +881,50 @@
     document.getElementById('drawer').hidden = true
     selected = null
     gNodes.selectAll('g.node').attr('class', n => nodeClass(n.data))
+  })
+
+  // the drawer's width: its left edge drags (arrow keys once focused), a double-click restores the default
+  const mainEl = document.querySelector('main')
+  const resizer = document.getElementById('drawer-resize')
+  const DRAWER_MIN = 280
+  let drawerW = null // the width dragged to, in px; null: the default, which grows with the text size
+  function setDrawerWidth(w, save = true) {
+    const v = Number(w)
+    drawerW = w == null || !Number.isFinite(v) ? null
+      : Math.round(Math.min(Math.max(DRAWER_MIN, window.innerWidth * 0.92), Math.max(DRAWER_MIN, v)))
+    if (drawerW == null) mainEl.style.removeProperty('--drawer-w')
+    else mainEl.style.setProperty('--drawer-w', `${drawerW}px`)
+    if (save) store.set('drawerWidth', drawerW)
+  }
+  let drag = null // while the edge is dragged: where the press started, and the width then
+  resizer.addEventListener('pointerdown', ev => {
+    if (ev.button !== 0) return
+    ev.preventDefault()
+    resizer.setPointerCapture(ev.pointerId)
+    drag = { x: ev.clientX, w: drawer.offsetWidth, moved: false }
+    document.body.classList.add('resizing')
+    hideSelBar()
+    fnPop.hidden = true
+  })
+  resizer.addEventListener('pointermove', ev => {
+    if (!drag || ev.clientX === drag.x) return
+    drag.moved = true
+    setDrawerWidth(drag.w + drag.x - ev.clientX, false)
+  })
+  const endDrag = () => {
+    if (!drag) return
+    if (drag.moved) store.set('drawerWidth', drawerW)
+    drag = null
+    document.body.classList.remove('resizing')
+  }
+  resizer.addEventListener('pointerup', endDrag)
+  resizer.addEventListener('lostpointercapture', endDrag)
+  resizer.addEventListener('dblclick', () => setDrawerWidth(null))
+  resizer.addEventListener('keydown', ev => {
+    const d = { ArrowLeft: 1, ArrowRight: -1 }[ev.key]
+    if (!d) return
+    ev.preventDefault()
+    setDrawerWidth(drawer.offsetWidth + d * (ev.shiftKey ? 120 : 30))
   })
   document.getElementById('note').addEventListener('click', ev => {
     const a = ev.target.closest('a[data-go]')
