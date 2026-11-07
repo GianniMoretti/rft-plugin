@@ -113,6 +113,10 @@
         <button id="drawer-type" class="icon-btn" hidden aria-label="Change type" title="Change the note's type: it gets a new id of that type, and links to it follow">
           <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 18.93A8 8 0 1 1 18.93 8"/><path d="M20 4.1L18.93 8l-3.9-1"/><circle cx="12" cy="12" r="3"/></svg>
         </button>
+        <button id="drawer-lock" class="icon-btn cycle" hidden aria-pressed="false" aria-label="Lock">
+          <svg class="ico lock-open on" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.6-1.7"/></svg>
+          <svg class="ico lock-closed" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+        </button>
         <button id="drawer-edit" class="icon-btn" hidden aria-label="Edit" title="Edit the note's text (Ctrl+S saves, Esc cancels)">
           <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l1-4.5L15.5 5a2.1 2.1 0 0 1 3 0l.5.5a2.1 2.1 0 0 1 0 3L8.5 19z"/><path d="M13.5 7l3.5 3.5"/></svg>
         </button>
@@ -157,6 +161,27 @@
       </div>
     </form>
     <article id="note"></article>
+    <section id="threads" hidden aria-label="Comments and suggestions"></section>
+    <div id="sel-bar" class="sel-bar" hidden role="toolbar" aria-label="On the selected text">
+      <button type="button" data-compose="comment" title="Discuss this part of the note">Comment</button>
+      <button type="button" data-compose="suggestion" title="Propose new text for it, or say what should change">Suggest</button>
+      <button type="button" data-compose="footnote" title="Add a footnote here: a mark in the text, its text in the margin">Footnote</button>
+      <span id="sel-msg" class="muted"></span>
+    </div>
+    <form id="composer" class="composer" hidden>
+      <div class="composer-title"><b id="composer-kind"></b> <span class="muted">on</span></div>
+      <blockquote id="composer-quote" class="t-quote"></blockquote>
+      <label id="composer-repl-label" for="composer-repl" class="muted">Replace with (markdown). Leave it as it is to say in words what should change.</label>
+      <textarea id="composer-repl" rows="3"></textarea>
+      <textarea id="composer-text" rows="3"></textarea>
+      <div class="editor-bar">
+        <button id="composer-post" type="submit" class="primary" title="Ctrl+Enter">Post</button>
+        <button id="composer-ask" type="button" title="Post it and ask Claude to answer it: a turn of the session that ran /rft">Post and ask Claude</button>
+        <button id="composer-cancel" type="button" title="Esc">Cancel</button>
+        <span id="composer-msg" class="muted" role="status"></span>
+      </div>
+    </form>
+    <div id="fn-pop" class="fn-pop" hidden role="tooltip"></div>
     <div id="editor" hidden>
       <textarea id="note-text" aria-label="The note's text, in markdown"></textarea>
       <div class="editor-bar">

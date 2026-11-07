@@ -386,6 +386,169 @@ class ServerTest(unittest.TestCase):
         self.assertTrue(data.endswith(b"---\r\nOne\r\nTwo\r\n"))
         self.assertNotIn(b"\n", data.replace(b"\r\n", b""))
 
+    # ------------------------------------------------------------ comments, suggestions, lock
+
+    def comment(self, nid, payload, **kw):
+        return self.write("POST", "/api/comment", {"id": nid, **payload}, **kw)
+
+    def discussed_note(self, nid="D07", text=None):
+        """A scratch note whose comments file goes with it."""
+        p = self.scratch_note(nid, text)
+        self.addCleanup((self.vault / ".comments" / f"{nid}.json").unlink, missing_ok=True)
+        return p
+
+    def test_locate_finds_a_quote_by_its_context(self):
+        body = "A cat. The dog runs. A cat sleeps. The end."
+        # the second "A cat", by what comes after it
+        self.assertEqual(rft_server.locate(body, "A cat", "dog runs. ", " sleeps"), (21, 26, True))
+        self.assertEqual(rft_server.locate(body, "A cat", "", ". The dog"), (0, 5, True))
+        # the quote edited: the text between its context, not exact
+        edited = "A cat. The dog walks. A cat sleeps. The end."
+        self.assertEqual(rft_server.locate(edited, "runs", "A cat. The dog ", ". A cat sleeps"), (15, 20, False))
+        # its context gone too: detached
+        self.assertIsNone(rft_server.locate("Something else entirely.", "runs", "The dog ", ". A cat"))
+        self.assertIsNone(rft_server.locate("", "x", "", ""))
+        # the quote and the text after it edited: beside what came before, text that begins as it did
+        body = "## What\nMixup alpha 0.2 or 1.0, CutMix (alpha 1.0); 200 epochs[^2]."
+        self.assertEqual(rft_server.locate(body, "Mixup alpha 0.2 and 1.0", "## What\n", ", CutMix; 200 epochs; 5 seeds["), (8, 31, False))
+        # or, before what came after, text that ends as it did
+        self.assertEqual(rft_server.locate("A brand new opening of the line, then the end.", "old opening of the line", "gone before ", ", then the end."), (8, 31, False))
+        self.assertIsNone(rft_server.locate("Nothing alike here at all.", "Mixup alpha", "## What\n", ", CutMix"))
+
+    def test_a_thread_keeps_its_context_up_to_date(self):
+        p = self.discussed_note()
+        self.comment("D07", {"action": "new", "kind": "comment", "quote": "Text of D07", "prefix": "", "suffix": "", "text": "?"})
+        # the text before the quote rewritten, the quote kept: the next action takes the context anew
+        p.write_text(p.read_text().replace("# D07 · Scratch\n\n", "# D07 · Scratch\n\nA new first paragraph.\n\n"))
+        self.comment("D07", {"action": "reply", "thread": "c1", "text": "More."})
+        saved = json.loads((self.vault / ".comments" / "D07.json").read_text())["threads"][0]
+        self.assertEqual(saved["prefix"], " D07 · Scratch\n\nA new first paragraph.\n\n")
+        # and so does a save of the note's text from the page
+        n = json.loads(self.get("/api/note?id=D07")[2])
+        self.put("D07", {"body": n["body"].replace("A new first paragraph.", "Rewritten."), "version": n["version"]})
+        saved = json.loads((self.vault / ".comments" / "D07.json").read_text())["threads"][0]
+        self.assertTrue(saved["prefix"].endswith("Rewritten.\n\n"))
+
+    def test_a_comment_thread_from_posting_to_history(self):
+        self.discussed_note()
+        status, n = self.comment("D07", {"action": "new", "kind": "comment", "quote": "Text of D07", "prefix": "Scratch\n\n", "suffix": ".", "text": " Is this right? "})
+        self.assertEqual(status, 200)
+        [t] = n["threads"]
+        self.assertEqual((t["id"], t["kind"], t["state"], t["quote"]), ("c1", "comment", "open", "Text of D07"))
+        self.assertEqual(n["body"][t["at"][0]:t["at"][1]], "Text of D07")
+        self.assertTrue(t["exact"])
+        self.assertEqual(t["prefix"], "\n# D07 · Scratch\n\n")
+        self.assertEqual(t["messages"], [{"by": "you", "at": t["messages"][0]["at"], "text": "Is this right?"}])
+        self.assertRegex(t["messages"][0]["at"], r"^\d{4}-\d\d-\d\d \d\d:\d\d$")
+        nodes = {x["id"]: x for x in json.loads(self.get("/api/tree")[2])["nodes"]}
+        self.assertEqual(nodes["D07"]["threads"], 1)
+        self.assertEqual(self.comment("D07", {"action": "reply", "thread": "c1", "text": "Yes."})[1]["threads"][0]["messages"][-1]["text"], "Yes.")
+        status, n = self.comment("D07", {"action": "resolve", "thread": "c1"})
+        self.assertEqual((status, n["threads"][0]["state"], n["threads"][0]["closed"]["by"]), (200, "resolved", "you"))
+        # kept as history, and no longer counted as open
+        nodes = {x["id"]: x for x in json.loads(self.get("/api/tree")[2])["nodes"]}
+        self.assertEqual(nodes["D07"]["threads"], 0)
+        self.assertEqual(self.comment("D07", {"action": "reply", "thread": "c1", "text": "More."})[0], 409)
+        self.assertEqual(self.comment("D07", {"action": "reopen", "thread": "c1"})[1]["threads"][0]["state"], "open")
+        # the next thread gets the next id; the comments file is plain JSON beside the notes
+        self.comment("D07", {"action": "new", "kind": "comment", "quote": "Scratch", "prefix": "", "suffix": "", "text": "Title?"})
+        saved = json.loads((self.vault / ".comments" / "D07.json").read_text())
+        self.assertEqual([x["id"] for x in saved["threads"]], ["c1", "c2"])
+        self.assertEqual(saved["next"], 3)
+
+    def test_a_thread_on_text_no_longer_in_the_note_is_refused(self):
+        self.discussed_note()
+        status, res = self.comment("D07", {"action": "new", "kind": "comment", "quote": "Not here", "prefix": "", "suffix": "", "text": "?"})
+        self.assertEqual(status, 409)
+        self.assertIn("select it again", res["error"])
+        self.assertIn("body", res)
+        self.assertFalse((self.vault / ".comments" / "D07.json").exists())
+
+    def test_a_suggestion_accepted_is_written_into_the_note(self):
+        p = self.discussed_note()
+        before = p.read_text()
+        _, n = self.comment("D07", {"action": "new", "kind": "suggestion", "quote": "Text of D07.", "prefix": "", "suffix": "", "text": "", "replacement": "Better text, with $x$."})
+        self.assertEqual(n["threads"][0]["replacement"], "Better text, with $x$.")
+        status, n = self.comment("D07", {"action": "accept", "thread": "c1"})
+        self.assertEqual((status, n["threads"][0]["state"]), (200, "accepted"))
+        self.assertEqual(p.read_text(), before.replace("Text of D07.", "Better text, with $x$."))
+        self.assertEqual(n["body"], "\n# D07 · Scratch\n\nBetter text, with $x$.\n")
+        self.assertEqual(self.comment("D07", {"action": "accept", "thread": "c1"})[0], 400)
+
+    def test_a_suggestion_on_text_that_changed_is_not_accepted(self):
+        p = self.discussed_note()
+        self.comment("D07", {"action": "new", "kind": "suggestion", "quote": "Text of D07.", "prefix": "", "suffix": "", "text": "", "replacement": "New."})
+        p.write_text(p.read_text().replace("Text of D07.", "Text of D07, edited by Claude."))
+        changed = p.read_text()
+        n = json.loads(self.get("/api/note?id=D07")[2])
+        self.assertFalse(n["threads"][0]["exact"])
+        status, res = self.comment("D07", {"action": "accept", "thread": "c1"})
+        self.assertEqual(status, 409)
+        self.assertIn("the text changed", res["error"])
+        self.assertEqual(p.read_text(), changed)
+        self.assertEqual(self.comment("D07", {"action": "reject", "thread": "c1"})[1]["threads"][0]["state"], "rejected")
+
+    def test_an_instruction_is_a_suggestion_without_a_replacement(self):
+        self.discussed_note()
+        _, n = self.comment("D07", {"action": "new", "kind": "suggestion", "quote": "Text of D07.", "prefix": "", "suffix": "", "text": "Add the numbers.", "replacement": "Text of D07."})
+        self.assertIsNone(n["threads"][0]["replacement"])
+        status, res = self.comment("D07", {"action": "accept", "thread": "c1"})
+        self.assertEqual(status, 409)
+        self.assertIn("no replacement yet", res["error"])
+        # a suggestion needs a change or an instruction; a comment needs its text
+        self.assertEqual(self.comment("D07", {"action": "new", "kind": "suggestion", "quote": "Scratch", "text": ""})[0], 400)
+        self.assertEqual(self.comment("D07", {"action": "new", "kind": "comment", "quote": "Scratch", "text": " "})[0], 400)
+        self.assertEqual(self.comment("D07", {"action": "resolve", "thread": "c1"})[0], 400)
+
+    def test_ask_claude_hands_the_thread_to_the_session(self):
+        self.discussed_note()
+        self.session(None)
+        self.comment("D07", {"action": "new", "kind": "comment", "quote": "Scratch", "prefix": "", "suffix": "", "text": "Why?"})
+        status, n = self.comment("D07", {"action": "ask", "thread": "c1"})
+        self.assertEqual(status, 200)
+        self.assertEqual(self.asked, [("RFT_ASK", {"id": "D07", "thread": "c1"})])
+        self.assertRegex(n["threads"][0]["asked"], r"^\d{4}-")
+
+        def gone(request):
+            raise OSError("broken pipe")
+
+        self.session(gone)
+        self.comment("D07", {"action": "new", "kind": "comment", "quote": "Text of D07", "prefix": "", "suffix": "", "text": "And this?"})
+        status, res = self.comment("D07", {"action": "ask", "thread": "c2"})
+        self.assertEqual(status, 503)
+        self.assertIsNone(json.loads(self.get("/api/note?id=D07")[2])["threads"][1]["asked"])
+
+    def test_comments_need_the_page_and_its_key(self):
+        self.discussed_note()
+        payload = {"action": "new", "kind": "comment", "quote": "Scratch", "prefix": "", "suffix": "", "text": "x"}
+        self.assertEqual(self.comment("D07", payload, key=None)[0], 403)
+        self.assertEqual(self.comment("D07", payload, origin="http://evil.example")[0], 403)
+        self.assertEqual(self.comment("D07", {"action": "dance", "thread": "c1"})[0], 404)
+        self.assertEqual(self.comment("D07", {**payload, "text": "x" * 20_001})[0], 413)
+        self.assertEqual(self.comment("D99", payload)[0], 404)
+        self.assertEqual(self.write("POST", "/api/comment", {"action": "new"})[0], 400)
+        self.assertFalse((self.vault / ".comments" / "D07.json").exists())
+        self.assertEqual(self.comment("D07", payload)[0], 200)
+        self.assertEqual(self.comment("D07", {"action": "dance", "thread": "c1"})[0], 400)
+
+    def test_lock_and_unlock_a_note(self):
+        p = self.scratch_note()
+        before = p.read_text()
+        status, n = self.write("POST", "/api/lock", {"id": "D07", "locked": True})
+        self.assertEqual((status, n["locked"]), (200, True))
+        self.assertEqual(p.read_text(), before.replace("\n---\n", "\nlocked: true\n---\n", 1))
+        nodes = {x["id"]: x for x in json.loads(self.get("/api/tree")[2])["nodes"]}
+        self.assertTrue(nodes["D07"]["locked"])
+        self.assertFalse(nodes["D00"]["locked"])
+        # locking twice keeps one line; unlocking gives the note back as it was
+        self.write("POST", "/api/lock", {"id": "D07", "locked": True})
+        self.assertEqual(p.read_text().count("locked:"), 1)
+        status, n = self.write("POST", "/api/lock", {"id": "D07", "locked": False})
+        self.assertEqual((status, n["locked"], p.read_text()), (200, False, before))
+        self.assertEqual(self.write("POST", "/api/lock", {"id": "D07", "locked": True}, key=None)[0], 403)
+        self.assertEqual(self.write("POST", "/api/lock", {"id": "D07", "locked": "yes"})[0], 400)
+        self.assertEqual(p.read_text(), before)
+
     def test_add_node_asks_the_session_and_answers_the_new_id(self):
         self.session(self.plugin)
         status, res = self.post({"parent": "E01", "type": "direction", "title": "  Then this  "})

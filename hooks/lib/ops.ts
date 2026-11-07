@@ -2,15 +2,20 @@
 // export the HTML view, and the operating rules injected into a session. Each takes an `Io`
 // and returns plain text for the model or the person.
 
+import { isLocked, locate as locateThread, readComments, renameComments } from './comments'
 import type { PageAssets } from './page'
 import { staticPage } from './page'
 import type { CodeRepo, Concept, Config, Io, Loaded, NodeType, RftNode, Tree } from './vault'
 import {
-  CODE, CONFIG_PATH, ID_RE, INDEX, LEGEND, MERMAID, NODE_TYPES, STATUSES, SUBDIR, TEMPLATES, TYPES,
+  CODE, CONFIG_PATH, ID_RE, bodyOf, INDEX, LEGEND, MERMAID, NODE_TYPES, STATUSES, SUBDIR, TEMPLATES, TYPES,
   MARK, ROOT_CONCEPT, CANVAS, renameLinks, retyped, withCardRenamed, withLinksRenamed, compactTree, conceptOrder, conceptPath, counts, countsLine, defaultConfig, front, idOf, indexTemplate,
   codeRepos, codeSection, declaredConcept, isAbsolute, isInGit, isNodeType, join, load, locate, needsCode, nextId, noteText, orList, readConfig, removeField, repoAbs, reposLine, resolveId, sanitiseTitle, setField, statusSummary,
   sync, tagCounts, unquote, validate, walk, withChildListed, withCodeSection, withStatus, withTopicalTags, writeConfig,
 } from './vault'
+
+/** Why Claude may not change a locked note's text, and what it does instead. */
+export const lockedText = (n: { id: string; name: string }, instead = `propose the change with rft_suggest {id: "${n.id}", quote: the exact text to replace, replacement}`) =>
+  `${n.name} is locked: the user changes its text, you only suggest changes to it. Instead, ${instead}; the user accepts or rejects it in the tree view. Unlocking is theirs alone (the padlock in the tree view's note drawer).`
 
 export const today = (now = new Date()) =>
   `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
@@ -309,6 +314,7 @@ export async function setStatus(io: Io, loaded: Loaded, ref: string, status: str
   if (!(STATUSES as readonly string[]).includes(status)) throw new RftError(`status must be one of ${STATUSES.join(', ')}`)
   const n = loaded.tree.nodes[id]!
   const prev = loaded.texts[id]!
+  if (note && isLocked(prev)) throw new RftError(lockedText(n, 'set the status without a note, and propose the text with rft_suggest'))
   await io.write(join(loaded.config.vault, n.path), withStatus(prev, n, status, note))
   const fresh = await load(io, loaded.config)
   const report = await sync(io, fresh)
@@ -529,6 +535,7 @@ export async function setCode(io: Io, loaded: Loaded, env: CodeEnv, ref: string,
   const id = resolveId(tree, ref)
   if (!id) throw new RftError(`"${ref}" is not a note of the tree`)
   const n = tree.nodes[id]!
+  if (isLocked(loaded.texts[id] ?? '')) throw new RftError(lockedText(n, 'propose the Code section\'s text with rft_suggest'))
   const concepts = tree.concepts ?? {}
   const repos = codeRepos(concepts, n.concept)
   if (!repos.length) {
@@ -573,6 +580,7 @@ export async function setType(io: Io, loaded: Loaded, ref: string, type: string)
   config.lastId[prefix] = Math.max(config.lastId[prefix] ?? 0, Number(id.slice(1)))
   await writeConfig(io, config)
   const linked = await renameLinks(io, config.vault, n.name, name, [n.path, path])
+  await renameComments(io, config.vault, old, id)
   const canvas = join(config.vault, CANVAS)
   if (config.canvas && (await io.exists(canvas))) await io.write(canvas, withCardRenamed(await io.read(canvas), old, id))
   try {
@@ -650,6 +658,8 @@ The reasoning of this research project is kept as a tree of Obsidian notes in \`
 - Code: a concept can link the code repositories its work runs on (\`concept_repos:\` on its starting note; on the root note, the whole project's). Its notes work with its own repos first, then those of the concepts above it. When you create a concept, ask the user whether code for it already exists and where; link it with rft_set_repos (never guess a path), then read the code and give the concept's experiments and directions a ## Code section with rft_set_code.
 - The ## Code section of an experiment or direction says how it relates to the code: entry points, files, functions, configs, what has to change (a short pointer for a direction). Write it from the code as it is now (the current commit and uncommitted changes), not as an older note saw it; rft_set_code records the commit it was checked against. Before working on such an experiment (planning, launching, analysing), call rft_code: it lists what changed since that commit; read the changes and update the references with rft_set_code.
 - Results go in the experiment's own note: read the run's outputs where its repo keeps them, process them (seeds aggregated, tables) and write the numbers in Result; record how to reproduce them (the commit of the run, the command and config, where the raw outputs are, how they were processed) with rft_set_code's reproduce.
+- A note with \`locked: true\` in its frontmatter is the user's: never change its text (Edit, Write and shell writes to it are refused, and so are rft_set_status notes and rft_set_code on it). Propose each change with rft_suggest {id, quote, replacement}; the user accepts or rejects it in the tree view. Its status, tags and derived fields still change through the rft tools.
+- The user discusses notes in the tree view: comments and suggestions on a part of a note's text (rft_comments lists them). Answer a thread only when the user asks you to: the tree view's Ask Claude sends it to you, and you answer in the thread with rft_comment or rft_suggest, not in the chat.
 - The rft-manual skill is the full manual; rft_tree shows the current tree.
 ${codeContext(tree, where)}
 The tree at the start of this session${Object.keys(tree.concepts ?? {}).length > 1 ? ', by concept (← parent, when not the line above)' : ''}:
@@ -661,6 +671,15 @@ ${lines.join('\n')}`
 export async function exportHtml(io: Io, loaded: Loaded, assets: PageAssets): Promise<string> {
   const path = join(loaded.config.vault, 'tree.html')
   const { tree, texts, config, signature } = loaded
-  await io.write(path, staticPage(assets, tree, texts, config.project, signature.length.toString(36)))
+  const comments: Record<string, unknown[]> = {}
+  for (const id of Object.keys(tree.nodes)) {
+    const { threads } = await readComments(io, config.vault, id)
+    const body = bodyOf(texts[id] ?? '')
+    if (threads.length) comments[id] = threads.map(t => {
+      const at = locateThread(body, t.quote, t.prefix, t.suffix)
+      return { ...t, at: at ? [at.start, at.end] : null, exact: Boolean(at?.exact) }
+    })
+  }
+  await io.write(path, staticPage(assets, tree, texts, config.project, signature.length.toString(36), comments))
   return path
 }

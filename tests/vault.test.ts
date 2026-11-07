@@ -268,8 +268,10 @@ describe('vault', () => {
 
   test('the static page inlines the web view and embeds the tree with every note', async () => {
     const { tree, texts } = (await loadDemo()).loaded
-    const html = staticPage({ html: WEB_FILES['web/index.html']!, css: 'a{}', js: 'go()', d3: 'd3()', katex: 'kx()', katexCss: '.katex{}', filters: 'filt()', layout: 'lay()', concepts: 'con()', markdown: 'mdn()', theme: 'thm()' }, tree, texts, 'demo', 'v1')
+    const html = staticPage({ html: WEB_FILES['web/index.html']!, css: 'a{}', js: 'go()', d3: 'd3()', katex: 'kx()', katexCss: '.katex{}', filters: 'filt()', layout: 'lay()', concepts: 'con()', markdown: 'mdn()', theme: 'thm()' }, tree, texts, 'demo', 'v1', { E02: [{ id: 'c1', quote: '<b>', at: [1, 4] }] })
     const data = JSON.parse(/window\.RFT_DATA = (.*?);<\/script>/.exec(html)![1]!)
+    expect(data.comments).toEqual({ E02: [{ id: 'c1', quote: '<b>', at: [1, 4] }] })
+    expect(html).not.toContain('<b>') // escaped inside the script
     expect(data.tree.project).toBe('demo')
     expect(data.tree.roots).toEqual(['D00'])
     expect(data.tree.nodes).toHaveLength(4)

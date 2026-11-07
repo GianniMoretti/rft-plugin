@@ -29,10 +29,11 @@ export const treeJson = (tree: Tree, project: string, version: string) => ({
 
 const script = (code: string) => `<script>${code.replace(/<\/script/gi, '<\\/script')}</script>`
 
-export function staticPage(a: PageAssets, tree: Tree, texts: Record<string, string>, project: string, version: string): string {
+/** `comments`: each note's threads, placed in its body as the server's api/note places them, shown read-only. */
+export function staticPage(a: PageAssets, tree: Tree, texts: Record<string, string>, project: string, version: string, comments: Record<string, unknown[]> = {}): string {
   const bodies: Record<string, string> = {}
   for (const id of Object.keys(tree.nodes)) bodies[id] = bodyOf(texts[id] ?? '')
-  const data = JSON.stringify({ tree: treeJson(tree, project, version), bodies }).replace(/</g, '\\u003c')
+  const data = JSON.stringify({ tree: treeJson(tree, project, version), bodies, comments }).replace(/</g, '\\u003c')
   // function replacements: the inlined code may hold `$&` and the like
   return a.html
     .replace(/<script src="theme\.js" data-rft-inline><\/script>/, () => script(a.theme))

@@ -35,7 +35,7 @@ describe('activation', () => {
     const w = world(on, demoFiles())
     on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.tools).toEqual(['rft_add_node', 'rft_set_repos', 'rft_code', 'rft_set_code', 'rft_set_status', 'rft_set_tags', 'rft_set_type', 'rft_set_concept', 'rft_concepts', 'rft_tags', 'rft_tree', 'rft_validate', 'rft_sync'])
+    expect(w.tools).toEqual(['rft_add_node', 'rft_set_repos', 'rft_code', 'rft_set_code', 'rft_set_status', 'rft_set_tags', 'rft_set_type', 'rft_set_concept', 'rft_concepts', 'rft_tags', 'rft_tree', 'rft_validate', 'rft_sync', 'rft_comments', 'rft_comment', 'rft_suggest'])
     expect(w.opened).toEqual(['rft-tree'])
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
     const rules = res.sections.find(s => s.id === 'rft:rules')
@@ -50,7 +50,7 @@ describe('activation', () => {
     on('prompt.compose', () => ({ sections: [] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
     expect(w.commands).toEqual(['rft-init', 'rft-concepts', 'rft-view'])
-    expect(w.tools).toHaveLength(13)
+    expect(w.tools).toHaveLength(16)
     expect(w.opened).toEqual(['rft-tree'])
     expect(w.toasts.join()).toContain('/rft')
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
@@ -163,7 +163,8 @@ describe('commands', () => {
 
   test('/rft-view writes one standalone page: the web view with the tree and the notes inlined', async ($, on) => {
     mock.clock(on)
-    const w = world(on, { ...demoFiles(), ...WEB_FILES })
+    const thread = { id: 'c1', kind: 'comment', state: 'open', quote: 'Text of E02.', prefix: '', suffix: '', replacement: null, asked: null, messages: [], closed: null }
+    const w = world(on, { ...demoFiles(), ...WEB_FILES, 'vault/.comments/E02.json': JSON.stringify({ note: 'E02', next: 2, threads: [thread] }) })
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
     const res = await $.command.run({ command: 'rft-view', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } } as never)
     expect(res.text).toContain(`file://${CWD}/vault/tree.html`)
@@ -176,6 +177,12 @@ describe('commands', () => {
     expect(html).toContain('window.RFT_DATA = {"tree":{"project":"demo"')
     expect(html).toContain('Text of D01.')
     expect(html.indexOf('window.RFT_DATA')).toBeLessThan(html.indexOf('console.log(window.RFT_DATA'))
+    // each note's threads, placed in its text, for the page to show read-only
+    const data = JSON.parse(/window\.RFT_DATA = (.*?);<\/script>/.exec(html)![1]!)
+    const body = data.bodies.E02 as string
+    expect(data.comments.E02).toHaveLength(1)
+    expect(body.slice(...(data.comments.E02[0].at as [number, number]))).toBe('Text of E02.')
+    expect(data.comments.E02[0].exact).toBe(true)
   })
 })
 
@@ -515,7 +522,7 @@ describe('linked trees', () => {
     const srv = fakeServer(on)
     on('prompt.compose', () => ({ sections: [] }))
     await $.session.start({ cwd: REPO, source: 'startup' } as never)
-    expect(w.tools).toHaveLength(13)
+    expect(w.tools).toHaveLength(16)
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
     expect(res.sections.find(s => s.id === 'rft:rules')?.text).toContain(`notes in \`${TREE}/vault/\``)
     expect((await $.tool.call({ tool: 'mcp__rft__rft_tree' } as never)).text).toContain(`theory notes in ${TREE}/vault/.`)
@@ -550,7 +557,7 @@ describe('linked trees', () => {
     mock.clock(on)
     const w = world(on, linked(), { cwd: `${TREE}/analysis` })
     await $.session.start({ cwd: `${TREE}/analysis`, source: 'startup' } as never)
-    expect(w.tools).toHaveLength(13)
+    expect(w.tools).toHaveLength(16)
     const tree = await $.tool.call({ tool: 'mcp__rft__rft_tree' } as never)
     expect(tree.text).toMatch(/^demo: 2 directions, 2 experiments/)
   })

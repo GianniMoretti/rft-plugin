@@ -77,6 +77,8 @@ export type RftNode = {
   tags: string[]
   /** The id of its concept: the nearest ancestor (or itself) declaring one, else `root`. */
   concept: string
+  /** `locked: true` in its frontmatter: the user's to change; Claude only suggests changes to it. */
+  locked: boolean
 }
 
 export type Tree = {
@@ -425,6 +427,7 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
         status: fm.status ?? '', date: fm.date ?? '', parent: null, children: [], path,
         tags: topicalTags(parseTags(fm.tags), config.project, fmType),
         concept: ROOT_CONCEPT,
+        locked: ['true', 'yes'].includes(unquote(fm.locked).toLowerCase()),
       }
       texts[id] = text
       parentRef[id] = linkTarget(fm.parent)
