@@ -4,7 +4,8 @@
 // formula, an image, an embed, a footnote mark) is marked data-atom. `cells` says which source
 // characters each visible character of one run stands for, so a selection in the page becomes a
 // range of the note's text (a comment's quote, where a footnote goes), and a range of the text
-// a highlight. Footnotes: a mark [^label] with a definition line `[^label]: text` (indented lines
+// a highlight. A highlight ==like this== is Obsidian's; highlightEdit() makes one, or takes it
+// out, on a selection. Footnotes: a mark [^label] with a definition line `[^label]: text` (indented lines
 // continue it), or inline ^[text]; their texts come back beside the HTML, for the page to show in
 // the margin. Pure: loaded by the page before app.js, and by the plugin's tests; it sets
 // `globalThis.RftMarkdown` and touches nothing else.
@@ -31,6 +32,8 @@
   // and the rules of the text around them
   const EMBED = /!\[\[([^\]]+)\]\]/g
   const WIKILINK = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g
+  // ==highlighted text==, its == with no space just inside them
+  const HIGHLIGHT = /==([^\s=](?:[^\n]*?[^\s=])?)==/g
   const BOLD = /\*\*([^*]+)\*\*/g
   const ITALIC = /(^|[^*])\*([^*\s][^*]*)\*/g
   const LINK = /\[([^\]]+)\]\((https?:[^)\s]+)\)/g
@@ -90,6 +93,7 @@
           const label = alias || target
           return id ? `<a data-go="${id}">${label}</a>` : `<span class="missing">${label}</span>`
         })
+        .replace(HIGHLIGHT, '<mark class="hl">$1</mark>')
         .replace(BOLD, '<strong>$1</strong>')
         .replace(ITALIC, '$1<em>$2</em>')
         .replace(LINK, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
@@ -197,7 +201,9 @@
    * The visible characters of `inline(t)`, in order, each as { ch, s, e }: the source range
    * [s, e) of `t` it stands for, and [ts, te) when it belongs to a token a range may not split
    * (a link's label: its brackets and target go with it). Each atom of the HTML (data-atom) is
-   * one cell, ch "\u0000". It follows inline()'s rules in inline()'s order.
+   * one cell, ch "\u0000". A cell in **bold**, *italic* or ==highlighted== text lists those spans
+   * in `wraps`, each { kind: b | i | hl, s, e, cs, ce }: its source with the delimiters [s, e) and
+   * without them [cs, ce). It follows inline()'s rules in inline()'s order.
    */
   function cells(t) {
     let cs = Array.from({ length: t.length }, (_, i) => ({ ch: t[i], s: i, e: i + 1 }))
@@ -208,7 +214,7 @@
       for (const m of text.matchAll(new RegExp(re.source, re.flags + 'd'))) {
         const s = cs[m.index].s, e = cs[m.index + m[0].length - 1].e
         const group = g => (m.indices[g] ? cs.slice(m.indices[g][0], m.indices[g][1]) : [])
-        const made = become(m, { s, e, group })
+        const made = become(m, { s, e, group, cell: i => cs[i] })
         if (made == null) continue // left as it is
         out.push(...cs.slice(last, m.index), ...made)
         last = m.index + m[0].length
@@ -218,6 +224,12 @@
     }
     const atom = (m, r) => [{ ch: '\u0000', atom: true, s: r.s, e: r.e, ts: r.s, te: r.e }]
     const label = (r, list) => list.map(c => ({ ...c, ts: Math.min(r.s, c.ts != null ? c.ts : r.s), te: Math.max(r.e, c.te != null ? c.te : r.e) }))
+    const wrap = (kind, s, e, list) => {
+      if (!list.length) return list
+      const first = list[0], last = list[list.length - 1]
+      const w = { kind, s, e, cs: first.ts != null ? first.ts : first.s, ce: last.te != null ? last.te : last.e }
+      return list.map(c => ({ ...c, wraps: [...(c.wraps || []), w] }))
+    }
     pass(CODE, atom)
     pass(WIKI_IMAGE, (m, r) => (isImageEmbed(m[1]) ? atom(m, r) : null))
     pass(MD_IMAGE, atom)
@@ -226,8 +238,9 @@
     pass(FN_REF, atom)
     pass(EMBED, atom)
     pass(WIKILINK, (m, r) => label(r, r.group(m[2] != null ? 2 : 1)))
-    pass(BOLD, (m, r) => r.group(1))
-    pass(ITALIC, (m, r) => [...r.group(1), ...r.group(2)])
+    pass(HIGHLIGHT, (m, r) => wrap('hl', r.s, r.e, r.group(1)))
+    pass(BOLD, (m, r) => wrap('b', r.s, r.e, r.group(1)))
+    pass(ITALIC, (m, r) => [...r.group(1), ...wrap('i', r.cell(m.indices[2][0] - 1).s, r.e, r.group(2))])
     pass(LINK, (m, r) => label(r, r.group(1)))
     return cs
   }
@@ -263,6 +276,60 @@
     return from < 0 ? null : [from, to]
   }
 
+  /**
+   * A range [s, e) of a run's source (run offsets), grown until it cuts into nothing: a token it
+   * reaches (a link, a formula, code) goes whole, and so does a **bold**, *italic* or ==highlighted==
+   * span it holds only part of from outside it. A range inside such a span's text stays as it is.
+   */
+  function wholeRange(cs, s, e) {
+    for (let grown = true; grown;) {
+      grown = false
+      const grow = (a, b) => { if (a < s || b > e) { s = Math.min(s, a); e = Math.max(e, b); grown = true } }
+      for (const c of cs) {
+        if (c.s >= e || c.e <= s) continue
+        if (c.ts != null) grow(c.ts, c.te)
+        for (const w of c.wraps || []) if (s < w.cs || e > w.ce) grow(w.s, w.e)
+      }
+    }
+    return [s, e]
+  }
+
+  /**
+   * The note's text with [start, end) highlighted as Obsidian writes it: ==text== in each run of
+   * text the range covers (`runs`, the page's { s, e, kind }: code and formula blocks are left out,
+   * and a selection over several lines takes one highlight per line), each part trimmed of space and
+   * grown so it cuts into no markup. When that text holds a highlight already, the highlights it
+   * holds or cuts into are taken out instead. { text, on }: the new text, and whether it highlights;
+   * null when there is nothing to highlight.
+   */
+  function highlightEdit(src, runs, start, end) {
+    const parts = [], found = new Map()
+    for (const r of runs) {
+      if (r.kind !== 'text' || r.e <= start || r.s >= end) continue
+      const text = src.slice(r.s, r.e)
+      let s = Math.max(start, r.s) - r.s, e = Math.min(end, r.e) - r.s
+      while (s < e && /\s/.test(text[s])) s++
+      while (e > s && /\s/.test(text[e - 1])) e--
+      if (s >= e) continue
+      const cs = cells(text)
+      ;[s, e] = wholeRange(cs, s, e)
+      for (const c of cs) {
+        if (c.s >= e || c.e <= s) continue
+        for (const w of c.wraps || []) if (w.kind === 'hl') found.set(r.s + w.s, r.s + w.e)
+      }
+      // an = just inside the == would not read as a highlight
+      if (text[s] !== '=' && text[e - 1] !== '=') parts.push([r.s + s, r.s + e])
+    }
+    let text = src
+    if (found.size) {
+      for (const [s, e] of [...found].sort((a, b) => b[0] - a[0])) text = text.slice(0, s) + text.slice(s + 2, e - 2) + text.slice(e)
+      return { text, on: false }
+    }
+    if (!parts.length) return null
+    for (const [s, e] of parts.sort((a, b) => b[0] - a[0])) text = `${text.slice(0, s)}==${text.slice(s, e)}==${text.slice(e)}`
+    return { text, on: true }
+  }
+
   /** The highest numeric footnote label in a note's text, so a new one takes the next. */
   function lastFootnote(src) {
     let n = 0
@@ -285,5 +352,5 @@
     return { text: head, label }
   }
 
-  root.RftMarkdown = { make, cells, runCells, sourceAt, cellsIn, escH, lastFootnote, withFootnote }
+  root.RftMarkdown = { make, cells, runCells, sourceAt, cellsIn, wholeRange, highlightEdit, escH, lastFootnote, withFootnote }
 })(typeof globalThis !== 'undefined' ? globalThis : window)

@@ -231,6 +231,7 @@ folder and every link to it change together.
 - **Footnotes** are part of the note, as Obsidian writes them: a mark `[^1]` and its text on a line
   `[^1]: …` at the end (indented lines continue it), or inline `^[…]`. The tree view shows them in
   the margin. Keep them when you edit a note.
+- **Highlights** `==text==` are the user's, as Obsidian writes them: keep them when you edit a note.
 
 ## Note layout
 
@@ -260,6 +261,6 @@ gets a direction node.
 `/rft` starts the interactive tree view (a local page; the user opens its address in a
 browser) and the outline pane; `/rft text` prints the tree; `/rft-view` writes a standalone
 `<vault>/tree.html`; Obsidian shows `Reasoning tree.canvas`. The user can edit a note's text
-(not its frontmatter), add notes with their default status, lock a note, add footnotes, and
+(not its frontmatter), add notes with their default status, lock a note, add footnotes and highlights, and
 comment on and suggest changes to a note's text in the tree view, so re-read a note before
 changing it, and the tree (`rft_tree`) before relying on the copy you were given.

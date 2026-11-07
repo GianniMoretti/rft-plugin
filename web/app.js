@@ -433,6 +433,8 @@
   function showEditButton() {
     editBtn.hidden = Boolean(EMBED) || editing != null || !shown || shown.id !== selected
     if (editBtn.hidden) noKey.hidden = true
+    hlBtn.hidden = editBtn.hidden
+    hlHint.hidden = !highlighting || hlBtn.hidden
     addBtn.hidden = Boolean(EMBED) || editing != null || !byId.has(selected)
     // the root stays a direction
     typeBtn.hidden = Boolean(EMBED) || editing != null || !byId.has(selected) || !byId.get(selected).parent
@@ -450,6 +452,7 @@
     if (!note || note.id !== selected) return
     const lead = /^\n*/.exec(note.body)[0] // the blank line under the frontmatter is kept, not shown
     editing = { id: note.id, version: note.version, lead, text: note.body.slice(lead.length), newer: null }
+    setHighlighting(false)
     closeAdder()
     closeRetyper()
     closeComposer()
@@ -873,6 +876,7 @@
   })
   document.getElementById('drawer-close').addEventListener('click', () => {
     if (!leaveEditor()) return
+    setHighlighting(false)
     closeAdder()
     closeRetyper()
     closeComposer()
@@ -1421,8 +1425,11 @@
   function selectionAnchor() {
     const sel = window.getSelection()
     if (!shown || !sel || sel.isCollapsed || !sel.rangeCount) return null
-    const range = sel.getRangeAt(0)
-    if (!article.contains(range.commonAncestorContainer)) return null
+    return rangeAnchor(sel.getRangeAt(0))
+  }
+  /** A range of the page as a range of the note's text, as selectionAnchor(). */
+  function rangeAnchor(range) {
+    if (!shown || !article.contains(range.commonAncestorContainer)) return null
     const spans = [...article.querySelectorAll('.src')].filter(s => range.intersectsNode(s))
     if (!spans.length) return null
     const point = (span, node, offset, isEnd) => {
@@ -1583,6 +1590,11 @@
     if (EMBED || editing || composing || drawer.hidden) return
     const a = selectionAnchor()
     if (!a) { hideSelBar(); return }
+    if (highlighting) {
+      if (a.error) showSelMsg(a.error)
+      else applyHighlight(a)
+      return
+    }
     selMsg.textContent = a.error || ''
     for (const b of selBar.querySelectorAll('button')) b.hidden = Boolean(a.error)
     if (!a.error) anchor = a
@@ -1592,7 +1604,8 @@
     place(selBar, a.rect || rects[rects.length - 1])
   }
   article.addEventListener('mouseup', () => setTimeout(onSelectionEnd, 0))
-  article.addEventListener('keyup', ev => { if (ev.shiftKey) onSelectionEnd() })
+  // a selection made with the keyboard: in the highlighter, once Shift is let go
+  article.addEventListener('keyup', ev => { if (highlighting ? ev.key === 'Shift' : ev.shiftKey) onSelectionEnd() })
   document.addEventListener('selectionchange', () => {
     const s = window.getSelection()
     if (!s || s.isCollapsed) hideSelBar()
@@ -1603,6 +1616,80 @@
     const b = ev.target.closest('button[data-compose]')
     if (b) openComposer(b.dataset.compose)
   })
+
+  /** Writes the note's text, its frontmatter kept as it is; refused when the note changed since `version`. */
+  async function putBody(id, body, version) {
+    try {
+      const res = await fetch(`api/note?id=${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'X-RFT-Token': editKey() },
+        body: JSON.stringify({ body, version }),
+      })
+      const reply = await res.json().catch(() => ({}))
+      return res.ok ? { ok: true } : { ok: false, status: res.status, error: reply.error || `the server answered ${res.status}` }
+    } catch (e) {
+      return { ok: false, status: 0, error: 'the server is not answering' }
+    }
+  }
+
+  // ------------------------------------------------ the highlighter: ==text== in the note itself
+
+  // A mode of the drawer, like a pen (the marker left of Add child): while it is on, a selection in
+  // the note is highlighted as soon as it is made, or, when it holds a highlight already, that is
+  // taken out, and so is a highlight clicked. Comment, Suggest and Footnote wait until it is off.
+  const hlBtn = document.getElementById('drawer-hl')
+  const hlHint = document.getElementById('hl-hint')
+  let highlighting = false
+  let hlBusy = false
+  const pageRuns = () => [...article.querySelectorAll('.src')].map(span => ({ s: +span.dataset.s, e: +span.dataset.e, kind: runKind(span) }))
+
+  function setHighlighting(on) {
+    highlighting = on
+    hlBtn.setAttribute('aria-pressed', String(on))
+    drawer.classList.toggle('highlighting', on)
+    hlHint.hidden = !on || hlBtn.hidden
+    if (on) { closeComposer(); hideSelBar() }
+  }
+  hlBtn.addEventListener('click', () => {
+    if (!highlighting && !editKey()) { noKey.hidden = false; return }
+    setHighlighting(!highlighting)
+  })
+  document.addEventListener('keydown', ev => {
+    if (ev.key !== 'Escape' || !highlighting || editing || composing) return
+    if (ev.target.closest && ev.target.closest('input, textarea, select')) return
+    setHighlighting(false)
+  })
+
+  /** The bar under the selection with a message only. */
+  function showSelMsg(text, rect) {
+    selMsg.textContent = text
+    for (const b of selBar.querySelectorAll('button')) b.hidden = true
+    const sel = window.getSelection()
+    const rects = sel && sel.rangeCount ? sel.getRangeAt(0).getClientRects() : []
+    const at = rect || rects[rects.length - 1]
+    if (!at) return
+    selBar.hidden = false
+    place(selBar, at)
+  }
+
+  /** Highlights the note's text `a` (as rangeAnchor gives it), or takes out the highlights it holds or cuts into. */
+  async function applyHighlight(a) {
+    if (hlBusy || !shown || shown.id !== a.id) return
+    const hl = M.highlightEdit(shown.body, pageRuns(), a.start, a.end)
+    if (!hl) { showSelMsg('This takes no highlight: code, a formula block, or text that starts or ends with =.', a.rect); return }
+    hlBusy = true
+    const r = await putBody(a.id, hl.text, a.version)
+    hlBusy = false
+    if (!r.ok) {
+      showSelMsg(r.status === 409 ? 'Not changed: the note changed meanwhile (Claude or another editor); select the text again.' : `Not changed: ${r.error}.`, a.rect)
+      return
+    }
+    hideSelBar()
+    const sel = window.getSelection()
+    if (sel) sel.removeAllRanges()
+    await select(a.id)
+  }
 
   function setComposerMsg(text, isError = false) {
     composerMsg.textContent = text
@@ -1672,16 +1759,10 @@
         if (!text) { setComposerMsg('Write the footnote.', true); return }
         if (!shown || shown.id !== a.id || shown.version !== a.version) { composerDrafts[kind] = text; setComposerMsg('The note changed meanwhile: select the text again.', true); return }
         setComposerMsg('Adding…')
-        const res = await fetch(`api/note?id=${encodeURIComponent(a.id)}`, {
-          method: 'PUT',
-          cache: 'no-store',
-          headers: { 'Content-Type': 'application/json', 'X-RFT-Token': editKey() },
-          body: JSON.stringify({ body: M.withFootnote(shown.body, a.end, text).text, version: a.version }),
-        })
-        const reply = await res.json().catch(() => ({}))
-        if (!res.ok) {
+        const r = await putBody(a.id, M.withFootnote(shown.body, a.end, text).text, a.version)
+        if (!r.ok) {
           composerDrafts[kind] = text
-          setComposerMsg(res.status === 409 ? 'Not added: the note changed meanwhile (Claude or another editor); select the text again.' : `Not added: ${reply.error || `the server answered ${res.status}`}.`, true)
+          setComposerMsg(r.status === 409 ? 'Not added: the note changed meanwhile (Claude or another editor); select the text again.' : `Not added: ${r.error}.`, true)
           return
         }
         delete composerDrafts[kind]
@@ -1844,6 +1925,16 @@
   threadsBox.addEventListener('mouseleave', () => setActive(null))
   article.addEventListener('click', ev => {
     if (ev.target.closest('a[data-go]')) return
+    const hlMark = highlighting && ev.target.closest('.src mark.hl')
+    if (hlMark) {
+      const sel = window.getSelection()
+      if (sel && !sel.isCollapsed) return // a selection: it is highlighted, or not, once made
+      const range = document.createRange()
+      range.selectNodeContents(hlMark)
+      const a = rangeAnchor(range)
+      if (a && !a.error) applyHighlight(a)
+      return
+    }
     const fn = ev.target.closest('.sidenote, sup.fn-ref')
     // a touch has no hover: a tap on a footnote's mark shows it
     if (fn) { if (popFor === fn && !fnPop.hidden) hideFootnote(0); else showFootnote(fn); return }

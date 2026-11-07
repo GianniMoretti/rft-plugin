@@ -198,12 +198,21 @@ button.linkish { border: 0; background: none; color: var(--accent); padding: 0; 
   background: var(--panel); border: 1px solid var(--line); box-shadow: 0 6px 20px rgb(0 0 0 / 0.18); font-size: 0.9em; }
 .fn-pop .fn-n { color: var(--accent); font-weight: 700; margin-right: 6px; }
 .fn-pop a { color: var(--accent); cursor: pointer; }
+/* a highlight the user made, ==like this== in the note */
+#note mark.hl { color: inherit; border-radius: 2px; padding: 0 1px;
+  background: light-dark(color-mix(in srgb, #ffe419 65%, transparent), color-mix(in srgb, #ffe419 32%, transparent)); }
 #note mark.c-mark, #note .math-block.c-mark { color: inherit; border-radius: 2px; cursor: pointer;
   background: color-mix(in srgb, var(--planned) 30%, transparent); }
 #note mark.c-mark.suggestion, #note .math-block.c-mark.suggestion { background: color-mix(in srgb, var(--dropped) 15%, transparent);
   text-decoration: line-through; text-decoration-color: var(--dropped); }
 #note mark.c-mark.moved { background: transparent; outline: 1px dashed var(--muted); text-decoration: none; }
 #note mark.c-mark.active, #note .c-mark.active, #note ins.c-ins.active { outline: 2px solid var(--accent); }
+/* the highlighter (the marker in the drawer's head): a marker for a pointer, selections in yellow */
+.hl-hint { margin: 6px 0 0; padding: 3px 8px; border-radius: 6px; font-size: 0.85em; color: var(--muted);
+  border-left: 3px solid #ffe419; background: color-mix(in srgb, #ffe419 10%, transparent); }
+.hl-hint kbd { font: inherit; padding: 0 4px; border: 1px solid var(--line); border-radius: 4px; }
+#drawer.highlighting #note .src { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3Cg stroke='white' stroke-width='3.6'%3E%3Cpath d='M15.4 4.4l4.2 4.2-7.5 7.5-4.2-4.2z'/%3E%3Cpath d='M7.9 11.9l-1.9 3.6 2.5 2.5 3.6-1.9z'/%3E%3C/g%3E%3Cg stroke='black' stroke-width='1.5'%3E%3Cpath d='M15.4 4.4l4.2 4.2-7.5 7.5-4.2-4.2z' fill='white'/%3E%3Cpath d='M7.9 11.9l-1.9 3.6 2.5 2.5 3.6-1.9z' fill='%23ffe419'/%3E%3C/g%3E%3C/svg%3E") 7 17, text; }
+#drawer.highlighting #note ::selection { background: color-mix(in srgb, #ffe419 60%, transparent); }
 #note ins.c-ins { text-decoration: none; margin-left: 2px; padding: 0 2px; border-radius: 2px; white-space: pre-wrap;
   background: color-mix(in srgb, var(--done) 20%, transparent); border-bottom: 1px solid var(--done); }
 .sel-bar { position: absolute; z-index: 5; display: flex; align-items: center; gap: 4px; padding: 4px; border-radius: 8px;

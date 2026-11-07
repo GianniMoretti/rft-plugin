@@ -120,12 +120,16 @@
         <button id="drawer-edit" class="icon-btn" hidden aria-label="Edit" title="Edit the note's text (Ctrl+S saves, Esc cancels)">
           <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l1-4.5L15.5 5a2.1 2.1 0 0 1 3 0l.5.5a2.1 2.1 0 0 1 0 3L8.5 19z"/><path d="M13.5 7l3.5 3.5"/></svg>
         </button>
+        <button id="drawer-hl" class="icon-btn" hidden aria-pressed="false" aria-label="Highlighter" title="Highlighter: while it is on, the text you select is highlighted (==like this== in the note, as Obsidian writes it), and a highlight you select or click is taken out (Esc turns it off)">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M15.4 4.4l4.2 4.2-7.5 7.5-4.2-4.2z"/><path d="M7.9 11.9l-1.9 3.6 2.5 2.5 3.6-1.9"/><path d="M3.5 21.2h11" stroke="#e8c300" stroke-width="3.2"/></svg>
+        </button>
         <button id="drawer-add" class="icon-btn" hidden aria-label="Add a child note" title="Add a direction, an experiment, a reference or a theory note under this note">
           <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.6" fill="currentColor" stroke="none"/><path d="M6 9v6a2 2 0 0 0 2 2h2.5"/><path d="M17.5 13.5v7M14 17h7"/></svg>
         </button>
         <button id="drawer-close" title="Close">✕</button>
       </span>
     </div>
+    <p id="hl-hint" class="hl-hint" hidden>Highlighter on: select text to highlight it; select or click a highlight to take it out. <kbd>Esc</kbd> turns it off.</p>
     <p id="edit-nokey" class="edit-nokey" hidden>To edit or add notes, open the address <code>/rft</code> printed (it ends in
       <code>?token=…</code>) once: this browser then remembers its key.</p>
     <form id="adder" class="adder" hidden>

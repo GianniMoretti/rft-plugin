@@ -19,6 +19,7 @@ type Api = {
   cellsIn: (cs: Cell[], s: number, e: number) => [number, number] | null
   lastFootnote: (src: string) => number
   withFootnote: (src: string, at: number, text: string) => { text: string; label: string }
+  highlightEdit: (src: string, runs: { s: number; e: number; kind: string }[], start: number, end: number) => { text: string; on: boolean } | null
 }
 
 const M = (globalThis as unknown as { RftMarkdown: Api }).RftMarkdown
@@ -75,6 +76,7 @@ const RICH = `
 CutMix closes the gap at **1k** (0.3 ± 0.5 points)[^1]; Mixup does *not*. See [[E02 Variant run|the baseline]] and [the paper](https://arxiv.org/abs/1905.04899).
 Cost $5 and $10, loss $\\mathcal{L} = x^2$ and \\$ sign; \`code $x$ here\`; ![[fig.png|300]] and ![[Other note]], ![a plot](plots/a.png).
 An inline note^[with $y$ and [[E01 First check]]] here, *a* b **c** *d*.
+A ==highlight with **bold**== and *==one==* in italics; a == b == c is no highlight, ==$h$== is.
 
 - item with *emphasis* and \`code\`
   continued line [[Missing note]]
@@ -176,6 +178,56 @@ describe('selections and highlights', () => {
     const [lf, lt] = M.cellsIn(cs, link, line.indexOf(']]') + 2)!
     expect(vis.slice(lf, lt)).toBe('the baseline')
     expect(M.cellsIn(cs, line.length, line.length + 5)).toBeNull()
+  })
+})
+
+describe('highlights', () => {
+  test('==text== is a highlight, its == with no space just inside, never in code or a formula', () => {
+    expect(md.inline('a ==b **c**== d')).toBe('a <mark class="hl">b <strong>c</strong></mark> d')
+    expect(md.inline('a == b == c and ==x==')).toBe('a == b == c and <mark class="hl">x</mark>')
+    expect(md.inline('`==a==` and $x==y$')).not.toContain('<mark')
+    expect(md.inline('==[[E01 First check]]==')).toBe('<mark class="hl"><a data-go="E01">E01 First check</a></mark>')
+    // the == go out of the visible text, as the page shows it
+    expect(visible(M.cells('a ==b **c**== d'))).toBe('a b c d')
+  })
+
+  /** highlightEdit on the note's text `src`, over the first occurrence of `quote` (from `from`), with the runs the page has. */
+  const edit = (src: string, quote: string, from = 0) => {
+    const at = src.indexOf(quote, from)
+    if (at < 0) throw new Error(`no ${quote} in the note`)
+    return M.highlightEdit(src, runs(md.render(src).html), at, at + quote.length)
+  }
+
+  test('a selection becomes ==text== in the note, trimmed of space', () => {
+    expect(edit('Five seeds here.\n', ' seeds ')).toEqual({ text: 'Five ==seeds== here.\n', on: true })
+    expect(edit('# A title\n\n- item one\n', 'title')!.text).toBe('# A ==title==\n\n- item one\n')
+  })
+
+  test('a selection that cuts into bold, italics or a link grows to hold it whole; one inside it stays inside', () => {
+    expect(edit('a **bold** text\n', 'old** tex')!.text).toBe('a ==**bold** tex==t\n')
+    expect(edit('a **bold** text\n', 'ol')!.text).toBe('a **b==ol==d** text\n')
+    expect(edit('see *it* now\n', 'it* now')!.text).toBe('see ==*it* now==\n')
+    expect(edit('see [[E02 x|the base]] now\n', 'base]] now')!.text).toBe('see ==[[E02 x|the base]] now==\n')
+  })
+
+  test('over several lines, one highlight per line; code and formula blocks are left out', () => {
+    const src = 'one line\nand another\n\n```\ncode\n```\n\n$$\nx\n$$\n\n- item\n'
+    expect(edit(src, 'line\nand another\n\n```\ncode\n```\n\n$$\nx\n$$\n\n- it')!.text)
+      .toBe('one ==line==\n==and another==\n\n```\ncode\n```\n\n$$\nx\n$$\n\n- ==it==em\n')
+    expect(edit(src, 'code')).toBeNull()
+    expect(edit(src, '\nx\n')).toBeNull()
+  })
+
+  test('a selection in, over or into a highlight takes it out instead', () => {
+    const src = 'a ==hi there== b and ==more== here\n'
+    expect(edit(src, 'there')).toEqual({ text: 'a hi there b and ==more== here\n', on: false })
+    expect(edit(src, 'a ==hi')!.text).toBe('a hi there b and ==more== here\n')
+    expect(edit(src, 'there== b and ==mo')!.text).toBe('a hi there b and more here\n')
+    expect(edit('A ==hi==\nand ==lo==\n', 'hi==\nand ==lo')!.text).toBe('A hi\nand lo\n')
+  })
+
+  test('text that starts or ends with = takes no highlight, which would not read as one', () => {
+    expect(edit('x = 1 here\n', '= 1')).toBeNull()
   })
 })
 

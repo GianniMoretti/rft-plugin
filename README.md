@@ -187,6 +187,13 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   numbered in reading order and has a number in the drawer's right margin; hover either (or tap
   it) to read the footnote, links and LaTeX included. Select text and choose **Footnote** to add
   one: its mark goes after the selection, its text at the end of the note.
+- **The highlighter** (the marker left of **Add child**) is a mode of the drawer, like a pen:
+  while it is on, the text you select is highlighted at once, `==like this==` in the note, as
+  Obsidian writes it, so Obsidian shows it too; selecting inside or across a highlight, or
+  clicking one, takes it out. A selection over several lines gets one highlight per line, and one
+  that cuts into bold, italics or a link grows to hold it whole; code and formula blocks take
+  none. **Esc** or the marker turns it off; **Comment**, **Suggest** and **Footnote** wait until
+  then.
 - **Comments and suggestions**, as in Overleaf, discuss a part of a note before anyone edits it.
   Select text in the drawer and choose:
   - **Comment**: a question or remark on that text;
@@ -327,8 +334,8 @@ vault, and the image files notes embed: one inside the vault to anyone who can r
 one outside it (anywhere on disk) only to the page carrying the key below, so another user of
 the machine cannot read your files through it, nor learn whether one exists. An image is sent
 with a policy that runs nothing in it, an SVG's scripts included. It answers only requests for
-a loopback host name. It writes a note's text from **Edit**, **Footnote** or an accepted
-suggestion, its frontmatter kept as it is; the `locked:` line from the padlock; and a note's
+a loopback host name. It writes a note's text from **Edit**, **Footnote**, **Highlight** or an
+accepted suggestion, its frontmatter kept as it is; the `locked:` line from the padlock; and a note's
 comments file in `vault/.comments/`. A new note from **Add child**, or a note's new type from
 **Change type**, it asks the session that started it to make, and **Ask Claude** to answer (a
 line on its output, which the plugin reads). It does any of these only for
