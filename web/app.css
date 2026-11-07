@@ -35,6 +35,10 @@ button:disabled:hover { border-color: var(--line); }
 .icon-btn { display: inline-flex; align-items: center; padding: 3px 6px; }
 .cycle > :not(.on) { display: none; }
 .ico { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+/* the top bar's buttons a little larger than the drawer's */
+#bar button { font-size: 13px; padding: 5px 11px; }
+#bar .icon-btn { padding: 5px 8px; }
+#bar .ico { width: 19px; height: 19px; }
 #search { margin-left: auto; min-width: 180px; padding: 4px 8px; border-radius: 6px; font: inherit;
   border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
 .live { width: 8px; height: 8px; border-radius: 50%; background: var(--discussed); }
