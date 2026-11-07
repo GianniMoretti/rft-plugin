@@ -213,6 +213,29 @@ button.linkish { border: 0; background: none; color: var(--accent); padding: 0; 
 .hl-hint kbd { font: inherit; padding: 0 4px; border: 1px solid var(--line); border-radius: 4px; }
 #drawer.highlighting #note .src { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3Cg stroke='white' stroke-width='3.6'%3E%3Cpath d='M15.4 4.4l4.2 4.2-7.5 7.5-4.2-4.2z'/%3E%3Cpath d='M7.9 11.9l-1.9 3.6 2.5 2.5 3.6-1.9z'/%3E%3C/g%3E%3Cg stroke='black' stroke-width='1.5'%3E%3Cpath d='M15.4 4.4l4.2 4.2-7.5 7.5-4.2-4.2z' fill='white'/%3E%3Cpath d='M7.9 11.9l-1.9 3.6 2.5 2.5 3.6-1.9z' fill='%23ffe419'/%3E%3C/g%3E%3C/svg%3E") 7 17, text; }
 #drawer.highlighting #note ::selection { background: color-mix(in srgb, #ffe419 60%, transparent); }
+/* a drawer wide enough (layoutSidenotes): a column right of the text, with each footnote's text and
+   a card for each open thread, level with it in the text */
+#note.wide { padding-right: calc(var(--margin-w) + 18px); }
+#note.wide .sidenotes { width: var(--margin-w); }
+#note .side { position: absolute; left: 0; right: 0; font-size: 0.82em; line-height: 1.4; overflow-wrap: anywhere; }
+#note .side-fn { max-height: 9.9em; overflow: hidden; padding-left: 7px; border-left: 2px solid var(--line); color: var(--muted); }
+#note .side-fn .fn-n { color: var(--accent); font-weight: 700; margin-right: 5px; }
+#note .side-fn.clipped { cursor: help; mask-image: linear-gradient(to bottom, #000 65%, transparent); }
+#note .side-fn.active { border-left-color: var(--accent); color: var(--fg); }
+#note sup.fn-ref.active { border-radius: 3px; background: color-mix(in srgb, var(--accent) 18%, transparent); }
+#note .side-t { display: flex; flex-direction: column; gap: 2px; padding: 4px 7px; border-radius: 6px; cursor: pointer;
+  user-select: none; background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--planned); }
+#note .side-t.suggestion { border-left-color: var(--dropped); }
+#note .side-t:hover, #note .side-t.active { border-top-color: var(--accent); border-right-color: var(--accent); border-bottom-color: var(--accent);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 0.12); }
+#note .side-t .s-head { color: var(--muted); font-size: 0.95em; }
+#note .side-t .s-head b { color: var(--fg); font-weight: 600; }
+#note .side-t .s-repl, #note .side-t .s-msg { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+#note .side-t .s-repl { -webkit-line-clamp: 2; white-space: pre-wrap; padding: 0 3px; border-radius: 3px;
+  background: color-mix(in srgb, var(--done) 18%, transparent); }
+#note .side-t .s-msg { -webkit-line-clamp: 3; }
+#note .side-t .s-who { color: var(--muted); }
+#note .side-t .s-asked { color: var(--accent); font-size: 0.95em; }
 #note ins.c-ins { text-decoration: none; margin-left: 2px; padding: 0 2px; border-radius: 2px; white-space: pre-wrap;
   background: color-mix(in srgb, var(--done) 20%, transparent); border-bottom: 1px solid var(--done); }
 .sel-bar { position: absolute; z-index: 5; display: flex; align-items: center; gap: 4px; padding: 4px; border-radius: 8px;

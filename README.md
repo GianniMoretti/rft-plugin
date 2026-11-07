@@ -194,6 +194,11 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   that cuts into bold, italics or a link grows to hold it whole; code and formula blocks take
   none. **Esc** or the marker turns it off; **Comment**, **Suggest** and **Footnote** wait until
   then.
+- **The margin column**: when the drawer leaves the text room beside it (drag its left edge to
+  widen it), the margin shows each footnote's text level with its mark, and a card for each open
+  comment or suggestion level with its text: its kind, a suggestion's new text, and the last
+  message, cut short. Hover a card to light up its text; click it to open the thread below. On a
+  narrower drawer the margin keeps only the footnotes' numbers.
 - **Comments and suggestions**, as in Overleaf, discuss a part of a note before anyone edits it.
   Select text in the drawer and choose:
   - **Comment**: a question or remark on that text;

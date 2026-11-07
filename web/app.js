@@ -1512,28 +1512,91 @@
     }
   }
 
-  // ------------------------------------------------ footnotes in the margin
+  // ------------------------------------------------ the margin: footnotes, and the open threads when there is room
 
+  const TEXT_MIN = 440 // the narrowest text, in px at the A− / A+ scale 1, that leaves room for the margin column
+  const MARGIN_GAP = 18
+  let wideMargin = false // whether the margin column shows the footnotes' texts and the threads' cards
+
+  /** A card in the margin for an open thread: its kind, a suggestion's new text, its last message, cut short. */
+  function sideCard(t) {
+    const msgs = t.messages || []
+    const last = msgs[msgs.length - 1]
+    const replies = Math.max(0, msgs.length - 1)
+    const kind = t.kind === 'comment' ? 'Comment' : t.replacement == null ? 'Suggestion · in words' : 'Suggestion'
+    const el = document.createElement('div')
+    el.className = `side side-t ${t.kind}`
+    el.dataset.thread = t.id
+    el.title = 'Open the thread'
+    el.innerHTML = `<div class="s-head"><b>${kind}</b>${replies ? ` · ${replies} ${replies > 1 ? 'replies' : 'reply'}` : ''}${t.exact ? '' : ' · the text changed'}</div>` +
+      (t.kind === 'suggestion' && t.replacement != null
+        ? `<div class="s-repl">${t.replacement ? escH(clip(t.replacement, 240)) : '<em>(delete the text)</em>'}</div>` : '') +
+      (last ? `<div class="s-msg"><span class="s-who">${who(last.by)}:</span> ${mdm.inline(clip(String(last.text || '').replace(/\s+/g, ' ').trim(), 320))}</div>` : '') +
+      (t.asked ? '<div class="s-asked">Claude is answering…</div>' : '')
+    return el
+  }
+
+  /**
+   * The column right of the note's text. When the drawer leaves the text room enough beside it:
+   * each footnote's text, and a card for each open comment or suggestion, level with where it is in
+   * the text and below the one above. Else, as on a narrow drawer: each footnote's number, which
+   * shows its text on hover, and the threads only under the note.
+   */
   function layoutSidenotes() {
     const layer = article.querySelector(':scope > .sidenotes')
     if (!layer || article.hidden) return
     layer.textContent = ''
+    const sups = [...article.querySelectorAll('.src sup.fn-ref')]
+    const open = shown ? shown.threads.filter(t => t.state === 'open' && t.at) : []
+    const width = article.offsetWidth
+    const mw = Math.round(Math.min(280 * font, Math.max(190 * font, width * 0.3)))
+    wideMargin = width - mw - MARGIN_GAP >= TEXT_MIN * font && (sups.length > 0 || open.length > 0)
+    article.classList.toggle('wide', wideMargin)
+    article.style.setProperty('--margin-w', `${mw}px`)
+    article.style.minHeight = ''
     const box = article.getBoundingClientRect()
-    let below = -Infinity
-    for (const sup of article.querySelectorAll('.src sup.fn-ref')) {
+    const items = [] // { top, left, el }, in the text's order
+    const seen = new Set()
+    for (const sup of sups) {
       const r = sup.getBoundingClientRect()
       if (!r.height) continue
-      const top = Math.max(r.top - box.top - 2, below)
-      const b = document.createElement('button')
-      b.type = 'button'
-      b.className = 'sidenote'
-      b.textContent = sup.textContent
-      b.dataset.fn = sup.dataset.fn
-      b.style.top = `${top}px`
-      b.setAttribute('aria-label', `Footnote ${sup.textContent}`)
-      layer.append(b)
-      below = top + b.offsetHeight + 3
+      const f = wideMargin && !seen.has(sup.dataset.fn) ? footnotes.find(x => x.label === sup.dataset.fn) : null
+      seen.add(sup.dataset.fn)
+      let el
+      if (f) {
+        el = document.createElement('div')
+        el.className = 'side side-fn'
+        // its continued lines run on, as one paragraph in a column this narrow
+        el.innerHTML = `<span class="fn-n">${f.n}</span>${f.html.replace(/<br>/g, ' ')}`
+      } else {
+        // a footnote's number: on a narrow drawer, and where a note marks one footnote again
+        el = document.createElement('button')
+        el.type = 'button'
+        el.className = 'sidenote'
+        el.textContent = sup.textContent
+        el.setAttribute('aria-label', `Footnote ${sup.textContent}`)
+      }
+      el.dataset.fn = sup.dataset.fn
+      items.push({ top: r.top - box.top - 2, left: r.left, el })
     }
+    if (wideMargin) {
+      for (const t of open) {
+        const m = article.querySelector(`[data-thread="${CSS.escape(t.id)}"]`)
+        const r = m && m.getClientRects()[0]
+        if (r) items.push({ top: r.top - box.top - 3, left: r.left, el: sideCard(t) })
+      }
+    }
+    items.sort((a, b) => (Math.abs(a.top - b.top) > 4 ? a.top - b.top : a.left - b.left))
+    let below = -Infinity
+    for (const it of items) {
+      layer.append(it.el)
+      const top = Math.max(it.top, below)
+      it.el.style.top = `${top}px`
+      if (it.el.classList.contains('side-fn')) it.el.classList.toggle('clipped', it.el.scrollHeight > it.el.clientHeight + 1)
+      below = top + it.el.offsetHeight + (wideMargin ? 8 : 3)
+    }
+    // the column may run on below the text: the threads under it stay clear of it
+    if (wideMargin && below > 0) article.style.minHeight = `${Math.ceil(below)}px`
   }
   let layoutQueued = false
   new ResizeObserver(() => {
@@ -1560,11 +1623,23 @@
     clearTimeout(popTimer)
     popTimer = setTimeout(() => { fnPop.hidden = true; popFor = null }, wait)
   }
-  const FN = '.sidenote, #note sup.fn-ref'
-  drawer.addEventListener('mouseover', ev => { const el = ev.target.closest(FN); if (el) showFootnote(el) })
+  const FN = '.sidenote, .side-fn, #note sup.fn-ref'
+  /** A footnote pointed at: its mark and its text in the margin lit together; its text in a pop-up when the margin does not show it whole. */
+  function pointFootnote(el) {
+    const label = el.dataset.fn
+    const side = wideMargin ? article.querySelector(`.side-fn[data-fn="${CSS.escape(label)}"]`) : null
+    if (side) {
+      for (const x of article.querySelectorAll('[data-fn]')) x.classList.toggle('active', x.dataset.fn === label)
+      if (!side.classList.contains('clipped')) return
+    }
+    showFootnote(el)
+  }
+  drawer.addEventListener('mouseover', ev => { const el = ev.target.closest(FN); if (el) pointFootnote(el) })
   drawer.addEventListener('mouseout', ev => {
     const el = ev.target.closest(FN)
-    if (el && !(ev.relatedTarget && el.contains(ev.relatedTarget))) hideFootnote()
+    if (!el || (ev.relatedTarget && el.contains(ev.relatedTarget))) return
+    for (const x of article.querySelectorAll('[data-fn].active')) x.classList.remove('active')
+    hideFootnote()
   })
   fnPop.addEventListener('mouseenter', () => clearTimeout(popTimer))
   fnPop.addEventListener('mouseleave', () => hideFootnote())
@@ -1923,6 +1998,14 @@
   threadsBox.addEventListener('toggle', ev => { if (ev.target.matches('details.history')) historyOpen = ev.target.open }, true)
   threadsBox.addEventListener('mouseover', ev => { const c = ev.target.closest('.thread'); setActive(c ? c.dataset.thread : null) })
   threadsBox.addEventListener('mouseleave', () => setActive(null))
+  // a thread's mark in the text and its card in the margin light up together
+  let hovered = null
+  article.addEventListener('mouseover', ev => {
+    const m = ev.target.closest('[data-thread]')
+    const tid = m ? m.dataset.thread : null
+    if (tid !== hovered) { hovered = tid; setActive(tid) }
+  })
+  article.addEventListener('mouseleave', () => { if (hovered) { hovered = null; setActive(null) } })
   article.addEventListener('click', ev => {
     if (ev.target.closest('a[data-go]')) return
     const hlMark = highlighting && ev.target.closest('.src mark.hl')
