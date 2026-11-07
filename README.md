@@ -345,7 +345,7 @@ needs no network.
 | `/rft-concepts` | print the concept tree |
 | `/rft-concepts suggest` | ask Claude to propose a concept split; nothing changes until you confirm |
 | `/rft-literature <topic, id or concept>` | ask Claude for a literature search: one reference note per key paper read, under the note or concept it is about, then a synthesis and the directions it suggests (added only once you choose) |
-| `/rft-rebalance [concept or id]` | ask Claude to propose moving branches under the line of research they belong to, as a table of moves; only the ones you confirm are made, each keeping its origin |
+| `/rft-rebalance [concept or id] [--full]` | ask Claude to propose moving branches under the line of research they belong to, as a table of moves; only the ones you confirm are made, each keeping its origin. The plugin first finds the candidates (notes whose words and references sit closer to another concept than to their own) and Claude judges only those; `--full` has Claude review the whole tree instead |
 | `/rft-summarize [concept]` | ask Claude to write the missing note summaries and concept digests of an existing tree, concept by concept (a one-off job) |
 | `/rft-view` | write `vault/tree.html`: the same tree view as one standalone file, every note inside (images as placeholders), to open anywhere or share |
 

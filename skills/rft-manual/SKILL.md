@@ -217,8 +217,12 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
   moves with it, and the note keeps its past parents in `origin:` plus a dated line under
   `## History`, so the path that led to it stays readable (the tree view's **Came from** draws
   it).
-- **`/rft-rebalance [concept or id]`** asks you to review the whole tree, or one part of it, and
-  propose moves. Start from the map (`rft_map`, `rft_map <concept>`): the summaries say what
+- **`/rft-rebalance [concept or id]`** gives you a short list of candidates the plugin found:
+  notes whose title, summary, tags and references sit closer to another concept than to their
+  own, each with its fit to both and the nearest note in the other concept. Judge only those
+  (the fit is a hint from shared words, not a verdict); check a candidate with `rft_map
+  <concept>` or `rft_graph <id>` and open its file only when in doubt. With `--full` you review
+  the whole tree, or one part of it, instead. Start from the map (`rft_map`, `rft_map <concept>`): the summaries say what
   each note is; open a note's file only when its summary leaves a move in doubt. Answer
   with a short numbered table (note, parent now, new parent, why), say what you would leave as
   it is, and wait: apply only the moves the user confirms, each with its `why`, then run

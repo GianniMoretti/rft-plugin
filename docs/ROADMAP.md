@@ -1,7 +1,7 @@
 # Roadmap
 
 Planned work, split into release packages in the order they should ship. Each
-package is one minor version (the current release is 0.17.0, which also brings Alex's
+package is one minor version (the current release is 0.18.0, which also brings Alex's
 changes: note types, light theme, LaTeX, images, code repos) and lists what it contains, how it
 could be done, and when it is done. A package builds only on the ones before it.
 
@@ -17,7 +17,7 @@ could be done, and when it is done. A package builds only on the ones before it.
 | 0.15.0 | Alex's PR #4 merged (done) | – |
 | 0.16.0 | Project map (done) | 0.14.0 |
 | 0.17.0 | Recall (done) | 0.16.0 |
-| 0.18.0 | Cheaper rebalancing | 0.16.0 |
+| 0.18.0 | Cheaper rebalancing (done) | 0.16.0 |
 | 0.19.0 | State of knowledge | 0.16.0 |
 
 ---
@@ -154,7 +154,7 @@ question ("what do we know about X") are measured before and after.
 Done when: on the replica, a question answered by search is measured against the same question
 before (tokens, turns).
 
-## 0.18.0 — Cheaper rebalancing
+## 0.18.0 — Cheaper rebalancing (done)
 
 - Candidates first: notes whose text and references sit closer to another concept than to their
   own (similarity over summaries and refs, clustering of the note graph), with their summaries.

@@ -1,6 +1,6 @@
 # Design note: the tree as a knowledge base
 
-Status: adopted for 0.16–0.19 (roadmap). 0.16.0 (project map) and 0.17.0 (recall) are built.
+Status: adopted for 0.16–0.19 (roadmap). 0.16.0 (project map), 0.17.0 (recall) and 0.18.0 (cheaper rebalancing) are built.
 
 ## The problem
 
@@ -69,6 +69,25 @@ ruled out, what is open.
 - A `tool.call` hook: a Grep or Glob in the vault, or a shell grep / rg / find naming it, gets a
   reminder (model context only, the result is untouched) to use rft_search, rft_map and
   rft_graph, until one of them is used in the session. Reading a single note is left alone.
+
+## 0.18.0, as built
+
+- `candidates(loaded, {scope})` (hooks/lib/rebalance.ts): tf-idf vectors of each note's title,
+  summary (both counted twice) and tags, or the start of its body when it has no summary. A
+  concept's profile is the sum of its own notes' vectors plus its name; a note is compared with
+  its own concept leaving itself out. References add 0.3 × the share of the note's refs that the
+  concept's other notes also use. A note is a candidate when its best other concept (not one on
+  its own concept path, not one started inside its subtree) fits at least 0.12, by 0.08 more
+  and 1.4 times its own; a note whose ancestor already goes to the same concept is dropped, so
+  a branch is proposed whole. With the nearest note in the target concept as a suggested parent.
+- `/rft-rebalance` embeds that list (at most 15, clearest first) in the prompt and asks Claude to
+  judge only those; with none, it says so and asks nothing. `--full` keeps the 0.16 prompt.
+- No clustering of the note graph: on the replica the text and reference signal alone gives a
+  short, plausible list (5 candidates out of 400 notes, in 0.6 s).
+- Measured on the replica: `--full` cost $0.98 (30 turns, about 744K input tokens) and proposed
+  4 moves (1 clear, 3 it called less certain); the candidates cost $0.61 (17 turns, about 331K)
+  and proposed the clear one, rejecting the other 4 candidates with reasons. The 3 uncertain
+  moves of the full run were not among the candidates: the list trades some recall for cost.
 
 ## Not in scope
 

@@ -1,6 +1,6 @@
 // rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-concepts, /rft-literature, /rft-rebalance,
 // /rft-summarize, /rft-view), the model's tools (rft_add_node, rft_set_status, rft_set_summary, rft_map, rft_set_digest, rft_move_node, rft_set_refs, rft_search,
-// rft_graph, // rft_collect_papers, rft_set_tags, rft_set_type, rft_set_concept, rft_concepts, rft_set_repos, rft_code,
+// rft_graph, rft_collect_papers, rft_set_tags, rft_set_type, rft_set_concept, rft_concepts, rft_set_repos, rft_code,
 // rft_set_code, rft_tags, rft_tree, rft_validate, rft_sync), the operating rules
 // injected into the system prompt, the outline pane, and the web view: /rft starts a local
 // server (server/rft_server.py) for the interactive tree page (web/), and makes the notes that
@@ -19,6 +19,7 @@ import type { Config, Io, Loaded, NodeType, Tree } from './lib/vault'
 import { OPEN_HOSTS, planPapers } from './lib/papers'
 import { searchReport, similarNotes } from './lib/search'
 import { graphReport } from './lib/graph'
+import { candidates, candidatesReport } from './lib/rebalance'
 import { RECALL_HINT, searchesVault } from './lib/recall'
 import { SMALL_TREE, mapGaps, mapReport, mapWarnings, projectMap, readDigests, resolveConcept, setDigest, setSummaries } from './lib/map'
 import { LEGEND, MARK, NODE_TYPES, bodyOf, counts, countsLine, isAbsolute, join, locate, readConfig, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
@@ -429,7 +430,7 @@ async function registerCommands($: EngineInterface): Promise<void> {
   await attempt('rft-init', () => $.command.register({ name: 'rft-init', description: 'Activate the Reasoning Flow Tree in this project and create its vault', argumentHint: '[starting question]' }))
   await attempt('rft-concepts', () => $.command.register({ name: 'rft-concepts', description: 'Print the concept tree (/rft-concepts suggest: ask Claude to propose a concept split)', argumentHint: '[suggest]' }))
   await attempt('rft-literature', () => $.command.register({ name: 'rft-literature', description: 'Ask Claude for a literature search on a topic, a note or a concept, ending in reference notes', argumentHint: '<topic, note id or concept>' }))
-  await attempt('rft-rebalance', () => $.command.register({ name: 'rft-rebalance', description: 'Ask Claude to propose moving branches under the line of research they belong to; nothing moves until you confirm', argumentHint: '[concept or note id]' }))
+  await attempt('rft-rebalance', () => $.command.register({ name: 'rft-rebalance', description: 'Ask Claude to propose moving branches under the line of research they belong to; nothing moves until you confirm', argumentHint: '[concept or note id] [--full]' }))
   await attempt('rft-summarize', () => $.command.register({ name: 'rft-summarize', description: 'Ask Claude to write the missing one-line note summaries and concept digests (the project map)', argumentHint: '[concept]' }))
   await attempt('rft-view', () => $.command.register({ name: 'rft-view', description: 'Write a standalone HTML view of the tree to <vault>/tree.html' }))
   if (failed.length) reportFailures($, failed)
@@ -834,6 +835,9 @@ const literaturePrompt = (subject: string, where: string | null) => `Run a thoro
 /** The rebalancing request; `scope` (a concept name or a note id) narrows it to one part of the tree. */
 const rebalancePrompt = (scope: string) => `Propose a rebalancing of the reasoning tree (rft-manual skill, "Restructuring the tree")${scope ? `, limited to ${JSON.stringify(scope)} (a concept or a note: consider the branches in it, and moves into it or out of it)` : ''}. Over time some branches grow out of one line of research but belong to another: an experiment hung under the note that happened to come before it, an idea that opened a different line, a branch that would sit better under another concept. Start from the map: rft_map, then rft_map <concept> for the concepts involved (their digests and one-line note summaries); read a note's file only when its summary leaves the move in doubt. For each branch that clearly belongs elsewhere, propose one move: the note to move (its subtree goes with it), its parent now, the new parent, and why in one line. Keep the tree's history in mind: a note that came out of a result stays where the reasoning produced it unless it really is part of another line; when in doubt, leave it. Moves only: if a new concept would help, say so separately (rft_set_concept, after the user agrees). Present the moves as a short numbered table, say what you would leave as it is, and ask me which moves to apply. Do not call rft_move_node until I say yes; then apply only the moves I confirm, each with its why, and finish with rft_validate.`
 
+/** The rebalancing request from the plugin's short list of candidates. */
+const candidatesPrompt = (scope: string, list: string) => `Propose a rebalancing of the reasoning tree (rft-manual skill, "Restructuring the tree")${scope ? `, limited to ${JSON.stringify(scope)}` : ''}. The plugin compared every note with the concepts (its title, summary, tags and references against each concept's notes) and found these candidates, notes that sit closer to another concept than to their own:\n\n${list}\n\nJudge only these; do not survey the rest of the tree. For each, check it against the two concepts (rft_map <concept> if their state is not clear to you, rft_graph <id> for its neighbours) and open a note's file only when that leaves the move in doubt. The fit is a hint from shared words, not a verdict: a note that came out of a result stays where the reasoning produced it unless it really is part of another line; when in doubt, leave it. For each move you keep: the note to move (its subtree goes with it), its parent now, the new parent (the nearest note named is a start, pick the right one), and why in one line. Moves only: if a new concept would help, say so separately (rft_set_concept, after the user agrees). Present the moves as a short numbered table, say which candidates you would leave and why in a few words, and ask me which moves to apply. Do not call rft_move_node until I say yes; then apply only the moves I confirm, each with its why, and finish with rft_validate.`
+
 /** The back-fill of the map: summaries of the notes without one, then the digests, concept by concept. */
 const summarizePrompt = (scope: string) => `Fill in the project map of the reasoning tree${scope ? ` for the concept ${JSON.stringify(scope)} and its sub-concepts` : ''} (rft-manual skill, "The project map"). Work concept by concept, the smallest sub-concepts first: call rft_map <concept> to see its notes and which have no summary; read those notes (their Idea, What, Why, Result, Summary, Relevance, Statement: the parts that say what the note is and what it found, not the boilerplate) and set a one-line summary for each with rft_set_summary, many per call (at most 20). A summary says what the note is about and, if it has one, its result with the key number; for a dropped or discussed direction, why. Never invent a result: when the note has none, say what it tests. Then, with all its summaries set, write the concept's digest with rft_set_digest: its state in one or two sentences, then ## Key results, ## Dead ends and ## Open questions, each point with the note ids. Go on to the next concept without asking me, and at the end run rft_validate and tell me how many summaries and digests you wrote.`
 
@@ -981,9 +985,17 @@ export const register: Register = (on, options) => {
     try {
       const loaded = await loadActive((await mustHere($)).io)
       if (Object.keys(loaded.tree.nodes).length < 3) return { text: 'The tree has too few notes to rebalance.' }
+      // --full: Claude reads the map of the whole tree; otherwise it judges the plugin's candidates
+      const full = /(^|\s)--full(\s|$)/.test(e.args)
+      const scope = e.args.replace(/(^|\s)--full(?=\s|$)/, ' ').trim()
+      if (full) pendingPrompt = rebalancePrompt(scope)
+      else {
+        const list = candidates(loaded, { scope: scope || undefined })
+        if (!list.length) return { text: `${conceptsReport(loaded)}\n\nNo note sits clearly closer to another concept than to its own${scope ? ` in ${scope}` : ''}: nothing to propose. /rft-rebalance --full asks Claude to look at the whole tree anyway.` }
+        pendingPrompt = candidatesPrompt(scope, candidatesReport(loaded, list))
+      }
       // submitted by the poller, as for /rft-concepts suggest
-      pendingPrompt = rebalancePrompt(e.args.trim())
-      return { text: `${conceptsReport(loaded)}\n\nClaude will propose moves in a moment, as a table; nothing moves until you confirm.` }
+      return { text: `${conceptsReport(loaded)}\n\nClaude will propose moves in a moment, as a table${full ? '' : ', from the candidates the plugin found'}; nothing moves until you confirm.` }
     } catch (err) {
       return { text: message(err) }
     }
