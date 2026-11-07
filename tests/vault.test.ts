@@ -218,6 +218,24 @@ describe('vault', () => {
     expect(loaded.tree.nodes.D01!.origin).toEqual(['E01', 'D00'])
   })
 
+  test('a move keeps the footnotes after the parents\' children lists, even those that link the note', async () => {
+    const files = demoFiles()
+    const withNote = (path: string) => {
+      files[path] = files[path]!.replace(/Text of (\w+)\./, 'Text of $1.[^1]') + `\n[^1]: compare with [[${D01}]],\n    which disagrees.\n`
+    }
+    withNote(`vault/experiments/${E01}.md`)
+    withNote(`vault/directions/${D00}.md`)
+    const { fs, io, loaded } = await loadDemo(new MemoryFs(files))
+    await sync(io, loaded)
+    await moveNode(io, loaded, 'D01', 'D00', '2026-02-01')
+    const footnote = `\n\n[^1]: compare with [[${D01}]],\n    which disagrees.\n`
+    // the old parent stops listing it, its footnote stays
+    expect(fs.read(`vault/experiments/${E01}.md`)).toEndWith(`## Children in the tree${footnote}`)
+    // the new parent lists it in the list, before its footnote, though the footnote already links it
+    expect(fs.read(`vault/directions/${D00}.md`)).toEndWith(`## Children in the tree\n- [[${E01}]]\n- [[${D01}]]${footnote}`)
+    expect(await validate(io, loaded)).toEqual({ errors: [], warnings: [] })
+  })
+
   test('a move refuses the root, the same parent and the note\'s own subtree', async () => {
     const { io, loaded } = await loadDemo()
     await expect(moveNode(io, loaded, 'D00', 'E01', '2026-02-01')).rejects.toThrow(/root of the tree/)

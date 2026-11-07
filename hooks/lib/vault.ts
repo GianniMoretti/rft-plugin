@@ -1036,8 +1036,7 @@ export async function validate(io: Io, loaded: Loaded, opts: { root?: string; ho
     if (!sameLinks(fm.children, f.children!) || (fm.up ?? '') !== f.up || (fm.down ?? '') !== f.down) {
       warnings.push(`${n.id}: children / up / down frontmatter out of date (rft_sync fixes it)`)
     }
-    const section = /## Children in the tree\n([\s\S]*?)(\n## |$)/.exec(text)
-    const listed = new Set(linksIn(section?.[1]))
+    const listed = new Set(linksIn(childrenAt(text)?.body))
     const missing = n.children.filter(k => !listed.has(tree.nodes[k]!.name))
     if (missing.length) warnings.push(`${n.id}: "Children in the tree" does not list ${missing.join(', ')} (rft_sync adds them)`)
   }
@@ -1129,16 +1128,28 @@ export function noteText(id: string, n: NewNode, project: string, parentName: st
   return head.join('\n') + '\n\n' + blocks.join('\n') + '\n## Children in the tree\n'
 }
 
+/**
+ * The "Children in the tree" list: from its heading to the next section, or to the note's
+ * footnote texts (`[^1]: …`), which the tree view writes after it, at the end of the note.
+ */
+export function childrenAt(t: string): { start: number; end: number; body: string } | null {
+  const m = /## Children in the tree\n/.exec(t)
+  if (!m) return null
+  const start = m.index + m[0].length
+  const stop = /^(## |\[\^[^\]\s]+\]:)/m.exec(t.slice(start))
+  const end = stop ? start + stop.index : t.length
+  return { start, end, body: t.slice(start, end) }
+}
+
 /** Adds `- [[child]]` to the parent's "Children in the tree" section, creating it when missing. */
 export function withChildListed(text: string, childName: string): string {
   const line = `- [[${childName}]]`
   const t = normalise(text)
-  const m = /## Children in the tree\n([\s\S]*?)(?=\n## |$)/.exec(t)
-  if (!m) return t.replace(/\n*$/, '\n\n') + `## Children in the tree\n${line}\n`
-  if (linksIn(m[1]).includes(childName)) return t
-  const start = m.index + '## Children in the tree\n'.length
-  const kept = m[1]!.split('\n').filter(l => l.trim() !== '')
-  return t.slice(0, start) + [...kept, line].join('\n') + '\n' + t.slice(start + m[1]!.length)
+  const c = childrenAt(t)
+  if (!c) return t.replace(/\n*$/, '\n\n') + `## Children in the tree\n${line}\n`
+  if (linksIn(c.body).includes(childName)) return t
+  const kept = c.body.split('\n').filter(l => l.trim() !== '')
+  return t.slice(0, c.start) + [...kept, line].join('\n') + '\n' + (c.end < t.length ? '\n' : '') + t.slice(c.end)
 }
 
 /** Sets `refs:` (note names); an empty list removes the field. */
@@ -1149,11 +1160,10 @@ export function withRefs(text: string, names: string[]): string {
 /** Drops `- [[child]]` from the "Children in the tree" section (the note moved elsewhere). */
 export function withChildUnlisted(text: string, childName: string): string {
   const t = normalise(text)
-  const m = /## Children in the tree\n([\s\S]*?)(?=\n## |$)/.exec(t)
-  if (!m) return t
-  const start = m.index + '## Children in the tree\n'.length
-  const kept = m[1]!.split('\n').filter(l => !linksIn(l).includes(childName))
-  return t.slice(0, start) + kept.join('\n') + t.slice(start + m[1]!.length)
+  const c = childrenAt(t)
+  if (!c) return t
+  const kept = c.body.split('\n').filter(l => !linksIn(l).includes(childName))
+  return t.slice(0, c.start) + kept.join('\n') + t.slice(c.end)
 }
 
 /**
