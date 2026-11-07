@@ -58,6 +58,7 @@ PAGE_FILES = {
     "/layout.js": ("layout.js", "text/javascript; charset=utf-8"),
     "/concepts.js": ("concepts.js", "text/javascript; charset=utf-8"),
     "/theme.js": ("theme.js", "text/javascript; charset=utf-8"),
+    "/markdown.js": ("markdown.js", "text/javascript; charset=utf-8"),
     "/vendor/d3.v7.9.0.min.js": ("vendor/d3.v7.9.0.min.js", "text/javascript; charset=utf-8"),
     "/vendor/LICENSE-d3.txt": ("vendor/LICENSE-d3.txt", "text/plain; charset=utf-8"),
     "/vendor/katex.v0.16.22.min.js": ("vendor/katex.v0.16.22.min.js", "text/javascript; charset=utf-8"),

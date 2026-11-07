@@ -769,6 +769,7 @@ export const register: Register = (on, options) => {
         filters: await $.fs.read(join(root, ASSET_PATHS.filters)),
         layout: await $.fs.read(join(root, ASSET_PATHS.layout)),
         concepts: await $.fs.read(join(root, ASSET_PATHS.concepts)),
+        markdown: await $.fs.read(join(root, ASSET_PATHS.markdown)),
         theme: await $.fs.read(join(root, ASSET_PATHS.theme)),
       }
       const path = await exportHtml(io, loaded, assets)

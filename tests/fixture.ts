@@ -39,7 +39,7 @@ export const E02 = 'E02 Variant run'
 export const WEB_FILES: Record<string, string> = {
   'web/index.html': '<!doctype html><html><head><script src="theme.js" data-rft-inline></script><link rel="stylesheet" href="app.css" data-rft-inline><link rel="stylesheet" href="vendor/katex.v0.16.22.min.css" data-rft-inline></head><body>' +
     '<script src="vendor/d3.v7.9.0.min.js" data-rft-inline></script><script src="vendor/katex.v0.16.22.min.js" data-rft-inline></script><script src="filters.js" data-rft-inline></script>' +
-    '<script src="layout.js" data-rft-inline></script><script src="concepts.js" data-rft-inline></script>' +
+    '<script src="layout.js" data-rft-inline></script><script src="concepts.js" data-rft-inline></script><script src="markdown.js" data-rft-inline></script>' +
     '<script src="app.js" data-rft-inline></script></body></html>',
   'web/app.css': 'body { color: red }',
   'web/app.js': 'console.log(window.RFT_DATA.tree.nodes.length, "$&")',
@@ -49,6 +49,7 @@ export const WEB_FILES: Record<string, string> = {
   'web/filters.js': '/* filters */',
   'web/layout.js': '/* layout */',
   'web/concepts.js': '/* concepts */',
+  'web/markdown.js': '/* markdown */',
   'web/theme.js': '/* theme */',
 }
 

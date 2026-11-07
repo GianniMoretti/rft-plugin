@@ -274,6 +274,7 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.get("/app.js")[0], 200)
         self.assertEqual(self.get("/layout.js")[0], 200)
         self.assertEqual(self.get("/theme.js")[0], 200)
+        self.assertEqual(self.get("/markdown.js")[0], 200)
         self.assertEqual(self.get("/vendor/d3.v7.9.0.min.js")[0], 200)
         self.assertEqual(self.get("/vendor/katex.v0.16.22.min.js")[0], 200)
         self.assertEqual(self.get("/vendor/katex.v0.16.22.min.css")[0], 200)

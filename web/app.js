@@ -1213,9 +1213,10 @@
   document.getElementById('cmode').addEventListener('click', () => setMode(following(CMODES, conceptMode)))
   document.getElementById('view-toggle').addEventListener('click', () => setView(view === 'concepts' ? 'tree' : 'concepts'))
 
-  // ---------------------------------------------------------------- markdown (the subset notes use)
+  // ---------------------------------------------------------------- markdown (web/markdown.js)
 
-  const escH = t => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  const M = window.RftMarkdown
+  const escH = M.escH
   function idForLink(target) {
     const t = target.trim()
     for (const n of tree.nodes) if (n.name === t) return n.id
@@ -1229,18 +1230,6 @@
     } catch (e) { /* below */ }
     return `<code class="math">${escH(display ? `$$${src}$$` : `$${src}$`)}</code>`
   }
-  // what the other inline rules must not touch: `code` first, as it binds tightest (a $ in it
-  // stays a $), then, as Obsidian reads them, \$ (a dollar), $$display math$$ and $inline math$,
-  // whose dollars have no space just inside them and no digit just after ("$5 and $10" is text)
-  const CODE = /`([^`]+)`/g
-  const MATH = /\\\$|\$\$([^\u0000]+?)\$\$|\$(?=[^\s$])((?:\\[^\u0000]|[^\\$\u0000])+?)(?<!\s)\$(?!\d)/g
-  // images as Obsidian embeds them: ![[name.png]], ![[name.png|400]] (a width, or 400x300) and
-  // ![alt](path.png), ![alt|400](<a path with spaces.png>); the server finds the file. In a
-  // table the | is written \|
-  const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i
-  const WIKI_IMAGE = /!\[\[([^\]\n]+)\]\]/g
-  const MD_IMAGE = /!\[([^\]\n]*)\]\(\s*(<[^>\n]+>|[^)\s]+)(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\s*\)/g
-  const sizeOf = o => /^\s*(\d+)(?:x(\d+))?\s*$/.exec(o)
   let mdNote = null // the note markdown() renders: its images are found from its folder
   /** An image of the note shown, as the server serves it; a mention in the standalone page. */
   function image(src, alt, size) {
@@ -1253,89 +1242,13 @@
     return `<a class="image" href="${escH(url)}" target="_blank" rel="noopener noreferrer" title="Open at full size">` +
       `<img src="${escH(url)}" alt="${escH(alt)}" data-label="${escH(label)}" loading="lazy"${dims}></a>`
   }
-  /** `![[inner]]` as an image, or null when it embeds something else (a note, a PDF). */
-  function wikiImage(inner) {
-    const [target, ...opts] = inner.split(/\\?\|/)
-    if (!IMAGE_EXT.test(target.trim())) return null
-    const alt = opts.find(o => !sizeOf(o))
-    return image(target.trim(), alt ? alt.trim() : '', opts.map(sizeOf).find(Boolean))
-  }
-  /** `![alt](src)`: a local image, a link to a remote one (the page fetches nothing from elsewhere). */
-  function mdImage(alt, src) {
-    const [text, ...opts] = alt.split(/\\?\|/)
-    src = src.replace(/^<(.*)>$/, '$1')
-    if (/^https?:/i.test(src)) return `<a href="${escH(src)}" target="_blank" rel="noopener noreferrer">(image: ${escH(text.trim() || src)})</a>`
-    let path = src
-    try { path = decodeURIComponent(src) } catch (e) { /* a % of its own */ }
-    if (!IMAGE_EXT.test(path)) return `<em>(embedded: ${escH(text.trim() || path)})</em>`
-    return image(path, text.trim(), opts.map(sizeOf).find(Boolean))
-  }
-  function inline(t) {
-    const held = []
-    const hold = html => `\u0000${held.push(html) - 1}\u0000`
-    t = t.replace(CODE, (m, code) => hold(`<code>${escH(code)}</code>`))
-      .replace(WIKI_IMAGE, (m, inner) => { const html = wikiImage(inner); return html == null ? m : hold(html) })
-      .replace(MD_IMAGE, (m, alt, src) => hold(mdImage(alt, src)))
-      .replace(MATH, (m, display, math) => hold(display != null ? tex(display, true) : math != null ? tex(math, false) : '$'))
-    return escH(t)
-      .replace(/!\[\[([^\]]+)\]\]/g, '<em>(embedded: $1)</em>')
-      .replace(/\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g, (m, target, alias) => {
-        const id = idForLink(target.replace(/&amp;/g, '&'))
-        const label = alias || target
-        return id ? `<a data-go="${id}">${label}</a>` : `<span class="missing">${label}</span>`
-      })
-      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-      .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>')
-      .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
-      .replace(/\u0000(\d+)\u0000/g, (m, i) => held[i])
-  }
+  const md = M.make({ tex, image, link: idForLink })
+  let footnotes = [] // the footnotes of the note markdown() rendered last: { label, n, html }
   function markdown(src, noteId) {
     mdNote = noteId || null
-    const out = []
-    let list = 0, inCode = false, table = false, para = []
-    let math = null // the lines of a $$ block opened on a line of its own, until its closing $$
-    // a line ending in two spaces breaks the line, as in Obsidian
-    const flush = () => {
-      if (para.length) out.push(`<p>${para.map((l, i) => inline(l.replace(/\s+$/, '')) + (i < para.length - 1 ? (/ {2}$/.test(l) ? '<br>' : ' ') : '')).join('')}</p>`)
-      para = []
-    }
-    const close = () => { flush(); while (list > 0) { out.push('</ul>'); list-- } if (table) { out.push('</table>'); table = false } }
-    for (const raw of src.split('\n')) {
-      if (math) {
-        const end = raw.indexOf('$$')
-        if (end < 0) { math.push(raw); continue }
-        out.push(`<div class="math-block">${tex([...math, raw.slice(0, end)].join('\n'), true)}</div>`)
-        math = null
-        if (raw.slice(end + 2).trim()) para.push(raw.slice(end + 2))
-        continue
-      }
-      if (!inCode && /^\s*\$\$/.test(raw) && !raw.trim().slice(2).includes('$$')) { close(); math = [raw.trim().slice(2)]; continue }
-      if (raw.startsWith('```')) { close(); out.push(inCode ? '</pre>' : '<pre>'); inCode = !inCode; continue }
-      if (inCode) { out.push(escH(raw)); continue }
-      const h = /^(#{1,6})\s+(.*)$/.exec(raw)
-      const li = /^(\s*)[-*]\s+(.*)$/.exec(raw)
-      if (h) { close(); const l = Math.min(h[1].length, 2); out.push(`<h${l}>${inline(h[2])}</h${l}>`) }
-      else if (li) {
-        flush()
-        if (table) { out.push('</table>'); table = false }
-        const depth = Math.floor(li[1].replace(/\t/g, '    ').length / 2) + 1
-        while (list < depth) { out.push('<ul>'); list++ }
-        while (list > depth) { out.push('</ul>'); list-- }
-        out.push(`<li>${inline(li[2])}</li>`)
-      } else if (/^\|.*\|\s*$/.test(raw)) {
-        if (/^\|[\s:|-]+\|\s*$/.test(raw)) continue
-        if (!table) { close(); out.push('<table>'); table = true }
-        out.push('<tr>' + raw.trim().slice(1, -1).split(/(?<!\\)\|/).map(c => `<td>${inline(c.trim())}</td>`).join('') + '</tr>')
-      } else if (raw.trim() === '') close()
-      else if (list && /^\s+\S/.test(raw) && out[out.length - 1].endsWith('</li>')) {
-        // an indented line continues the list item above
-        out[out.length - 1] = out[out.length - 1].slice(0, -5) + ' ' + inline(raw.trim()) + '</li>'
-      } else { if (list || table) close(); para.push(raw) }
-    }
-    close()
-    if (inCode) out.push('</pre>')
-    if (math) out.push(`<div class="math-block">${tex(math.join('\n'), true)}</div>`)
-    return out.join('\n')
+    const r = md.render(src)
+    footnotes = r.notes
+    return r.html
   }
 
   // ---------------------------------------------------------------- start
