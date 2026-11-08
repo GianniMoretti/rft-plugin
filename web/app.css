@@ -58,8 +58,9 @@ main { position: relative; flex: 1; min-height: 0; }
 .node.theory circle.dot { stroke: var(--theory); }
 .node.selected circle.dot { stroke: var(--fg); stroke-width: 3.5px; }
 .node.match circle.dot { stroke: var(--accent); stroke-width: 4px; }
+/* the label takes clicks like the circle: a click on the title opens the note */
 .node text.label { fill: var(--fg); paint-order: stroke; stroke: var(--label-halo); stroke-width: 3px;
-  stroke-linejoin: round; pointer-events: none; }
+  stroke-linejoin: round; }
 .node .fold { cursor: pointer; }
 .node .fold circle { fill: var(--panel); stroke: var(--muted); stroke-width: 1px; }
 .node .fold text { fill: var(--fg); font-size: 11px; text-anchor: middle; dominant-baseline: central;
