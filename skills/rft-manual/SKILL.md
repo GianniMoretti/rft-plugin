@@ -1,6 +1,6 @@
 ---
 name: rft-manual
-description: Operating manual of the Reasoning Flow Tree, the tree of experiment (E..), direction (D..), reference (R..) and theory (T..) notes that records a research project's reasoning, grouped into concepts (lines of research) that can link the code repositories they run on. Use in a project with .rft/config.json whenever an experiment is planned, launched or finished, an idea or question comes up (even a rejected one), a paper or literature review is read, a new field comes up (offer a literature search first), a definition, method or taxonomy is written down, an idea is dropped or moved, a branch belongs under another note (move it), a new line of research opens (propose a concept, ask for its code), work starts on an experiment whose concept links code, the user asks Claude to answer a comment or suggestion from the tree view, a note is locked, or the user asks about the tree, the vault, its concepts, its code or what was tried (start from rft_map).
+description: Operating manual of the Reasoning Flow Tree, the tree of experiment (E..), direction (D..), reference (R..) and theory (T..) notes that records a research project's reasoning, grouped into concepts (lines of research) that can link the code repositories they run on. Use in a project with .rft/config.json whenever an experiment is planned, launched or finished, an idea or question comes up (even a rejected one), a paper or literature review is read, a new field comes up (offer a literature search first), a definition, method or taxonomy is written down, an idea is dropped or moved, a branch belongs under another note (move it), a new line of research opens (propose a concept, ask for its code), work starts on an experiment whose concept links code, the user asks Claude to answer a comment or suggestion from the tree view, a note is locked, a note's priority comes up (suggest one, never set it), or the user asks about the tree, the vault, its concepts, its code or what was tried (start from rft_map).
 ---
 
 # Reasoning Flow Tree (rft)
@@ -220,10 +220,33 @@ The map says what holds now, not only what was done.
   and graph then show it as `[superseded by …]`; never quote or build on such a result without
   saying it was overturned. Then rewrite the concept's digest so its key results are the ones
   that hold. `rft_supersede(id)` without `by` clears the mark.
-- **What is still open**: `rft_next [concept]` (and `/rft-next` for the user) lists, by concept,
-  the experiments running, those planned and never run, the directions with nothing tried under
-  them (oldest first, with their age) and the open questions of the digests. Call it when asked
-  what to do next and before proposing new work: pick up an open thread before opening a new one.
+- **What is still open**: `rft_next [concept]` (and `/rft-next` for the user) lists the user's
+  priorities first (the open notes they made urgent, high or medium), then, by concept, the
+  experiments running, those planned and never run, the directions with nothing tried under them
+  (the higher priorities first, then the oldest, with their age) and the open questions of the
+  digests, and last the suggested priorities still waiting for the user. Call it when asked what
+  to do next and before proposing new work: pick up an open thread before opening a new one, and
+  what the user made urgent or high before the rest.
+
+## Priorities
+
+A note's priority (`priority:` in its frontmatter: `urgent`, `high`, `medium` or `low`) is the
+user's alone. They set it in the tree view (the kanban, or the note's drawer); a new note has
+none. Among the open notes (idea, planned, running) at most 1 is urgent, 5 high and 10 medium;
+low has no limit, and a note that is done, dropped, discussed or moved does not count.
+
+- **Never set, change or remove `priority:`** yourself. Edit, Write and shell writes that change
+  it are refused; no rft tool writes it.
+- **Suggest one** when you have a clear reason: it unblocks other work, the user said it matters,
+  it is cheap and decisive, or it matters less than its priority says. `rft_suggest_priority {id,
+  priority, why}` writes `suggested_priority:` and a one-line `suggested_priority_why:`, or pass
+  `suggested_priority` and `priority_why` to `rft_add_node` for a new note of work to do. The user
+  accepts it (it becomes the priority) or dismisses it in the tree view. Do not suggest one for
+  every note: leave it out when you have no reason.
+- When a priority is full, a suggestion of it can only be accepted once the user lowers one of the
+  notes that hold it; the tool's answer names them, so tell the user when it matters.
+- `rft_validate` warns about a priority that is none of the four and about a limit exceeded by
+  hand edits.
 
 ## Restructuring the tree
 
@@ -304,7 +327,8 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 | `rft_map` | the project map, or one concept's digest and notes with their summaries |
 | `rft_set_digest` | write a concept's digest (state, key results, dead ends, open questions) |
 | `rft_supersede` | mark a note whose result a newer one overturns (`superseded_by:`), or clear the mark |
-| `rft_next` | what is still open by concept: running, planned, unexplored directions, open questions |
+| `rft_next` | the user's priorities, then what is still open by concept: running, planned, unexplored directions, open questions |
+| `rft_suggest_priority` | suggest a priority for a note, with why; the user accepts or dismisses it (never set `priority:` yourself) |
 | `rft_move_node` | move a note and its subtree under another parent, keeping its origin, after the user agrees |
 | `rft_set_refs` | replace the reference notes a note builds on (`refs:`) |
 | `rft_search` | search every note (titles, summaries, tags, concepts, text), best first with each summary, matching concepts first; filters by type, status, concept, tag |
@@ -373,6 +397,8 @@ folder and every link to it change together.
 
 Frontmatter: `id`, `type` (`experiment` | `direction` | `reference` | `theory`), `status`, `date` (YYYY-MM-DD),
 `summary: "<one line>"`, `superseded_by: "[[<newer note>]]"` when a newer result overturns it,
+`priority: <urgent | high | medium | low>` when the user gave it one (theirs alone),
+`suggested_priority:` and `suggested_priority_why: "<one line>"` while your suggestion waits,
 `parent: "[[<parent name>]]"` (`""` for the root), `children`, `up`, `down`,
 `tags: [<project>, <type>, <topical tags...>, <status>]`, and on a note that starts a
 concept `concept: "<name>"`, `concept_summary: "<one line>"` and, when it links code,
@@ -402,6 +428,7 @@ gets a direction node.
 `/rft` starts the interactive tree view (a local page; the user opens its address in a
 browser) and the outline pane; `/rft text` prints the tree; `/rft-view` writes a standalone
 `<vault>/tree.html`; Obsidian shows `Reasoning tree.canvas`. The user can edit a note's text
-(not its frontmatter), add notes with their default status, lock a note, add footnotes and highlights, and
+(not its frontmatter), add notes with their default status, lock a note, set its priority (on the
+kanban, which shows the notes in one column per status), add footnotes and highlights, and
 comment on and suggest changes to a note's text in the tree view, so re-read a note before
 changing it, and the tree (`rft_tree`) before relying on the copy you were given.

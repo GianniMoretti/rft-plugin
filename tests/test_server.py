@@ -573,6 +573,95 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.write("POST", "/api/lock", {"id": "D07", "locked": "yes"})[0], 400)
         self.assertEqual(p.read_text(), before)
 
+    # ------------------------------------------------------------ priorities
+
+    def priority(self, payload, **kw):
+        return self.write("POST", "/api/priority", payload, **kw)
+
+    def nodes(self):
+        return {x["id"]: x for x in json.loads(self.get("/api/tree")[2])["nodes"]}
+
+    def with_priority(self, path, priority):
+        """A fixture note given `priority` for one test, as it was afterwards."""
+        before = path.read_text()
+        self.addCleanup(path.write_text, before)
+        path.write_text(re.sub(r"(status: \w+\n)", rf"\1priority: {priority}\n", before, count=1))
+
+    def test_priority_set_changed_and_taken_away(self):
+        p = self.scratch_note()
+        before = p.read_text()
+        self.assertEqual(self.priority({"id": "D07", "priority": "high"}), (200, {"id": "D07", "priority": "high"}))
+        self.assertEqual(p.read_text(), before.replace("status: idea\n", "status: idea\npriority: high\n", 1))
+        self.assertEqual(self.nodes()["D07"]["priority"], "high")
+        self.assertNotIn("priority", self.nodes()["D00"])
+        # changed in place, one line; null takes it away and gives the note back as it was
+        self.priority({"id": "D07", "priority": "low"})
+        self.assertEqual(p.read_text().count("priority:"), 1)
+        self.assertEqual(self.priority({"id": "D07", "priority": None}), (200, {"id": "D07", "priority": None}))
+        self.assertEqual(p.read_text(), before)
+
+    def test_accepting_or_dismissing_claudes_suggestion(self):
+        suggestion = 'suggested_priority: high\nsuggested_priority_why: "It unblocks D05"\n'
+        text = note("D07", "direction", "idea", "D00 Root question", "Scratch").replace("status: idea\n", "status: idea\n" + suggestion)
+        p = self.scratch_note(text=text)
+        n = self.nodes()["D07"]
+        self.assertEqual((n.get("priority"), n["suggestedPriority"], n["suggestedWhy"]), (None, "high", "It unblocks D05"))
+        # dismissed: the suggestion goes, and no priority comes
+        self.assertEqual(self.priority({"id": "D07", "dismiss": True}), (200, {"id": "D07", "priority": None}))
+        self.assertEqual(p.read_text(), text.replace(suggestion, ""))
+        self.assertNotIn("suggestedPriority", self.nodes()["D07"])
+        # accepted, or another priority chosen: either answers the suggestion
+        p.write_text(text)
+        self.priority({"id": "D07", "priority": "medium"})
+        self.assertEqual(p.read_text(), text.replace(suggestion, "priority: medium\n"))
+        self.assertNotIn("suggestedPriority", self.nodes()["D07"])
+
+    def test_priority_limits_count_the_open_notes_only(self):
+        self.with_priority(self.vault / "experiments" / "E01 First run.md", "urgent")  # E01 is running
+        self.scratch_note()
+        status, err = self.priority({"id": "D07", "priority": "urgent"})
+        self.assertEqual((status, err["holders"]), (409, ["E01"]))
+        self.assertIn("urgent is full: E01 already holds it (at most 1 open note). Lower one of them first.", err["error"])
+        self.assertNotIn("priority", self.nodes()["D07"])
+        # the note that holds it may set it again; a note that is done does not count
+        self.assertEqual(self.priority({"id": "E01", "priority": "urgent"})[0], 200)
+        self.with_priority(self.vault / "directions" / "D00 Root question.md", "low")
+        self.assertEqual(self.priority({"id": "D00", "priority": "urgent"})[0], 200)
+        # five high ideas fill high; medium still has room, low has no limit
+        for i in range(5):
+            self.scratch_note(f"D1{i}", note(f"D1{i}", "direction", "idea", "D00 Root question", "Scratch")
+                              .replace("status: idea\n", "status: idea\npriority: high\n"))
+        status, err = self.priority({"id": "D07", "priority": "high"})
+        self.assertEqual((status, err["holders"]), (409, ["D10", "D11", "D12", "D13", "D14"]))
+        self.assertIn("D10, D11, D12, D13, D14 already hold it (at most 5 open notes)", err["error"])
+        self.assertEqual(self.priority({"id": "D07", "priority": "medium"})[0], 200)
+        self.assertEqual(self.priority({"id": "D07", "priority": "low"})[0], 200)
+
+    def test_priority_bad_requests(self):
+        p = self.scratch_note()
+        before = p.read_text()
+        for payload in ({"id": "D07"}, {"id": "D07", "priority": "top"}, {"id": "D07", "priority": 1},
+                        {"id": "D07", "priority": "High"}, {"priority": "high"}, {"id": "D07", "dismiss": "yes"}):
+            self.assertEqual(self.priority(payload)[0], 400, payload)
+        self.assertEqual(self.priority({"id": "D07", "priority": "high"}, key=None)[0], 403)
+        self.assertEqual(self.priority({"id": "D07", "priority": "high"}, origin="http://evil.example")[0], 403)
+        self.assertEqual(self.priority({"id": "D99", "priority": "high"})[0], 404)
+        self.assertEqual(p.read_text(), before)
+
+    def test_priorities_match_the_plugin_and_the_page(self):
+        """PRIORITIES, their limits and the open statuses, as hooks/lib/vault.ts and web/kanban.js give them."""
+        root = Path(__file__).resolve().parents[1]
+        words = lambda s: tuple(re.findall(r"'(\w+)'", s))
+        limits = lambda s: {k: None if v == "null" else int(v) for k, v in re.findall(r"(\w+): (\d+|null)", s)}
+        ts = (root / "hooks" / "lib" / "vault.ts").read_text()
+        self.assertEqual(words(re.search(r"export const PRIORITIES = \[(.*?)\]", ts).group(1)), rft_server.PRIORITIES)
+        self.assertEqual(limits(re.search(r"export const PRIORITY_LIMITS[^=]*= \{(.*?)\}", ts).group(1)), rft_server.PRIORITY_LIMITS)
+        self.assertEqual(words(re.search(r"export const OPEN_STATUSES[^=]*= \[(.*?)\]", ts).group(1)), rft_server.OPEN_STATUSES)
+        js = (root / "web" / "kanban.js").read_text()
+        self.assertEqual(words(re.search(r"const PRIORITIES = \[(.*?)\]", js).group(1)), rft_server.PRIORITIES)
+        self.assertEqual(limits(re.search(r"const LIMITS = \{(.*?)\}", js).group(1)), rft_server.PRIORITY_LIMITS)
+        self.assertEqual(words(re.search(r"const OPEN = \[(.*?)\]", js).group(1)), rft_server.OPEN_STATUSES)
+
     def test_add_node_asks_the_session_and_answers_the_new_id(self):
         self.session(self.plugin)
         status, res = self.post({"parent": "E01", "type": "direction", "title": "  Then this  "})

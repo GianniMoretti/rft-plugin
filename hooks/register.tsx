@@ -1,11 +1,12 @@
 // rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-concepts, /rft-literature, /rft-rebalance,
 // /rft-summarize, /rft-next, /rft-view), the model's tools (rft_add_node, rft_set_status, rft_set_summary, rft_map, rft_set_digest, rft_move_node, rft_set_refs, rft_search,
-// rft_graph, rft_supersede, rft_next, rft_collect_papers, rft_set_tags, rft_set_type, rft_set_concept, rft_concepts, rft_set_repos, rft_code,
+// rft_graph, rft_supersede, rft_next, rft_suggest_priority, rft_collect_papers, rft_set_tags, rft_set_type, rft_set_concept, rft_concepts, rft_set_repos, rft_code,
 // rft_set_code, rft_tags, rft_tree, rft_validate, rft_sync, rft_comments, rft_comment, rft_suggest), the operating rules
 // injected into the system prompt, the outline pane, and the web view: /rft starts a local
 // server (server/rft_server.py) for the interactive tree page (web/), makes the notes that
 // page adds, retypes or moves (fromView), and asks Claude to answer the threads the user asks
-// it to (askFromView). Claude's own edits of a locked note are refused (lockedEdit).
+// it to (askFromView). Claude's own edits of a locked note are refused (lockedEdit), and so are
+// its writes of a note's priority, the user's alone (priorityEdit).
 // Everything is
 // inert without `.rft/config.json` in the session's folder or a folder above it; that config
 // may be a link (`{"tree": "../notes"}`) to a tree kept elsewhere.
@@ -24,6 +25,7 @@ import { searchReport, similarNotes } from './lib/search'
 import { graphReport } from './lib/graph'
 import { candidates, candidatesReport } from './lib/rebalance'
 import { nextReport, supersede } from './lib/knowledge'
+import { changesPriority, priorityText, suggestPriority } from './lib/priority'
 import { RECALL_HINT, searchesVault } from './lib/recall'
 import { SMALL_TREE, mapGaps, mapReport, mapWarnings, projectMap, readDigests, resolveConcept, setDigest, setSummaries } from './lib/map'
 import { LEGEND, MARK, NODE_TYPES, bodyOf, counts, countsLine, isAbsolute, join, locate, readConfig, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
@@ -97,6 +99,8 @@ const TOOLS = {
         tags: { type: 'array', items: { type: 'string' }, description: '1-3 short topical tags, lowercase kebab-case, reused from rft_tags when they fit (the project, type and status tags are added anyway).' },
         refs: { type: 'array', items: { type: 'string' }, description: 'Ids of the reference notes (R..) it builds on: for an experiment, the paper(s) whose setup it starts from; for a direction, the work it extends. Add missing references first.' },
         summary: { type: 'string', description: 'One line (at most 240 characters) on what the note is about, specific enough to read instead of the note: what is tested and on what, the idea, the paper\'s main claim. Always give it.' },
+        suggested_priority: { type: 'string', enum: ['urgent', 'high', 'medium', 'low'], description: 'Optional: the priority you suggest for this work, only with a clear reason. The note itself gets no priority (the user\'s alone); they accept or dismiss the suggestion in the tree view.' },
+        priority_why: { type: 'string', description: 'With suggested_priority: why, in one line (what it unblocks, what makes it pressing or not).' },
       },
       required: ['type', 'title'],
     },
@@ -147,6 +151,19 @@ const TOOLS = {
         summary: { type: 'string', description: 'The note\'s one-line summary, updated with what it found (the key number) or why it was dropped.' },
       },
       required: ['id', 'status'],
+    },
+  },
+  rft_suggest_priority: {
+    description:
+      'Suggest a priority for a note: urgent, high, medium or low (among the open notes at most 1 urgent, 5 high and 10 medium). Priorities are the user\'s alone: this writes only a suggestion with its reason, which the user accepts or dismisses in the tree view (the kanban, or the note\'s drawer); you never set priority: yourself, and edits that change it are refused. Suggest one when you have a clear reason: it unblocks other work, the user said it matters, it is cheap and decisive, or it no longer matters as much.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id (e.g. E12) or full name of the note.' },
+        priority: { type: 'string', enum: ['urgent', 'high', 'medium', 'low'] },
+        why: { type: 'string', description: 'Why, in one line (at most 240 characters): shown to the user next to the suggestion.' },
+      },
+      required: ['id', 'priority', 'why'],
     },
   },
   rft_set_summary: {
@@ -580,6 +597,7 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       const node = await addNode(io, loaded, {
         type: i.type as NodeType, title: String(i.title ?? ''), parent: str(i.parent) ?? null,
         status: str(i.status), date: today(), sections, code: str(i.code), tags: strings(i.tags), refs: strings(i.refs), summary: str(i.summary),
+        suggestedPriority: str(i.suggested_priority), priorityWhy: str(i.priority_why),
       }, await codeEnv($, h))
       const similar = similarNotes(loaded, node.id)
       return `${node.report}\nId: ${node.id}\nNote: ${join(shownVault(h, loaded.config), node.path)}${similar ? `\n${similar}` : ''}`
@@ -613,6 +631,8 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       return tagsReport(loaded)
     case 'rft_set_status':
       return setStatus(io, loaded, String(i.id ?? ''), String(i.status ?? ''), str(i.note), str(i.summary))
+    case 'rft_suggest_priority':
+      return suggestPriority(io, loaded, String(i.id ?? ''), i.priority, i.why)
     case 'rft_set_summary': {
       const given: Record<string, string> = {}
       for (const [k, v] of Object.entries((i.summaries as Record<string, unknown> | undefined) ?? {})) if (typeof v === 'string') given[k] = v
@@ -999,6 +1019,54 @@ async function lockedEdit($: EngineInterface, e: Record<string, unknown>): Promi
   }
 }
 
+/** A `priority:` line, not `suggested_priority:`. */
+const PRIORITY_LINE = /(^|[^\w])priority\s*:/m
+
+/** A note's text once an Edit, MultiEdit or Write has run on `before`; null when the call would fail or is another one. */
+function afterCall(tool: string, e: Record<string, unknown>, before: string): string | null {
+  if (tool === 'Write') return typeof e.content === 'string' ? e.content : null
+  const edits = tool === 'Edit' ? [e] : tool === 'MultiEdit' && Array.isArray(e.edits) ? (e.edits as Record<string, unknown>[]) : null
+  if (!edits) return null
+  let text = before
+  for (const x of edits) {
+    const from = x.old_string, to = x.new_string
+    if (typeof from !== 'string' || typeof to !== 'string') return null
+    if (!from) { if (text) return null; text = to; continue } // an empty old_string makes a new file
+    if (!text.includes(from)) return null
+    text = x.replace_all === true ? text.split(from).join(to) : text.replace(from, () => to)
+  }
+  return text
+}
+
+/**
+ * Why Claude may not make this tool call, or null: it would change a note's `priority:`, the
+ * user's alone (an Edit or Write of a note in the vault that adds, changes or removes the field;
+ * a shell command that writes, holds a `priority:` line and names the vault or a note).
+ */
+async function priorityEdit($: EngineInterface, e: Record<string, unknown>): Promise<string | null> {
+  const tool = String(e.tool)
+  if (!EDIT_TOOLS.has(tool) && tool !== 'Bash') return null
+  const s = await read($, snapshot)
+  if (!s?.isActive || !s.vault) return null
+  const vault = resolvePath(s.vault, '.')
+  if (tool === 'Bash') {
+    const cmd = String(e.command ?? '')
+    if (!SHELL_WRITES.test(cmd) || !PRIORITY_LINE.test(cmd)) return null
+    const named = Object.values(s.nodes).find(n => cmd.includes(n.name) || new RegExp(`\\b${n.id}\\b`).test(cmd)) ?? null
+    const folder = vault.split('/').pop()
+    return named || cmd.includes(vault) || (folder && cmd.includes(`${folder}/`)) ? priorityText(named) : null
+  }
+  const raw = e.file_path
+  if (typeof raw !== 'string' || !raw.endsWith('.md')) return null
+  const abs = resolvePath(resolvePath(await $.session.cwd(), '.'), raw)
+  if (!abs.startsWith(`${vault}/`)) return null
+  let before = ''
+  try { before = await $.fs.read(abs) } catch { /* a new file */ }
+  const after = afterCall(tool, e, before)
+  if (after === null || !changesPriority(before, after)) return null
+  return priorityText(Object.values(s.nodes).find(x => join(vault, x.path) === abs) ?? null)
+}
+
 /**
  * The literature search: `subject` is a topic in words, a note id or a concept name; the
  * references go under that note, the concept's start note, or the note the topic belongs to.
@@ -1216,6 +1284,7 @@ export const register: Register = (on, options) => {
         katex: await $.fs.read(join(root, ASSET_PATHS.katex)),
         katexCss: await $.fs.read(join(root, ASSET_PATHS.katexCss)),
         filters: await $.fs.read(join(root, ASSET_PATHS.filters)),
+        kanban: await $.fs.read(join(root, ASSET_PATHS.kanban)),
         layout: await $.fs.read(join(root, ASSET_PATHS.layout)),
         concepts: await $.fs.read(join(root, ASSET_PATHS.concepts)),
         markdown: await $.fs.read(join(root, ASSET_PATHS.markdown)),
@@ -1246,7 +1315,7 @@ export const register: Register = (on, options) => {
       }
     }
     if (rules) {
-      const why = await lockedEdit($, e as unknown as Record<string, unknown>)
+      const why = (await lockedEdit($, e as unknown as Record<string, unknown>)) ?? (await priorityEdit($, e as unknown as Record<string, unknown>))
       if (why) return { deny: why }
     }
     const ran = await next(e)

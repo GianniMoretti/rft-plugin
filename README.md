@@ -113,7 +113,7 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
 
   | tool | does |
   |---|---|
-  | `rft_add_node` | creates a note with the next free id, a sanitised title (no `^ # \| [ ]`), the template sections, and links it under its parent; it answers with the notes already in the tree close to the new one ("have we tried this?") |
+  | `rft_add_node` | creates a note with the next free id, a sanitised title (no `^ # \| [ ]`), the template sections, and links it under its parent, with no priority (Claude may suggest one); it answers with the notes already in the tree close to the new one ("have we tried this?") |
   | `rft_set_status` | changes a status (frontmatter, tag, Status line), optionally appending results or the reason |
   | `rft_move_node` | moves a note and its subtree under another parent, after you agree; the note keeps its past parents (`origin:`) and a dated `## History` line |
   | `rft_set_refs` | replaces the reference notes a note builds on (`refs:`); `rft_add_node` takes `refs` too |
@@ -123,7 +123,8 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_set_summary` | sets the one-line `summary:` of one or more notes (Claude writes one for every note, and updates it when a result arrives) |
   | `rft_set_digest` | writes a concept's digest in the vault's `map/` folder: state, key results, dead ends, open questions; the map says when it is out of date |
   | `rft_supersede` | marks a note whose result a newer one overturns (`superseded_by:` and a History line); the map, search, graph and tree view show it as superseded, so the old number is not built on |
-  | `rft_next` | what is still open, by concept: experiments running, planned and never run, directions with nothing tried under them (with their age), and the digests' open questions |
+  | `rft_next` | what is still open: your priorities first, then by concept the experiments running, planned and never run, directions with nothing tried under them (with their age, the higher priorities first), the digests' open questions, and the priorities Claude suggested that wait for you |
+  | `rft_suggest_priority` | suggests a priority for a note, with a one-line reason (`suggested_priority:`); you accept or dismiss it in the tree view. Claude never sets a priority itself (see Priorities) |
   | `rft_collect_papers` | downloads, in the background, the open-access PDFs of reference notes (arXiv, OpenReview, PMLR, ACL Anthology, NeurIPS/CVF proceedings, ...) into `vault/papers/<concept>/<year> <first author> <title>.pdf`, linked from each note (`pdf:`); saved PDFs follow their concept. Never from paywalled publishers |
   | `rft_set_tags` | replaces a note's topical tags (lowercase kebab-case), keeping the project, type and status tags |
   | `rft_set_type` | changes the type of a note made with the wrong one: the next free id of the new type, the file moved to that type's folder, the type's sections (no text lost), every link to it renamed |
@@ -248,6 +249,8 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   pick it from the list (or type its id), **Move** or Enter. As with **Add child**, the plugin
   makes the move with `rft_move_node`'s code. A moved note shows where it came from at the top
   of the drawer, and **Came from** draws a faint dashed link from its previous parent.
+- **Tree**, **Concepts** and **Kanban** at the top switch between the reasoning tree, the concept
+  tree and the kanban (below).
 - Hover a node to highlight its path to the root; **search** (Enter jumps to the next match).
 - **Filters** opens a side panel: topical tags (with counts, matching **any** or **all**), type,
   status (the same filter as clicking the legend), and a date range. Notes that do not match
@@ -258,6 +261,36 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   system's theme; then it keeps the choice, for every project.
 - It follows the vault live, and keeps the zoom, layout, folds, filters and text size between
   visits.
+
+### The kanban and priorities
+
+**Kanban** shows the notes in one column per status: idea → planned → running → done, then
+dropped, discussed and moved as narrow folded strips (click one to open it, its head to fold it
+again), and a column for any other status a note was given by hand. Each note is a card: its type
+ring, id and title, its summary, its priority, its concept and its date. Click a card to read the
+note in the drawer; the board makes room for it.
+
+- **Order by Priority** (the default: urgent, high, medium, low, then the notes with none; newest
+  first within each) or **Date** (newest first, by the date the note was made).
+- **The filters apply**: type, status (a hidden status hides its column), concepts, tags and the
+  date range, and the concept focus. Notes that do not match are left off the board (the dim /
+  hide choice is the tree's). The search lights up the matching cards, and Enter goes to the next.
+- **Priority** is yours alone: `priority:` in the note's frontmatter, `urgent`, `high`, `medium` or
+  `low`, set with the menu on a card or in the drawer (**No priority** takes it away). A new note
+  has none. Among the open notes (idea, planned, running) at most **1 is urgent, 5 high and 10
+  medium**; low has no limit, and a note that is done, dropped, discussed or moved does not count.
+  A full priority is offered greyed out, naming the notes that hold it: lower one of them first.
+  The bar above the board shows how the open notes use each priority.
+- **Claude only suggests** a priority: `rft_suggest_priority`, or `rft_add_node` for a new note,
+  writes `suggested_priority:` and a one-line `suggested_priority_why:`. The card and the drawer
+  show it in a dashed box with its reason: **Accept** makes it the note's priority (greyed out
+  while that priority is full), **Dismiss** drops it; setting another priority answers it too.
+  Claude's own Edit, Write and shell writes that add, change or remove a note's `priority:` are
+  refused, so it cannot set one, even by hand. `rft_next` lists your priorities first, and
+  `rft_validate` warns about a priority that is none of the four and about a limit exceeded by
+  hand.
+- A menu you are in is not redrawn under you while notes change on disk; the board follows once
+  you leave it. The standalone `/rft-view` page shows the kanban read-only.
 
 ### Concepts
 
@@ -288,7 +321,7 @@ In the tree view, the concept button switches the overlay from off to **Regions*
 - Concept colours are a palette of their own, apart from the status colours; a concept legend
   shows while the overlay is on. It lists the top-level concepts, each with an arrow that
   unfolds its sub-concepts, and the whole legend folds to one line (**Legend ▸**).
-- **Concept tree** shows a tree of the concepts: each sized by its notes, with a bar of their
+- **Concepts** (at the top) shows a tree of the concepts: each sized by its notes, with a bar of their
   statuses, in the same layout as the reasoning tree (top-down, left-right or radial). Click one to go back to the reasoning tree on its start note, its region briefly
   highlighted; **focus** shows only that concept's subtree.
 - **Focus** is also reachable from the legend, a badge, and the concept path at the top of the
@@ -297,7 +330,7 @@ In the tree view, the concept button switches the overlay from off to **Regions*
 - Concepts are also a filter in **Filters**.
 
 A link can open the view in a given state, e.g. `?layout=lr&concepts=regions`,
-`?view=concepts`, or `?focus=D02&note=E05`.
+`?view=concepts`, `?view=kanban&order=date`, or `?focus=D02&note=E05`.
 
 ### Code repos
 
@@ -364,8 +397,9 @@ the machine cannot read your files through it, nor learn whether one exists. An 
 with a policy that runs nothing in it, an SVG's scripts included. A reference's saved PDF is
 served only from the vault's `papers/` folder. It answers only requests for
 a loopback host name. It writes a note's text from **Edit**, **Footnote**, **Highlight** or an
-accepted suggestion, its frontmatter kept as it is; the `locked:` line from the padlock; and a note's
-comments file in `vault/.comments/`. A new note from **Add child**, a note's new type from
+accepted suggestion, its frontmatter kept as it is; the `locked:` line from the padlock; the
+`priority:` line from the kanban or the drawer (which also clears Claude's suggested priority), within
+the limits; and a note's comments file in `vault/.comments/`. A new note from **Add child**, a note's new type from
 **Change type**, or a move from **Move**, it asks the session that started it to make, and **Ask
 Claude** to answer (a line on its output, which the plugin reads). It does any of these only for
 the page itself carrying the project's key, which the address `/rft` prints holds (`?token=…`):
@@ -452,8 +486,9 @@ session with the plugin loaded from this folder.
 - `hooks/lib/vault.ts`: the vault model; `hooks/lib/ops.ts` the operations; `hooks/lib/page.ts`
   the standalone page.
 - `hooks/lib/comments.ts`: comments, suggestions and locked notes, as Claude's tools see them.
-- `web/`: the tree view (`index.html`, `app.js`, `app.css`; `filters.js`, `layout.js` and
-  `concepts.js` hold the pure filter, radial layout and concept logic; `markdown.js` the note
+- `hooks/lib/priority.ts`: priorities, their limits and Claude's suggested ones.
+- `web/`: the tree view (`index.html`, `app.js`, `app.css`; `filters.js`, `kanban.js`, `layout.js` and
+  `concepts.js` hold the pure filter, kanban, radial layout and concept logic; `markdown.js` the note
   renderer, footnotes and the map from the page back to the note's text; `theme.js` the light and
   dark themes; vendored d3), one codebase for the live view and `/rft-view`, which shows the
   threads read-only.

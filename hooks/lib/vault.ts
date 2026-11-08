@@ -58,6 +58,20 @@ export const MARK: Record<string, string> = {
 export const LEGEND =
   '✓ done · … running · → planned · ? idea · ✗ dropped · · discussed, not pursued · ↗ moved'
 
+/**
+ * A note's priority, highest first: `priority:` in its frontmatter, set by the user alone (the
+ * tree view's kanban and drawer); Claude only suggests one (`suggested_priority:`, with
+ * `suggested_priority_why:`). A new note has none. web/kanban.js and server/rft_server.py hold
+ * the same lists.
+ */
+export const PRIORITIES = ['urgent', 'high', 'medium', 'low'] as const
+export type Priority = (typeof PRIORITIES)[number]
+export const isPriority = (p: unknown): p is Priority => (PRIORITIES as readonly unknown[]).includes(p)
+/** How many open notes may hold each priority at once; low has no limit. */
+export const PRIORITY_LIMITS: Record<Priority, number | null> = { urgent: 1, high: 5, medium: 10, low: null }
+/** The statuses of work still to do: only their notes count towards the priority limits. */
+export const OPEN_STATUSES: readonly string[] = ['idea', 'planned', 'running']
+
 /** Characters that break Obsidian wikilinks or file names. */
 export const FORBIDDEN = /[\^#|[\]\\/:*"<>?]/
 
@@ -87,6 +101,12 @@ export type RftNode = {
   summary?: string
   /** The note whose result overturns this one's (`superseded_by:`): do not build on this one. */
   supersededBy?: string
+  /** Its priority (`priority:`), the user's alone; none until they give it one. */
+  priority?: Priority
+  /** The priority Claude suggests for it (`suggested_priority:`), until the user accepts or dismisses it. */
+  suggestedPriority?: Priority
+  /** Why Claude suggests it (`suggested_priority_why:`). */
+  suggestedWhy?: string
 }
 
 export type Tree = {
@@ -446,6 +466,14 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
       }
       const summary = unquoteJson(fm.summary)
       if (summary) nodes[id]!.summary = summary
+      const priority = unquote(fm.priority).toLowerCase()
+      if (isPriority(priority)) nodes[id]!.priority = priority
+      const suggested = unquote(fm.suggested_priority).toLowerCase()
+      if (isPriority(suggested)) {
+        nodes[id]!.suggestedPriority = suggested
+        const why = unquoteJson(fm.suggested_priority_why)
+        if (why) nodes[id]!.suggestedWhy = why
+      }
       texts[id] = text
       parentRef[id] = linkTarget(fm.parent)
       originRef[id] = linksIn(fm.origin)
@@ -1000,6 +1028,8 @@ export async function validate(io: Io, loaded: Loaded, opts: { root?: string; ho
       else if (/[\^#|[\]]/.test(cname)) errors.push(`${n.id}: concept name "${cname}" contains ^ # | [ or ]`)
     } else if (fm.concept_summary !== undefined) warnings.push(`${n.id}: concept_summary without concept`)
     if (fm.superseded_by !== undefined && !n.supersededBy) warnings.push(`${n.id}: superseded_by names no note of the tree (rft_supersede sets or clears it)`)
+    if (fm.priority !== undefined && !n.priority) warnings.push(`${n.id}: priority "${unquote(fm.priority)}" is not ${orList([...PRIORITIES])} (the user sets it in the tree view)`)
+    if (fm.suggested_priority !== undefined && !n.suggestedPriority) warnings.push(`${n.id}: suggested_priority "${unquote(fm.suggested_priority)}" is not ${orList([...PRIORITIES])} (rft_suggest_priority writes it)`)
     const notRefs = (n.refs ?? []).filter(r => tree.nodes[r]!.type !== 'reference')
     if (notRefs.length) warnings.push(`${n.id}: refs ${notRefs.join(', ')} ${notRefs.length === 1 ? 'is not a reference' : 'are not references'} (R notes)`)
     if (config.requireRefs && needsRefs(n) && !(n.refs ?? []).length && n.parent) {
@@ -1039,6 +1069,11 @@ export async function validate(io: Io, loaded: Loaded, opts: { root?: string; ho
     const listed = new Set(linksIn(childrenAt(text)?.body))
     const missing = n.children.filter(k => !listed.has(tree.nodes[k]!.name))
     if (missing.length) warnings.push(`${n.id}: "Children in the tree" does not list ${missing.join(', ')} (rft_sync adds them)`)
+  }
+  for (const p of PRIORITIES) {
+    const limit = PRIORITY_LIMITS[p]
+    const held = Object.values(tree.nodes).filter(n => n.priority === p && OPEN_STATUSES.includes(n.status)).map(n => n.id).sort(compareNames)
+    if (limit !== null && held.length > limit) warnings.push(`${held.length} open notes are ${p} (${held.join(', ')}), more than the ${limit} allowed: the user lowers some in the tree view`)
   }
   const seenNames = new Map<string, string>()
   for (const c of Object.values(tree.concepts ?? {})) {
@@ -1084,6 +1119,9 @@ export type NewNode = {
   refs?: string[]
   /** One line on what the note is (and what it found). */
   summary?: string
+  /** The priority Claude suggests for it, and why: the note itself starts with none. */
+  suggestedPriority?: Priority
+  suggestedWhy?: string
 }
 
 /** `taken`: ids in use beyond the loaded ones, e.g. notes another session added since. */
@@ -1110,7 +1148,9 @@ export function noteText(id: string, n: NewNode, project: string, parentName: st
   const parentLink = parentName ? `[[${parentName}]]` : '(root)'
   const topical = topicalTags((n.tags ?? []).map(sanitiseTag).filter(Boolean), project, n.type)
   const head = [
-    '---', `id: ${id}`, `type: ${n.type}`, `status: ${status}`, `date: ${n.date}`,
+    '---', `id: ${id}`, `type: ${n.type}`, `status: ${status}`,
+    ...(n.suggestedPriority ? [`suggested_priority: ${n.suggestedPriority}`, `suggested_priority_why: ${JSON.stringify(n.suggestedWhy ?? '')}`] : []),
+    `date: ${n.date}`,
     ...(n.summary?.trim() ? [`summary: ${JSON.stringify(n.summary.trim().replace(/\s+/g, ' '))}`] : []),
     `parent: ${parentName ? `"[[${parentName}]]"` : '""'}`, 'children: []', 'up: ""', 'down: []',
     `tags: ${tagsLine(project, n.type, topical, status)}`, ...(n.refs?.length ? [`refs: ${linkList(n.refs)}`] : []), '---', '',

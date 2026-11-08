@@ -12,6 +12,9 @@
   --running: light-dark(#e8590c, #fd7e14); --planned: light-dark(#e8a400, #fab005);
   --idea: light-dark(#f2c94c, #ffe066); --dropped: light-dark(#e03131, #fa5252); --discussed: #868e96;
   --moved: light-dark(#1c7ed6, #4dabf7);
+  /* priorities, the user's alone: a colour each, low as quiet as the text around it */
+  --p-urgent: light-dark(#c92a2a, #ff6b6b); --p-high: light-dark(#d9480f, #ff922b);
+  --p-medium: light-dark(#1971c2, #74c0fc); --p-low: var(--muted);
   --font-scale: 1;
 }
 :root[data-theme="light"] { color-scheme: light; }
@@ -294,3 +297,77 @@ details.history .thread { opacity: 0.85; }
 .origin.dim { opacity: 0.12; }
 .drawer-origin { font-size: 0.9em; margin: 2px 0 4px; }
 .drawer-origin a { cursor: pointer; color: var(--fg); }
+
+/* the pages: the tree's own controls and legend leave the kanban */
+body[data-page="kanban"] .tree-only, body[data-page="kanban"] #legend { display: none !important; }
+/* the page switch: three joined buttons, the current one marked */
+.pages { gap: 0; }
+#bar .pages button { padding: 5px 9px; border-radius: 0; margin-left: -1px; }
+#bar .pages button:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+#bar .pages button:last-child { border-radius: 0 6px 6px 0; }
+.pages button[aria-pressed="true"] { position: relative; font-weight: 600; background: var(--panel); }
+/* the kanban: one column per status, a card per note; it makes room for the filters and the drawer */
+#kanban { position: absolute; inset: 0; display: flex; flex-direction: column; min-width: 0;
+  font-size: calc(13px * var(--font-scale)); }
+#kanban[hidden] { display: none; }
+main:has(#filters:not([hidden])) #kanban { left: min(280px, 85vw); }
+main:has(#drawer:not([hidden])) #kanban { right: min(var(--drawer-w), 92vw); }
+.kb-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding: 8px 12px 2px; }
+.kb-bar .seg { align-items: center; gap: 4px; }
+.kb-limits .full { font-weight: 600; }
+.kb-limits .over { color: var(--dropped); font-weight: 700; text-decoration: underline wavy; }
+.kb-cols { flex: 1; min-height: 0; display: flex; gap: 10px; padding: 8px 12px 12px; overflow-x: auto; }
+.kb-col { flex: 1 1 0; min-width: calc(230px * var(--font-scale)); max-width: 440px; display: flex; flex-direction: column;
+  min-height: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+.kb-col.folded { flex: 0 0 auto; min-width: 0; width: calc(34px * var(--font-scale)); cursor: pointer; }
+.kb-col.folded:hover { border-color: var(--muted); }
+.kb-head { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); font-weight: 600; }
+.kb-head .kb-n { margin-left: auto; font-weight: 400; }
+.kb-head.kb-fold { cursor: pointer; }
+.kb-col.folded .kb-head { writing-mode: vertical-rl; border-bottom: 0; padding: 10px 0; align-self: center; }
+.kb-col.folded .kb-head .kb-n { margin: 6px 0 0; }
+.kb-list { flex: 1; min-height: 0; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.kb-empty { margin: 4px 2px; }
+.kb-card { background: var(--bg); border: 1px solid var(--line); border-left: 3px solid var(--line); border-radius: 6px;
+  padding: 7px 9px; cursor: pointer; }
+.kb-card:hover, .kb-card:focus-visible { border-color: var(--muted); outline: none; }
+.kb-card.p-urgent { border-left-color: var(--p-urgent); }
+.kb-card.p-high { border-left-color: var(--p-high); }
+.kb-card.p-medium { border-left-color: var(--p-medium); }
+.kb-card.selected { box-shadow: 0 0 0 2px var(--fg); }
+.kb-card.match { box-shadow: 0 0 0 2px var(--accent); }
+.kb-card.superseded .kb-title { text-decoration: line-through; color: var(--muted); }
+.kb-card.flash { animation: kb-flash 1.4s ease-out; }
+@keyframes kb-flash { 0%, 40% { box-shadow: 0 0 0 4px var(--accent); } 100% { box-shadow: 0 0 0 0 transparent; } }
+.kb-top { display: flex; align-items: flex-start; gap: 6px; line-height: 1.35; }
+.kb-top .ring { flex: none; margin-top: 0.2em; }
+.kb-id { font-weight: 700; flex: none; }
+.kb-title { font-weight: 600; overflow-wrap: anywhere; }
+.kb-summary { margin-top: 3px; color: var(--muted); font-size: 0.92em; overflow: hidden; display: -webkit-box;
+  -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.kb-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 6px; font-size: 0.9em; }
+.kb-concept { display: inline-flex; align-items: center; gap: 4px; }
+.kb-concept .swatch { width: 9px; height: 9px; }
+.kb-flag { color: var(--dropped); }
+/* a priority menu, on a card and in the drawer */
+select.prio { font: inherit; font-size: 0.95em; padding: 1px 4px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--muted); cursor: pointer; }
+select.prio:hover { border-color: var(--muted); }
+select.prio:disabled { cursor: default; opacity: 1; }
+select.prio.p-urgent { color: var(--p-urgent); border-color: var(--p-urgent); font-weight: 700; }
+select.prio.p-high { color: var(--p-high); border-color: var(--p-high); font-weight: 600; }
+select.prio.p-medium { color: var(--p-medium); border-color: var(--p-medium); }
+select.prio.p-low { color: var(--fg); }
+select.prio option { color: var(--fg); font-weight: 400; }
+/* a priority's name in its colour: in the limits line and a suggestion (a card shows it by its edge) */
+.kb-limits .p-urgent, .suggest .p-urgent { color: var(--p-urgent); }
+.kb-limits .p-high, .suggest .p-high { color: var(--p-high); }
+.kb-limits .p-medium, .suggest .p-medium { color: var(--p-medium); }
+/* Claude's suggested priority, until the user accepts or dismisses it */
+.suggest { margin-top: 6px; padding: 4px 7px; border: 1px dashed var(--accent); border-radius: 6px; font-size: 0.9em;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; cursor: default; }
+.suggest-why { color: var(--muted); }
+.suggest-bar { display: inline-flex; gap: 4px; margin-left: auto; }
+.suggest button { padding: 0 7px; font-size: 0.95em; }
+.drawer-priority { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 6px 0 2px; font-size: 0.9em; }
+.drawer-priority .suggest { margin-top: 0; flex: 1 1 100%; }

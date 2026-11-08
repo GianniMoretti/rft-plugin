@@ -3,7 +3,8 @@
 
 Serves the page (web/), the tree of the vault as JSON, and one note at a time with its
 discussion, and writes: the body of a note, its frontmatter kept as it is (an edit, a footnote, an
-accepted suggestion); the `locked:` line of its frontmatter; and its discussion, the comments and
+accepted suggestion); the `locked:` line of its frontmatter; its `priority:` line, the user's
+alone (which also answers Claude's `suggested_priority:`); and its discussion, the comments and
 suggestions on parts of its text, in vault/.comments/<id>.json (as hooks/lib/comments.ts reads
 it). A new note, or a note's new type, it never writes itself: it asks the session that runs it,
 with a line `RFT_ADD_NODE {"parent", "type", "title"}` or `RFT_SET_TYPE {"id", "type"}` on stdout,
@@ -13,7 +14,7 @@ answer a thread (a model turn). It binds 127.0.0.1 only, takes requests only for
 host name (so a web page elsewhere cannot reach it through DNS rebinding), serves nothing but an
 allow-list of page files, and reads or writes a note only by its id, in a markdown file that
 resolves inside one of the vault's note folders (experiments/, directions/, references/,
-theory/). A write (PUT api/note, POST api/node, api/type, api/comment, api/lock) must also come from the page itself (its
+theory/). A write (PUT api/note, POST api/node, api/type, api/comment, api/lock, api/priority) must also come from the page itself (its
 Origin) and carry the vault's key, which is in the address the server prints, so neither
 another web page nor another user of the machine can change a note. The key is kept in the
 user's cache, readable by them alone, so it stays the same across restarts.
@@ -58,6 +59,7 @@ PAGE_FILES = {
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/app.css": ("app.css", "text/css; charset=utf-8"),
     "/filters.js": ("filters.js", "text/javascript; charset=utf-8"),
+    "/kanban.js": ("kanban.js", "text/javascript; charset=utf-8"),
     "/layout.js": ("layout.js", "text/javascript; charset=utf-8"),
     "/concepts.js": ("concepts.js", "text/javascript; charset=utf-8"),
     "/theme.js": ("theme.js", "text/javascript; charset=utf-8"),
@@ -91,6 +93,12 @@ CONTEXT = 40  # the characters kept on each side of a thread's quote, to find it
 MAX_COMMENT_BYTES = 200_000
 MAX_TEXT = 20_000  # the longest message, quote or replacement
 KINDS = ("comment", "suggestion")
+# a note's priority, highest first, the user's alone; at most this many open notes hold each (low:
+# no limit). As PRIORITIES, PRIORITY_LIMITS and OPEN_STATUSES in hooks/lib/vault.ts have them.
+PRIORITIES = ("urgent", "high", "medium", "low")
+PRIORITY_LIMITS = {"urgent": 1, "high": 5, "medium": 10, "low": None}
+OPEN_STATUSES = ("idea", "planned", "running")
+SUGGESTION_FIELDS = ("suggested_priority", "suggested_priority_why")
 
 
 # ------------------------------------------------------------------ the vault
@@ -104,6 +112,12 @@ def front(text: str) -> dict[str, str]:
             k, _, v = line.partition(":")
             out[k.strip()] = v.strip()
     return out
+
+
+def priority_of(value: str | None) -> str:
+    """A priority as written in the frontmatter, or "" when it is none of PRIORITIES."""
+    v = unquote(value).lower()
+    return v if v in PRIORITIES else ""
 
 
 def is_locked(fm: dict[str, str]) -> bool:
@@ -426,6 +440,13 @@ class Vault:
                 summary = unquote_json(fm.get("summary"))
                 if summary:
                     nodes[nid]["summary"] = summary
+                if priority_of(fm.get("priority")):
+                    nodes[nid]["priority"] = priority_of(fm.get("priority"))
+                if priority_of(fm.get("suggested_priority")):
+                    nodes[nid]["suggestedPriority"] = priority_of(fm.get("suggested_priority"))
+                    why = unquote_json(fm.get("suggested_priority_why"))
+                    if why:
+                        nodes[nid]["suggestedWhy"] = why
                 pdf = link_target(fm.get("pdf"))
                 if pdf:
                     nodes[nid]["pdf"] = pdf
@@ -647,6 +668,44 @@ class Vault:
                 fields.append("locked: true")
             self._write_note(path, text, "\n".join([lines[0], *fields, lines[-1]]) + "\n", body)
         return 200, self.note(nid)
+
+    def set_priority(self, nid: str, priority: str | None, dismiss: bool = False) -> tuple[int, dict]:
+        """Sets a note's priority (`priority:` after its status; None takes it away), which the
+        user alone sets, and drops Claude's suggested priority, now answered; with `dismiss`, drops
+        only the suggestion. Refused, naming them, when the open notes holding that priority are
+        at its limit and the note is open too (a note that is done or dropped does not count)."""
+        path = self.note_path(nid)
+        if path is None:
+            return 404, {"error": "no such note"}
+        with self._write_lock:
+            if priority is not None and not dismiss:
+                nodes = self.tree()["nodes"]
+                me = next((n for n in nodes if n["id"] == nid), None)
+                limit = PRIORITY_LIMITS[priority]
+                if me and limit is not None and me["status"] in OPEN_STATUSES and me.get("priority") != priority:
+                    held = sorted((n["id"] for n in nodes
+                                   if n["id"] != nid and n["status"] in OPEN_STATUSES and n.get("priority") == priority),
+                                  key=natural_key)
+                    if len(held) >= limit:
+                        return 409, {"error": f"{priority} is full: {', '.join(held)} already "
+                                              f"{'holds' if len(held) == 1 else 'hold'} it (at most {limit} open "
+                                              f"note{'' if limit == 1 else 's'}). Lower one of them first.",
+                                     "holders": held}
+            try:
+                text = path.read_bytes().decode("utf-8")
+            except UnicodeDecodeError:
+                return 422, {"error": "the note is not UTF-8 text; edit it in an editor"}
+            head, body = split_note(text)
+            if not head:
+                return 422, {"error": "the note has no frontmatter"}
+            lines = head.rstrip("\n").split("\n")  # ---, the fields, ---
+            drop = SUGGESTION_FIELDS if dismiss else ("priority", *SUGGESTION_FIELDS)
+            fields = [l for l in lines[1:-1] if not re.match(rf"(?:{'|'.join(drop)})\s*:", l)]
+            if priority is not None and not dismiss:
+                at = next((i + 1 for i, l in enumerate(fields) if re.match(r"status\s*:", l)), len(fields))
+                fields.insert(at, f"priority: {priority}")
+            self._write_note(path, text, "\n".join([lines[0], *fields, lines[-1]]) + "\n", body)
+        return 200, {"id": nid, "priority": None if dismiss else priority}
 
     # ------------------------------------------------------------ comments and suggestions
 
@@ -1037,7 +1096,8 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             TYPES}: the note's type changed; POST api/move {"id": "<id>", "parent": "<id>", "unlock"?: bool}: the note
             and its subtree under `parent`. The session makes each. POST api/comment {"id":
             "<id>", "action": ...}: a change to the note's discussion (Vault.comment); POST api/lock
-            {"id": "<id>", "locked": bool}."""
+            {"id": "<id>", "locked": bool}; POST api/priority {"id": "<id>", "priority": one of
+            PRIORITIES or null} or {"id": "<id>", "dismiss": true} (Claude's suggestion only)."""
             route = urlsplit(self.path).path
             if route == "/api/comment":
                 got = self._write_request("/api/comment", MAX_COMMENT_BYTES)
@@ -1055,6 +1115,19 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 if not isinstance(req.get("id"), str) or not isinstance(req.get("locked"), bool):
                     return self._json(400, {"error": "expected {id, locked: true or false}"})
                 return self._json(*vault.set_locked(req["id"], req["locked"]))
+            if route == "/api/priority":
+                got = self._write_request("/api/priority", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                _, req = got
+                bad = {"error": "expected {id, priority: one of " + ", ".join(PRIORITIES) + " or null} or {id, dismiss: true}"}
+                if not isinstance(req.get("id"), str):
+                    return self._json(400, bad)
+                if req.get("dismiss") is True:
+                    return self._json(*vault.set_priority(req["id"], None, dismiss=True))
+                if "priority" not in req or (req["priority"] is not None and req["priority"] not in PRIORITIES):
+                    return self._json(400, bad)
+                return self._json(*vault.set_priority(req["id"], req["priority"]))
             if route == "/api/move":
                 got = self._write_request("/api/move", MAX_NODE_BYTES)
                 if got is None:

@@ -2,7 +2,8 @@
 // a side drawer. It runs in two ways: served by server/rft_server.py, where it polls
 // `api/tree`, reads notes from `api/note` and writes a note's edited text back to it, asks
 // `api/node` for a new note under the one shown and `api/type` to change its type, and keeps a
-// note's discussion (comments, suggestions) with `api/comment` and its lock with `api/lock`; or
+// note's discussion (comments, suggestions) with `api/comment`, its lock with `api/lock` and its
+// priority (the user's alone; also the answer to Claude's suggested one) with `api/priority`; or
 // inlined into a standalone tree.html by /rft-view, where `window.RFT_DATA` holds the tree,
 // every note's text and its threads, and nothing is edited.
 (function () {
@@ -46,6 +47,13 @@
   let moving = false
   let showOrigins = false
   let retyping = false
+  const K = window.RftKanban
+  const PAGES = ['tree', 'concepts', 'kanban']
+  let boardSet = new Set() // the notes on the kanban: those that match, in the focused concept when there is one
+  let kanbanOrder = 'priority' // priority | date
+  let kanbanOpen = new Set() // the folded columns opened
+  let prioUse = null // the open notes that hold each priority (K.usage), for the whole tree
+  let needsInitialView = false // the tree's first view waits until its canvas shows
 
   // ---------------------------------------------------------------- persistence
 
@@ -80,16 +88,20 @@
     const first = tree === null
     tree = next
     byId = new Map(tree.nodes.map(n => [n.id, n]))
+    prioUse = K.usage(tree.nodes)
     concepts = C.annotate(tree)
     if (first) {
       conceptMode = ['off', 'regions', 'arrows'].includes(store.get('conceptMode', 'off')) ? store.get('conceptMode', 'off') : 'off'
-      view = store.get('pageView', 'tree') === 'concepts' ? 'concepts' : 'tree'
+      view = PAGES.includes(store.get('pageView', 'tree')) ? store.get('pageView', 'tree') : 'tree'
+      kanbanOrder = K.ORDERS.includes(store.get('kanbanOrder', 'priority')) ? store.get('kanbanOrder', 'priority') : 'priority'
+      kanbanOpen = new Set(store.get('kanbanOpen', []))
       focus = store.get('focus', null)
-      // a link can say how to open: ?layout=lr&concepts=regions&view=concepts&focus=D02&filter=hide
+      // a link can say how to open: ?layout=lr&concepts=regions&view=concepts&focus=D02&filter=hide, ?view=kanban&order=date
       const q = new URLSearchParams(location.search)
       if (['td', 'lr', 'radial'].includes(q.get('layout'))) store.set('layout', q.get('layout'))
       if (['off', 'regions', 'arrows'].includes(q.get('concepts'))) conceptMode = q.get('concepts')
-      if (['tree', 'concepts'].includes(q.get('view'))) view = q.get('view')
+      if (PAGES.includes(q.get('view'))) view = q.get('view')
+      if (K.ORDERS.includes(q.get('order'))) kanbanOrder = q.get('order')
       if (q.has('focus')) focus = q.get('focus') || null
       if (q.has('note')) selected = q.get('note')
       buildArrowMarkers()
@@ -408,6 +420,7 @@
     selected = id
     showEditButton()
     gNodes.selectAll('g.node').attr('class', n => nodeClass(n.data))
+    markCards()
     const n = byId.get(id)
     const drawer = document.getElementById('drawer')
     drawer.hidden = false
@@ -416,6 +429,7 @@
     renderRefs(n)
     renderCode(document.getElementById('drawer-code'), n.concept)
     document.getElementById('drawer-meta').textContent = `${n.type} · ${MARK[n.status] || ''} ${n.status}${n.date ? ' · ' + n.date : ''}${n.tags && n.tags.length ? ' · #' + n.tags.join(' #') : ''}`
+    renderDrawerPriority(n)
     const summary = document.getElementById('drawer-summary')
     summary.textContent = n.summary || ''
     summary.hidden = !n.summary
@@ -458,6 +472,7 @@
 
   function go(id) {
     if (editing && editing.id !== id && !leaveEditor()) return
+    if (view === 'kanban') { select(id); showCard(id); return }
     reveal(id)
     select(id)
     centreOn(id)
@@ -925,13 +940,15 @@
   searchBox.addEventListener('input', () => {
     matchAt = -1
     gNodes.selectAll('g.node').attr('class', n => nodeClass(n.data))
+    markCards()
   })
   searchBox.addEventListener('keydown', ev => {
     if (ev.key !== 'Enter') return
     const q = searchText()
     if (!q) return
     // search works with the filters: a hidden note is not a hit
-    const hits = tree.nodes.filter(n => shownSet.has(n.id) && n.name.toLowerCase().includes(q))
+    const pool = view === 'kanban' ? boardSet : shownSet
+    const hits = tree.nodes.filter(n => pool.has(n.id) && n.name.toLowerCase().includes(q))
     if (!hits.length) return
     matchAt = (matchAt + 1) % hits.length
     go(hits[matchAt].id)
@@ -942,12 +959,15 @@
   function computeFilters() {
     matchSet = F.matching(tree, filters)
     shownSet = F.visible(tree, filters)
+    boardSet = matchSet
     if (focus) {
       // focus on a concept: its subtree alone, its root always drawn
       const top = concepts.get(focus).root
       const sub = C.subtree(tree, top)
       shownSet = new Set([...shownSet].filter(id => sub.has(id)))
       shownSet.add(top)
+      // the kanban has no shape to keep: only the matches inside the concept
+      boardSet = new Set([...matchSet].filter(id => sub.has(id)))
     }
   }
 
@@ -959,6 +979,7 @@
     buildLegend()
     buildFilterPanel()
     render(true)
+    drawKanban()
   }
 
   const toggled = (list, v) => (list.includes(v) ? list.filter(x => x !== v) : [...list, v])
@@ -1109,6 +1130,7 @@
     document.getElementById('drawer').hidden = true
     selected = null
     gNodes.selectAll('g.node').attr('class', n => nodeClass(n.data))
+    markCards()
   })
 
   // the drawer's width: its left edge drags (arrow keys once focused), a double-click restores the default
@@ -1287,11 +1309,12 @@
   function setFocus(id) {
     focus = id && id !== C.ROOT && concepts.has(id) ? id : null
     store.set('focus', focus)
-    if (view !== 'tree') setView('tree')
+    if (view === 'concepts') setView('tree')
     computeFilters()
     buildCrumbs()
     render(true)
-    setTimeout(() => fit(true), 420)
+    drawKanban()
+    if (view === 'tree') setTimeout(() => fit(true), 420)
   }
 
   const CMODES = ['off', 'regions', 'arrows']
@@ -1301,9 +1324,7 @@
     const b = document.getElementById('cmode')
     const next = following(CMODES, conceptMode)
     showValue(b, conceptMode, `Concept overlay: ${CMODE_NAME[conceptMode]}, ${CMODE_HINT[conceptMode]} (click: ${CMODE_NAME[next]})`)
-    const t = document.getElementById('view-toggle')
-    t.setAttribute('aria-pressed', String(view === 'concepts'))
-    t.textContent = view === 'concepts' ? 'Reasoning tree' : 'Concept tree'
+    document.querySelectorAll('[data-show]').forEach(t => t.setAttribute('aria-pressed', String(t.dataset.show === view)))
   }
 
   /** The concept path of `id` as links that focus on each concept. */
@@ -1417,11 +1438,15 @@
   function setView(v) {
     view = v
     store.set('pageView', v)
+    document.body.dataset.page = v // the tree's own buttons and legend hide on the kanban (app.css)
     // SVG elements have no `hidden` property: the attribute itself
     document.getElementById('canvas').toggleAttribute('hidden', v !== 'tree')
     document.getElementById('concept-canvas').toggleAttribute('hidden', v !== 'concepts')
+    document.getElementById('kanban').hidden = v !== 'kanban'
     syncConceptButtons()
     if (v === 'concepts') drawConceptTree()
+    if (v === 'kanban') drawKanban()
+    if (v === 'tree' && needsInitialView) requestAnimationFrame(() => initialView())
   }
 
   function drawConceptTree() {
@@ -1506,7 +1531,251 @@
   }
 
   document.getElementById('cmode').addEventListener('click', () => setMode(following(CMODES, conceptMode)))
-  document.getElementById('view-toggle').addEventListener('click', () => setView(view === 'concepts' ? 'tree' : 'concepts'))
+  document.querySelectorAll('[data-show]').forEach(t => t.addEventListener('click', () => setView(t.dataset.show)))
+
+  // ---------------------------------------------------------------- the kanban (web/kanban.js)
+
+  // one column per status, the notes that pass the filters as cards, ordered by priority or by
+  // date; the priority is the user's alone, set here or in the drawer, and the answer to Claude's
+  // suggested one
+  const kbCols = document.getElementById('kb-cols')
+  const COLUMN_LABEL = { ...LABEL, other: 'another status' }
+  const PRIORITY_LABEL = { urgent: 'Urgent', high: 'High', medium: 'Medium', low: 'Low' }
+
+  /** A priority menu in `box` the user is in (focused, not waiting for its write), or null. */
+  function menuIn(box) {
+    const a = document.activeElement
+    return a && a.matches && a.matches('select.prio') && !a.disabled && box.contains(a) ? a : null
+  }
+
+  /**
+   * Whether `box` may be redrawn now: not while the user is in one of its priority menus (the
+   * notes change under them as Claude works), which `draw` then redraws once they leave it.
+   */
+  function mayRedraw(box, draw) {
+    const menu = menuIn(box)
+    if (!menu) return true
+    if (!menu.dataset.redraw) {
+      menu.dataset.redraw = 'after'
+      menu.addEventListener('blur', () => draw(), { once: true })
+    }
+    return false
+  }
+
+  function drawKanban() {
+    if (!tree || view !== 'kanban' || !mayRedraw(kbCols, drawKanban)) return
+    // a redraw keeps where the board and each column were scrolled to
+    const kept = new Map([...kbCols.querySelectorAll('.kb-list')].map(l => [l.parentElement.dataset.status, l.scrollTop]))
+    const left = kbCols.scrollLeft
+    const notes = tree.nodes.filter(n => boardSet.has(n.id))
+    kbCols.replaceChildren(...K.columns(notes, { order: kanbanOrder, hiddenStatuses: filters.hiddenStatuses }).map(kanbanColumn))
+    kbCols.scrollLeft = left
+    kbCols.querySelectorAll('.kb-list').forEach(l => { if (kept.has(l.parentElement.dataset.status)) l.scrollTop = kept.get(l.parentElement.dataset.status) })
+    syncKanbanBar(notes.length)
+  }
+
+  function kanbanColumn(c) {
+    const col = document.createElement('section')
+    const open = !c.folded || kanbanOpen.has(c.status)
+    col.className = `kb-col${open ? '' : ' folded'}`
+    col.dataset.status = c.status
+    const head = document.createElement('div')
+    head.className = 'kb-head'
+    const colour = c.status === K.OTHER ? 'var(--muted)' : `var(--${c.status})`
+    head.innerHTML = `<span class="swatch" style="background: ${colour}"></span><span class="kb-name">${escH(MARK[c.status] ? `${MARK[c.status]} ` : '')}${escH(COLUMN_LABEL[c.status] || c.status)}</span><span class="kb-n muted">${c.notes.length}</span>`
+    col.appendChild(head)
+    if (c.folded) {
+      // a folded column is a narrow strip: a click opens it, its head folds it again
+      const flip = () => {
+        kanbanOpen = new Set(toggled([...kanbanOpen], c.status))
+        store.set('kanbanOpen', [...kanbanOpen])
+        drawKanban()
+      }
+      ;(open ? head : col).addEventListener('click', flip)
+      ;(open ? head : col).title = open ? 'Fold this column' : `${c.notes.length} ${COLUMN_LABEL[c.status]}: click to open the column`
+      head.classList.add('kb-fold')
+    }
+    if (!open) return col
+    const list = document.createElement('div')
+    list.className = 'kb-list'
+    if (!c.notes.length) list.innerHTML = '<p class="kb-empty muted">No notes</p>'
+    for (const n of c.notes) list.appendChild(kanbanCard(n))
+    col.appendChild(list)
+    return col
+  }
+
+  const isHit = n => { const q = searchText(); return Boolean(q) && n.name.toLowerCase().includes(q) }
+  const cardClass = n => `kb-card${n.priority ? ` p-${n.priority}` : ''}${n.id === selected ? ' selected' : ''}${isHit(n) ? ' match' : ''}${n.supersededBy ? ' superseded' : ''}`
+
+  function kanbanCard(n) {
+    const el = document.createElement('article')
+    el.className = cardClass(n)
+    el.dataset.id = n.id
+    el.tabIndex = 0
+    el.innerHTML = `<div class="kb-top"><span class="ring ring-${escH(n.type)}" title="${escH(n.type)}"></span><span class="kb-id">${escH(n.id)}</span><span class="kb-title">${escH(n.title || n.name)}</span></div>`
+    if (n.summary) {
+      const s = document.createElement('div')
+      s.className = 'kb-summary'
+      s.textContent = n.summary
+      s.title = n.summary
+      el.appendChild(s)
+    }
+    const meta = document.createElement('div')
+    meta.className = 'kb-meta'
+    meta.appendChild(priorityControl(n))
+    const c = n.concept && n.concept !== C.ROOT && concepts.get(n.concept)
+    if (c) meta.insertAdjacentHTML('beforeend', `<span class="kb-concept" title="${escH(c.summary || c.name)}"><span class="swatch" style="background: ${C.colourOf(concepts, c.id)}"></span>${escH(c.name)}</span>`)
+    if (n.date) meta.insertAdjacentHTML('beforeend', `<span class="kb-date muted">${escH(n.date)}</span>`)
+    if (n.supersededBy) meta.insertAdjacentHTML('beforeend', `<span class="kb-flag" title="Superseded by ${escH(n.supersededBy)}: its result no longer holds">superseded</span>`)
+    el.appendChild(meta)
+    if (n.suggestedPriority) el.appendChild(suggestionBox(n))
+    el.addEventListener('click', () => select(n.id))
+    el.addEventListener('keydown', ev => { if (ev.key === 'Enter' && ev.target === el) select(n.id) })
+    return el
+  }
+
+  /** The cards' marks after a selection or a search, without a redraw. */
+  function markCards() {
+    if (view !== 'kanban') return
+    kbCols.querySelectorAll('.kb-card').forEach(el => { const n = byId.get(el.dataset.id); if (n) el.className = cardClass(n) })
+  }
+
+  /** The card of a note in view, its folded column opened if need be, briefly lit. */
+  function showCard(id) {
+    const n = byId.get(id)
+    if (n && K.FOLDED.includes(n.status) && !kanbanOpen.has(n.status) && boardSet.has(id)) {
+      kanbanOpen.add(n.status)
+      store.set('kanbanOpen', [...kanbanOpen])
+      drawKanban()
+    }
+    const el = [...kbCols.querySelectorAll('.kb-card')].find(x => x.dataset.id === id)
+    if (!el) return
+    el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' })
+    el.classList.add('flash')
+    setTimeout(() => el.classList.remove('flash'), 1400)
+  }
+
+  /** The order buttons, and how the open notes use each priority (the limits are the project's, whatever the filters). */
+  function syncKanbanBar(count) {
+    document.querySelectorAll('[data-kb-order]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.kbOrder === kanbanOrder)))
+    const use = prioUse
+    const box = document.getElementById('kb-limits')
+    box.replaceChildren('Open priorities: ')
+    K.PRIORITIES.forEach((p, i) => {
+      const limit = K.LIMITS[p], held = use[p]
+      const s = document.createElement('span')
+      s.className = `p-${p}${limit != null && held.length > limit ? ' over' : limit != null && held.length === limit ? ' full' : ''}`
+      s.textContent = `${p} ${held.length}${limit == null ? '' : `/${limit}`}`
+      s.title = held.length ? `${held.join(', ')}${limit != null && held.length > limit ? `: more than the ${limit} allowed, lower some` : ''}` : `No open note is ${p}`
+      box.append(i ? ' · ' : '', s)
+    })
+    const filtered = F.activeCount(filters) > 0 || focus
+    document.getElementById('kb-count').textContent = `${count}${filtered ? ` of ${tree.nodes.length}` : ''} note${count === 1 ? '' : 's'}`
+  }
+
+  document.querySelectorAll('[data-kb-order]').forEach(b => b.addEventListener('click', () => {
+    kanbanOrder = b.dataset.kbOrder
+    store.set('kanbanOrder', kanbanOrder)
+    drawKanban()
+  }))
+
+  /**
+   * A note's priority as a menu: only the user changes it. A priority the open notes already fill
+   * is offered greyed out, naming them; the standalone page shows it read-only.
+   */
+  function priorityControl(n) {
+    const sel = document.createElement('select')
+    sel.className = `prio${n.priority ? ` p-${n.priority}` : ''}`
+    sel.setAttribute('aria-label', `Priority of ${n.id}`)
+    for (const v of ['', ...K.PRIORITIES]) {
+      const o = document.createElement('option')
+      const held = v ? K.blockers(tree.nodes, n, v, prioUse) : []
+      o.value = v
+      o.textContent = v ? `${PRIORITY_LABEL[v]}${held.length ? ` (full: ${held.join(', ')})` : ''}` : 'No priority'
+      o.disabled = held.length > 0
+      o.selected = (n.priority || '') === v
+      sel.appendChild(o)
+    }
+    sel.title = `${n.priority ? `Priority: ${n.priority}` : 'No priority'}. Only you set it; Claude can suggest one.`
+    sel.disabled = Boolean(EMBED)
+    sel.addEventListener('click', ev => ev.stopPropagation())
+    sel.addEventListener('keydown', ev => ev.stopPropagation())
+    sel.addEventListener('change', () => setPriority(n.id, sel.value || null, sel))
+    return sel
+  }
+
+  /** Claude's suggested priority and why, for the user to accept or dismiss. */
+  function suggestionBox(n) {
+    const p = n.suggestedPriority
+    const box = document.createElement('div')
+    box.className = 'suggest'
+    box.innerHTML = `<span>Claude suggests <b class="p-${escH(p)}">${escH(PRIORITY_LABEL[p] || p)}</b>${n.suggestedWhy ? `: <span class="suggest-why">${escH(n.suggestedWhy)}</span>` : ''}</span>`
+    if (n.suggestedWhy) box.title = n.suggestedWhy
+    box.addEventListener('click', ev => ev.stopPropagation())
+    if (EMBED) return box
+    const held = K.blockers(tree.nodes, n, p, prioUse)
+    const accept = document.createElement('button')
+    accept.type = 'button'
+    accept.textContent = 'Accept'
+    accept.disabled = held.length > 0
+    accept.title = held.length ? `${p} is full: ${held.join(', ')} ${held.length === 1 ? 'holds' : 'hold'} it. Lower one of them first.` : `Make ${n.id} ${p}`
+    accept.addEventListener('click', () => setPriority(n.id, p, accept))
+    const dismiss = document.createElement('button')
+    dismiss.type = 'button'
+    dismiss.textContent = 'Dismiss'
+    dismiss.title = `Drop the suggestion; ${n.id} keeps ${n.priority ? `its priority (${n.priority})` : 'no priority'}`
+    dismiss.addEventListener('click', () => setPriority(n.id, null, dismiss, true))
+    const bar = document.createElement('span')
+    bar.className = 'suggest-bar'
+    bar.append(accept, dismiss)
+    box.appendChild(bar)
+    return box
+  }
+
+  /** The drawer's priority row: the menu, and Claude's suggestion when there is one. */
+  function renderDrawerPriority(n) {
+    const box = document.getElementById('drawer-priority')
+    if (!mayRedraw(box, () => renderDrawerPriority(byId.get(selected)))) return
+    box.replaceChildren()
+    box.hidden = !n
+    if (!n) return
+    const label = document.createElement('span')
+    label.className = 'muted'
+    label.textContent = 'Priority'
+    box.append(label, priorityControl(n))
+    if (n.suggestedPriority) box.appendChild(suggestionBox(n))
+  }
+
+  /**
+   * Sets a note's priority (null: none), or with `dismiss` drops Claude's suggestion; the page
+   * follows once the note is written. Changes made in a row each go through (the server writes
+   * them one at a time).
+   */
+  async function setPriority(id, priority, control, dismiss = false) {
+    if (EMBED) return
+    const redraw = () => { drawKanban(); if (selected && byId.has(selected)) renderDrawerPriority(byId.get(selected)) }
+    if (!editKey()) {
+      window.alert('To set priorities, open the address /rft printed (it ends in ?token=…) once: this browser then remembers its key.')
+      redraw()
+      return
+    }
+    if (control) control.disabled = true
+    try {
+      const res = await fetch('api/priority', {
+        method: 'POST',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'X-RFT-Token': editKey() },
+        body: JSON.stringify(dismiss ? { id, dismiss: true } : { id, priority }),
+      })
+      const reply = await res.json().catch(() => ({}))
+      if (!res.ok) window.alert(`${dismiss ? 'Not dismissed' : 'Priority not set'}: ${reply.error || `the server answered ${res.status}`}`)
+    } catch (e) {
+      window.alert('The server is not answering.')
+    } finally {
+      await poll()
+      redraw() // also puts a menu back when the change was refused
+    }
+  }
 
   // ---------------------------------------------------------------- markdown (web/markdown.js)
 
@@ -2294,6 +2563,9 @@
     const w = svg.node().clientWidth, h = svg.node().clientHeight
     const box = gNodes.node().getBBox()
     if ((!w || !h || !box.width) && tries < 20) { requestAnimationFrame(() => initialView(tries + 1)); return }
+    // another page shows first: the tree gets its first view once it shows
+    needsInitialView = !w || !h
+    if (needsInitialView) return
     if (new URLSearchParams(location.search).has('fit')) { fit(false); return }
     const v = store.get('view', null)
     if (v && Number.isFinite(v.k) && Number.isFinite(v.x) && Number.isFinite(v.y)) {
@@ -2318,7 +2590,7 @@
     render(false)
     hasView = true
     requestAnimationFrame(() => initialView())
-    if (view === 'concepts') setView('concepts')
+    setView(view)
     if (selected && byId.has(selected)) select(selected)
   }
 
@@ -2335,7 +2607,7 @@
       if (!tree || next.version !== tree.version) {
         setTree(next)
         if (!hasView) first()
-        else { render(true); if (view === 'concepts') drawConceptTree() }
+        else { render(true); if (view === 'concepts') drawConceptTree(); drawKanban() }
         if (selected && byId.has(selected)) select(selected)
       }
     } catch (e) {

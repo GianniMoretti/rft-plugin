@@ -16,6 +16,7 @@ import {
   withTopicalTags, writeConfig,
 } from './vault'
 import { cleanSummary, withSummary } from './map'
+import { checkSuggestion, fullText } from './priority'
 
 /** Why Claude may not change a locked note's text, and what it does instead. */
 export const lockedText = (n: { id: string; name: string }, instead = `propose the change with rft_suggest {id: "${n.id}", quote: the exact text to replace, replacement}`) =>
@@ -124,6 +125,9 @@ export type AddInput = {
   refs?: string[]
   /** One line on what the note is (and, for a result, what it found). */
   summary?: string
+  /** A priority Claude suggests, with why (`priorityWhy`): the note gets none; the user accepts or dismisses it. */
+  suggestedPriority?: string
+  priorityWhy?: string
 }
 
 /** Note names for references given by id or name; unknown ones refused. */
@@ -178,7 +182,8 @@ export async function addNode(io: Io, loaded: Loaded, input: AddInput, env?: Cod
   }
   const refs = refNames(tree, input.refs ?? [])
   const summary = input.summary?.trim() ? cleanSummary(input.summary) : undefined
-  const text = noteText(id, { ...input, sections, title, status, refs, summary }, config.project, parentName)
+  const suggestion = input.suggestedPriority !== undefined ? checkSuggestion(input.suggestedPriority, input.priorityWhy) : null
+  const text = noteText(id, { ...input, sections, title, status, refs, summary, suggestedPriority: suggestion?.priority, suggestedWhy: suggestion?.why }, config.project, parentName)
   await io.write(join(config.vault, path), text)
   const prefix = TYPES[input.type].prefix
   config.lastId[prefix] = Math.max(config.lastId[prefix] ?? 0, Number(id.slice(1)))
@@ -195,7 +200,8 @@ export async function addNode(io: Io, loaded: Loaded, input: AddInput, env?: Cod
   const node = fresh.tree.nodes[id]!
   return {
     ...node,
-    report: `Created ${path}${parent ? ` under ${parentName}` : ' as the root'} (status ${status}). Updated ${report.changed.length} derived file(s).${codeSaid}${summary ? '' : ' It has no summary: give it one line with rft_set_summary.'}`,
+    report: `Created ${path}${parent ? ` under ${parentName}` : ' as the root'} (status ${status}). Updated ${report.changed.length} derived file(s).${codeSaid}${summary ? '' : ' It has no summary: give it one line with rft_set_summary.'}` +
+      (suggestion ? ` It has no priority: your suggestion (${suggestion.priority}) waits for the user to accept or dismiss it in the tree view.${fullText(fresh.tree, node, suggestion.priority)}` : ''),
   }
 }
 
@@ -733,7 +739,8 @@ The reasoning of this research project is kept as a tree of Obsidian notes in \`
 - Every note has a one-line \`summary:\` you write: what it is about and, once known, what it found (with the key number). Pass summary to rft_add_node; when a result arrives or a direction is dropped, update it (rft_set_status summary, or rft_set_summary). Keep it specific: it is what you and later sessions read instead of the note.
 - Each concept can have a digest (vault \`map/\`): its state, key results, dead ends, open questions. After a piece of work changes a concept (a result, a dropped line, a new branch), or when rft_map says its digest is missing or out of date and you have read its notes, rewrite it with rft_set_digest.
 - When a result overturns an earlier one (a corrected number, a bug in the run, a better-controlled rerun), mark the old note with rft_supersede (id, by, why) and update the concept's digest: a note shown as [superseded by …] is not to be built on.
-- When asked what to do next, or before opening new work, call rft_next: running and planned experiments, directions with nothing tried under them, the digests' open questions.
+- When asked what to do next, or before opening new work, call rft_next: the user's priorities first, then running and planned experiments, directions with nothing tried under them, the digests' open questions.
+- Priorities (\`priority:\` urgent, high, medium or low; at most 1 urgent, 5 high and 10 medium among the open notes) are the user's alone: never write \`priority:\` (Edit, Write and shell writes that change it are refused), and a new note gets none. When you have a clear reason (it unblocks other work, the user said it matters, it is cheap and decisive), suggest one: rft_suggest_priority {id, priority, why}, or rft_add_node's suggested_priority and priority_why; the user accepts or dismisses it in the tree view. Work on what the user made urgent or high first.
 - Before launching an experiment (a training run, a grid, a numerical check, a measurement, a literature search for a yes or no answer), create its node first: rft_add_node with type experiment, parent = the direction it tests, status planned or running, and What / Why filled.
 - When it finishes or gives a partial result, write the real numbers in its note (Result, with spread over seeds and what failed; Directions found; Code / data: commit, script, results folder, machine), then rft_set_status. Record only results that were actually obtained, never expected or invented ones.
 - Every new idea or question, from a result, a reference, the user or a discussion, even if rejected: rft_add_node with type direction, parent = the note it comes from. Rejected ideas get status discussed; abandoned ones dropped; moved ones moved, with the reason (rft_set_status note).

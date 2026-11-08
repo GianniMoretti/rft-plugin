@@ -5,13 +5,14 @@
 import type { Tree } from './vault'
 import { bodyOf, conceptOrder, tagCounts } from './vault'
 
-export type PageAssets = { html: string; css: string; js: string; d3: string; katex: string; katexCss: string; filters: string; layout: string; concepts: string; markdown: string; theme: string }
+export type PageAssets = { html: string; css: string; js: string; d3: string; katex: string; katexCss: string; filters: string; kanban: string; layout: string; concepts: string; markdown: string; theme: string }
 
 export const ASSET_PATHS = {
   html: 'web/index.html',
   css: 'web/app.css',
   js: 'web/app.js',
   filters: 'web/filters.js',
+  kanban: 'web/kanban.js',
   layout: 'web/layout.js',
   concepts: 'web/concepts.js',
   markdown: 'web/markdown.js',
@@ -42,6 +43,7 @@ export function staticPage(a: PageAssets, tree: Tree, texts: Record<string, stri
     .replace(/<script src="vendor\/d3[^"]*" data-rft-inline><\/script>/, () => script(a.d3))
     .replace(/<script src="vendor\/katex[^"]*" data-rft-inline><\/script>/, () => script(a.katex))
     .replace(/<script src="filters\.js" data-rft-inline><\/script>/, () => script(a.filters))
+    .replace(/<script src="kanban\.js" data-rft-inline><\/script>/, () => script(a.kanban))
     .replace(/<script src="layout\.js" data-rft-inline><\/script>/, () => script(a.layout))
     .replace(/<script src="concepts\.js" data-rft-inline><\/script>/, () => script(a.concepts))
     .replace(/<script src="markdown\.js" data-rft-inline><\/script>/, () => script(a.markdown))

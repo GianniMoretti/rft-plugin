@@ -13,7 +13,12 @@
   <h1 id="title">Reasoning tree</h1>
   <span id="counts" class="muted"></span>
   <span id="live" class="live" title="Live: follows the vault"></span>
-  <div class="group" role="group" aria-label="View">
+  <div class="group pages" role="group" aria-label="Page">
+    <button data-show="tree" aria-pressed="true" title="The reasoning tree: every note under the one it came from">Tree</button>
+    <button data-show="concepts" aria-pressed="false" title="A tree whose nodes are the concepts">Concepts</button>
+    <button data-show="kanban" aria-pressed="false" title="The notes in one column per status, ordered by priority or date">Kanban</button>
+  </div>
+  <div class="group tree-only" role="group" aria-label="View">
     <!-- each toggle shows the symbol of its state (or of what a click does); its tooltip names it -->
     <button id="layout" class="cycle icon-btn" title="Layout: Top-down (click: Left-right)" aria-label="Layout: Top-down (click: Left-right)">
       <svg data-v="td" class="ico on" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7v5M6 17v-5h12v5"/><circle cx="12" cy="5" r="2.6" fill="currentColor" stroke="none"/><circle cx="6" cy="19" r="2.6" fill="currentColor" stroke="none"/><circle cx="18" cy="19" r="2.6" fill="currentColor" stroke="none"/></svg>
@@ -34,15 +39,14 @@
     <span id="font-size" class="muted" title="Text size">100 %</span>
     <button id="font-up" title="Larger text">A+</button>
   </div>
-  <div class="group" role="group" aria-label="Concepts">
+  <div class="group tree-only" role="group" aria-label="Concepts">
     <button id="cmode" class="cycle icon-btn" title="Concept overlay: off (click: regions)" aria-label="Concept overlay: off (click: regions)">
       <svg data-v="off" class="ico on" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="7" stroke-dasharray="3 2.6" opacity="0.6"/><path d="M5 20L19 4"/></svg>
       <svg data-v="regions" class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="3.5" width="11" height="17" rx="5.5" fill="#f783ac" fill-opacity="0.35" stroke="#f783ac"/><rect x="11" y="7" width="10.5" height="13" rx="5.2" fill="#3bc9db" fill-opacity="0.35" stroke="#3bc9db"/></svg>
       <svg data-v="arrows" class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 11.2L18 6M15.4 9.9L18 6l-4.7-.6" stroke="#f783ac"/><path d="M6.5 12.8L18 18M13.3 18.6L18 18l-2.6-3.9" stroke="#3bc9db"/><circle cx="4.5" cy="12" r="2.6" fill="currentColor" stroke="none"/></svg>
     </button>
-    <button id="view-toggle" aria-pressed="false" title="A tree whose nodes are the concepts">Concept tree</button>
   </div>
-  <div class="group">
+  <div class="group tree-only">
     <button id="origins-toggle" class="icon-btn" aria-pressed="false" aria-label="Came from" title="Came from: dashed links from where each moved note came from">
       <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="17" r="2.6" fill="currentColor" stroke="none"/><path d="M7 14.5C9 7 15 5 18.5 7.5" stroke-dasharray="2.4 2.4"/><circle cx="19" cy="9" r="2.6" fill="currentColor" stroke="none"/></svg>
     </button>
@@ -78,7 +82,7 @@
   <aside id="filters" hidden aria-label="Filters">
     <div class="fhead"><strong>Filters</strong><button id="filters-close" title="Close">✕</button></div>
     <section>
-      <div class="ftitle">Notes that do not match are</div>
+      <div class="ftitle">In the tree, notes that do not match are</div>
       <label><input type="radio" name="fmode" value="dim"> dimmed (the tree keeps its shape)</label>
       <label><input type="radio" name="fmode" value="hide"> hidden (their ancestors stay)</label>
     </section>
@@ -109,6 +113,16 @@
       <label class="date">To <input type="date" id="fdate-to"></label>
     </section>
   </aside>
+  <section id="kanban" hidden aria-label="The notes by status">
+    <div class="kb-bar">
+      <span class="seg" role="group" aria-label="Order of the cards">Order by
+        <button data-kb-order="priority" title="The highest priority first, the notes without one last; newest first within each">Priority</button><button data-kb-order="date" title="Newest first, by the date each note was made">Date</button>
+      </span>
+      <span id="kb-limits" class="kb-limits"></span>
+      <span id="kb-count" class="muted"></span>
+    </div>
+    <div id="kb-cols" class="kb-cols"></div>
+  </section>
   <aside id="drawer" hidden>
     <div id="drawer-concept" class="drawer-concept"></div>
     <div id="drawer-code" class="drawer-code muted" hidden></div>
@@ -137,6 +151,7 @@
         <button id="drawer-close" title="Close">✕</button>
       </span>
     </div>
+    <div id="drawer-priority" class="drawer-priority" hidden></div>
     <p id="hl-hint" class="hl-hint" hidden>Highlighter on: select text to highlight it; select or click a highlight to take it out. <kbd>Esc</kbd> turns it off.</p>
     <p id="edit-nokey" class="edit-nokey" hidden>To edit or add notes, open the address <code>/rft</code> printed (it ends in
       <code>?token=…</code>) once: this browser then remembers its key.</p>
@@ -229,6 +244,7 @@
 <script src="vendor/d3.v7.9.0.min.js" data-rft-inline></script>
 <script src="vendor/katex.v0.16.22.min.js" data-rft-inline></script>
 <script src="filters.js" data-rft-inline></script>
+<script src="kanban.js" data-rft-inline></script>
 <script src="layout.js" data-rft-inline></script>
 <script src="concepts.js" data-rft-inline></script>
 <script src="markdown.js" data-rft-inline></script>
