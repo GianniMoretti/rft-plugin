@@ -29,6 +29,7 @@ import { nextReport } from '../hooks/lib/knowledge'
 import { setStatus, today } from '../hooks/lib/ops'
 import { gpuLoad, icsCalendar, parseDue, parseEst, plan, suggestDates, suggestDeadline, utcOf } from '../hooks/lib/schedule'
 import { front, load, readConfig, sync, validate } from '../hooks/lib/vault'
+import { S } from '../hooks/lib/dates'
 import { CWD, D01, E02, MemoryFs, demoFiles, world } from './fixture'
 
 const TODAY = '2026-11-09'
@@ -195,6 +196,18 @@ describe('milestones', () => {
     ])
   })
 
+  test('a run with no started: has no end the plan can know; the notes after it count from today', async () => {
+    const { notes } = example2()
+    const { l } = await setup(notes, { e02: { est: '3d' } })
+    const [m] = plan(l.tree, l.milestones, TODAY)
+    expect(m!.items).toMatchObject([
+      { id: 'E02', noStart: true, slack: null },
+      { id: 'E05', earliestStart: TODAY, latestStart: '2026-11-09', slack: 0 },
+    ])
+    expect(m!.items[0]).not.toHaveProperty('expectedEnd')
+    expect(S.detail(m!)).toBe('at risk: E02 is running with no start date (started:); E05 must start today')
+  })
+
   test('a run within its estimate can still be at risk, when the plan no longer fits', async () => {
     const { notes } = example2()
     const { l } = await setup(notes, { e02: { started: '2026-11-08', est: '3d' } })
@@ -255,6 +268,15 @@ describe('GPUs', () => {
       clashes: [{ from: TODAY, to: TODAY, need: 3, notes: [{ id: 'E02', gpus: 2 }, { id: 'E03', gpus: 1 }] }],
       noEnd: ['E02'],
     })
+  })
+
+  test('a running run with no started: is not on the calendar, nor counted for the GPUs', async () => {
+    const { l } = await setup({
+      [E03]: experiment(E03, 'planned', { start: TODAY, est: '2d' }),
+    }, { gpus: 1, e02: { est: '3d' } })
+    expect(S.windows(Object.values(l.tree.nodes), TODAY).map(w => w.id)).toEqual(['E03'])
+    expect(gpuLoad(l.tree, l.config.gpus, TODAY)).toEqual({ clashes: [], noEnd: [] })
+    expect(icsCalendar(l, '20261109T000000Z').text).not.toContain('UID:E02@')
   })
 })
 

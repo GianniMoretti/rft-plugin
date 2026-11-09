@@ -41,6 +41,8 @@ export type PlanItem = {
   est?: number
   overrun?: number
   noEstimate?: true
+  /** Running with no `started:`: when it ends is unknown. */
+  noStart?: true
   waits?: true
   slack: number | null
 }
@@ -57,6 +59,17 @@ export type DeadlinePlan = {
   atRisk: boolean
   items: PlanItem[]
   problems: string[]
+}
+
+/** The days an experiment holds on a calendar, `from` up to `to` (the day after its last). */
+export type Window = {
+  id: string
+  from: string
+  to: string
+  kind: 'planned' | 'running' | 'done'
+  plannedTo?: string
+  over?: boolean
+  noEnd?: true
 }
 
 export type Clash = { from: string; to: string; need: number; notes: { id: string; gpus: number }[] }
@@ -89,9 +102,11 @@ type Api = {
   formatDue: (due: Due | null) => string
   utcOf: (due: Due | null) => string | null
   parseEst: (v: unknown) => number | null
+  windows: (nodes: Dated[], today: string) => Window[]
   gpuLoad: (nodes: Dated[], capacity: number | undefined, today: string) => GpuLoad
   plan: (nodes: Dated[], milestones: Milestone[], today: string) => DeadlinePlan[]
   when: (daysLeft: number) => string
+  detail: (p: DeadlinePlan) => string
   deadlineLine: (p: DeadlinePlan) => string
   clashLine: (c: Clash, capacity: number) => string
   andList: (items: string[]) => string

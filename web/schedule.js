@@ -93,16 +93,18 @@
 
   /**
    * The days each experiment holds on a calendar, `from` up to `to` (its end, the day after the
-   * last): planned with a start and an estimate; running from `started` (today when unknown),
-   * `plannedTo` its estimate's end and `to` today's end once it is over that, `noEnd` without an
-   * estimate; done between `started` and `finished`.
+   * last): planned with a start and an estimate; running from `started`, `plannedTo` its
+   * estimate's end and `to` today's end once it is over that, `noEnd` without an estimate; done
+   * between `started` and `finished`. One with no date of its own (running with no `started:`)
+   * has none: it is not on the calendar, nor counted for the GPUs.
    */
   function windows(nodes, today) {
     const out = []
     for (const n of nodesOf(nodes)) {
       if (n.type !== 'experiment' || n.supersededBy) continue
       if (n.status === 'running') {
-        const from = n.started || today
+        if (!n.started) continue
+        const from = n.started
         if (n.est > 0) {
           const plannedTo = addDays(from, n.est)
           out.push({ id: n.id, from, to: later(plannedTo, addDays(today, 1)), plannedTo, kind: 'running', over: plannedTo <= today })
@@ -171,9 +173,9 @@
     const list = nodesOf(nodes)
     const byId = new Map(list.map(n => [n.id, n]))
 
-    // when a running note may end: its estimate's end, today at the earliest; without a start
-    // known, its estimate from today
-    const expectedEnd = n => (n.est > 0 ? later(addDays(n.started || today, n.est), today) : null)
+    // when a running note may end: its estimate's end, today at the earliest; unknown without a
+    // start
+    const expectedEnd = n => (n.est > 0 && n.started ? later(addDays(n.started, n.est), today) : null)
 
     // a note's earliest start: today, its planned start, the earliest end of the notes it comes after
     const starts = new Map()
@@ -222,6 +224,7 @@
         if (l.start) item.latestStart = l.start
         if (!(n.est > 0)) return { ...item, noEstimate: true, slack: null }
         if (n.status === 'running') {
+          if (!n.started) return { ...item, noStart: true, slack: null }
           item.expectedEnd = expectedEnd(n)
           item.slack = between(item.expectedEnd, l.end)
           if (n.started && between(n.started, today) > n.est) item.overrun = between(n.started, today) - n.est
@@ -264,6 +267,7 @@
     const parts = [...p.problems]
     for (const i of p.items) {
       if (i.noEstimate) parts.push(`${i.id} has no estimate (est:)`)
+      else if (i.noStart) parts.push(`${i.id} is running with no start date (started:)`)
       else if (!p.atRisk) continue
       else if (i.overrun) parts.push(`${i.id} ${i.overrun}d over its ${i.est}d estimate`)
       else if (i.slack > 0) continue
@@ -338,7 +342,7 @@
     // the runs as planned: a running one from its start for its estimate, none without an end
     for (const w of windows(nodes, '1970-01-01')) {
       const n = byId.get(w.id)
-      if (w.noEnd || (w.kind === 'running' && !n.started)) continue
+      if (w.noEnd) continue
       const to = w.kind === 'running' ? w.plannedTo : w.to
       event([`UID:${n.id}@${host}`, stamp, `DTSTART;VALUE=DATE:${icsDay(w.from)}`, `DTEND;VALUE=DATE:${icsDay(to)}`,
         `SUMMARY:${icsText(n.name)}`, `DESCRIPTION:${icsText(`${n.status}${n.gpus > 1 ? `, ${n.gpus} GPUs` : ''}`)}`])

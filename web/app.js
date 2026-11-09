@@ -2105,7 +2105,7 @@
     const winOf = new Map(d.wins.map(w => [w.id, w]))
     const shown = n => boardSet.has(n.id)
     const rows = tree.nodes.filter(n => shown(n) && n.type === 'experiment' && !n.supersededBy &&
-      (winOf.has(n.id) || planOf.has(n.id) || n.suggestedStart || n.suggestedEst || n.due))
+      (winOf.has(n.id) || (planOf.has(n.id) && n.status !== 'running') || n.suggestedStart || n.suggestedEst || n.due))
     // the days shown: from two weeks back to eight ahead, widened to the bars and the deadlines
     // (a year back at most), from a Monday
     let from = S.addDays(d.today, -14)
@@ -2270,7 +2270,7 @@
     }
     const p = planOf.get(n.id)
     // how late it may run for the nearest deadline that needs it: a dotted frame, when no run is planned
-    if (p && p.item.latestStart && !w) {
+    if (p && p.item.latestStart && !w && n.status !== 'running') {
       const ghost = document.createElement('div')
       ghost.className = 'tl-latest'
       place(ghost, p.item.latestStart, p.item.latestEnd)
@@ -2621,7 +2621,7 @@
       const line = document.createElement('div')
       line.className = `dates-needed${p.plan.atRisk ? ' risk' : ''}`
       const i = p.item
-      line.textContent = `Needed by ${p.plan.name} (${p.plan.dueText}, ${S.when(p.plan.daysLeft)}): ${i.noEstimate ? 'no estimate yet' : i.expectedEnd ? `ends by ${i.latestEnd}` : `start by ${i.latestStart}`}${i.slack !== null ? `, ${i.slack}d of slack` : ''}`
+      line.textContent = `Needed by ${p.plan.name} (${p.plan.dueText}, ${S.when(p.plan.daysLeft)}): ${i.noEstimate ? 'no estimate yet' : i.noStart ? 'running, no start date' : i.expectedEnd ? `ends by ${i.latestEnd}` : `start by ${i.latestStart}`}${i.slack !== null ? `, ${i.slack}d of slack` : ''}`
       box.appendChild(line)
     }
   }
