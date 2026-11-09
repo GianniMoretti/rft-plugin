@@ -248,6 +248,46 @@ low has no limit, and a note that is done, dropped, discussed or moved does not 
 - `rft_validate` warns about a priority that is none of the four and about a limit exceeded by
   hand edits.
 
+## Deadlines and dates
+
+Deadlines of any kind (a submission, a rebuttal, a meeting, a talk, a thesis chapter) are
+**milestones**: one note each in the vault's `milestones/` folder, outside the reasoning tree,
+with `due:` and the notes that must be done first (`needs:`). Experiments carry the plan of their
+run: `start:` (a day) and `est:` (whole days or weeks: `3d`, `2w`); any note can have a `due:` of
+its own. A due date is a day, a local time, or a time in a zone:
+`2026-11-13`, `2026-11-13 14:00`, `2026-11-13 23:59 AoE` (or `UTC`, `+01:00`).
+
+- **The dates are the user's.** Never write `due:`, `start:` or `est:`, on a note or a milestone:
+  Edit, Write and shell writes that change them are refused. The user sets them in the tree view's
+  Calendar (dragging a run, + Deadline) or the note's drawer.
+- **Suggest a start or an estimate** when you can say why (a deadline needs the run done by then,
+  it waits for another run, the GPUs are taken until then, the code shows how long a run takes):
+  `rft_suggest_dates {id, start, est, why}`. The user accepts or dismisses it.
+- **A deadline the user gives you** ("supervisor meeting Friday at 14:00, I need E12 by then"):
+  `rft_add_deadline {title, due, needs}`. The plugin asks the user to confirm it in a dialog you
+  cannot answer; if they decline, leave it.
+- **Paper submissions**: only when the user names a venue or asks which deadlines fit, find the
+  venue's official dates page and read it now (web search, fetch), never from memory: dates move
+  every year, and extensions happen. Suggest one milestone per date (abstract, paper,
+  supplementary) with `rft_suggest_deadline {title, due, source, why, needs}`, with the time and
+  zone the page states (most are 23:59 AoE). It waits, dashed, in the Calendar until the user
+  accepts or dismisses it.
+- Write `gpus:` on an experiment that takes more than one GPU (from its command and config), and
+  `after:` (wikilinks) on one that waits for another run. With `gpus:` in `.rft/config.json`, the
+  plugin reports the days the planned and running experiments need more GPUs than there are.
+- `rft_set_status` records `started:` the day a run starts and `finished:` the day it is done:
+  the calendar's runs, and real durations to set against the estimates.
+- **Planning** is backwards from each deadline, in whole days: what a deadline needs must end by
+  its due day, so a note's latest start is the due day less its estimate (less those of the notes
+  that come after it). Slack is the days between its earliest start (today, its `start:`, the end
+  of the notes it waits for) and that latest start. A deadline is **at risk** at 0 days of slack or
+  less, or when a note it needs was dropped, superseded or is missing. `rft_next` lists the
+  deadlines first, nearest first, with what puts each at risk; session start names the ones of the
+  next 14 days at risk. When one is at risk, say so and propose what would save it (a suggested
+  start, a smaller run, a priority suggestion), without changing the dates.
+- The vault's `rft.ics` holds the deadlines and the planned runs (never the suggestions), for any
+  calendar app to import; `rft_sync` keeps it current.
+
 ## Restructuring the tree
 
 A note's parent is where the reasoning came from; a concept is the line of research it belongs
@@ -327,8 +367,11 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 | `rft_map` | the project map, or one concept's digest and notes with their summaries |
 | `rft_set_digest` | write a concept's digest (state, key results, dead ends, open questions) |
 | `rft_supersede` | mark a note whose result a newer one overturns (`superseded_by:`), or clear the mark |
-| `rft_next` | the user's priorities, then what is still open by concept: running, planned, unexplored directions, open questions |
+| `rft_next` | the deadlines (nearest first, what puts them at risk) and GPU clashes, the user's priorities, then what is still open by concept: running, planned, unexplored directions, open questions |
 | `rft_suggest_priority` | suggest a priority for a note, with why; the user accepts or dismisses it (never set `priority:` yourself) |
+| `rft_suggest_dates` | suggest an experiment's start and/or estimate, with why; the user accepts or dismisses it (never set `start:`, `est:` or `due:` yourself) |
+| `rft_add_deadline` | add a deadline the user gave you (title, due, needs); they confirm it in a dialog |
+| `rft_suggest_deadline` | suggest a paper submission read now from the venue's official dates page (`source`), with why |
 | `rft_move_node` | move a note and its subtree under another parent, keeping its origin, after the user agrees |
 | `rft_set_refs` | replace the reference notes a note builds on (`refs:`) |
 | `rft_search` | search every note (titles, summaries, tags, concepts, text), best first with each summary, matching concepts first; filters by type, status, concept, tag |

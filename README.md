@@ -123,8 +123,11 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_set_summary` | sets the one-line `summary:` of one or more notes (Claude writes one for every note, and updates it when a result arrives) |
   | `rft_set_digest` | writes a concept's digest in the vault's `map/` folder: state, key results, dead ends, open questions; the map says when it is out of date |
   | `rft_supersede` | marks a note whose result a newer one overturns (`superseded_by:` and a History line); the map, search, graph and tree view show it as superseded, so the old number is not built on |
-  | `rft_next` | what is still open: your priorities first, then by concept the experiments running, planned and never run, directions with nothing tried under them (with their age, the higher priorities first), the digests' open questions, and the priorities Claude suggested that wait for you |
+  | `rft_next` | what is still open: the deadlines first (nearest first, with what puts them at risk) and the GPU clashes, your priorities, then by concept the experiments running, planned and never run, directions with nothing tried under them (with their age, the higher priorities first), the digests' open questions, and the priorities Claude suggested that wait for you |
   | `rft_suggest_priority` | suggests a priority for a note, with a one-line reason (`suggested_priority:`); you accept or dismiss it in the tree view. Claude never sets a priority itself (see Priorities) |
+  | `rft_suggest_dates` | suggests an experiment's start and/or estimate, with a one-line reason (`suggested_start:`, `suggested_est:`); you accept or dismiss it. Claude never sets a date itself (see Deadlines and the calendar) |
+  | `rft_add_deadline` | adds a deadline you gave Claude in the chat (a milestone, with the notes it needs), once you confirm it in a dialog |
+  | `rft_suggest_deadline` | suggests a paper submission deadline, read from the venue's official dates page (`source:`); you accept or dismiss it in the Calendar |
   | `rft_collect_papers` | downloads, in the background, the open-access PDFs of reference notes (arXiv, OpenReview, PMLR, ACL Anthology, NeurIPS/CVF proceedings, ...) into `vault/papers/<concept>/<year> <first author> <title>.pdf`, linked from each note (`pdf:`); saved PDFs follow their concept. Never from paywalled publishers |
   | `rft_set_tags` | replaces a note's topical tags (lowercase kebab-case), keeping the project, type and status tags |
   | `rft_set_type` | changes the type of a note made with the wrong one: the next free id of the new type, the file moved to that type's folder, the type's sections (no text lost), every link to it renamed |
@@ -255,8 +258,8 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   pick it from the list (or type its id), **Move** or Enter. As with **Add child**, the plugin
   makes the move with `rft_move_node`'s code. A moved note shows where it came from at the top
   of the drawer, and **Came from** draws a faint dashed link from its previous parent.
-- **Tree**, **Concepts** and **Kanban** at the top switch between the reasoning tree, the concept
-  tree and the kanban (below).
+- **Tree**, **Concepts**, **Kanban** and **Calendar** at the top switch between the reasoning tree,
+  the concept tree, the kanban and the calendar (below).
 - Hover a node to highlight its path to the root; **search** (Enter jumps to the next match).
 - **Filters** opens a side panel: topical tags (with counts, matching **any** or **all**), type,
   status (the same filter as clicking the legend), and a date range. Notes that do not match
@@ -298,6 +301,49 @@ note in the drawer; the board makes room for it.
 - A menu you are in is not redrawn under you while notes change on disk; the board follows once
   you leave it. The standalone `/rft-view` page shows the kanban read-only.
 
+### Deadlines and the calendar
+
+**Calendar** (beside Kanban) shows the deadlines and the experiments' runs, as a **Timeline** or a
+**Month**. The dates are yours alone, as priorities are: Claude suggests them, and its own edits
+that change them are refused.
+
+- **Deadlines** of any kind are milestones: one note each in `vault/milestones/` (outside the
+  tree), e.g. `M01 Workshop paper.md`, with `due:` and the notes it `needs:` done first. A due date
+  is a day, a local time or a time in a zone: `2026-11-13`, `2026-11-13 14:00`,
+  `2026-11-13 23:59 AoE` (or `UTC`, `+01:00`); a zoned one also shows the time where you are.
+  **+ Deadline** adds one (click a day of the Month to start on it); a deadline's name opens its
+  editor (due date, needs, **Done**). Any note can also have a `due:` of its own.
+- **An experiment's run**: `start:` (a day) and `est:` (`3d`, `2w`), set in the note's drawer or
+  by dragging its bar on the Timeline (the bar moves the start, its right end the estimate).
+  `rft_set_status` records `started:` and `finished:`. `after:` names the runs it waits for, and
+  `gpus:` how many GPUs it takes (one when not given).
+- **Planning**, backwards from each deadline in whole days: what it needs must end by its due day;
+  each note's latest start is the due day less its estimate (and less those that come after it),
+  its slack the days from its earliest start (today, its start, the end of what it waits for) to
+  that. A deadline is **at risk** (red) at 0 days of slack or less, or when a note it needs was
+  dropped, superseded or is missing; amber when 3 days or fewer are left. The cards above the
+  calendar say which note puts it at risk and how ("E04 3d over its 3d estimate", "E05 must start
+  today").
+- **Timeline**: one row per experiment with dates, or needed by a deadline, by concept: its run
+  (planned, running, done; a run over its estimate hatched in red, one with no end fading out),
+  Claude's suggestion dashed, and for a run not planned yet the latest it may run, dotted (drag it
+  to plan the run). The deadlines are lines across the rows, today a band. With `gpus:` in the
+  config, a strip below shows the GPUs taken each day, red above the capacity. **‹ Today ›**
+  scroll, **− +** zoom.
+- **Month**: the runs across each week, the deadlines on their days (Claude's dashed, done ones
+  struck through).
+- **Claude suggests** a start and an estimate (`rft_suggest_dates`) and paper submissions
+  (`rft_suggest_deadline`, read from the venue's official dates page, never from memory); you
+  **Accept** or **Dismiss** them in the drawer and in the Calendar. A dismissed deadline stays
+  in the vault as dismissed, so it is not suggested again. A deadline you tell Claude in the chat
+  it adds with `rft_add_deadline`, once you confirm it in a dialog.
+- `rft_next` lists the deadlines first, with what puts them at risk, and the GPU clashes; session
+  start names the deadlines of the next 14 days that are at risk. A kanban card shows the
+  deadline nearest it.
+- **`vault/rft.ics`**, rewritten by `rft_sync` when the dates change, holds the deadlines and the
+  planned runs (never the suggestions), for any calendar app to import; **.ics** in the Calendar
+  downloads the same.
+
 ### Concepts
 
 A **concept** is a line of research: the note that starts it (usually the direction that opened
@@ -336,7 +382,7 @@ In the tree view, the concept button switches the overlay from off to **Regions*
 - Concepts are also a filter in **Filters**.
 
 A link can open the view in a given state, e.g. `?layout=lr&concepts=regions`,
-`?view=concepts`, `?view=kanban&order=date`, or `?focus=D02&note=E05`.
+`?view=concepts`, `?view=kanban&order=date`, `?view=calendar&cal=month`, or `?focus=D02&note=E05`.
 
 ### Code repos
 
@@ -405,7 +451,9 @@ served only from the vault's `papers/` folder. It answers only requests for
 a loopback host name. It writes a note's text from **Edit**, **Footnote**, **Highlight** or an
 accepted suggestion, its frontmatter kept as it is; the `locked:` line from the padlock; the
 `priority:` line from the kanban or the drawer (which also clears Claude's suggested priority), within
-the limits; and a note's comments file in `vault/.comments/`. A new note from **Add child**, a note's new type from
+the limits; a note's `due:`, `start:` and `est:` from the Calendar or the drawer (which also clear
+Claude's suggested dates); a deadline in `vault/milestones/` (a new one, its due date, needs and
+status, Claude's suggested one accepted or dismissed); and a note's comments file in `vault/.comments/`. A new note from **Add child**, a note's new type from
 **Change type**, or a move from **Move**, it asks the session that started it to make, and **Ask
 Claude** to answer (a line on its output, which the plugin reads). It does any of these only for
 the page itself carrying the project's key, which the address `/rft` prints holds (`?token=…`):
@@ -458,14 +506,16 @@ and it runs. The terminal's typeahead lists them.
 
 ```json
 { "version": 1, "vault": "vault", "project": "my-project", "canvas": true, "mermaid": false,
-  "lastId": { "E": 12, "D": 9 }, "webPort": 0, "requireRefs": true }
+  "lastId": { "E": 12, "D": 9 }, "webPort": 0, "requireRefs": true, "gpus": 2 }
 ```
 
 `mermaid: true` also writes `Reasoning tree (diagram).md`, a Mermaid flowchart Obsidian draws
 natively. `lastId` keeps ids from being reused after a note is deleted. `webPort` fixes the
 tree view's port (0: a free one), handy for a standing `ssh -L` forward. `requireRefs: true`
 (set by `/rft-init` on a new vault, off on an adopted one) makes `rft_validate` warn about
-experiments and directions in work that name no reference. A config that holds
+experiments and directions in work that name no reference. `gpus` is how many GPUs the
+experiments share: the Calendar and `rft_next` report the days the planned and running ones need
+more. A config that holds
 only `tree` is a link to a tree in another folder (see above). The code a concept runs on is
 linked in its note, not in the config (see Code repos).
 
