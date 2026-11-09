@@ -124,6 +124,20 @@
    */
   function gpuLoad(nodes, capacity, today) {
     if (!(capacity > 0)) return { clashes: [], noEnd: [] }
+    const { days, noEnd } = gpuDays(nodes, today)
+    const clashes = []
+    for (const { day, need, notes } of days) {
+      if (need <= capacity) continue
+      const key = notes.map(x => x.id).join(',')
+      const last = clashes[clashes.length - 1]
+      if (last && last.key === key && addDays(last.to, 1) === day) last.to = day
+      else clashes.push({ from: day, to: day, need, notes, key })
+    }
+    return { clashes: clashes.map(({ key, ...c }) => c), noEnd }
+  }
+
+  /** The GPUs the planned and running experiments take on each day from today on, the days in order; and the runs with no end planned. */
+  function gpuDays(nodes, today) {
     const byId = new Map(nodesOf(nodes).map(n => [n.id, n]))
     const days = new Map()
     const noEnd = []
@@ -136,17 +150,13 @@
         days.get(d).push({ id: w.id, gpus })
       }
     }
-    const clashes = []
-    for (const d of [...days.keys()].sort()) {
-      const notes = days.get(d).sort((a, b) => naturally(a.id, b.id))
-      const need = notes.reduce((s, x) => s + x.gpus, 0)
-      if (need <= capacity) continue
-      const key = notes.map(x => x.id).join(',')
-      const last = clashes[clashes.length - 1]
-      if (last && last.key === key && addDays(last.to, 1) === d) last.to = d
-      else clashes.push({ from: d, to: d, need, notes, key })
+    return {
+      days: [...days.keys()].sort().map(day => {
+        const notes = days.get(day).sort((a, b) => naturally(a.id, b.id))
+        return { day, need: notes.reduce((s, x) => s + x.gpus, 0), notes }
+      }),
+      noEnd: noEnd.sort(naturally),
     }
-    return { clashes: clashes.map(({ key, ...c }) => c), noEnd: noEnd.sort(naturally) }
   }
 
   /**
@@ -370,6 +380,6 @@
   root.RftSchedule = {
     MILESTONE_STATUSES, DUE_EXAMPLES, DUE_RE,
     isDay, parseDay, addDays, between, weekday, parseDue, formatDue, utcOf, parseEst,
-    windows, gpuLoad, plan, when, detail, deadlineLine, clashLine, andList, ics, monthWeeks, weekBars,
+    windows, gpuLoad, gpuDays, plan, when, detail, deadlineLine, clashLine, andList, ics, monthWeeks, weekBars,
   }
 })(typeof globalThis !== 'undefined' ? globalThis : window)

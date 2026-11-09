@@ -58,7 +58,7 @@
   let showOrigins = false
   let retyping = false
   const K = window.RftKanban
-  const PAGES = ['tree', 'concepts', 'kanban']
+  const PAGES = ['tree', 'concepts', 'kanban', 'calendar']
   let boardSet = new Set() // the notes on the kanban: those that match, in the focused concept when there is one
   let kanbanOrder = 'priority' // priority | date
   let kanbanOpen = new Set() // the folded columns opened
@@ -99,6 +99,7 @@
     tree = next
     byId = new Map(tree.nodes.map(n => [n.id, n]))
     prioUse = K.usage(tree.nodes)
+    planAll()
     concepts = C.annotate(tree)
     stars = new Map([...concepts.values()].filter(c => c.root && byId.has(c.root)).map(c => [c.root, c.id]))
     if (first) {
@@ -106,6 +107,8 @@
       view = PAGES.includes(store.get('pageView', 'tree')) ? store.get('pageView', 'tree') : 'tree'
       kanbanOrder = K.ORDERS.includes(store.get('kanbanOrder', 'priority')) ? store.get('kanbanOrder', 'priority') : 'priority'
       kanbanOpen = new Set(store.get('kanbanOpen', []))
+      calMode = CAL_MODES.includes(store.get('calMode', 'timeline')) ? store.get('calMode', 'timeline') : 'timeline'
+      calZoom = Math.max(0, Math.min(CAL_ZOOM.length - 1, Number(store.get('calZoom', 2)) || 0))
       focus = store.get('focus', null)
       // a link can say how to open: ?layout=lr&concepts=regions&view=concepts&focus=D02&filter=hide, ?view=kanban&order=date
       const q = new URLSearchParams(location.search)
@@ -113,6 +116,7 @@
       if (['off', 'regions', 'arrows'].includes(q.get('concepts'))) conceptMode = q.get('concepts')
       if (PAGES.includes(q.get('view'))) view = q.get('view')
       if (K.ORDERS.includes(q.get('order'))) kanbanOrder = q.get('order')
+      if (CAL_MODES.includes(q.get('cal'))) calMode = q.get('cal')
       if (q.has('focus')) focus = q.get('focus') || null
       if (q.has('note')) selected = q.get('note')
       buildArrowMarkers()
@@ -497,6 +501,8 @@
     renderCode(document.getElementById('drawer-code'), n.concept)
     document.getElementById('drawer-meta').textContent = `${n.type} · ${MARK[n.status] || ''} ${n.status}${n.date ? ' · ' + n.date : ''}${n.tags && n.tags.length ? ' · #' + n.tags.join(' #') : ''}`
     renderDrawerPriority(n)
+    renderDrawerDates(n)
+    markRows()
     const summary = document.getElementById('drawer-summary')
     summary.textContent = n.summary || ''
     summary.hidden = !n.summary
@@ -540,6 +546,7 @@
   function go(id) {
     if (editing && editing.id !== id && !leaveEditor()) return
     if (view === 'kanban') { select(id); showCard(id); return }
+    if (view === 'calendar') { select(id); showRow(id); return }
     reveal(id)
     select(id)
     centreOn(id)
@@ -1014,7 +1021,7 @@
     const q = searchText()
     if (!q) return
     // search works with the filters: a hidden note is not a hit
-    const pool = view === 'kanban' ? boardSet : shownSet
+    const pool = view === 'kanban' || view === 'calendar' ? boardSet : shownSet
     const hits = tree.nodes.filter(n => pool.has(n.id) && n.name.toLowerCase().includes(q))
     if (!hits.length) return
     matchAt = (matchAt + 1) % hits.length
@@ -1047,6 +1054,7 @@
     buildFilterPanel()
     render(true)
     drawKanban()
+    drawCalendar()
   }
 
   const toggled = (list, v) => (list.includes(v) ? list.filter(x => x !== v) : [...list, v])
@@ -1155,6 +1163,7 @@
     document.getElementById('font-size').textContent = `${Math.round(font * 100)} %`
     if (save) store.set('font', font)
     scheduleLabels()
+    if (tree) drawCalendar()
   }
   const stepFont = d => setFont(FONT_STEPS[Math.max(0, Math.min(FONT_STEPS.length - 1, FONT_STEPS.indexOf(font) + d))])
   document.getElementById('font-down').addEventListener('click', () => stepFont(-1))
@@ -1525,9 +1534,11 @@
     document.getElementById('canvas').toggleAttribute('hidden', v !== 'tree')
     document.getElementById('concept-canvas').toggleAttribute('hidden', v !== 'concepts')
     document.getElementById('kanban').hidden = v !== 'kanban'
+    calSection.hidden = v !== 'calendar'
     syncConceptButtons()
     if (v === 'concepts') drawConceptTree()
     if (v === 'kanban') drawKanban()
+    if (v === 'calendar') drawCalendar()
     if (v === 'tree' && needsInitialView) requestAnimationFrame(() => initialView())
   }
 
@@ -1708,6 +1719,8 @@
     meta.appendChild(priorityControl(n))
     const c = n.concept && n.concept !== C.ROOT && concepts.get(n.concept)
     if (c) meta.insertAdjacentHTML('beforeend', `<span class="kb-concept" title="${escH(c.summary || c.name)}"><span class="swatch" style="background: ${C.colourOf(concepts, c.id)}"></span>${escH(c.name)}</span>`)
+    const dl = dueChip(n)
+    if (dl) meta.appendChild(dl)
     if (n.date) meta.insertAdjacentHTML('beforeend', `<span class="kb-date muted">${escH(n.date)}</span>`)
     if (n.supersededBy) meta.insertAdjacentHTML('beforeend', `<span class="kb-flag" title="Superseded by ${escH(n.supersededBy)}: its result no longer holds">superseded</span>`)
     el.appendChild(meta)
@@ -1858,6 +1871,810 @@
       await poll()
       redraw() // also puts a menu back when the change was refused
     }
+  }
+
+  // ---------------------------------------------------------------- the calendar (web/schedule.js)
+
+  // the deadlines (milestones, and notes' own due dates) and the experiments' runs, as a timeline
+  // (one row per experiment, the deadlines as lines across them, the GPUs below) or a month (the
+  // deadlines on their days, the runs across them). The dates are the user's alone: set here (drag
+  // a bar or its end, + Deadline, a deadline's edit) and in the note's drawer, which also answer
+  // Claude's suggested ones. The filters and the concept focus choose the rows, as on the kanban.
+  const S = window.RftSchedule
+  const CAL_MODES = ['timeline', 'month']
+  const CAL_ZOOM = [10, 16, 24, 34, 48] // a day's width on the timeline, in px at A 100 %
+  const TL_LABEL = 230 // the timeline's column of titles, in px at A 100 %
+  const calSection = document.getElementById('calendar')
+  const calBody = document.getElementById('cal-body')
+  const calDeadlines = document.getElementById('cal-deadlines')
+  const calAdder = document.getElementById('cal-adder')
+  let calMode = 'timeline'
+  let calZoom = 2
+  let calMonth = null // the month shown, YYYY-MM
+  let calDrag = null // a bar being dragged: nothing is redrawn under it
+  let calScroll = null // where the timeline was scrolled to, kept across redraws: { from, left }
+  let calOpen = null // the deadline whose editor is open
+  let plans = [] // every deadline planned (S.plan), for the whole tree
+  let planOf = new Map() // a note → the nearest deadline that needs it, and its plan for the note
+
+  /** Today, here: YYYY-MM-DD. */
+  const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
+  const monthOf = day => day.slice(0, 7)
+  // in English, as the rest of the page
+  const monthName = ym => new Date(Date.UTC(+ym.slice(0, 4), +ym.slice(5, 7) - 1, 1)).toLocaleString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+  const shortDay = day => new Date(Date.UTC(+day.slice(0, 4), +day.slice(5, 7) - 1, +day.slice(8, 10))).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })
+  const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+  /** A due date with a zone (AoE, UTC, ±HH:MM) as the time here: `Mon 30 Nov, 12:59 here`; '' for a day or a local time. */
+  function localOf(due) {
+    const utc = S.utcOf(due)
+    return utc ? `${new Date(utc).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} here` : ''
+  }
+
+  /** The deadlines planned again: after every read of the tree. */
+  function planAll() {
+    plans = S.plan(tree.nodes, tree.milestones || [], todayStr())
+    planOf = new Map()
+    for (const p of plans) for (const i of p.items) if (!planOf.has(i.id)) planOf.set(i.id, { plan: p, item: i })
+  }
+
+  function drawCalendar() {
+    if (!tree || view !== 'calendar' || calDrag || calBusyIn(calSection)) return
+    const today = todayStr()
+    if (!calMonth) calMonth = monthOf(today)
+    const d = { today, wins: S.windows(tree.nodes, today), gpu: S.gpuDays(tree.nodes, today), clashes: S.gpuLoad(tree.nodes, tree.gpus, today) }
+    document.querySelectorAll('[data-cal-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.calMode === calMode)))
+    calSection.dataset.mode = calMode
+    drawDeadlines(d)
+    if (calMode === 'month') drawMonth(d)
+    else drawTimeline(d)
+    const g = document.getElementById('cal-gpus')
+    if (tree.gpus) {
+      const n = d.clashes.clashes.length
+      g.textContent = `${tree.gpus} GPU${tree.gpus === 1 ? '' : 's'}: ${n ? `${n} clash${n === 1 ? '' : 'es'} ahead` : 'no clash ahead'}${d.clashes.noEnd.length ? ` · ${d.clashes.noEnd.join(', ')} running with no end planned` : ''}`
+      g.title = d.clashes.clashes.map(c => S.clashLine(c, tree.gpus)).join('\n') || 'The planned and running experiments fit on the GPUs'
+      g.classList.toggle('over', n > 0)
+    } else {
+      g.textContent = ''
+      g.title = ''
+    }
+    syncDatalist()
+  }
+
+  /** Whether the user is typing in a form inside `box`: it is redrawn once they leave it. */
+  function calBusyIn(box) {
+    const a = document.activeElement
+    if (!a || !box.contains(a) || !a.matches('input, select, textarea')) return false
+    if (!a.dataset.redraw) {
+      a.dataset.redraw = 'after'
+      a.addEventListener('blur', () => { delete a.dataset.redraw; setTimeout(drawCalendar, 0) }, { once: true })
+    }
+    return true
+  }
+
+  /** The note ids the deadline forms offer. */
+  function syncDatalist() {
+    const list = document.getElementById('cal-ids')
+    if (list.childElementCount === tree.nodes.length) return
+    list.replaceChildren(...tree.nodes.filter(n => n.type === 'experiment' || n.type === 'direction').map(n => {
+      const o = document.createElement('option')
+      o.value = n.id
+      o.label = n.name
+      return o
+    }))
+  }
+
+  /** A write of the user's dates or deadlines; the page follows once it is on disk. */
+  async function calWrite(route, body, what) {
+    if (EMBED) return null
+    if (!editKey()) {
+      window.alert('To change dates, open the address /rft printed (it ends in ?token=…) once: this browser then remembers its key.')
+      return null
+    }
+    try {
+      const res = await fetch(route, {
+        method: 'POST', cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'X-RFT-Token': editKey() },
+        body: JSON.stringify(body),
+      })
+      const reply = await res.json().catch(() => ({}))
+      if (!res.ok) { window.alert(`${what}: ${reply.error || `the server answered ${res.status}`}`); return null }
+      return reply
+    } catch (e) {
+      window.alert('The server is not answering.')
+      return null
+    } finally {
+      await poll()
+      drawCalendar()
+      if (selected && byId.has(selected)) renderDrawerDates(byId.get(selected))
+    }
+  }
+  const setDates = (id, dates, what = 'Dates not set') => calWrite('api/dates', { id, ...dates }, what)
+  const writeMilestone = (body, what = 'Deadline not changed') => calWrite('api/milestone', body, what)
+
+  // ---------------------------------------------------------------- the deadlines strip
+
+  function drawDeadlines(d) {
+    calDeadlines.replaceChildren()
+    for (const p of plans.filter(p => p.daysLeft >= 0 || p.atRisk)) calDeadlines.appendChild(deadlineCard(p))
+    for (const m of (tree.milestones || []).filter(m => m.status === 'suggested')) calDeadlines.appendChild(suggestedDeadline(m))
+    if (!calDeadlines.childElementCount) {
+      calDeadlines.innerHTML = `<span class="muted">No deadline ahead.${EMBED ? '' : ' <b>+ Deadline</b> adds one; Claude suggests paper submissions when you name a venue.'}</span>`
+    }
+  }
+
+  const milestoneOf = id => (tree.milestones || []).find(m => m.id === id)
+
+  /** A deadline: when, how much room is left or what puts it at risk, the notes it needs; a milestone's own editor. */
+  function deadlineCard(p) {
+    const el = document.createElement('article')
+    el.className = `cal-dl${p.atRisk ? ' risk' : ''}${p.slack !== null && p.slack > 0 && p.slack <= 3 ? ' tight' : ''}`
+    el.dataset.id = p.id
+    const head = document.createElement('div')
+    head.className = 'cal-dl-head'
+    const name = document.createElement('a')
+    name.className = 'cal-dl-name'
+    name.textContent = p.name
+    name.title = p.kind === 'note' ? 'Open the note' : 'Edit this deadline'
+    name.addEventListener('click', () => (p.kind === 'note' ? go(p.id) : toggleEditor(p.id)))
+    head.append(name)
+    const here = localOf(p.at)
+    head.insertAdjacentHTML('beforeend', `<span class="cal-dl-when"${here ? ` title="${escH(here)}"` : ''}>${escH(p.dueText)}${here ? ` (${escH(here)})` : ''} · <b>${escH(S.when(p.daysLeft))}</b></span>`)
+    el.appendChild(head)
+    const detail = S.detail(p)
+    if (detail) {
+      const t = document.createElement('div')
+      t.className = 'cal-dl-detail'
+      t.textContent = detail
+      t.title = detail
+      el.appendChild(t)
+    }
+    if (p.kind === 'milestone' && calOpen === p.id && !EMBED) el.appendChild(milestoneEditor(milestoneOf(p.id)))
+    return el
+  }
+
+  function toggleEditor(id) {
+    calOpen = calOpen === id ? null : id
+    drawCalendar()
+  }
+
+  /** A milestone's editor: its due date and the notes it needs; Done; Cancel. */
+  function milestoneEditor(m) {
+    const f = document.createElement('form')
+    f.className = 'cal-dl-edit'
+    f.innerHTML = `<label>Due <input name="due" type="text" value="${escH(m.due || '')}" placeholder="2026-11-13 23:59 AoE" required></label>
+      <label>Needs <input name="needs" type="text" value="${escH((m.needs || []).join(', '))}" placeholder="E03, E04" list="cal-ids"></label>
+      <span class="cal-dl-buttons"><button type="submit" class="primary">Save</button><button type="button" data-act="done" title="Mark it done: it leaves the plan">Done</button><button type="button" data-act="cancel">Cancel</button></span>`
+    f.addEventListener('submit', async ev => {
+      ev.preventDefault()
+      const needs = f.needs.value.split(/[\s,]+/).filter(Boolean)
+      if (await writeMilestone({ id: m.id, due: f.due.value.trim(), needs })) calOpen = null
+      drawCalendar()
+    })
+    f.querySelector('[data-act="done"]').addEventListener('click', async () => {
+      if (await writeMilestone({ id: m.id, status: 'done' })) calOpen = null
+      drawCalendar()
+    })
+    f.querySelector('[data-act="cancel"]').addEventListener('click', () => { calOpen = null; f.remove(); drawCalendar() })
+    f.addEventListener('keydown', ev => { if (ev.key === 'Escape') { calOpen = null; f.remove(); drawCalendar() } })
+    return f
+  }
+
+  /** Claude's suggested deadline, with where it was read and why, for the user to accept or dismiss. */
+  function suggestedDeadline(m) {
+    const el = document.createElement('article')
+    el.className = 'cal-dl suggested'
+    const due = S.parseDue(m.due)
+    const here = localOf(due)
+    el.innerHTML = `<div class="cal-dl-head"><span class="cal-dl-name">Claude suggests ${escH(m.name)}</span><span class="cal-dl-when">${escH(S.formatDue(due) || m.due || '')}${here ? ` (${escH(here)})` : ''}${due ? ` · <b>${escH(S.when(S.between(todayStr(), due.day)))}</b>` : ''}</span></div>`
+    const why = document.createElement('div')
+    why.className = 'cal-dl-detail'
+    why.textContent = m.why || ''
+    if (m.source && /^https?:\/\//.test(m.source)) {
+      const a = document.createElement('a')
+      a.href = m.source
+      a.target = '_blank'
+      a.rel = 'noopener noreferrer'
+      a.textContent = 'official dates'
+      a.title = m.source
+      why.append(m.why ? ' · ' : '', a)
+    }
+    el.appendChild(why)
+    if (EMBED) return el
+    const bar = document.createElement('span')
+    bar.className = 'suggest-bar'
+    const accept = document.createElement('button')
+    accept.type = 'button'
+    accept.textContent = 'Accept'
+    accept.title = 'Make it a deadline: it is planned for from now on'
+    accept.addEventListener('click', () => writeMilestone({ id: m.id, accept: true }, 'Not accepted'))
+    const dismiss = document.createElement('button')
+    dismiss.type = 'button'
+    dismiss.textContent = 'Dismiss'
+    dismiss.title = 'Drop it: it stays in the vault as dismissed, so it is not suggested again'
+    dismiss.addEventListener('click', () => writeMilestone({ id: m.id, dismiss: true }, 'Not dismissed'))
+    bar.append(accept, dismiss)
+    el.querySelector('.cal-dl-head').appendChild(bar)
+    return el
+  }
+
+  // ---------------------------------------------------------------- the timeline
+
+  function drawTimeline(d) {
+    const dayW = Math.round(CAL_ZOOM[calZoom] * font)
+    const labelW = Math.round(TL_LABEL * font)
+    const winOf = new Map(d.wins.map(w => [w.id, w]))
+    const shown = n => boardSet.has(n.id)
+    const rows = tree.nodes.filter(n => shown(n) && n.type === 'experiment' && !n.supersededBy &&
+      (winOf.has(n.id) || planOf.has(n.id) || n.suggestedStart || n.suggestedEst || n.due))
+    // the days shown: from two weeks back to eight ahead, widened to the bars and the deadlines
+    // (a year back at most), from a Monday
+    let from = S.addDays(d.today, -14)
+    let to = S.addDays(d.today, 56)
+    const span = (a, b) => { if (a && a < from) from = a; if (b && b > to) to = b }
+    for (const n of rows) {
+      const w = winOf.get(n.id)
+      if (w) span(w.from, w.to)
+      const p = planOf.get(n.id)
+      if (p && p.item.latestStart) span(p.item.latestStart, p.item.latestEnd)
+      if (n.suggestedStart) span(n.suggestedStart, S.addDays(n.suggestedStart, n.suggestedEst || n.est || 1))
+    }
+    for (const p of plans) span(null, S.addDays(p.due, 7))
+    if (S.between(from, d.today) > 365) from = S.addDays(d.today, -365)
+    from = S.addDays(from, -S.weekday(from))
+    to = S.addDays(to, 6 - S.weekday(to))
+    const days = S.between(from, to) + 1
+    const x = day => S.between(from, day) * dayW
+    const width = labelW + days * dayW
+
+    const kept = calBody.querySelector('.tl-scroll')
+    const keep = kept ? { from: kept.dataset.from, left: kept.scrollLeft, top: kept.scrollTop } : null
+    const scroll = document.createElement('div')
+    scroll.className = 'tl-scroll'
+    scroll.dataset.from = from
+    const grid = document.createElement('div')
+    grid.className = 'tl-grid'
+    grid.style.width = `${width}px`
+    grid.style.setProperty('--day', `${dayW}px`)
+    grid.style.setProperty('--label', `${labelW}px`)
+    scroll.appendChild(grid)
+
+    // the head: months, then days (weekends shaded); the deadlines' flags under them
+    const head = document.createElement('div')
+    head.className = 'tl-head'
+    const months = document.createElement('div')
+    months.className = 'tl-row tl-months'
+    const daysRow = document.createElement('div')
+    daysRow.className = 'tl-row tl-days'
+    const flags = document.createElement('div')
+    flags.className = 'tl-row tl-flags'
+    for (const r of [months, daysRow, flags]) {
+      const corner = document.createElement('div')
+      corner.className = 'tl-label tl-corner'
+      r.appendChild(corner)
+      const track = document.createElement('div')
+      track.className = 'tl-track'
+      track.style.width = `${days * dayW}px`
+      r.appendChild(track)
+    }
+    months.firstChild.textContent = ''
+    daysRow.firstChild.textContent = ''
+    flags.firstChild.textContent = 'Deadlines'
+    for (let i = 0; i < days; i++) {
+      const day = S.addDays(from, i)
+      if (i === 0 || day.slice(8) === '01') {
+        const m = document.createElement('span')
+        m.className = 'tl-month'
+        m.style.left = `${i * dayW}px`
+        m.textContent = monthName(monthOf(day))
+        months.lastChild.appendChild(m)
+      }
+      const c = document.createElement('span')
+      c.className = `tl-day${S.weekday(day) >= 5 ? ' weekend' : ''}${day === d.today ? ' today' : ''}`
+      c.style.left = `${i * dayW}px`
+      c.style.width = `${dayW}px`
+      c.textContent = dayW >= 16 || S.weekday(day) === 0 ? String(+day.slice(8)) : ''
+      c.title = shortDay(day)
+      daysRow.lastChild.appendChild(c)
+    }
+    let lane = 0
+    for (const p of plans) {
+      if (p.due < from || p.due > to) continue
+      const f = document.createElement('span')
+      f.className = `tl-flag${p.atRisk ? ' risk' : ''}`
+      f.style.left = `${x(p.due)}px`
+      f.style.top = `${2 + 18 * (lane++ % 2)}px`
+      f.textContent = p.name
+      f.title = S.deadlineLine(p)
+      f.addEventListener('click', () => (p.kind === 'note' ? go(p.id) : toggleEditor(p.id)))
+      flags.lastChild.appendChild(f)
+    }
+    head.append(months, daysRow, flags)
+    grid.appendChild(head)
+
+    // the lines across every row: the weeks, today, each deadline (at the start of its day: what it
+    // needs ends before it)
+    const lines = document.createElement('div')
+    lines.className = 'tl-lines'
+    lines.style.left = `${labelW}px`
+    lines.style.width = `${days * dayW}px`
+    for (let i = 5; i < days; i += 7) lines.insertAdjacentHTML('beforeend', `<span class="tl-wk" style="left:${i * dayW}px;width:${2 * dayW}px"></span>`)
+    lines.insertAdjacentHTML('beforeend', `<span class="tl-now" style="left:${x(d.today)}px;width:${dayW}px" title="Today"></span>`)
+    for (const p of plans) {
+      if (p.due < from || p.due > to) continue
+      lines.insertAdjacentHTML('beforeend', `<span class="tl-dline${p.atRisk ? ' risk' : ''}" style="left:${x(p.due)}px"></span>`)
+    }
+    grid.appendChild(lines)
+
+    // the rows, by concept
+    const byConcept = new Map()
+    for (const n of rows) {
+      if (!byConcept.has(n.concept)) byConcept.set(n.concept, [])
+      byConcept.get(n.concept).push(n)
+    }
+    const startOf = n => (winOf.get(n.id) || {}).from || n.start || n.suggestedStart || (planOf.get(n.id) && planOf.get(n.id).item.latestStart) || '9999'
+    const order = [...concepts.keys()].filter(c => byConcept.has(c))
+    for (const cid of order) {
+      const c = concepts.get(cid)
+      if (order.length > 1 || cid !== C.ROOT) {
+        const g = document.createElement('div')
+        g.className = 'tl-row tl-group'
+        g.innerHTML = `<div class="tl-label"><span class="swatch" style="background:${C.colourOf(concepts, cid)}"></span>${escH(c ? c.name : cid)}</div><div class="tl-track" style="width:${days * dayW}px"></div>`
+        grid.appendChild(g)
+      }
+      const list = byConcept.get(cid).sort((a, b) => startOf(a).localeCompare(startOf(b)) || a.id.localeCompare(b.id, 'en', { numeric: true }))
+      for (const n of list) grid.appendChild(timelineRow(n, winOf.get(n.id), d, { from, to, dayW, days, x }))
+    }
+    if (!rows.length) {
+      const empty = document.createElement('p')
+      empty.className = 'tl-empty muted'
+      empty.style.left = `${labelW}px`
+      empty.textContent = 'No experiment has dates yet: give one a start and an estimate in its drawer, or a deadline the notes it needs (+ Deadline).'
+      grid.appendChild(empty)
+    }
+    if (tree.gpus) grid.appendChild(gpuRow(d, { from, to, dayW, days, x }))
+
+    calBody.replaceChildren(scroll)
+    document.getElementById('cal-range').textContent = `${monthName(monthOf(from))} – ${monthName(monthOf(to))}`
+    // the same days in view as before; the first time, today a little in from the left
+    if (keep && keep.from === from) { scroll.scrollLeft = keep.left; scroll.scrollTop = keep.top }
+    else if (keep) { scroll.scrollLeft = keep.left + S.between(from, keep.from) * dayW; scroll.scrollTop = keep.top }
+    else scrollToDay(scroll, d.today)
+  }
+
+  function scrollToDay(scroll, day) {
+    const from = scroll.dataset.from
+    const dayW = Math.round(CAL_ZOOM[calZoom] * font)
+    const labelW = Math.round(TL_LABEL * font)
+    scroll.scrollLeft = Math.max(0, S.between(from, day) * dayW - (scroll.clientWidth - labelW) / 4)
+  }
+
+  /** One experiment's row: its title, its run, Claude's suggested dates, how late it may start for a deadline, its own due date. */
+  function timelineRow(n, w, d, g) {
+    const row = document.createElement('div')
+    row.className = `tl-row tl-note${n.id === selected ? ' selected' : ''}`
+    row.dataset.id = n.id
+    const label = document.createElement('div')
+    label.className = 'tl-label'
+    label.innerHTML = `<span class="tdot ${escH(toneOf(n))}"></span><span class="kb-id">${escH(n.id)}</span><span class="tl-title">${escH(n.title || n.name)}</span>`
+    label.title = `${n.name} · ${n.status}${n.gpus > 1 ? ` · ${n.gpus} GPUs` : ''}`
+    label.addEventListener('click', () => select(n.id))
+    const track = document.createElement('div')
+    track.className = 'tl-track'
+    track.style.width = `${g.days * g.dayW}px`
+    row.append(label, track)
+    const place = (el, a, b) => {
+      const s = a < g.from ? g.from : a
+      const e = b > S.addDays(g.to, 1) ? S.addDays(g.to, 1) : b
+      el.style.left = `${g.x(s)}px`
+      el.style.width = `${Math.max(g.dayW * S.between(s, e), 4)}px`
+    }
+    const p = planOf.get(n.id)
+    // how late it may run for the nearest deadline that needs it: a dotted frame, when no run is planned
+    if (p && p.item.latestStart && !w) {
+      const ghost = document.createElement('div')
+      ghost.className = 'tl-latest'
+      place(ghost, p.item.latestStart, p.item.latestEnd)
+      ghost.title = `For ${p.plan.name}: start by ${p.item.latestStart} (${p.item.est}d)${EMBED ? '' : '. Drag it to plan the run.'}`
+      ghost.textContent = 'latest'
+      if (!EMBED) ghost.addEventListener('pointerdown', ev => startDrag(ev, ghost, n, 'place', p.item.latestStart, p.item.est, g))
+      track.appendChild(ghost)
+    }
+    // Claude's suggestion, dashed
+    if (n.suggestedStart || n.suggestedEst) {
+      const start = n.suggestedStart || n.start || (p && p.item.latestStart) || d.today
+      const s = document.createElement('div')
+      s.className = 'tl-suggested'
+      place(s, start, S.addDays(start, n.suggestedEst || n.est || 1))
+      s.title = `Claude suggests ${[n.suggestedStart ? `starting ${n.suggestedStart}` : '', n.suggestedEst ? `${n.suggestedEst}d` : ''].filter(Boolean).join(', ')}${n.suggestedDatesWhy ? `: ${n.suggestedDatesWhy}` : ''}. Accept or dismiss it in the drawer.`
+      s.addEventListener('click', () => select(n.id))
+      track.appendChild(s)
+    }
+    if (w) {
+      const bar = document.createElement('div')
+      bar.className = `tl-bar tone experiment s-${w.kind === 'planned' ? 'planned' : w.kind}${w.noEnd ? ' noend' : ''}${n.priority ? ` p-${n.priority}` : ''}`
+      const end = w.kind === 'running' && w.plannedTo ? w.plannedTo : w.to
+      place(bar, w.from, end)
+      bar.innerHTML = `<span class="tl-bar-text">${escH(n.id)}</span>`
+      const est = w.kind === 'planned' ? n.est : null
+      bar.title = `${n.name}: ${w.kind}${w.kind === 'planned' ? `, ${w.from} for ${n.est}d` : ''}${n.started ? `, started ${n.started}` : ''}${n.finished ? `, finished ${n.finished}` : ''}${w.noEnd ? ', no end planned (est:)' : ''}${w.kind === 'planned' && !EMBED ? '. Drag to move it, its right end to change the estimate.' : ''}`
+      if (w.kind === 'planned' && !EMBED) {
+        bar.classList.add('movable')
+        const grip = document.createElement('span')
+        grip.className = 'tl-grip'
+        grip.title = 'Drag to change the estimate'
+        bar.appendChild(grip)
+        grip.addEventListener('pointerdown', ev => { ev.stopPropagation(); startDrag(ev, bar, n, 'resize', w.from, est, g) })
+        bar.addEventListener('pointerdown', ev => startDrag(ev, bar, n, 'move', w.from, est, g))
+      } else bar.addEventListener('click', () => select(n.id))
+      track.appendChild(bar)
+      // a run over its estimate: the days past it, hatched
+      if (w.kind === 'running' && w.over) {
+        const over = document.createElement('div')
+        over.className = 'tl-over'
+        place(over, w.plannedTo, w.to)
+        over.title = `${S.between(w.plannedTo, d.today) + 1}d over its ${n.est}d estimate`
+        over.addEventListener('click', () => select(n.id))
+        track.appendChild(over)
+      }
+    }
+    if (n.due) {
+      const due = S.parseDue(n.due)
+      if (due && due.day >= g.from && due.day <= g.to) {
+        const m = document.createElement('span')
+        m.className = 'tl-due'
+        m.style.left = `${g.x(due.day)}px`
+        m.title = `Due ${S.formatDue(due)}`
+        track.appendChild(m)
+      }
+    }
+    return row
+  }
+
+  /** The GPUs taken each day from today, against how many there are: a day over is marked. */
+  function gpuRow(d, g) {
+    const row = document.createElement('div')
+    row.className = 'tl-row tl-gpus'
+    row.innerHTML = `<div class="tl-label" title="The GPUs the planned and running experiments take each day (an experiment takes one unless its gpus: says more)">GPUs (${tree.gpus})</div>`
+    const track = document.createElement('div')
+    track.className = 'tl-track'
+    track.style.width = `${g.days * g.dayW}px`
+    for (const { day, need, notes } of d.gpu.days) {
+      if (day > g.to) break
+      const b = document.createElement('span')
+      b.className = `tl-load${need > tree.gpus ? ' over' : ''}`
+      b.style.left = `${g.x(day)}px`
+      b.style.width = `${g.dayW}px`
+      b.style.height = `${Math.round(100 * Math.min(need, 2 * tree.gpus) / (2 * tree.gpus))}%`
+      b.title = `${shortDay(day)}: ${need} of ${tree.gpus} (${notes.map(x => `${x.id} ${x.gpus}`).join(', ')})`
+      track.appendChild(b)
+    }
+    const cap = document.createElement('span')
+    cap.className = 'tl-cap'
+    track.appendChild(cap)
+    row.appendChild(track)
+    return row
+  }
+
+  /**
+   * Dragging a run on the timeline, by whole days: `move` it (a new start), `resize` its end (a new
+   * estimate), or `place` the dotted frame of a run not planned yet (its start, with its estimate).
+   * A press without a move opens the note.
+   */
+  function startDrag(ev, el, n, kind, start, est, g) {
+    if (ev.button !== 0) return
+    ev.preventDefault()
+    el.setPointerCapture(ev.pointerId)
+    const x0 = ev.clientX
+    const left = parseFloat(el.style.left), width = parseFloat(el.style.width)
+    calDrag = { id: n.id, moved: false }
+    const tip = document.createElement('span')
+    tip.className = 'tl-tip'
+    let dd = 0
+    const onMove = e => {
+      const dx = e.clientX - x0
+      if (!calDrag.moved && Math.abs(dx) < 4) return
+      calDrag.moved = true
+      el.classList.add('dragging')
+      dd = Math.round(dx / g.dayW)
+      if (kind === 'resize') {
+        const days = Math.max(1, (est || 1) + dd)
+        el.style.width = `${days * g.dayW}px`
+        tip.textContent = `${days}d`
+      } else {
+        el.style.left = `${left + dd * g.dayW}px`
+        tip.textContent = shortDay(S.addDays(start, dd))
+      }
+      if (!tip.parentNode) el.appendChild(tip)
+    }
+    const onUp = async () => {
+      el.removeEventListener('pointermove', onMove)
+      el.removeEventListener('pointerup', onUp)
+      el.removeEventListener('pointercancel', onCancel)
+      const moved = calDrag.moved
+      calDrag = null
+      if (!moved) { select(n.id); drawCalendar(); return }
+      if (kind === 'resize') {
+        const days = Math.max(1, (est || 1) + dd)
+        if (days !== est) await setDates(n.id, { est: `${days}d` }, 'Estimate not set')
+      } else if (dd !== 0 || kind === 'place') {
+        await setDates(n.id, kind === 'place' && !n.est ? { start: S.addDays(start, dd), est: `${est}d` } : { start: S.addDays(start, dd) }, 'Start not set')
+      }
+      drawCalendar()
+    }
+    const onCancel = () => {
+      el.removeEventListener('pointermove', onMove)
+      el.removeEventListener('pointerup', onUp)
+      el.removeEventListener('pointercancel', onCancel)
+      calDrag = null
+      el.style.left = `${left}px`
+      el.style.width = `${width}px`
+      drawCalendar()
+    }
+    el.addEventListener('pointermove', onMove)
+    el.addEventListener('pointerup', onUp)
+    el.addEventListener('pointercancel', onCancel)
+  }
+
+  // ---------------------------------------------------------------- the month
+
+  function drawMonth(d) {
+    const y = +calMonth.slice(0, 4), m = +calMonth.slice(5, 7)
+    const weeks = S.monthWeeks(y, m)
+    const notes = new Map(tree.nodes.map(n => [n.id, n]))
+    const wins = d.wins.filter(w => boardSet.has(w.id))
+    const deadlines = new Map() // day → what falls due on it
+    const at = (day, item) => { if (!deadlines.has(day)) deadlines.set(day, []); deadlines.get(day).push(item) }
+    for (const p of plans) at(p.due, { plan: p })
+    for (const ms of tree.milestones || []) {
+      const due = S.parseDue(ms.due)
+      if (due && (ms.status === 'suggested' || ms.status === 'done')) at(due.day, { milestone: ms, due })
+    }
+    const box = document.createElement('div')
+    box.className = 'mo'
+    const headRow = document.createElement('div')
+    headRow.className = 'mo-head'
+    headRow.innerHTML = WEEKDAYS.map(w => `<span>${w}</span>`).join('')
+    box.appendChild(headRow)
+    for (const week of weeks) {
+      const bars = S.weekBars(week, wins)
+      const lanes = bars.reduce((k, b) => Math.max(k, b.lane + 1), 0)
+      const row = document.createElement('div')
+      row.className = 'mo-week'
+      row.style.setProperty('--lanes', lanes)
+      for (const day of week) {
+        const cell = document.createElement('div')
+        cell.className = `mo-day${monthOf(day) !== calMonth ? ' out' : ''}${day === d.today ? ' today' : ''}${S.weekday(day) >= 5 ? ' weekend' : ''}`
+        cell.dataset.day = day
+        cell.innerHTML = `<span class="mo-num">${+day.slice(8)}</span>`
+        const list = document.createElement('div')
+        list.className = 'mo-items'
+        for (const it of deadlines.get(day) || []) list.appendChild(monthChip(it))
+        cell.appendChild(list)
+        if (!EMBED) {
+          cell.title = `${shortDay(day)}: click to add a deadline on this day`
+          cell.addEventListener('click', ev => { if (ev.target === cell || ev.target.classList.contains('mo-num') || ev.target === list) openDeadlineAdder(day) })
+        }
+        row.appendChild(cell)
+      }
+      for (const b of bars) {
+        const n = notes.get(b.id)
+        const el = document.createElement('div')
+        el.className = `mo-bar tone experiment s-${b.kind}${b.cutStart ? ' cut-start' : ''}${b.cutEnd ? ' cut-end' : ''}${b.over ? ' over' : ''}${b.noEnd ? ' noend' : ''}`
+        el.style.left = `calc(${b.col} * 100% / 7 + 2px)`
+        el.style.width = `calc(${b.span} * 100% / 7 - 4px)`
+        el.style.top = `calc(22px * var(--font-scale) + ${b.lane} * 18px * var(--font-scale))`
+        el.textContent = n ? `${n.id} ${n.title}` : b.id
+        el.title = n ? `${n.name}: ${b.kind}${n.est ? `, ${n.est}d` : ''}${b.over ? ', over its estimate' : ''}${b.noEnd ? ', no end planned' : ''}` : b.id
+        el.addEventListener('click', ev => { ev.stopPropagation(); select(b.id) })
+        row.appendChild(el)
+      }
+      box.appendChild(row)
+    }
+    calBody.replaceChildren(box)
+    document.getElementById('cal-range').textContent = monthName(calMonth)
+  }
+
+  /** A deadline on its day in the month: at risk in red, Claude's suggestion dashed, a done one faded. */
+  function monthChip(it) {
+    const el = document.createElement('button')
+    el.type = 'button'
+    if (it.plan) {
+      const p = it.plan
+      el.className = `mo-dl${p.atRisk ? ' risk' : ''}`
+      el.textContent = `${p.at.time ? `${p.at.time}${p.at.zone ? ` ${p.at.zone}` : ''} ` : ''}${p.name}`
+      el.title = `${S.deadlineLine(p)}${localOf(p.at) ? ` (${localOf(p.at)})` : ''}`
+      el.addEventListener('click', ev => { ev.stopPropagation(); if (p.kind === 'note') go(p.id); else { calOpen = p.id; drawCalendar(); calDeadlines.querySelector(`[data-id="${p.id}"]`)?.scrollIntoView({ block: 'nearest' }) } })
+    } else {
+      const ms = it.milestone
+      el.className = `mo-dl ${ms.status}`
+      el.textContent = `${it.due.time ? `${it.due.time} ` : ''}${ms.name}`
+      el.title = ms.status === 'suggested' ? `Claude suggests ${ms.name}${ms.why ? `: ${ms.why}` : ''} (accept or dismiss it above)` : `${ms.name}: done`
+      el.addEventListener('click', ev => ev.stopPropagation())
+    }
+    return el
+  }
+
+  // ---------------------------------------------------------------- the calendar's controls
+
+  document.querySelectorAll('[data-cal-mode]').forEach(b => b.addEventListener('click', () => {
+    calMode = b.dataset.calMode
+    store.set('calMode', calMode)
+    drawCalendar()
+  }))
+  document.getElementById('cal-prev').addEventListener('click', () => calStep(-1))
+  document.getElementById('cal-next').addEventListener('click', () => calStep(1))
+  document.getElementById('cal-today').addEventListener('click', () => {
+    calMonth = monthOf(todayStr())
+    if (calMode === 'month') return drawCalendar()
+    const scroll = calBody.querySelector('.tl-scroll')
+    if (scroll) scrollToDay(scroll, todayStr())
+  })
+  function calStep(dir) {
+    if (calMode === 'month') {
+      const y = +calMonth.slice(0, 4), m = +calMonth.slice(5, 7) + dir
+      calMonth = `${m < 1 ? y - 1 : m > 12 ? y + 1 : y}-${String(((m + 11) % 12) + 1).padStart(2, '0')}`
+      return drawCalendar()
+    }
+    const scroll = calBody.querySelector('.tl-scroll')
+    if (scroll) scroll.scrollBy({ left: dir * 7 * Math.round(CAL_ZOOM[calZoom] * font), behavior: 'smooth' })
+  }
+  const zoomBy = step => {
+    const scroll = calBody.querySelector('.tl-scroll')
+    const labelW = Math.round(TL_LABEL * font)
+    // the day in the middle stays in the middle
+    const before = Math.round(CAL_ZOOM[calZoom] * font)
+    const mid = scroll ? (scroll.scrollLeft + (scroll.clientWidth - labelW) / 2) / before : 0
+    calZoom = Math.max(0, Math.min(CAL_ZOOM.length - 1, calZoom + step))
+    store.set('calZoom', calZoom)
+    drawCalendar()
+    const after = calBody.querySelector('.tl-scroll')
+    if (after && scroll) after.scrollLeft = mid * Math.round(CAL_ZOOM[calZoom] * font) - (after.clientWidth - labelW) / 2
+  }
+  document.getElementById('cal-zoom-in').addEventListener('click', () => zoomBy(1))
+  document.getElementById('cal-zoom-out').addEventListener('click', () => zoomBy(-1))
+  document.getElementById('cal-ics').addEventListener('click', ev => {
+    const text = S.ics({ project: tree.project, nodes: tree.nodes, milestones: tree.milestones || [], stamp: new Date().toISOString() }).text
+    const a = ev.currentTarget
+    if (a.href) URL.revokeObjectURL(a.href)
+    a.href = URL.createObjectURL(new Blob([text], { type: 'text/calendar' }))
+    a.download = `${tree.project}.ics`
+  })
+
+  // + Deadline: what, when (a day; a time and its zone, as a call for papers states it), and the
+  // notes it needs; the server writes it in milestones/
+  function openDeadlineAdder(day) {
+    if (EMBED) return
+    calAdder.hidden = false
+    if (day) document.getElementById('cal-add-day').value = day
+    document.getElementById('cal-add-title').focus()
+  }
+  function closeDeadlineAdder() {
+    calAdder.hidden = true
+    calAdder.reset()
+  }
+  document.getElementById('cal-add').addEventListener('click', () => (calAdder.hidden ? openDeadlineAdder(null) : closeDeadlineAdder()))
+  document.getElementById('cal-add-cancel').addEventListener('click', closeDeadlineAdder)
+  calAdder.addEventListener('keydown', ev => { if (ev.key === 'Escape') closeDeadlineAdder() })
+  calAdder.addEventListener('submit', async ev => {
+    ev.preventDefault()
+    const time = document.getElementById('cal-add-time').value
+    const zone = document.getElementById('cal-add-zone').value
+    const due = [document.getElementById('cal-add-day').value, time, time || zone ? zone : ''].filter(Boolean).join(' ')
+    const needs = document.getElementById('cal-add-needs').value.split(/[\s,]+/).filter(Boolean)
+    const ok = await writeMilestone({ title: document.getElementById('cal-add-title').value, due, needs }, 'Deadline not added')
+    if (ok) closeDeadlineAdder()
+  })
+  if (EMBED) document.getElementById('cal-add').hidden = true
+
+  // ---------------------------------------------------------------- a note's dates, in the drawer
+
+  /**
+   * The drawer's dates row: the note's own due date and, for an experiment, its start and estimate,
+   * with what was recorded of its run; Claude's suggested dates to accept or dismiss; the deadlines
+   * that need it.
+   */
+  function renderDrawerDates(n) {
+    const box = document.getElementById('drawer-dates')
+    if (!n) { box.hidden = true; return }
+    if (calBusyIn(box)) return
+    box.replaceChildren()
+    box.hidden = false
+    const isExp = n.type === 'experiment'
+    const facts = [n.started ? `started ${n.started}` : '', n.finished ? `finished ${n.finished}` : '', n.gpus > 1 ? `${n.gpus} GPUs` : '',
+      n.after && n.after.length ? `after ${n.after.join(', ')}` : ''].filter(Boolean)
+    if (EMBED) {
+      const parts = [n.due ? `due ${n.due}` : '', n.start ? `start ${n.start}` : '', n.est ? `${n.est}d` : '', ...facts].filter(Boolean)
+      box.hidden = !parts.length && !n.suggestedStart && !n.suggestedEst
+      box.innerHTML = parts.length ? `<span class="muted">Dates</span> ${escH(parts.join(' · '))}` : ''
+      if (n.suggestedStart || n.suggestedEst) box.appendChild(datesSuggestion(n))
+      return
+    }
+    const f = document.createElement('form')
+    f.className = 'dates-form'
+    f.innerHTML = `<span class="muted">Dates</span>
+      ${isExp ? `<label title="The day the run starts">Start <input name="start" type="date" value="${escH(n.start || '')}"></label>
+      <label title="How long the run takes: 3d, 2w">Est. <input name="est" type="text" size="4" value="${escH(n.est ? `${n.est}d` : '')}" placeholder="3d"></label>` : ''}
+      <label title="The note's own deadline: a day, a time, a zone (2026-11-13 23:59 AoE)">Due <input name="due" type="text" size="16" value="${escH(n.due || '')}" placeholder="2026-11-13"></label>
+      <button type="submit" hidden>Save</button>`
+    const save = f.querySelector('button')
+    const changed = () => {
+      const out = {}
+      const was = { start: n.start || '', est: n.est ? `${n.est}d` : '', due: n.due || '' }
+      for (const k of isExp ? ['start', 'est', 'due'] : ['due']) {
+        const v = f[k].value.trim()
+        if (v !== was[k]) out[k] = v || null
+      }
+      return out
+    }
+    f.addEventListener('input', () => { save.hidden = !Object.keys(changed()).length })
+    f.addEventListener('submit', async ev => {
+      ev.preventDefault()
+      const c = changed()
+      if (Object.keys(c).length) { document.activeElement && document.activeElement.blur(); await setDates(n.id, c) }
+    })
+    f.addEventListener('keydown', ev => { if (ev.key === 'Escape') { ev.stopPropagation(); document.activeElement.blur(); renderDrawerDates(byId.get(n.id)) } })
+    box.appendChild(f)
+    if (facts.length) box.insertAdjacentHTML('beforeend', `<span class="dates-facts muted">${escH(facts.join(' · '))}</span>`)
+    if (n.suggestedStart || n.suggestedEst) box.appendChild(datesSuggestion(n))
+    const p = planOf.get(n.id)
+    if (p) {
+      const line = document.createElement('div')
+      line.className = `dates-needed${p.plan.atRisk ? ' risk' : ''}`
+      const i = p.item
+      line.textContent = `Needed by ${p.plan.name} (${p.plan.dueText}, ${S.when(p.plan.daysLeft)}): ${i.noEstimate ? 'no estimate yet' : i.expectedEnd ? `ends by ${i.latestEnd}` : `start by ${i.latestStart}`}${i.slack !== null ? `, ${i.slack}d of slack` : ''}`
+      box.appendChild(line)
+    }
+  }
+
+  /** Claude's suggested start and estimate, and why, for the user to accept or dismiss. */
+  function datesSuggestion(n) {
+    const box = document.createElement('div')
+    box.className = 'suggest'
+    const what = [n.suggestedStart ? `start ${n.suggestedStart}` : '', n.suggestedEst ? `${n.suggestedEst}d` : ''].filter(Boolean).join(', ')
+    box.innerHTML = `<span>Claude suggests <b>${escH(what)}</b>${n.suggestedDatesWhy ? `: <span class="suggest-why">${escH(n.suggestedDatesWhy)}</span>` : ''}</span>`
+    if (EMBED) return box
+    const accept = document.createElement('button')
+    accept.type = 'button'
+    accept.textContent = 'Accept'
+    accept.title = `Make it ${n.id}'s ${what}`
+    accept.addEventListener('click', () => setDates(n.id, { ...(n.suggestedStart ? { start: n.suggestedStart } : {}), ...(n.suggestedEst ? { est: `${n.suggestedEst}d` } : {}) }, 'Not accepted'))
+    const dismiss = document.createElement('button')
+    dismiss.type = 'button'
+    dismiss.textContent = 'Dismiss'
+    dismiss.title = `Drop the suggestion; ${n.id} keeps its dates`
+    dismiss.addEventListener('click', () => setDates(n.id, { dismiss: true }, 'Not dismissed'))
+    const bar = document.createElement('span')
+    bar.className = 'suggest-bar'
+    bar.append(accept, dismiss)
+    box.appendChild(bar)
+    return box
+  }
+
+  /** A card's chip for the deadline nearest the note: its own due date, or one that needs it; red when at risk. */
+  function dueChip(n) {
+    const own = n.due && plans.find(p => p.kind === 'note' && p.id === n.id)
+    const p = own || (planOf.get(n.id) && planOf.get(n.id).plan)
+    if (!p || !(p.daysLeft >= 0 || p.atRisk)) return null
+    const el = document.createElement('span')
+    el.className = `kb-due${p.atRisk ? ' risk' : ''}`
+    el.textContent = own ? `due ${S.when(p.daysLeft)}` : `${p.id} ${S.when(p.daysLeft)}`
+    el.title = S.deadlineLine(p)
+    return el
+  }
+
+  /** The selected note's row on the timeline. */
+  function markRows() {
+    if (view !== 'calendar') return
+    calBody.querySelectorAll('.tl-note').forEach(r => r.classList.toggle('selected', r.dataset.id === selected))
+  }
+
+  /** A note's row on the timeline, scrolled into view and briefly lit. */
+  function showRow(id) {
+    const r = calBody.querySelector(`.tl-note[data-id="${CSS.escape(id)}"]`)
+    if (!r) return
+    r.scrollIntoView({ block: 'nearest' })
+    r.classList.add('flash')
+    setTimeout(() => r.classList.remove('flash'), 1400)
   }
 
   // ---------------------------------------------------------------- markdown (web/markdown.js)
@@ -2690,7 +3507,7 @@
       if (!tree || next.version !== tree.version) {
         setTree(next)
         if (!hasView) first()
-        else { render(true); if (view === 'concepts') drawConceptTree(); drawKanban() }
+        else { render(true); if (view === 'concepts') drawConceptTree(); drawKanban(); drawCalendar() }
         if (selected && byId.has(selected)) select(selected)
       }
     } catch (e) {
