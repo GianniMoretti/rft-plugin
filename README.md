@@ -158,9 +158,15 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
 - **In the terminal and elsewhere** it prints the address, e.g. `http://127.0.0.1:41234/?token=…`, and
   opens the outline pane. Open the address in any browser on the same machine.
 
-- A tidy tree, **top-down**, **left-right** or **radial** (never a force layout): circles
-  filled by status and ringed by type, arrows from parent to child. The layout button shows
-  the current layout as a symbol and switches to the next one.
+- A tidy tree, **top-down**, **left-right** or **radial** (never a force layout), arrows from
+  parent to child. Each note is a solid shape: a circle, or a **star** for the note that starts a
+  concept, with a small star inside in that concept's colour. Its colour is its type (direction violet, experiment teal, reference pink, theory
+  blue), and how strong that colour is says its status: full when done, then running, planned,
+  and palest as an idea. Dropped notes fade (shape, title and the link into them), discussed and
+  moved ones half as much, so what is still open stands out; hovering or reading one shows it in
+  full. An open note's priority glows around it in the priority's colour (as on the kanban: urgent
+  red, high orange, medium blue, low grey), brighter the higher, and an urgent one pulses.
+  The layout button shows the current layout as a symbol and switches to the next one.
 - An infinite canvas: drag to pan, scroll or pinch to zoom. One button fits the whole tree,
   then centres on the root; panning or zooming by hand makes it fit again.
   Labels show more of the title the closer you zoom.
@@ -266,8 +272,8 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
 
 **Kanban** shows the notes in one column per status: idea → planned → running → done, then
 dropped, discussed and moved as narrow folded strips (click one to open it, its head to fold it
-again), and a column for any other status a note was given by hand. Each note is a card: its type
-ring, id and title, its summary, its priority, its concept and its date. Click a card to read the
+again), and a column for any other status a note was given by hand. Each note is a card: its dot
+(the type's colour at its status's strength, as in the tree), id and title, its summary, its priority, its concept and its date. Click a card to read the
 note in the drawer; the board makes room for it.
 
 - **Order by Priority** (the default: urgent, high, medium, low, then the notes with none; newest

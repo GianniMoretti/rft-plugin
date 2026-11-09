@@ -53,14 +53,49 @@ main { position: relative; flex: 1; min-height: 0; }
 #arrow path { fill: var(--link); }
 .link { fill: none; stroke: var(--link); stroke-width: 1.4px; }
 .link.hl { stroke: var(--link-hl); stroke-width: 2.2px; }
+/* a note's look, wherever it shows (a node, a legend or kanban dot, a concept's status bar): its
+   type gives the hue, its status how strong it is (the share of the hue in a mix with --tone-base:
+   the background when light; a dark grey when dark, so the weak end does not sink into the
+   background), and the work left behind also fades (--a), so what is still open stands out */
+:root { --tone-base: light-dark(#fbfbfd, #3a3e48); }
+.tone { --hue: var(--fg); --i: 40%; --a: 1; }
+.tone.direction { --hue: var(--direction); }
+.tone.experiment { --hue: var(--experiment); }
+.tone.reference { --hue: var(--reference); }
+.tone.theory { --hue: var(--theory); }
+.tone.s-done { --i: 100%; }
+.tone.s-running { --i: 74%; }
+.tone.s-planned { --i: 52%; }
+.tone.s-idea { --i: 32%; }
+.tone.s-dropped { --i: 55%; --a: 0.28; }
+.tone.s-discussed { --i: 36%; --a: 0.5; }
+.tone.s-moved { --i: 60%; --a: 0.5; }
+:root[data-theme="dark"] .tone.s-running { --i: 78%; }
+:root[data-theme="dark"] .tone.s-planned { --i: 58%; }
+:root[data-theme="dark"] .tone.s-idea { --i: 40%; }
 .node { cursor: pointer; }
-.node circle.dot { stroke-width: 2.6px; }
-.node.direction circle.dot { stroke: var(--direction); }
-.node.experiment circle.dot { stroke: var(--experiment); }
-.node.reference circle.dot { stroke: var(--reference); }
-.node.theory circle.dot { stroke: var(--theory); }
-.node.selected circle.dot { stroke: var(--fg); stroke-width: 3.5px; }
-.node.match circle.dot { stroke: var(--accent); stroke-width: 4px; }
+/* solid shapes, no outline: a circle, or a star for the note that starts a concept */
+.node .dot { fill: color-mix(in oklab, var(--hue) var(--i), var(--tone-base)); opacity: var(--a); }
+/* inside a star, a small star in the colour of the concept it starts (its fill set by app.js) */
+.node .core { opacity: var(--a); }
+.node text.label { opacity: var(--a); }
+/* a faded note shows in full while it is hovered (with its path) or read */
+.node.hl, .node.selected { --a: 1; }
+.link.tone:not(.dim) { opacity: var(--a); }
+.link.tone.hl { --a: 1; }
+/* the selected note and the search's matches: a thin ring around the shape, apart from it */
+.node .sel { display: none; fill: none; pointer-events: none; }
+.node.selected .sel { display: inline; stroke: var(--fg); stroke-width: 1.6px; }
+.node.match .sel { display: inline; stroke: var(--accent); stroke-width: 2.4px; }
+/* an open note's priority: a glow in the priority's colour (as on the kanban), brighter the
+   higher; urgent pulses */
+.node .halo { pointer-events: none; }
+.node.p-urgent .halo { animation: rft-pulse 1.5s ease-in-out infinite alternate; }
+.node.p-high .halo { opacity: 0.8; }
+.node.p-medium .halo { opacity: 0.5; }
+.node.p-low .halo { opacity: 0.25; }
+/* urgent at its dimmest still outshines high */
+@keyframes rft-pulse { from { transform: scale(0.95); opacity: 0.9; } to { transform: scale(1.35); opacity: 1; } }
 /* the label takes clicks like the circle: a click on the title opens the note */
 .node text.label { fill: var(--fg); paint-order: stroke; stroke: var(--label-halo); stroke-width: 3px;
   stroke-linejoin: round; }
@@ -77,11 +112,22 @@ main { position: relative; flex: 1; min-height: 0; }
 #statuses .row { cursor: pointer; }
 #statuses .row.off { opacity: 0.35; }
 .swatch { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
-.ring { width: 11px; height: 11px; border-radius: 50%; display: inline-block; border: 2.5px solid; }
-.ring-direction { border-color: var(--direction); }
-.ring-experiment { border-color: var(--experiment); }
-.ring-reference { border-color: var(--reference); }
-.ring-theory { border-color: var(--theory); }
+/* a note's dot as the tree draws it (see .tone): a type at full strength, a status in grey, a card's note */
+.tdot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; flex: none;
+  background: color-mix(in oklab, var(--hue) var(--i), var(--tone-base)); opacity: var(--a); }
+.star-ico { width: 15px; height: 15px; flex: none; margin: 0 -2px; fill: var(--fg); }
+.star-ico .core { fill: #f783ac; }
+/* a priority's glow in the legend: a grey dot, the glow in the priority's colour and strength */
+.glow { width: 9px; height: 9px; margin: 0 1px; border-radius: 50%; display: inline-block; flex: none;
+  background: color-mix(in oklab, var(--fg) 55%, var(--tone-base));
+  box-shadow: 0 0 4px 2px color-mix(in srgb, var(--pc) var(--g), transparent); }
+.glow.p-urgent { --pc: var(--p-urgent); --g: 95%; animation: rft-glow 1.5s ease-in-out infinite alternate; }
+.glow.p-high { --pc: var(--p-high); --g: 80%; }
+.glow.p-medium { --pc: var(--p-medium); --g: 50%; }
+.glow.p-low { --pc: var(--p-low); --g: 30%; }
+@keyframes rft-glow { from { box-shadow: 0 0 4px 2px color-mix(in srgb, var(--pc) 90%, transparent); }
+  to { box-shadow: 0 0 6px 4px color-mix(in srgb, var(--pc) 100%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .node.p-urgent .halo, .glow.p-urgent { animation: none; } }
 .hint { margin-top: 6px; }
 /* --drawer-w: the default width, or the one dragged on the drawer's left edge (set on main by app.js) */
 main { --drawer-w: calc(480px * var(--font-scale)); }
@@ -192,6 +238,8 @@ button.linkish { border: 0; background: none; color: var(--accent); padding: 0; 
 .cname { fill: var(--fg); font-weight: 700; font-size: calc(15px * var(--font-scale)); }
 .ccount { fill: var(--muted); font-size: calc(12.5px * var(--font-scale)); }
 .cbar-frame { fill: none; stroke: var(--line); }
+/* a status's share of a concept's bar: the concept's colour at that status's strength (.tone) */
+.cbar { fill: color-mix(in oklab, var(--hue) var(--i), var(--tone-base)); fill-opacity: var(--a); }
 .cfocus { fill: var(--accent); font-size: calc(12px * var(--font-scale)); cursor: pointer; }
 .cfocus:hover { text-decoration: underline; }
 /* a halo behind the concept tree's text, so links that pass under it stay readable */
@@ -340,7 +388,7 @@ main:has(#drawer:not([hidden])) #kanban { right: min(var(--drawer-w), 92vw); }
 .kb-card.flash { animation: kb-flash 1.4s ease-out; }
 @keyframes kb-flash { 0%, 40% { box-shadow: 0 0 0 4px var(--accent); } 100% { box-shadow: 0 0 0 0 transparent; } }
 .kb-top { display: flex; align-items: flex-start; gap: 6px; line-height: 1.35; }
-.kb-top .ring { flex: none; margin-top: 0.2em; }
+.kb-top .tdot { margin-top: 0.2em; }
 .kb-id { font-weight: 700; flex: none; }
 .kb-title { font-weight: 600; overflow-wrap: anywhere; }
 .kb-summary { margin-top: 3px; color: var(--muted); font-size: 0.92em; overflow: hidden; display: -webkit-box;

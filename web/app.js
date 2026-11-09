@@ -13,6 +13,15 @@
   const MARK = { done: '✓', running: '…', planned: '→', idea: '?', dropped: '✗', discussed: '·', moved: '↗' }
   const LABEL = { done: 'done', running: 'running', planned: 'planned', idea: 'idea', dropped: 'dropped', discussed: 'discussed, not pursued', moved: 'moved' }
   const R = 7 // node radius
+  const TYPES = ['direction', 'experiment', 'reference', 'theory']
+  // the note that starts a concept is a star: its points this far out, its notches this share of that
+  const STAR_R = 12.5
+  const STAR_IN = 0.48
+  const STAR_SIDE = Math.cos(Math.PI / 5) // the lower points (in the star's own frame), as a share of STAR_R
+  const STAR_CORE = 0.52 // the small star inside, in the concept's colour, as a share of STAR_R
+  // an open note's priority as a glow in the priority's colour: how far it reaches beyond the
+  // shape (its strength is in app.css)
+  const HALO = { urgent: 13, high: 10, medium: 8, low: 6 }
   const SPACING = { td: [150, 104], lr: [34, 280], radial: [90, 140] } // [breadth, depth] in world units
   const CSPACING = { td: [240, 230], lr: [170, 300], radial: [250, 280] } // the same, for the concept tree
   const LABEL_PX = 15 // label size on screen at A 100 %, whatever the zoom
@@ -37,6 +46,7 @@
   let font = 1 // the A− / A+ scale of labels and the note drawer
   const C = window.RftConcepts
   let concepts = new Map() // the concepts by id, `root` the project
+  let stars = new Map() // the notes that start a concept, drawn as stars: note id → concept id
   let conceptMode = 'off' // off | regions | arrows
   let view = 'tree' // tree: the reasoning tree; concepts: the concept tree
   let focus = null // the concept whose subtree alone is drawn, or null
@@ -90,6 +100,7 @@
     byId = new Map(tree.nodes.map(n => [n.id, n]))
     prioUse = K.usage(tree.nodes)
     concepts = C.annotate(tree)
+    stars = new Map([...concepts.values()].filter(c => c.root && byId.has(c.root)).map(c => [c.root, c.id]))
     if (first) {
       conceptMode = ['off', 'regions', 'arrows'].includes(store.get('conceptMode', 'off')) ? store.get('conceptMode', 'off') : 'off'
       view = PAGES.includes(store.get('pageView', 'tree')) ? store.get('pageView', 'tree') : 'tree'
@@ -105,6 +116,7 @@
       if (q.has('focus')) focus = q.get('focus') || null
       if (q.has('note')) selected = q.get('note')
       buildArrowMarkers()
+      buildHalos()
       layoutKind = store.get('layout', 'td')
       collapsed = new Set(store.get('collapsed', []))
       // earlier versions kept only the legend's statuses, under `hidden`
@@ -182,24 +194,58 @@
       return [n.radius * Math.cos(a), n.radius * Math.sin(a)]
     }
     const nodes = root.descendants().filter(n => !n.data.virtual)
-    const pos = new Map(nodes.map(n => [n.data.id, { p: point(n), angle: n.angle, radius: n.radius }]))
+    const pos = new Map(nodes.map(n => [n.data.id, { p: point(n), angle: n.angle, radius: n.radius, star: stars.has(n.data.id) }]))
     const links = root.links().filter(l => !l.source.data.virtual)
     return { nodes, links, pos }
   }
 
+  // a link leaves a star from the notch opposite its point, and arrives at the point (starShape
+  // turns that point towards the parent)
   function linkPath(s, t) {
     const [x1, y1] = s.p, [x2, y2] = t.p
+    const out = s.star ? STAR_R * STAR_IN : R, into = (t.star ? STAR_R : R) + 3
     if (layoutKind === 'td') {
-      const ye = y2 - R - 3, my = (y1 + ye) / 2
-      return `M${x1},${y1 + R}C${x1},${my} ${x2},${my} ${x2},${ye}`
+      const ye = y2 - into, my = (y1 + ye) / 2
+      return `M${x1},${y1 + out}C${x1},${my} ${x2},${my} ${x2},${ye}`
     }
     if (layoutKind === 'lr') {
-      const xe = x2 - R - 3, mx = (x1 + xe) / 2
-      return `M${x1 + R},${y1}C${mx},${y1} ${mx},${y2} ${xe},${y2}`
+      const xe = x2 - into, mx = (x1 + xe) / 2
+      return `M${x1 + out},${y1}C${mx},${y1} ${mx},${y2} ${xe},${y2}`
     }
-    return radialLink({ source: [s.angle, s.radius ? s.radius + R : 0], target: [t.angle, Math.max(0, t.radius - R - 3)] })
+    return radialLink({ source: [s.angle, s.radius ? s.radius + out : 0], target: [t.angle, Math.max(0, t.radius - into)] })
   }
   const radialLink = d3.linkRadial().angle(e => e[0]).radius(e => e[1])
+
+  // ---------------------------------------------------------------- shapes
+
+  const circleShape = r => `M${r},0A${r},${r} 0 1,1 ${-r},0A${r},${r} 0 1,1 ${r},0Z`
+
+  /** A five-pointed star around (0, 0), its points `size` out, the first at angle `turn` (0: up, clockwise). */
+  function starShape(turn, size = STAR_R) {
+    let d = ''
+    for (let i = 0; i < 10; i++) {
+      const a = turn + (i * Math.PI) / 5, r = i % 2 ? size * STAR_IN : size
+      d += `${i ? 'L' : 'M'}${(r * Math.sin(a)).toFixed(2)},${(-r * Math.cos(a)).toFixed(2)}`
+    }
+    return `${d}Z`
+  }
+
+  /** A star's point faces where its link comes in: up, left, or towards the centre of the radial tree. */
+  function starTurn(id) {
+    if (layoutKind === 'td') return 0
+    if (layoutKind === 'lr') return -Math.PI / 2
+    const p = positions.get(id)
+    return p && p.radius ? Math.atan2(-p.p[0], p.p[1]) : 0
+  }
+
+  const shapeOf = id => (stars.has(id) ? starShape(starTurn(id)) : circleShape(R))
+  /** The colour of the concept a star starts (none for the project's own concept), for the small star inside it. */
+  const coreColourOf = id => (stars.has(id) ? C.colourOf(concepts, stars.get(id)) : null)
+  /** How far the shape reaches sideways and away from the parent: where the label and the fold badge go. */
+  const sideOf = id => (stars.has(id) ? STAR_R * STAR_SIDE : R)
+  /** The priority a note glows with: only an open note's (as only they count towards the limits). */
+  const glowOf = d => (K.isOpen(d) && HALO[d.priority] ? d.priority : null)
+  const toneOf = d => `tone ${TYPES.includes(d.type) ? d.type : 'other'} s-${STATUSES.includes(d.status) ? d.status : 'other'}`
 
   // ---------------------------------------------------------------- drawing
 
@@ -231,7 +277,12 @@
       .on('mouseenter', (ev, n) => hover(n.data.id, ev))
       .on('mousemove', ev => moveTooltip(ev))
       .on('mouseleave', () => hover(null))
-    nodeIn.append('circle').attr('class', 'dot').attr('r', R)
+    // the mark: the priority's glow under the shape, the ring that marks it selected or found
+    const mark = nodeIn.append('g').attr('class', 'mark')
+    mark.append('circle').attr('class', 'halo')
+    mark.append('circle').attr('class', 'sel')
+    mark.append('path').attr('class', 'dot')
+    mark.append('path').attr('class', 'core')
     nodeIn.append('text').attr('class', 'label')
     const fold = nodeIn.append('g').attr('class', 'fold')
       .on('click', (ev, n) => { ev.stopPropagation(); toggle(n.data.id) })
@@ -241,14 +292,25 @@
 
     const all = nodeIn.merge(node)
     all.attr('class', n => nodeClass(n.data))
-    all.select('circle.dot').attr('fill', n => `var(--${STATUSES.includes(n.data.status) ? n.data.status : 'discussed'})`)
+    all.select('path.dot').attr('d', n => shapeOf(n.data.id))
+    all.select('circle.sel').attr('r', n => (stars.has(n.data.id) ? STAR_R : R) + 4)
+    all.select('circle.halo')
+      .attr('display', n => (glowOf(n.data) ? null : 'none'))
+      .attr('r', n => (glowOf(n.data) ? (stars.has(n.data.id) ? STAR_R * 0.8 : R) + HALO[glowOf(n.data)] : 0))
+      .attr('fill', n => (glowOf(n.data) ? `url(#halo-${glowOf(n.data)})` : null))
+    // a star holds a small star in the colour of the concept it starts
+    all.select('path.core')
+      .attr('display', n => (coreColourOf(n.data.id) ? null : 'none'))
+      .attr('d', n => (coreColourOf(n.data.id) ? starShape(starTurn(n.data.id), STAR_R * STAR_CORE) : null))
+      .style('fill', n => coreColourOf(n.data.id))
     all.select('g.fold')
       .attr('display', n => (n.data.children.length ? null : 'none'))
       .attr('transform', n => foldOffset(n.data.id))
     all.select('g.fold text').text(n => (collapsed.has(n.data.id) ? `+${countBelow(n.data.id)}` : '−'))
     all.select('g.fold circle').attr('r', n => (collapsed.has(n.data.id) ? 8 : 5.5))
     all.transition().duration(dur).attr('transform', n => `translate(${pos.get(n.data.id).p})`)
-    gLinks.selectAll('path.link').attr('class', l => `link${matchSet.has(l.target.data.id) ? '' : ' dim'}`)
+    // a link fades with the note it leads to
+    gLinks.selectAll('path.link').attr('class', l => `link ${toneOf(l.target.data)}${matchSet.has(l.target.data.id) ? '' : ' dim'}`)
     drawConcepts(pos, dur)
     drawOrigins(pos, dur)
     updateLabels()
@@ -280,7 +342,8 @@
   }
 
   function nodeClass(d) {
-    let c = `node ${d.type}`
+    let c = `node ${toneOf(d)}`
+    if (glowOf(d)) c += ` p-${glowOf(d)}`
     if (d.id === selected) c += ' selected'
     if (!matchSet.has(d.id)) c += ' dim'
     const q = searchText()
@@ -294,12 +357,13 @@
   }
 
   function foldOffset(id) {
-    if (layoutKind === 'td') return `translate(${R + 8},${-R - 4})`
-    if (layoutKind === 'lr') return `translate(${-R - 2},${-R - 8})`
+    const r = sideOf(id)
+    if (layoutKind === 'td') return `translate(${r + 8},${-r - 4})`
+    if (layoutKind === 'lr') return `translate(${-r - 2},${-r - 8})`
     const p = positions.get(id)
-    if (!p || !p.radius) return `translate(${R + 8},${-R - 4})`
+    if (!p || !p.radius) return `translate(${r + 8},${-r - 4})`
     const len = Math.hypot(p.p[0], p.p[1]) || 1
-    return `translate(${(-p.p[1] / len) * (R + 9)},${(p.p[0] / len) * (R + 9)})`
+    return `translate(${(-p.p[1] / len) * (r + 9)},${(p.p[0] / len) * (r + 9)})`
   }
 
   // labels keep a constant size on screen and show as much of the title as the room at this
@@ -345,19 +409,21 @@
       spans.exit().remove()
       spans.enter().append('tspan').merge(spans).text(t => t)
         .attr('x', layoutKind === 'td' ? 0 : null).attr('dy', (t, i) => (i ? '1.15em' : null))
-      // nodes stay visible when far: at least 3.5 px on screen
-      d3.select(this).select('circle.dot').attr('r', Math.max(R, 3.5 / k))
+      // nodes stay visible when far: a circle at least 3.5 px across on screen, the rest in proportion
+      const grow = Math.max(1, 3.5 / (k * R))
+      d3.select(this).select('g.mark').attr('transform', grow > 1 ? `scale(${grow})` : null)
+      const side = sideOf(d.id) * grow
       if (layoutKind === 'td') {
-        text.attr('x', 0).attr('y', R + 4 + size).attr('text-anchor', 'middle').attr('transform', null)
+        text.attr('x', 0).attr('y', side + 4 + size).attr('text-anchor', 'middle').attr('transform', null)
       } else if (layoutKind === 'lr') {
-        text.attr('x', R + 6).attr('y', size * 0.35).attr('text-anchor', 'start').attr('transform', null)
+        text.attr('x', side + 6).attr('y', size * 0.35).attr('text-anchor', 'start').attr('transform', null)
       } else {
         const p = positions.get(d.id)
         // the centre's label lies flat, the others point outward and read left to right
         const angle = p && p.radius ? L.normalAngle(p.angle) : Math.PI / 2
         const deg = (angle * 180) / Math.PI
         const right = angle < Math.PI
-        text.attr('text-anchor', right ? 'start' : 'end').attr('x', right ? R + 6 : -R - 6).attr('y', size * 0.35)
+        text.attr('text-anchor', right ? 'start' : 'end').attr('x', right ? side + 6 : -side - 6).attr('y', size * 0.35)
           .attr('transform', `rotate(${right ? deg - 90 : deg + 90})`)
       }
     })
@@ -371,7 +437,8 @@
     gLinks.selectAll('path.link').classed('hl', l => path.has(l.target.data.id) && path.has(l.source.data.id))
     if (!id) { tooltip.hidden = true; return }
     const n = byId.get(id)
-    tooltip.textContent = `${n.name} · ${MARK[n.status] || ''} ${n.status}${n.date ? ' · ' + n.date : ''}`
+    const starts = stars.has(id) && concepts.get(stars.get(id))
+    tooltip.textContent = `${n.name} · ${MARK[n.status] || ''} ${n.status}${n.priority ? ` · ${n.priority} priority` : ''}${n.date ? ' · ' + n.date : ''}${starts ? ` · starts “${starts.name}”` : ''}`
     tooltip.hidden = false
     moveTooltip(ev)
   }
@@ -990,7 +1057,7 @@
     for (const s of STATUSES) {
       const row = document.createElement('div')
       row.className = `row${filters.hiddenStatuses.includes(s) ? ' off' : ''}`
-      row.innerHTML = `<span class="swatch" style="background: var(--${s})"></span>${MARK[s]} ${LABEL[s]}`
+      row.innerHTML = `<span class="tdot tone s-${s}"></span>${MARK[s]} ${LABEL[s]}`
       row.title = 'Click to filter this status out or back in'
       row.addEventListener('click', () => applyFilters({ hiddenStatuses: toggled(filters.hiddenStatuses, s) }))
       box.appendChild(row)
@@ -1012,7 +1079,7 @@
     sbox.innerHTML = ''
     for (const s of STATUSES) {
       const label = document.createElement('label')
-      label.innerHTML = `<input type="checkbox"${filters.hiddenStatuses.includes(s) ? '' : ' checked'}> <span class="swatch" style="background: var(--${s})"></span> ${LABEL[s]}`
+      label.innerHTML = `<input type="checkbox"${filters.hiddenStatuses.includes(s) ? '' : ' checked'}> <span class="tdot tone s-${s}"></span> ${LABEL[s]}`
       label.querySelector('input').addEventListener('change', () => applyFilters({ hiddenStatuses: toggled(filters.hiddenStatuses, s) }))
       sbox.appendChild(label)
     }
@@ -1207,6 +1274,21 @@
         .attr('markerWidth', 7).attr('markerHeight', 7).attr('orient', 'auto')
         .append('path').attr('d', 'M0,-4L8,0L0,4Z').attr('fill', colour)
     })
+  }
+
+  /**
+   * A glow per priority, in the priority's colour (as on the kanban): full at the centre, under
+   * the shape, fading out beyond it.
+   */
+  function buildHalos() {
+    const defs = svg.select('defs')
+    for (const p of K.PRIORITIES) {
+      if (!defs.select(`#halo-${p}`).empty()) continue
+      const g = defs.append('radialGradient').attr('id', `halo-${p}`)
+      for (const [at, a] of [[0, 1], [0.45, 0.85], [0.72, 0.32], [1, 0]]) {
+        g.append('stop').attr('offset', at).style('stop-color', `var(--p-${p})`).style('stop-opacity', a)
+      }
+    }
   }
 
   // the room a node takes in a region, in world units (its circle and its label), grown by `g`
@@ -1496,11 +1578,13 @@
       const counts = C.totalStatuses(concepts, n.data.id)
       const total = STATUSES.reduce((a, st) => a + (counts[st] || 0), 0) || 1
       const g = d3.select(this).append('g').attr('transform', `translate(${-BAR / 2},${radius(n.data) + 48})`)
+      // each status in the concept's colour at that status's strength, as the notes in the tree
+      const hue = C.colourOf(concepts, n.data.id) || 'var(--fg)'
       let x = 0
       for (const st of STATUSES) {
         const w = ((counts[st] || 0) / total) * BAR
         if (!w) continue
-        g.append('rect').attr('x', x).attr('width', w).attr('height', 9).attr('fill', `var(--${st})`)
+        g.append('rect').attr('class', `cbar tone s-${st}`).style('--hue', hue).attr('x', x).attr('width', w).attr('height', 9)
           .append('title').text(`${counts[st]} ${LABEL[st]}`)
         x += w
       }
@@ -1581,8 +1665,7 @@
     col.dataset.status = c.status
     const head = document.createElement('div')
     head.className = 'kb-head'
-    const colour = c.status === K.OTHER ? 'var(--muted)' : `var(--${c.status})`
-    head.innerHTML = `<span class="swatch" style="background: ${colour}"></span><span class="kb-name">${escH(MARK[c.status] ? `${MARK[c.status]} ` : '')}${escH(COLUMN_LABEL[c.status] || c.status)}</span><span class="kb-n muted">${c.notes.length}</span>`
+    head.innerHTML = `<span class="tdot tone s-${escH(c.status)}"></span><span class="kb-name">${escH(MARK[c.status] ? `${MARK[c.status]} ` : '')}${escH(COLUMN_LABEL[c.status] || c.status)}</span><span class="kb-n muted">${c.notes.length}</span>`
     col.appendChild(head)
     if (c.folded) {
       // a folded column is a narrow strip: a click opens it, its head folds it again
@@ -1612,7 +1695,7 @@
     el.className = cardClass(n)
     el.dataset.id = n.id
     el.tabIndex = 0
-    el.innerHTML = `<div class="kb-top"><span class="ring ring-${escH(n.type)}" title="${escH(n.type)}"></span><span class="kb-id">${escH(n.id)}</span><span class="kb-title">${escH(n.title || n.name)}</span></div>`
+    el.innerHTML = `<div class="kb-top"><span class="tdot ${escH(toneOf(n))}" title="${escH(`${n.type} · ${n.status}`)}"></span><span class="kb-id">${escH(n.id)}</span><span class="kb-title">${escH(n.title || n.name)}</span></div>`
     if (n.summary) {
       const s = document.createElement('div')
       s.className = 'kb-summary'
