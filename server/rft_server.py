@@ -4,9 +4,11 @@
 Serves the page (web/), the tree of the vault as JSON, and one note at a time with its
 discussion, and writes: the body of a note, its frontmatter kept as it is (an edit, a footnote, an
 accepted suggestion); the `locked:` line of its frontmatter; its `priority:` line, the user's
-alone (which also answers Claude's `suggested_priority:`); and its discussion, the comments and
-suggestions on parts of its text, in vault/.comments/<id>.json (as hooks/lib/comments.ts reads
-it). A new note, or a note's new type, it never writes itself: it asks the session that runs it,
+alone (which also answers Claude's `suggested_priority:`); its dates, the user's too (`due:`,
+`start:`, `est:`, which also answer Claude's suggested ones); the deadlines in vault/milestones/
+(a new one, its due date, the notes it needs, its status, and Claude's suggested ones accepted or
+dismissed); and its discussion, the comments and suggestions on parts of its text, in
+vault/.comments/<id>.json (as hooks/lib/comments.ts reads it). A new note, or a note's new type, it never writes itself: it asks the session that runs it,
 with a line `RFT_ADD_NODE {"parent", "type", "title"}` or `RFT_SET_TYPE {"id", "type"}` on stdout,
 and the plugin makes the change as the rft_add_node or rft_set_type tool does (no model turn), then
 answers the note's id once it is on disk. `RFT_ASK {"id", "thread"}` asks the session's Claude to
@@ -14,7 +16,8 @@ answer a thread (a model turn). It binds 127.0.0.1 only, takes requests only for
 host name (so a web page elsewhere cannot reach it through DNS rebinding), serves nothing but an
 allow-list of page files, and reads or writes a note only by its id, in a markdown file that
 resolves inside one of the vault's note folders (experiments/, directions/, references/,
-theory/). A write (PUT api/note, POST api/node, api/type, api/comment, api/lock, api/priority) must also come from the page itself (its
+theory/), and a deadline only in milestones/. A write (PUT api/note, POST api/node, api/type, api/comment, api/lock,
+api/priority, api/dates, api/milestone) must also come from the page itself (its
 Origin) and carry the vault's key, which is in the address the server prints, so neither
 another web page nor another user of the machine can change a note. The key is kept in the
 user's cache, readable by them alone, so it stays the same across restarts.
@@ -25,6 +28,7 @@ the note, in the vault and then in the Obsidian vault around it (the folder that
 `.obsidian/`). Only image files, and one outside the vault only for a request carrying the key.
 
     python3 rft_server.py --vault /abs/project/vault --web /abs/plugin/web [--port 0] [--project NAME]
+        [--config /abs/project/.rft/config.json]   (read for `gpus:` and the last milestone id)
 
 It prints `RFT_SERVER_URL http://127.0.0.1:<port>/?token=<key>` once listening, and exits when
 its parent process goes away (or, with --watch-stdin, closes its stdin). When a fixed --port is
@@ -35,6 +39,7 @@ on a free port instead.
 from __future__ import annotations
 
 import argparse
+import datetime
 import errno
 import hashlib
 import http.client
@@ -60,6 +65,7 @@ PAGE_FILES = {
     "/app.css": ("app.css", "text/css; charset=utf-8"),
     "/filters.js": ("filters.js", "text/javascript; charset=utf-8"),
     "/kanban.js": ("kanban.js", "text/javascript; charset=utf-8"),
+    "/schedule.js": ("schedule.js", "text/javascript; charset=utf-8"),
     "/layout.js": ("layout.js", "text/javascript; charset=utf-8"),
     "/concepts.js": ("concepts.js", "text/javascript; charset=utf-8"),
     "/theme.js": ("theme.js", "text/javascript; charset=utf-8"),
@@ -99,6 +105,17 @@ PRIORITIES = ("urgent", "high", "medium", "low")
 PRIORITY_LIMITS = {"urgent": 1, "high": 5, "medium": 10, "low": None}
 OPEN_STATUSES = ("idea", "planned", "running")
 SUGGESTION_FIELDS = ("suggested_priority", "suggested_priority_why")
+# the deadlines, outside the tree, and the dates of a note: the user's alone. A due date is a day, a
+# time and a zone, as DUE_RE in web/schedule.js reads it; an estimate whole days or weeks.
+MILESTONES = "milestones"
+MILESTONE_RE = re.compile(r"^M(\d+)$")
+MILESTONE_STATUSES = ("open", "done", "suggested", "dismissed")
+DAY_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+DUE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}):(\d{2}))?(?:\s*(AoE|UTC|Z|[+-]\d{2}:?\d{2}))?$", re.I)
+EST_RE = re.compile(r"^(\d+)\s*([dw])?$", re.I)
+DATE_FIELDS = ("due", "start", "est")
+DATE_SUGGESTION_FIELDS = ("suggested_start", "suggested_est", "suggested_dates_why")
+FORBIDDEN_TITLE = re.compile(r'[\^#|\[\]\\/:*"<>?]')
 
 
 # ------------------------------------------------------------------ the vault
@@ -339,6 +356,41 @@ def compute_concepts(nodes: dict[str, dict], roots: list[str], project: str,
     return order
 
 
+def day_of(value: str | None) -> str | None:
+    """The day `value` names (YYYY-MM-DD, one of the calendar), or None."""
+    v = unquote(value)
+    m = DAY_RE.match(v)
+    if not m:
+        return None
+    try:
+        datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return None
+    return v
+
+
+def due_ok(value: str | None) -> bool:
+    """Whether `value` is a due date: a day, with a time and a zone when given."""
+    m = DUE_RE.match(unquote(value))
+    return bool(m) and day_of(m.group(1)) is not None and (m.group(2) is None or (int(m.group(2)) <= 23 and int(m.group(3)) <= 59))
+
+
+def est_of(value: str | None) -> int | None:
+    """An estimate in whole days (3d, 2w, 4), or None."""
+    m = EST_RE.match(unquote(value))
+    days = int(m.group(1)) * (7 if (m.group(2) or "").lower() == "w" else 1) if m else 0
+    return days or None
+
+
+def count_of(value: str | None) -> int | None:
+    v = unquote(value)
+    return int(v) if v.isdigit() and int(v) > 0 else None
+
+
+def clean_title(title: str) -> str:
+    return re.sub(r"\s+", " ", FORBIDDEN_TITLE.sub(" ", title)).strip(" .,-")[:100].strip()
+
+
 def link_target(value: str | None) -> str | None:
     m = re.search(r"\[\[([^\]|#]+)", value or "")
     return m.group(1).strip() if m else None
@@ -368,9 +420,10 @@ def distance(a: Path, b: Path) -> int:
 class Vault:
     """The tree read from the notes' `parent:` fields, cached until a note changes."""
 
-    def __init__(self, root: Path, project: str):
+    def __init__(self, root: Path, project: str, config: Path | None = None):
         self.root = root.resolve()
         self.project = project
+        self.config = config
         # tells two servers of the same vault apart from others, without saying where it is
         self.ident = hashlib.sha256(str(self.root).encode()).hexdigest()[:16]
         self._lock = threading.Lock()
@@ -392,11 +445,15 @@ class Vault:
                 for f in sorted(d.glob("*.md")):
                     st = f.stat()
                     parts.append(f"{sub}/{f.name}:{st.st_mtime_ns}:{st.st_size}")
-        d = self.root / COMMENTS
-        if d.is_dir():
-            for f in sorted(d.glob("*.json")):
-                st = f.stat()
-                parts.append(f"{COMMENTS}/{f.name}:{st.st_mtime_ns}:{st.st_size}")
+        for sub, pattern in ((COMMENTS, "*.json"), (MILESTONES, "*.md")):
+            d = self.root / sub
+            if d.is_dir():
+                for f in sorted(d.glob(pattern)):
+                    st = f.stat()
+                    parts.append(f"{sub}/{f.name}:{st.st_mtime_ns}:{st.st_size}")
+        if self.config and self.config.is_file():
+            st = self.config.stat()
+            parts.append(f"config:{st.st_mtime_ns}:{st.st_size}")
         return hashlib.sha1("|".join(parts).encode()).hexdigest()[:16]
 
     def tree(self) -> dict:
@@ -415,6 +472,7 @@ class Vault:
         superseded: dict[str, list[str]] = {}
         decl: dict[str, tuple[str, str, list[str]]] = {}
         repos_only: dict[str, list[str]] = {}
+        after_of: dict[str, list[str]] = {}
         for sub, kind in SUBDIRS.items():
             d = self.root / sub
             if not d.is_dir():
@@ -450,6 +508,16 @@ class Vault:
                 pdf = link_target(fm.get("pdf"))
                 if pdf:
                     nodes[nid]["pdf"] = pdf
+                # the dates, as hooks/lib/vault.ts reads them: values that are none are left out
+                plan = {"due": unquote(fm.get("due")) if due_ok(fm.get("due")) else None,
+                        "start": day_of(fm.get("start")), "est": est_of(fm.get("est")),
+                        "started": day_of(fm.get("started")), "finished": day_of(fm.get("finished")),
+                        "gpus": count_of(fm.get("gpus")), "suggestedStart": day_of(fm.get("suggested_start")),
+                        "suggestedEst": est_of(fm.get("suggested_est"))}
+                if plan["suggestedStart"] or plan["suggestedEst"]:
+                    plan["suggestedDatesWhy"] = unquote_json(fm.get("suggested_dates_why")) or None
+                nodes[nid].update({k: v for k, v in plan.items() if v})
+                after_of[nid] = link_targets(fm.get("after"))
                 cname = unquote(fm.get("concept"))
                 repos = parse_repos(fm.get("concept_repos"))
                 if cname:
@@ -471,6 +539,9 @@ class Vault:
             newer = ids(superseded.get(n["id"], []))
             if newer and newer[0] != n["id"]:
                 n["supersededBy"] = newer[0]
+            after = [i for i in ids(after_of.get(n["id"], [])) if i != n["id"]]
+            if after:
+                n["after"] = after
         for n in nodes.values():
             ref = refs.get(n["id"])
             pid = by_name.get(ref) or (id_of(ref) if ref and id_of(ref) in nodes else None) if ref else None
@@ -497,8 +568,47 @@ class Vault:
                 counts[t] = counts.get(t, 0) + 1
         tags = [{"tag": t, "count": c} for t, c in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
         concepts = compute_concepts(nodes, roots, self.project, decl, repos_only)
+        milestones = self._milestones(by_name, nodes)
         return {"project": self.project, "version": sig, "nodes": list(nodes.values()), "roots": roots, "tags": tags,
-                "concepts": concepts}
+                "concepts": concepts, "milestones": milestones, "gpus": self._config().get("gpus") if count_of(str(self._config().get("gpus", ""))) else None}
+
+    def _config(self) -> dict:
+        """The project's .rft/config.json, or {} when there is none to read."""
+        try:
+            data = json.loads(self.config.read_text(encoding="utf-8")) if self.config else {}
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _milestones(self, by_name: dict[str, str], nodes: dict[str, dict]) -> list[dict]:
+        """The deadlines in milestones/: due date as written, status, the notes they need by id and
+        the names that are none, as hooks/lib/vault.ts loads them."""
+        out: list[dict] = []
+        d = self.root / MILESTONES
+        if not d.is_dir():
+            return out
+        for f in sorted(d.glob("*.md"), key=lambda p: natural_key(p.name)):
+            fm = front(f.read_text(encoding="utf-8", errors="replace"))
+            name = f.name[:-3]
+            mid = unquote(fm.get("id")) or id_of(name)
+            if any(m["id"] == mid for m in out):
+                continue
+            needs, missing = [], []
+            for ref in link_targets(fm.get("needs")):
+                nid = by_name.get(ref) or (id_of(ref) if id_of(ref) in nodes else None)
+                if nid and nid not in needs:
+                    needs.append(nid)
+                elif not nid:
+                    missing.append(ref)
+            m = {"id": mid, "name": name, "title": name[len(id_of(name)):].strip(), "path": f"{MILESTONES}/{f.name}",
+                 "status": unquote(fm.get("status")).lower() or "open", "due": unquote(fm.get("due")),
+                 "needs": needs, "missing": missing}
+            if unquote(fm.get("source")):
+                m["source"] = unquote(fm.get("source"))
+            if unquote_json(fm.get("why")):
+                m["why"] = unquote_json(fm.get("why"))
+            out.append(m)
+        return out
 
     def note_path(self, nid: str) -> Path | None:
         """The note's file, only when it resolves to a markdown file inside a note folder (SUBDIRS)."""
@@ -706,6 +816,143 @@ class Vault:
                 fields.insert(at, f"priority: {priority}")
             self._write_note(path, text, "\n".join([lines[0], *fields, lines[-1]]) + "\n", body)
         return 200, {"id": nid, "priority": None if dismiss else priority}
+
+    # ------------------------------------------------------------ dates and deadlines
+
+    @staticmethod
+    def _fields(text: str) -> tuple[list[str], str, str] | None:
+        """A note's frontmatter lines (without the ---), its first and last line, and its body."""
+        head, body = split_note(text)
+        if not head:
+            return None
+        lines = head.rstrip("\n").split("\n")
+        return lines[1:-1], "\n".join([lines[0], "%s", lines[-1]]) + "\n", body
+
+    def set_dates(self, nid: str, changes: dict, dismiss: bool = False) -> tuple[int, dict]:
+        """Sets a note's dates, which the user alone sets: `due` (any note), `start` and `est` (an
+        experiment), each a value or None to take it away, after its status; and drops Claude's
+        suggested dates, now answered. With `dismiss`, drops only the suggestion."""
+        path = self.note_path(nid)
+        if path is None:
+            return 404, {"error": "no such note"}
+        node = next(n for n in self.tree()["nodes"] if n["id"] == nid)
+        for key, value in changes.items():
+            if value is None:
+                continue
+            if key == "due" and not due_ok(value):
+                return 400, {"error": "due must be a date: 2026-11-13, 2026-11-13 23:59 or 2026-11-13 23:59 AoE"}
+            if key == "start" and not day_of(value):
+                return 400, {"error": "start must be a date: 2026-11-27"}
+            if key == "est" and not est_of(value):
+                return 400, {"error": "est must be a number of days or weeks: 3d, 2w"}
+            if key in ("start", "est") and node["type"] != "experiment":
+                return 422, {"error": f"only experiments have a start and an estimate; {nid} is a {node['type']}"}
+        with self._write_lock:
+            try:
+                text = path.read_bytes().decode("utf-8")
+            except UnicodeDecodeError:
+                return 422, {"error": "the note is not UTF-8 text; edit it in an editor"}
+            parts = self._fields(text)
+            if parts is None:
+                return 422, {"error": "the note has no frontmatter"}
+            fields, frame, body = parts
+            drop = DATE_SUGGESTION_FIELDS if dismiss else (*changes.keys(), *DATE_SUGGESTION_FIELDS)
+            fields = [l for l in fields if not re.match(rf"(?:{'|'.join(drop)})\s*:", l)]
+            at = next((i + 1 for i, l in enumerate(fields) if re.match(r"status\s*:", l)), len(fields))
+            new = [f"{k}: {changes[k].strip()}" for k in DATE_FIELDS if not dismiss and changes.get(k) is not None]
+            fields[at:at] = new
+            self._write_note(path, text, frame % "\n".join(fields), body)
+        return 200, {"id": nid, **({} if dismiss else changes)}
+
+    def milestone_path(self, mid: str) -> Path | None:
+        """A deadline's file, only when it resolves to a markdown file in milestones/."""
+        if not MILESTONE_RE.match(mid or ""):
+            return None
+        m = next((x for x in self.tree()["milestones"] if x["id"] == mid), None)
+        if m is None:
+            return None
+        path = (self.root / m["path"]).resolve()
+        return path if path.parent == (self.root / MILESTONES).resolve() and path.suffix == ".md" and path.is_file() else None
+
+    def _needs_line(self, needs) -> tuple[str | None, str | None]:
+        """The `needs:` line for these note ids (None: no line), or an error."""
+        if not isinstance(needs, list) or not all(isinstance(x, str) for x in needs):
+            return None, "needs must be a list of note ids"
+        names = {n["id"]: n["name"] for n in self.tree()["nodes"]}
+        unknown = [x for x in needs if x not in names]
+        if unknown:
+            return None, f"needs: {', '.join(unknown)} {'is' if len(unknown) == 1 else 'are'} not a note of the tree"
+        ids = list(dict.fromkeys(needs))
+        return (f"needs: [{', '.join(json.dumps(f'[[{names[x]}]]') for x in ids)}]" if ids else None), None
+
+    def add_milestone(self, title: str, due: str, needs) -> tuple[int, dict]:
+        """A new deadline the user adds, open: the next free M id (after the config's last one and
+        every milestone on disk), in milestones/."""
+        title = clean_title(title)
+        if not title:
+            return 400, {"error": "give the deadline a title"}
+        if not due_ok(due):
+            return 400, {"error": "due must be a date: 2026-11-13, 2026-11-13 23:59 or 2026-11-13 23:59 AoE"}
+        line, err = self._needs_line(needs if needs is not None else [])
+        if err:
+            return 400, {"error": err}
+        with self._write_lock:
+            last = self._config().get("lastId", {}).get("M", 0) if isinstance(self._config().get("lastId"), dict) else 0
+            taken = [int(m.group(1)) for x in self.tree()["milestones"] if (m := MILESTONE_RE.match(x["id"]))]
+            num = max([last if isinstance(last, int) else 0, *taken]) + 1
+            mid = f"M{num:02d}"
+            d = self.root / MILESTONES
+            d.mkdir(exist_ok=True)
+            path = d / f"{mid} {title}.md"
+            fields = [f"id: {mid}", "type: milestone", "status: open", f"due: {due.strip()}"] + ([line] if line else [])
+            path.write_text("---\n" + "\n".join(fields) + f"\n---\n\n# {mid} · {title}\n", encoding="utf-8")
+        return 201, {"id": mid, "name": f"{mid} {title}"}
+
+    def update_milestone(self, mid: str, req: dict) -> tuple[int, dict]:
+        """Changes a deadline: its `due`, the notes it `needs` (ids), its `status`; or answers Claude's
+        suggested one, `accept` (it becomes open) or `dismiss` (it stays, dismissed, so it is not
+        suggested again)."""
+        path = self.milestone_path(mid)
+        if path is None:
+            return 404, {"error": "no such deadline"}
+        changes: dict[str, str | None] = {}
+        if req.get("accept") is True:
+            changes["status"] = "status: open"
+        elif req.get("dismiss") is True:
+            changes["status"] = "status: dismissed"
+        if "status" in req:
+            if req["status"] not in ("open", "done", "dismissed"):
+                return 400, {"error": "status must be open, done or dismissed"}
+            changes["status"] = f"status: {req['status']}"
+        if "due" in req:
+            if not isinstance(req["due"], str) or not due_ok(req["due"]):
+                return 400, {"error": "due must be a date: 2026-11-13, 2026-11-13 23:59 or 2026-11-13 23:59 AoE"}
+            changes["due"] = f"due: {req['due'].strip()}"
+        if "needs" in req:
+            line, err = self._needs_line(req["needs"])
+            if err:
+                return 400, {"error": err}
+            changes["needs"] = line
+        if not changes:
+            return 400, {"error": "nothing to change: give due, needs or status, or accept or dismiss"}
+        with self._write_lock:
+            text = path.read_text(encoding="utf-8")
+            parts = self._fields(text)
+            if parts is None:
+                return 422, {"error": "the deadline has no frontmatter"}
+            fields, frame, body = parts
+            for key, line in changes.items():
+                at = next((i for i, l in enumerate(fields) if re.match(rf"{key}\s*:", l)), None)
+                if at is not None:
+                    if line is None:
+                        del fields[at]
+                    else:
+                        fields[at] = line
+                elif line is not None:
+                    after = next((i + 1 for i, l in enumerate(fields) if re.match(r"(due|status)\s*:", l)), len(fields))
+                    fields.insert(after, line)
+            self._write_note(path, text, frame % "\n".join(fields), body)
+        return 200, {"id": mid}
 
     # ------------------------------------------------------------ comments and suggestions
 
@@ -1097,8 +1344,37 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             and its subtree under `parent`. The session makes each. POST api/comment {"id":
             "<id>", "action": ...}: a change to the note's discussion (Vault.comment); POST api/lock
             {"id": "<id>", "locked": bool}; POST api/priority {"id": "<id>", "priority": one of
-            PRIORITIES or null} or {"id": "<id>", "dismiss": true} (Claude's suggestion only)."""
+            PRIORITIES or null} or {"id": "<id>", "dismiss": true} (Claude's suggestion only); POST
+            api/dates {"id": "<id>", "due"?, "start"?, "est"?: a value or null} or {"id", "dismiss": true}
+            (Claude's suggested dates only); POST api/milestone {"title", "due", "needs"?: [ids]} (a new
+            deadline), {"id": "M..", "due"?, "needs"?, "status"?} or {"id", "accept" | "dismiss": true}."""
             route = urlsplit(self.path).path
+            if route == "/api/dates":
+                got = self._write_request("/api/dates", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                _, req = got
+                bad = {"error": "expected {id, due?, start?, est?: a value or null} or {id, dismiss: true}"}
+                if not isinstance(req.get("id"), str):
+                    return self._json(400, bad)
+                if req.get("dismiss") is True and len(req) == 2:
+                    return self._json(*vault.set_dates(req["id"], {}, dismiss=True))
+                changes = {k: v for k, v in req.items() if k != "id"}
+                if not changes or any(k not in DATE_FIELDS or not (v is None or isinstance(v, str)) for k, v in changes.items()):
+                    return self._json(400, bad)
+                return self._json(*vault.set_dates(req["id"], changes))
+            if route == "/api/milestone":
+                got = self._write_request("/api/milestone", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                _, req = got
+                if "id" not in req:
+                    if not isinstance(req.get("title"), str) or not isinstance(req.get("due"), str):
+                        return self._json(400, {"error": "expected {title, due, needs?} for a new deadline"})
+                    return self._json(*vault.add_milestone(req["title"], req["due"], req.get("needs")))
+                if not isinstance(req["id"], str) or not all(isinstance(req.get(k, False), bool) for k in ("accept", "dismiss")):
+                    return self._json(400, {"error": "expected {id, due?, needs?, status?} or {id, accept: true} or {id, dismiss: true}"})
+                return self._json(*vault.update_milestone(req["id"], req))
             if route == "/api/comment":
                 got = self._write_request("/api/comment", MAX_COMMENT_BYTES)
                 if got is None:
@@ -1238,10 +1514,11 @@ def main(argv=None):
     ap.add_argument("--web", required=True)
     ap.add_argument("--port", type=int, default=0)
     ap.add_argument("--project", default="project")
+    ap.add_argument("--config", default=None, help="the project's .rft/config.json (gpus:, the last milestone id)")
     ap.add_argument("--no-watch", action="store_true", help="do not exit with the parent (for manual runs)")
     ap.add_argument("--watch-stdin", action="store_true", help="also exit when stdin is closed")
     a = ap.parse_args(argv)
-    vault = Vault(Path(a.vault), a.project)
+    vault = Vault(Path(a.vault), a.project, Path(a.config) if a.config else None)
     token = vault_key(Path(a.vault))
     handler = make_handler(vault, Path(a.web), token)
     if not a.no_watch:

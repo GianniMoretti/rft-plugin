@@ -6,6 +6,9 @@
 // Every file access goes through `Io`, so the same code runs on the engine's `$.fs` and on
 // an in-memory vault in tests.
 
+import type { Milestone } from './dates'
+import { S } from './dates'
+
 /**
  * Everything that differs between node types: the id letter, the folder, the default status,
  * the sections of a new note, the section a status note goes to, and the colours of the canvas
@@ -107,6 +110,23 @@ export type RftNode = {
   suggestedPriority?: Priority
   /** Why Claude suggests it (`suggested_priority_why:`). */
   suggestedWhy?: string
+  /** Its own deadline (`due:`, as written: a day, a time, a zone), the user's. */
+  due?: string
+  /** An experiment's planned start (`start:`, a day), the user's. */
+  start?: string
+  /** An experiment's estimate in days (`est:` 3d, 2w), the user's. */
+  est?: number
+  /** The notes it waits for (`after:`): it starts once they could end. */
+  after?: string[]
+  /** The day it started running and the day it was done (`started:`, `finished:`, written by rft_set_status). */
+  started?: string
+  finished?: string
+  /** How many GPUs an experiment's run takes (`gpus:`; one when not given). */
+  gpus?: number
+  /** The start and estimate Claude suggests (`suggested_start:`, `suggested_est:`), until the user answers, and why. */
+  suggestedStart?: string
+  suggestedEst?: number
+  suggestedDatesWhy?: string
 }
 
 export type Tree = {
@@ -163,6 +183,8 @@ export type Config = {
   requireRefs?: boolean
   /** Warn about each note with no `summary:` (on for new vaults; adopted ones get one counting line). */
   requireSummaries?: boolean
+  /** How many GPUs the experiments share: days on which planned and running ones need more are reported. */
+  gpus?: number
 }
 
 export type Io = {
@@ -179,6 +201,11 @@ export const PREFIX = Object.fromEntries(NODE_TYPES.map(t => [t, TYPES[t].prefix
 export const INDEX = '00 Index.md'
 export const CANVAS = 'Reasoning tree.canvas'
 export const MERMAID = 'Reasoning tree (diagram).md'
+/** The deadlines' folder in the vault, outside the tree, and their id letter. */
+export const MILESTONES = 'milestones'
+export const MILESTONE_RE = /^M(\d+)$/
+/** The calendar file of the deadlines and the planned runs, regenerated. */
+export const ICS = 'rft.ics'
 
 export const join = (...parts: string[]) =>
   parts.filter(p => p !== '' && p !== '.').join('/').replace(/\/+/g, '/')
@@ -420,11 +447,13 @@ export type Loaded = {
   problems: string[]
   /** Changes when any note is added, removed or edited. */
   signature: string
+  /** The deadlines in the vault's `milestones/`, by id. */
+  milestones: Milestone[]
 }
 
 export async function signatureOf(io: Io, vault: string): Promise<string> {
   const parts: string[] = []
-  for (const sub of Object.values(SUBDIR)) {
+  for (const sub of [...Object.values(SUBDIR), MILESTONES]) {
     const dir = join(vault, sub)
     if (!(await io.exists(dir))) continue
     for (const f of await io.list(dir)) {
@@ -442,6 +471,7 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
   const originRef: Record<string, string[]> = {}
   const refsRef: Record<string, string[]> = {}
   const supersededRef: Record<string, string | null> = {}
+  const afterRef: Record<string, string[]> = {}
   for (const [type, sub] of Object.entries(SUBDIR) as [NodeType, string][]) {
     const dir = join(config.vault, sub)
     if (!(await io.exists(dir))) continue
@@ -474,6 +504,8 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
         const why = unquoteJson(fm.suggested_priority_why)
         if (why) nodes[id]!.suggestedWhy = why
       }
+      readPlan(nodes[id]!, fm)
+      afterRef[id] = linksIn(fm.after)
       texts[id] = text
       parentRef[id] = linkTarget(fm.parent)
       originRef[id] = linksIn(fm.origin)
@@ -491,6 +523,8 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
     if (refs.length) n.refs = refs
     const by = supersededRef[n.id] ? idsOf([supersededRef[n.id]!])[0] : undefined
     if (by && by !== n.id) n.supersededBy = by
+    const after = idsOf(afterRef[n.id]!).filter(id => id !== n.id)
+    if (after.length) n.after = after
   }
   for (const n of Object.values(nodes)) {
     const ref = parentRef[n.id]
@@ -524,7 +558,60 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
   roots.sort(byNameCmp)
   const tree: Tree = { nodes, roots }
   tree.concepts = computeConcepts(tree, config.project, conceptDeclarations(texts))
-  return { config, tree, texts, problems, signature: await signatureOf(io, config.vault) }
+  const milestones = await loadMilestones(io, config.vault, byName, nodes)
+  return { config, tree, texts, problems, signature: await signatureOf(io, config.vault), milestones }
+}
+
+/** A whole number above 0, or undefined. */
+const count = (v: string | undefined) => (/^\d+$/.test(unquote(v)) && Number(unquote(v)) > 0 ? Number(unquote(v)) : undefined)
+
+/** A note's dates and GPUs, read from its frontmatter; a value that is none is left out (the validator names it). */
+function readPlan(n: RftNode, fm: Record<string, string>) {
+  const due = unquote(fm.due)
+  if (due && S.parseDue(due)) n.due = due
+  const start = S.parseDay(fm.start)
+  if (start) n.start = start
+  const est = S.parseEst(fm.est)
+  if (est) n.est = est
+  const started = S.parseDay(fm.started)
+  if (started) n.started = started
+  const finished = S.parseDay(fm.finished)
+  if (finished) n.finished = finished
+  const gpus = count(fm.gpus)
+  if (gpus) n.gpus = gpus
+  const sStart = S.parseDay(fm.suggested_start)
+  if (sStart) n.suggestedStart = sStart
+  const sEst = S.parseEst(fm.suggested_est)
+  if (sEst) n.suggestedEst = sEst
+  if ((sStart || sEst) && unquoteJson(fm.suggested_dates_why)) n.suggestedDatesWhy = unquoteJson(fm.suggested_dates_why)
+}
+
+/** The deadlines in `milestones/`: their due date, status, and the notes they need (by id; the names that are none apart). */
+export async function loadMilestones(io: Io, vault: string, byName: Record<string, string>, nodes: Record<string, RftNode>): Promise<Milestone[]> {
+  const dir = join(vault, MILESTONES)
+  if (!(await io.exists(dir))) return []
+  const out: Milestone[] = []
+  const files = (await io.list(dir)).filter(f => f.kind === 'file' && f.name.endsWith('.md'))
+  for (const f of files.sort((a, b) => compareNames(a.name, b.name))) {
+    const name = f.name.slice(0, -3)
+    const fm = front(normalise(await io.read(join(dir, f.name))))
+    const id = unquote(fm.id) || idOf(name)
+    if (out.some(m => m.id === id)) continue
+    const needs: string[] = []
+    const missing: string[] = []
+    for (const ref of linksIn(fm.needs)) {
+      const nid = byName[ref] ?? (nodes[idOf(ref)] ? idOf(ref) : null)
+      if (nid) { if (!needs.includes(nid)) needs.push(nid) } else missing.push(ref)
+    }
+    const m: Milestone = {
+      id, name, title: name.slice(idOf(name).length).trim(), path: `${MILESTONES}/${f.name}`,
+      status: unquote(fm.status).toLowerCase() || 'open', due: S.parseDue(unquote(fm.due)), dueText: unquote(fm.due), needs, missing,
+    }
+    if (unquote(fm.source)) m.source = unquote(fm.source)
+    if (unquoteJson(fm.why)) m.why = unquoteJson(fm.why)
+    out.push(m)
+  }
+  return out
 }
 
 // ---------------------------------------------------------------- concepts
@@ -957,6 +1044,16 @@ export async function sync(io: Io, loaded: Loaded, opts: { relayout?: boolean } 
     const mp = join(config.vault, MERMAID)
     await put(MERMAID, mermaidNote(tree), (await io.exists(mp)) ? await io.read(mp) : undefined)
   }
+  // the calendar file, once there is a date to show; its stamp kept while nothing else changes
+  const ip = join(config.vault, ICS)
+  const prevIcs = (await io.exists(ip)) ? await io.read(ip) : undefined
+  const calendar = (stamp: string) => S.ics({ project: config.project, nodes: Object.values(tree.nodes), milestones: loaded.milestones ?? [], stamp })
+  const kept = prevIcs && /DTSTAMP:(\d{8}T\d{6}Z)/.exec(prevIcs)
+  const same = kept ? calendar(kept[1]!) : null
+  if (!(same && same.text === prevIcs)) {
+    const fresh = calendar(new Date().toISOString())
+    if (fresh.events || prevIcs !== undefined) await put(ICS, fresh.text, prevIcs)
+  }
   loaded.signature = await signatureOf(io, config.vault)
   return { changed }
 }
@@ -1030,6 +1127,7 @@ export async function validate(io: Io, loaded: Loaded, opts: { root?: string; ho
     if (fm.superseded_by !== undefined && !n.supersededBy) warnings.push(`${n.id}: superseded_by names no note of the tree (rft_supersede sets or clears it)`)
     if (fm.priority !== undefined && !n.priority) warnings.push(`${n.id}: priority "${unquote(fm.priority)}" is not ${orList([...PRIORITIES])} (the user sets it in the tree view)`)
     if (fm.suggested_priority !== undefined && !n.suggestedPriority) warnings.push(`${n.id}: suggested_priority "${unquote(fm.suggested_priority)}" is not ${orList([...PRIORITIES])} (rft_suggest_priority writes it)`)
+    warnings.push(...planWarnings(n, fm, tree))
     const notRefs = (n.refs ?? []).filter(r => tree.nodes[r]!.type !== 'reference')
     if (notRefs.length) warnings.push(`${n.id}: refs ${notRefs.join(', ')} ${notRefs.length === 1 ? 'is not a reference' : 'are not references'} (R notes)`)
     if (config.requireRefs && needsRefs(n) && !(n.refs ?? []).length && n.parent) {
@@ -1075,6 +1173,7 @@ export async function validate(io: Io, loaded: Loaded, opts: { root?: string; ho
     const held = Object.values(tree.nodes).filter(n => n.priority === p && OPEN_STATUSES.includes(n.status)).map(n => n.id).sort(compareNames)
     if (limit !== null && held.length > limit) warnings.push(`${held.length} open notes are ${p} (${held.join(', ')}), more than the ${limit} allowed: the user lowers some in the tree view`)
   }
+  warnings.push(...milestoneWarnings(loaded))
   const seenNames = new Map<string, string>()
   for (const c of Object.values(tree.concepts ?? {})) {
     const key = c.name.toLowerCase()
@@ -1100,6 +1199,47 @@ export async function validate(io: Io, loaded: Loaded, opts: { root?: string; ho
     warnings.push(`the tree in ${INDEX} is out of date (rft_sync fixes it)`)
   }
   return { errors, warnings }
+}
+
+const DUE_HINT = `(${S.DUE_EXAMPLES})`
+
+/** What is wrong with a note's dates, GPUs and `after:`, as warnings. */
+function planWarnings(n: RftNode, fm: Record<string, string>, tree: Tree): string[] {
+  const out: string[] = []
+  const bad = (key: string, ok: unknown, what: string) => {
+    if (fm[key] !== undefined && unquote(fm[key]) !== '' && !ok) out.push(`${n.id}: ${key} "${unquote(fm[key])}" ${what}`)
+  }
+  bad('due', n.due, `is not a date ${DUE_HINT}`)
+  bad('start', n.start, 'is not a date (2026-11-27)')
+  bad('est', n.est, 'is not a number of days or weeks (3d, 2w)')
+  bad('started', n.started, 'is not a date (2026-11-27)')
+  bad('finished', n.finished, 'is not a date (2026-11-27)')
+  bad('gpus', n.gpus, 'is not a whole number of GPUs')
+  if ((n.start || n.est) && n.type !== 'experiment') out.push(`${n.id}: start and est plan a run, and only experiments run (a ${n.type} can have a due date)`)
+  const lost = linksIn(fm.after).filter(ref => !Object.values(tree.nodes).some(x => x.name === ref || x.id === idOf(ref)))
+  if (lost.length) out.push(`${n.id}: after names ${lost.map(r => `[[${r}]]`).join(', ')}, which ${lost.length === 1 ? 'is' : 'are'} not a note of the tree`)
+  return out
+}
+
+/** What is wrong with the deadlines: a due date that is none, an unknown status, needs that will not be done. */
+function milestoneWarnings(loaded: Loaded): string[] {
+  const out: string[] = []
+  const { tree } = loaded
+  for (const m of loaded.milestones ?? []) {
+    if (!MILESTONE_RE.test(m.id)) out.push(`${m.path}: id ${m.id} is not M<number>`)
+    if (!m.due) out.push(`${m.name}: ${m.dueText ? `due "${m.dueText}" is not a date` : 'no due date'} ${DUE_HINT}`)
+    if (!S.MILESTONE_STATUSES.includes(m.status)) out.push(`${m.name}: status "${m.status}" is not ${orList(S.MILESTONE_STATUSES)}`)
+    if (m.status === 'suggested' && !m.source) out.push(`${m.name}: a suggested deadline names the official page it was read from (source:)`)
+    if (m.status !== 'open' && m.status !== 'suggested') continue
+    const replace = 'the user replaces it or takes it out of needs'
+    for (const id of m.needs) {
+      const n = tree.nodes[id]!
+      if (n.supersededBy) out.push(`${m.name} needs ${n.name}, which was superseded by ${n.supersededBy}: ${replace}`)
+      else if (['dropped', 'discussed', 'moved'].includes(n.status)) out.push(`${m.name} needs ${n.name}, which was ${n.status}: ${replace}`)
+    }
+    for (const ref of m.missing) out.push(`${m.name} needs [[${ref}]], which is not a note of the tree`)
+  }
+  return out
 }
 
 // ---------------------------------------------------------------- creating notes

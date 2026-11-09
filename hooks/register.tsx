@@ -1,12 +1,13 @@
 // rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-concepts, /rft-literature, /rft-rebalance,
 // /rft-summarize, /rft-next, /rft-view), the model's tools (rft_add_node, rft_set_status, rft_set_summary, rft_map, rft_set_digest, rft_move_node, rft_set_refs, rft_search,
-// rft_graph, rft_supersede, rft_next, rft_suggest_priority, rft_collect_papers, rft_set_tags, rft_set_type, rft_set_concept, rft_concepts, rft_set_repos, rft_code,
+// rft_graph, rft_supersede, rft_next, rft_suggest_priority, rft_suggest_dates, rft_add_deadline, rft_suggest_deadline, rft_collect_papers, rft_set_tags, rft_set_type, rft_set_concept, rft_concepts, rft_set_repos, rft_code,
 // rft_set_code, rft_tags, rft_tree, rft_validate, rft_sync, rft_comments, rft_comment, rft_suggest), the operating rules
 // injected into the system prompt, the outline pane, and the web view: /rft starts a local
 // server (server/rft_server.py) for the interactive tree page (web/), makes the notes that
 // page adds, retypes or moves (fromView), and asks Claude to answer the threads the user asks
 // it to (askFromView). Claude's own edits of a locked note are refused (lockedEdit), and so are
-// its writes of a note's priority, the user's alone (priorityEdit).
+// its writes of a note's priority, the user's alone (priorityEdit), and of the dates, the user's too
+// (datesEdit): a note's due:, start: and est:, and a deadline's due:.
 // Everything is
 // inert without `.rft/config.json` in the session's folder or a folder above it; that config
 // may be a link (`{"tree": "../notes"}`) to a tree kept elsewhere.
@@ -26,9 +27,10 @@ import { graphReport } from './lib/graph'
 import { candidates, candidatesReport } from './lib/rebalance'
 import { nextReport, supersede } from './lib/knowledge'
 import { changesPriority, priorityText, suggestPriority } from './lib/priority'
+import { addDeadline, changesDates, checkDeadline, datesText, deadlineQuestion, deadlinesLine, suggestDates, suggestDeadline } from './lib/schedule'
 import { RECALL_HINT, searchesVault } from './lib/recall'
 import { SMALL_TREE, mapGaps, mapReport, mapWarnings, projectMap, readDigests, resolveConcept, setDigest, setSummaries } from './lib/map'
-import { LEGEND, MARK, NODE_TYPES, bodyOf, counts, countsLine, isAbsolute, join, locate, readConfig, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
+import { CONFIG_PATH, LEGEND, MARK, NODE_TYPES, bodyOf, counts, countsLine, isAbsolute, join, locate, readConfig, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
 
 const PANE = 'rft-tree'
 const TITLE = 'Reasoning tree'
@@ -164,6 +166,48 @@ const TOOLS = {
         why: { type: 'string', description: 'Why, in one line (at most 240 characters): shown to the user next to the suggestion.' },
       },
       required: ['id', 'priority', 'why'],
+    },
+  },
+  rft_suggest_dates: {
+    description:
+      'Suggest a start (a day) and/or an estimate (3d, 2w) for an experiment, with why. Dates are the user\'s: due:, start: and est: are set by them in the tree view (the Calendar, or the note\'s drawer), and your edits that change them are refused; this writes only a suggestion, which the user accepts or dismisses. Suggest when you can say why: a deadline needs it done by then, it waits for another run, the GPUs are taken until then, or the code shows how long a run takes. The plan keeps to the user\'s dates until they accept.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id (e.g. E12) or full name of the experiment.' },
+        start: { type: 'string', description: 'The day to start, YYYY-MM-DD.' },
+        est: { type: 'string', description: 'How long the run takes, in days or weeks: 3d, 2w.' },
+        why: { type: 'string', description: 'Why, in one line (at most 240 characters): shown to the user next to the suggestion.' },
+      },
+      required: ['id', 'why'],
+    },
+  },
+  rft_add_deadline: {
+    description:
+      'Add a deadline the user gave you (a meeting, a submission they named, a talk, a thesis chapter): a milestone in the vault\'s milestones/, outside the tree, with the notes it needs done first. The plugin asks the user to confirm it in a dialog you cannot answer; if they decline, nothing is added: do not try again unless they ask. Never add a deadline the user did not give you: for a paper submission you think fits, use rft_suggest_deadline.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'What is due, e.g. "Workshop paper", "Supervisor meeting".' },
+        due: { type: 'string', description: 'When: 2026-11-13 (the day), 2026-11-13 14:00 (local time), or 2026-11-13 23:59 AoE (AoE, UTC or +01:00).' },
+        needs: { type: 'array', items: { type: 'string' }, description: 'Ids of the notes that must be done before it (experiments, mostly).' },
+      },
+      required: ['title', 'due'],
+    },
+  },
+  rft_suggest_deadline: {
+    description:
+      'Suggest a paper submission deadline (or another one from an official page) the work could aim for: a milestone with status suggested, which the user accepts or dismisses in the tree view\'s Calendar; it is not planned for until then. Read the dates from the venue\'s official dates page now (web search, fetch), never from memory: deadlines move every year. Give that page as source, the exact time and zone it states (most are 23:59 AoE), and one milestone per date (abstract, paper, supplementary). Suggest only when the user names a venue or asks for deadlines.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'E.g. "CVPR 2027 paper", "CVPR 2027 abstract".' },
+        due: { type: 'string', description: 'As the official page states it: 2026-11-13 23:59 AoE, or a day.' },
+        source: { type: 'string', description: 'The official dates page it was read from (https://…).' },
+        why: { type: 'string', description: 'Why this venue fits the work, in one line.' },
+        needs: { type: 'array', items: { type: 'string' }, description: 'Ids of the notes the paper needs done first.' },
+      },
+      required: ['title', 'due', 'source', 'why'],
     },
   },
   rft_set_summary: {
@@ -459,6 +503,11 @@ async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> 
       } catch { /* the list of notes instead */ }
     }
     rules = rulesText(treeOf(s), config, shownVault(h, config), { cwd: h.cwd, root: h.root, home: await homeOf($) }, map)
+    // the deadlines close at hand that are at risk, so the session starts from them
+    try {
+      const line = deadlinesLine(await loadActive(h.io), today())
+      if (line) rules += `\n\n${line}`
+    } catch { /* the rules without it */ }
     recall = { vault: resolvePath(h.root, vaultOf(h, config)), cwd: h.cwd, used: false }
   }
   // each registration on its own, so one refusal leaves the rest working
@@ -630,7 +679,20 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
     case 'rft_tags':
       return tagsReport(loaded)
     case 'rft_set_status':
-      return setStatus(io, loaded, String(i.id ?? ''), String(i.status ?? ''), str(i.note), str(i.summary))
+      return setStatus(io, loaded, String(i.id ?? ''), String(i.status ?? ''), str(i.note), str(i.summary), today())
+    case 'rft_suggest_dates':
+      return suggestDates(io, loaded, String(i.id ?? ''), { start: i.start, est: i.est }, i.why)
+    case 'rft_suggest_deadline':
+      return suggestDeadline(io, loaded, { title: i.title, due: i.due, needs: i.needs, source: i.source, why: i.why })
+    case 'rft_add_deadline': {
+      const d = checkDeadline(loaded, { title: i.title, due: i.due, needs: i.needs })
+      let answer = ''
+      try {
+        answer = await $.ui.ask(deadlineQuestion(d), { options: ['Add it', "Don't add"], header: 'Deadline' })
+      } catch { /* dismissed, or no one to ask */ }
+      if (answer !== 'Add it') return `The user did not add it: no deadline was written. Do not try again unless the user asks.`
+      return addDeadline(io, loaded, d)
+    }
     case 'rft_suggest_priority':
       return suggestPriority(io, loaded, String(i.id ?? ''), i.priority, i.why)
     case 'rft_set_summary': {
@@ -716,6 +778,7 @@ async function startServer($: EngineInterface): Promise<string> {
   const args = [
     join(root, 'server/rft_server.py'), '--vault', vault, '--web', join(root, 'web'),
     '--project', config.project, '--port', String(config.webPort ?? 0),
+    '--config', join(h.root, CONFIG_PATH),
   ]
   const failures: string[] = []
   for (const python of ['python3', 'python']) {
@@ -1067,6 +1130,38 @@ async function priorityEdit($: EngineInterface, e: Record<string, unknown>): Pro
   return priorityText(Object.values(s.nodes).find(x => join(vault, x.path) === abs) ?? null)
 }
 
+/** A `due:`, `start:` or `est:` line, not `suggested_start:` or `suggested_est:`. */
+const DATE_LINE = /(^|[^\w])(due|start|est)\s*:/m
+
+/**
+ * Why Claude may not make this tool call, or null: it would change a date, the user's alone (an
+ * Edit or Write of a note or a milestone in the vault that adds, changes or removes `due:`,
+ * `start:` or `est:`; a shell command that writes, holds such a line and names the vault or a note).
+ */
+async function datesEdit($: EngineInterface, e: Record<string, unknown>): Promise<string | null> {
+  const tool = String(e.tool)
+  if (!EDIT_TOOLS.has(tool) && tool !== 'Bash') return null
+  const s = await read($, snapshot)
+  if (!s?.isActive || !s.vault) return null
+  const vault = resolvePath(s.vault, '.')
+  if (tool === 'Bash') {
+    const cmd = String(e.command ?? '')
+    if (!SHELL_WRITES.test(cmd) || !DATE_LINE.test(cmd)) return null
+    const named = Object.values(s.nodes).find(n => cmd.includes(n.name) || new RegExp(`\\b${n.id}\\b`).test(cmd)) ?? null
+    const folder = vault.split('/').pop()
+    return named || cmd.includes(vault) || (folder && cmd.includes(`${folder}/`)) ? datesText(named) : null
+  }
+  const raw = e.file_path
+  if (typeof raw !== 'string' || !raw.endsWith('.md')) return null
+  const abs = resolvePath(resolvePath(await $.session.cwd(), '.'), raw)
+  if (!abs.startsWith(`${vault}/`)) return null
+  let before = ''
+  try { before = await $.fs.read(abs) } catch { /* a new file */ }
+  const after = afterCall(tool, e, before)
+  if (after === null || !changesDates(before, after)) return null
+  return datesText(Object.values(s.nodes).find(x => join(vault, x.path) === abs) ?? null)
+}
+
 /**
  * The literature search: `subject` is a topic in words, a note id or a concept name; the
  * references go under that note, the concept's start note, or the note the topic belongs to.
@@ -1285,6 +1380,7 @@ export const register: Register = (on, options) => {
         katexCss: await $.fs.read(join(root, ASSET_PATHS.katexCss)),
         filters: await $.fs.read(join(root, ASSET_PATHS.filters)),
         kanban: await $.fs.read(join(root, ASSET_PATHS.kanban)),
+        schedule: await $.fs.read(join(root, ASSET_PATHS.schedule)),
         layout: await $.fs.read(join(root, ASSET_PATHS.layout)),
         concepts: await $.fs.read(join(root, ASSET_PATHS.concepts)),
         markdown: await $.fs.read(join(root, ASSET_PATHS.markdown)),
@@ -1315,7 +1411,8 @@ export const register: Register = (on, options) => {
       }
     }
     if (rules) {
-      const why = (await lockedEdit($, e as unknown as Record<string, unknown>)) ?? (await priorityEdit($, e as unknown as Record<string, unknown>))
+      const call = e as unknown as Record<string, unknown>
+      const why = (await lockedEdit($, call)) ?? (await priorityEdit($, call)) ?? (await datesEdit($, call))
       if (why) return { deny: why }
     }
     const ran = await next(e)

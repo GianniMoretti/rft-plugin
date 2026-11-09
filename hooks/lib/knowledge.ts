@@ -1,11 +1,13 @@
 // State of knowledge: a result that overturns another marks it (superseded_by:), so an older
 // number is not built on; and what is still open, by concept (rft_next, /rft-next): directions
 // never explored, experiments planned and never run, the open questions of the digests; the
-// user's priorities first, and in each list the higher priorities before the rest.
+// user's priorities first, and in each list the higher priorities before the rest; before them the
+// deadlines, nearest first, with what puts them at risk, and the days the runs need more GPUs.
 
 import { LockedChange, isLocked } from './comments'
 import type { Digest } from './map'
 import { readDigests, resolveConcept } from './map'
+import { scheduleReport } from './schedule'
 import type { Io, Loaded, RftNode } from './vault'
 import { MARK, OPEN_STATUSES, PRIORITIES, conceptOrder, conceptPath, join, load, removeField, resolveId, setField, withHistory } from './vault'
 
@@ -116,6 +118,11 @@ export async function nextReport(io: Io, loaded: Loaded, today: string, ref?: st
   const tail = waiting.length
     ? ['', `Suggested priorities waiting for the user (the tree view's kanban or note drawer): ${waiting.map(n => `${n.id} ${n.suggestedPriority}`).join(', ')}.`]
     : []
-  if (!out.length && !focus.length) return `Nothing open${scope ? ` in ${scope.name}` : ''}: no unexplored direction, no planned experiment, no open question in the digests.${tail.join('\n')}`
-  return `${total} open item(s)${scope ? ` in ${scope.name}` : ''}, by concept (age in days since the note was made):\n\n${[...head, ...out, ...tail].join('\n')}`
+  const sched = scheduleReport(loaded, today)
+  tail.push(...(sched.tail.length && !tail.length ? [''] : []), ...sched.tail)
+  if (!out.length && !focus.length) {
+    const none = `Nothing open${scope ? ` in ${scope.name}` : ''}: no unexplored direction, no planned experiment, no open question in the digests.`
+    return sched.head.length ? `${sched.head.join('\n')}\n${none}${tail.join('\n')}` : `${none}${tail.join('\n')}`
+  }
+  return `${total} open item(s)${scope ? ` in ${scope.name}` : ''}, by concept (age in days since the note was made):\n\n${[...sched.head, ...head, ...out, ...tail].join('\n')}`
 }

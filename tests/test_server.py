@@ -10,6 +10,7 @@ import json
 import os
 import queue
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -661,6 +662,120 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(words(re.search(r"const PRIORITIES = \[(.*?)\]", js).group(1)), rft_server.PRIORITIES)
         self.assertEqual(limits(re.search(r"const LIMITS = \{(.*?)\}", js).group(1)), rft_server.PRIORITY_LIMITS)
         self.assertEqual(words(re.search(r"const OPEN = \[(.*?)\]", js).group(1)), rft_server.OPEN_STATUSES)
+
+    # ------------------------------------------------------------ dates and deadlines
+
+    def dates(self, payload, **kw):
+        return self.write("POST", "/api/dates", payload, **kw)
+
+    def milestone(self, payload, **kw):
+        return self.write("POST", "/api/milestone", payload, **kw)
+
+    def scratch_experiment(self, extra=""):
+        """An experiment of its own, E17, planned, with more frontmatter after its status."""
+        p = self.vault / "experiments" / "E17 Scratch run.md"
+        p.write_text(note("E17", "experiment", "planned", "D00 Root question", "Scratch run").replace("status: planned\n", "status: planned\n" + extra))
+        self.addCleanup(p.unlink)
+        return p
+
+    def milestones_dir(self):
+        d = self.vault / "milestones"
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        return d
+
+    def test_tree_has_the_dates_and_the_deadlines(self):
+        self.scratch_experiment('start: 2026-11-27\nest: 1w\ngpus: 2\nafter: ["[[E01 First run]]"]\nsuggested_est: 4d\n'
+                                'suggested_dates_why: "Two seeds fewer"\ndue: soon\n')
+        d = self.milestones_dir()
+        d.mkdir()
+        (d / "M01 Workshop paper.md").write_text('---\nid: M01\ntype: milestone\nstatus: open\ndue: 2026-12-05 23:59 AoE\n'
+                                                 'needs: ["[[E17 Scratch run]]", "[[E99 Gone]]"]\n---\n\n# M01 · Workshop paper\n')
+        tree = json.loads(self.get("/api/tree")[2])
+        e17 = {n["id"]: n for n in tree["nodes"]}["E17"]
+        keys = ("start", "est", "gpus", "after", "suggestedEst", "suggestedDatesWhy", "due", "suggestedStart")
+        self.assertEqual({k: e17.get(k) for k in keys}, {"start": "2026-11-27", "est": 7, "gpus": 2, "after": ["E01"], "suggestedEst": 4,
+                                                         "suggestedDatesWhy": "Two seeds fewer", "due": None, "suggestedStart": None})
+        self.assertEqual(tree["milestones"], [{"id": "M01", "name": "M01 Workshop paper", "title": "Workshop paper", "path": "milestones/M01 Workshop paper.md",
+                                               "status": "open", "due": "2026-12-05 23:59 AoE", "needs": ["E17"], "missing": ["E99 Gone"]}])
+        self.assertIsNone(tree["gpus"])  # no config given
+
+    def test_dates_set_cleared_and_suggestion_answered(self):
+        p = self.scratch_experiment('suggested_start: 2026-11-20\nsuggested_est: 4d\nsuggested_dates_why: "Before M01"\n')
+        before = p.read_text()
+        plain = re.sub(r"suggested_.*\n", "", before)
+        # dismissed: the suggestion goes, and no date comes
+        self.assertEqual(self.dates({"id": "E17", "dismiss": True}), (200, {"id": "E17"}))
+        self.assertEqual(p.read_text(), plain)
+        # set (accepting, or setting other dates, answers the suggestion): after the status, due, start, est
+        p.write_text(before)
+        self.assertEqual(self.dates({"id": "E17", "start": "2026-11-20", "est": "4d"}), (200, {"id": "E17", "start": "2026-11-20", "est": "4d"}))
+        self.assertEqual(p.read_text(), plain.replace("status: planned\n", "status: planned\nstart: 2026-11-20\nest: 4d\n"))
+        # changed in place, one line; null takes a date away
+        self.dates({"id": "E17", "est": "1w"})
+        self.assertEqual(p.read_text().count("est:"), 1)
+        self.assertEqual((self.nodes()["E17"]["start"], self.nodes()["E17"]["est"]), ("2026-11-20", 7))
+        self.dates({"id": "E17", "start": None, "est": None, "due": "2026-12-01 14:00"})
+        n = self.nodes()["E17"]
+        self.assertEqual((n.get("start"), n.get("est"), n["due"]), (None, None, "2026-12-01 14:00"))
+        # any note can have a due date
+        self.assertEqual(self.dates({"id": "D01", "due": "2026-12-01"})[0], 200)
+        self.addCleanup(self.dates, {"id": "D01", "due": None})
+
+    def test_dates_bad_requests(self):
+        p = self.scratch_experiment()
+        before = p.read_text()
+        for payload in ({"id": "E17"}, {"id": "E17", "start": "soon"}, {"id": "E17", "est": "1.5d"}, {"id": "E17", "due": "next friday"},
+                        {"id": "E17", "start": 3}, {"id": "E17", "priority": "high"}, {"start": "2026-11-20"}, {"id": "E17", "dismiss": "yes"}):
+            self.assertEqual(self.dates(payload)[0], 400, payload)
+        self.assertEqual(self.dates({"id": "D01", "est": "3d"})[0], 422)  # only experiments run
+        self.assertEqual(self.dates({"id": "E17", "start": "2026-11-20"}, key=None)[0], 403)
+        self.assertEqual(self.dates({"id": "E17", "start": "2026-11-20"}, origin="http://evil.example")[0], 403)
+        self.assertEqual(self.dates({"id": "E99", "start": "2026-11-20"})[0], 404)
+        self.assertEqual(p.read_text(), before)
+
+    def test_deadline_added_changed_and_answered(self):
+        d = self.milestones_dir()
+        status, res = self.milestone({"title": "  Workshop: paper? ", "due": "2026-12-05", "needs": ["E01", "E01"]})
+        self.assertEqual((status, res), (201, {"id": "M01", "name": "M01 Workshop paper"}))
+        p = d / "M01 Workshop paper.md"
+        self.assertEqual(p.read_text(), '---\nid: M01\ntype: milestone\nstatus: open\ndue: 2026-12-05\nneeds: ["[[E01 First run]]"]\n---\n\n# M01 · Workshop paper\n')
+        # changed: the due date in place, the needs, the status
+        self.assertEqual(self.milestone({"id": "M01", "due": "2026-12-05 23:59 AoE", "needs": ["E01", "D01"], "status": "done"}), (200, {"id": "M01"}))
+        self.assertEqual(p.read_text(), '---\nid: M01\ntype: milestone\nstatus: done\ndue: 2026-12-05 23:59 AoE\n'
+                                        'needs: ["[[E01 First run]]", "[[D01 Next idea]]"]\n---\n\n# M01 · Workshop paper\n')
+        self.milestone({"id": "M01", "needs": []})
+        self.assertNotIn("needs:", p.read_text())
+        # Claude's suggestion: accepted, it is open; dismissed, it stays, so it is not suggested again
+        s = d / "M02 Venue X paper.md"
+        s.write_text('---\nid: M02\ntype: milestone\nstatus: suggested\ndue: 2027-03-05 23:59 AoE\nsource: https://venue-x.org/dates\n'
+                     'why: "Main results in"\n---\n\n# M02 · Venue X paper\n')
+        self.assertEqual(self.milestone({"id": "M02", "accept": True})[0], 200)
+        self.assertIn("status: open\n", s.read_text())
+        self.milestone({"id": "M02", "dismiss": True})
+        tree = json.loads(self.get("/api/tree")[2])
+        self.assertEqual({m["id"]: m["status"] for m in tree["milestones"]}, {"M01": "done", "M02": "dismissed"})
+        self.assertEqual(tree["milestones"][1]["source"], "https://venue-x.org/dates")
+        # ids are never reused: the next one after every milestone on disk
+        self.assertEqual(self.milestone({"title": "Talk", "due": "2026-12-10"})[1]["id"], "M03")
+
+    def test_deadline_bad_requests(self):
+        d = self.milestones_dir()
+        for payload in ({"title": "Talk"}, {"title": "Talk", "due": "soon"}, {"title": "  ?? ", "due": "2026-12-10"},
+                        {"title": "Talk", "due": "2026-12-10", "needs": ["E99"]}, {"title": "Talk", "due": "2026-12-10", "needs": "E01"},
+                        {"due": "2026-12-10"}):
+            self.assertEqual(self.milestone(payload)[0], 400, payload)
+        self.assertFalse(d.exists())
+        self.assertEqual(self.milestone({"title": "Talk", "due": "2026-12-10"}, key=None)[0], 403)
+        self.assertEqual(self.milestone({"id": "M09", "status": "done"})[0], 404)
+        self.assertEqual(self.milestone({"title": "Talk", "due": "2026-12-10"})[0], 201)
+        for payload in ({"id": "M01"}, {"id": "M01", "status": "suggested"}, {"id": "M01", "due": "soon"}, {"id": "M01", "accept": "yes"}):
+            self.assertEqual(self.milestone(payload)[0], 400, payload)
+
+    def test_due_dates_read_as_the_page_reads_them(self):
+        """DUE_RE and the milestone statuses, as web/schedule.js has them."""
+        js = (Path(__file__).resolve().parents[1] / "web" / "schedule.js").read_text()
+        self.assertEqual(re.search(r"const DUE_RE = /(.*)/i\n", js).group(1), rft_server.DUE_RE.pattern)
+        self.assertEqual(tuple(re.findall(r"'(\w+)'", re.search(r"const MILESTONE_STATUSES = \[(.*?)\]", js).group(1))), rft_server.MILESTONE_STATUSES)
 
     def test_add_node_asks_the_session_and_answers_the_new_id(self):
         self.session(self.plugin)

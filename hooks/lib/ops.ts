@@ -355,7 +355,12 @@ export function tagsReport(loaded: Loaded): string {
     : 'No topical tags yet: pick 1-3 short lowercase kebab-case ones per note.'
 }
 
-export async function setStatus(io: Io, loaded: Loaded, ref: string, status: string, note?: string, summary?: string): Promise<string> {
+/**
+ * Changes a note's status, with a note appended and a new summary when given. With `date`, a
+ * note that starts running records that day (`started:`, once) and one done records it too
+ * (`finished:`): the calendar's runs, and real durations to set against the estimates.
+ */
+export async function setStatus(io: Io, loaded: Loaded, ref: string, status: string, note?: string, summary?: string, date?: string): Promise<string> {
   const id = resolveId(loaded.tree, ref)
   if (!id) throw new RftError(`"${ref}" is not a note of the tree`)
   if (!(STATUSES as readonly string[]).includes(status)) throw new RftError(`status must be one of ${STATUSES.join(', ')}`)
@@ -364,6 +369,8 @@ export async function setStatus(io: Io, loaded: Loaded, ref: string, status: str
   if (note && isLocked(prev)) throw new RftError(lockedText(n, 'set the status without a note, and propose the text with rft_suggest'))
   let next = withStatus(prev, n, status, note)
   if (summary?.trim()) next = withSummary(next, summary)
+  if (date && status === 'running' && !front(next).started) next = setField(next, 'started', date, 'status')
+  if (date && status === 'done' && n.status !== 'done') next = setField(next, 'finished', date, front(next).started ? 'started' : 'status')
   await io.write(join(loaded.config.vault, n.path), next)
   const fresh = await load(io, loaded.config)
   const report = await sync(io, fresh)
@@ -741,6 +748,7 @@ The reasoning of this research project is kept as a tree of Obsidian notes in \`
 - When a result overturns an earlier one (a corrected number, a bug in the run, a better-controlled rerun), mark the old note with rft_supersede (id, by, why) and update the concept's digest: a note shown as [superseded by …] is not to be built on.
 - When asked what to do next, or before opening new work, call rft_next: the user's priorities first, then running and planned experiments, directions with nothing tried under them, the digests' open questions.
 - Priorities (\`priority:\` urgent, high, medium or low; at most 1 urgent, 5 high and 10 medium among the open notes) are the user's alone: never write \`priority:\` (Edit, Write and shell writes that change it are refused), and a new note gets none. When you have a clear reason (it unblocks other work, the user said it matters, it is cheap and decisive), suggest one: rft_suggest_priority {id, priority, why}, or rft_add_node's suggested_priority and priority_why; the user accepts or dismisses it in the tree view. Work on what the user made urgent or high first.
+- Dates are the user's too: deadlines (milestones in \`${vault}/milestones/\`, outside the tree: \`due:\` and the notes they \`needs:\`), a note's own \`due:\`, an experiment's \`start:\` and \`est:\` (3d, 2w). Never write them (edits that change them are refused). Suggest a start or an estimate with rft_suggest_dates {id, start, est, why}; add a deadline the user gives you with rft_add_deadline (they confirm it); suggest a paper submission only when the user names a venue or asks, with rft_suggest_deadline and the venue's official dates page read now, not from memory. Write \`gpus:\` on an experiment that takes more than one GPU and \`after:\` on one that waits for another run; rft_set_status records the days a run started and finished. rft_next lists the deadlines first, with what puts them at risk.
 - Before launching an experiment (a training run, a grid, a numerical check, a measurement, a literature search for a yes or no answer), create its node first: rft_add_node with type experiment, parent = the direction it tests, status planned or running, and What / Why filled.
 - When it finishes or gives a partial result, write the real numbers in its note (Result, with spread over seeds and what failed; Directions found; Code / data: commit, script, results folder, machine), then rft_set_status. Record only results that were actually obtained, never expected or invented ones.
 - Every new idea or question, from a result, a reference, the user or a discussion, even if rejected: rft_add_node with type direction, parent = the note it comes from. Rejected ideas get status discussed; abandoned ones dropped; moved ones moved, with the reason (rft_set_status note).
@@ -780,6 +788,6 @@ export async function exportHtml(io: Io, loaded: Loaded, assets: PageAssets): Pr
       return { ...t, at: at ? [at.start, at.end] : null, exact: Boolean(at?.exact) }
     })
   }
-  await io.write(path, staticPage(assets, tree, texts, config.project, signature.length.toString(36), comments))
+  await io.write(path, staticPage(assets, tree, texts, config.project, signature.length.toString(36), comments, { milestones: loaded.milestones, gpus: config.gpus }))
   return path
 }

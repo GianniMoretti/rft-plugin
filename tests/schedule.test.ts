@@ -402,8 +402,10 @@ describe('in a session', () => {
     const { w, asked } = await session($, on, {}, {}, 'Add it')
     const res = await $.tool.call({ tool: 'mcp__rft__rft_add_deadline', title: 'Supervisor meeting', due, needs: ['E02'] } as never)
     expect(asked).toEqual([`Add the deadline "Supervisor meeting" on ${due}, needing E02? [Add it | Don't add]`])
-    expect(res.text).toContain('Added M01 Supervisor meeting')
-    expect(front(w.fs.read('vault/milestones/M01 Supervisor meeting.md'))).toMatchObject({ id: 'M01', type: 'milestone', status: 'open', due, needs: `[${link(E02)}]` })
+    // ids are never reused: the config's last milestone id is M02
+    expect(res.text).toContain('Added M03 Supervisor meeting')
+    expect(front(w.fs.read('vault/milestones/M03 Supervisor meeting.md'))).toMatchObject({ id: 'M03', type: 'milestone', status: 'open', due, needs: `[${link(E02)}]` })
+    expect(JSON.parse(w.fs.read('.rft/config.json')).lastId.M).toBe(3)
   })
 
   for (const [how, answer] of [['declines', "Don't add"], ['dismisses', null]] as const) {
