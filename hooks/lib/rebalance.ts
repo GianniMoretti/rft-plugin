@@ -6,7 +6,7 @@
 import { resolveConcept } from './map'
 import { words } from './search'
 import type { Loaded, RftNode, Tree } from './vault'
-import { bodyOf, conceptPath, resolveId } from './vault'
+import { bodyOf, conceptPath, resolveId, withoutChildren } from './vault'
 
 type Vec = Map<string, number>
 
@@ -34,7 +34,7 @@ function noteWords(loaded: Loaded, n: RftNode): string[] {
   const out = [...words(n.title), ...words(n.title), ...n.tags.flatMap(t => words(t))]
   if (n.summary) out.push(...words(n.summary), ...words(n.summary))
   else {
-    const body = bodyOf(loaded.texts[n.id] ?? '').replace(/\n## Children in the tree\n[\s\S]*?(?=\n## |$)/, '\n').replace(/^#.*$/gm, '')
+    const body = withoutChildren(bodyOf(loaded.texts[n.id] ?? '')).replace(/^#.*$/gm, '')
     out.push(...words(body.slice(0, 600)))
   }
   return out

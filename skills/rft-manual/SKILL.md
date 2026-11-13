@@ -275,7 +275,7 @@ its own. A due date is a day, a local time, or a time in a zone:
 - Write `gpus:` on an experiment that takes more than one GPU (from its command and config), and
   `after:` (wikilinks) on one that waits for another run. With `gpus:` in `.rft/config.json`, the
   plugin reports the days the planned and running experiments need more GPUs than there are.
-- `rft_set_status` records `started:` the day a run starts and `finished:` the day it is done:
+- In a vault that uses dates, `rft_set_status` records `started:` the day a run starts and `finished:` the day it is done:
   the calendar's runs, and real durations to set against the estimates.
 - **Planning** is backwards from each deadline, in whole days: what a deadline needs must end by
   its due day, so a note's latest start is the due day less its estimate (less those of the notes

@@ -250,8 +250,9 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
     folder Obsidian leaves alone. They follow a note whose type (and id) changes.
 - **Lock** (the padlock in the drawer) makes a note yours: `locked: true` in its frontmatter.
   Claude then changes nothing in its text, only suggests changes, which you accept. The plugin
-  refuses Claude's Edit and Write on a locked note, shell commands that write to it and name its
-  file (as far as a command shows that), and `rft_set_status` notes and `rft_set_code` on it.
+  refuses Claude's Edit and Write on a locked note, shell commands that write to it (a redirection,
+  `tee`, `sed -i`, `perl -i`, `mv`, `cp`, `rm`, ...; a script run by an interpreter, when it names
+  the note), and `rft_set_status` notes and `rft_set_code` on it.
   Status, tags and the tree's derived fields still change. Your own edits in the drawer are not
   affected, and neither are Obsidian's. Moving a locked note, or marking it superseded, writes a
   line in its **History**, so it unlocks the note, and only once you agree: the session asks you
@@ -321,7 +322,7 @@ that change them are refused.
   editor (due date, needs, **Done**). Any note can also have a `due:` of its own.
 - **An experiment's run**: `start:` (a day) and `est:` (`3d`, `2w`), set in the note's drawer or
   by dragging its bar on the Timeline (the bar moves the start, its right end the estimate).
-  `rft_set_status` records `started:` and `finished:`. `after:` names the runs it waits for, and
+  In a vault that uses dates, `rft_set_status` records `started:` and `finished:`. `after:` names the runs it waits for, and
   `gpus:` how many GPUs it takes (one when not given).
 - **Planning**, backwards from each deadline in whole days: what it needs must end by its due day;
   each note's latest start is the due day less its estimate (and less those that come after it),

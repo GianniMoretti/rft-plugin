@@ -1,7 +1,7 @@
 # Roadmap
 
 Planned work, split into release packages in the order they should ship. Each
-package is one minor version (the current release is 0.22.0; 0.20.0 brought Alex's PR #5: comments
+package is one minor version (the current release is 0.23.0; 0.20.0 brought Alex's PR #5: comments
 and suggestions, locked notes, priorities, deadlines and the calendar) and lists what it contains, how it
 could be done, and when it is done. A package builds only on the ones before it.
 
@@ -22,7 +22,7 @@ could be done, and when it is done. A package builds only on the ones before it.
 | 0.20.0 | Alex's PR #5 merged (done) | – |
 | 0.21.0 | Lean tool list (done) | 0.20.0 |
 | 0.22.0 | Rules on demand (done) | 0.20.0 |
-| 0.23.0 | Fixes from the PR #5 review | 0.20.0 |
+| 0.23.0 | Fixes from the PR #5 review (done) | 0.20.0 |
 | 0.24.0 | Ask Claude in a subagent | 0.20.0 |
 | 1.0.0 | One release with everything, measured | 0.21.0–0.24.0 |
 
@@ -234,16 +234,24 @@ from the start. A deferred tool shows only its name until the model loads it wit
     urgent, Claude wrote a suggested priority and did not touch `priority:` (3 turns).
 - Tests: in `tests/tools.test.ts`, the rules with no features, with some, and with all of them.
 
-## 0.23.0 — Fixes from the PR #5 review
+## 0.23.0 — Fixes from the PR #5 review (done)
 
-- Footnotes in search and in the rebalance words: cut the "Children in the tree" list only, not
-  what follows it.
-- The shell guard for locked notes, priorities and dates: decide on the file a command writes
-  (redirect, `sed -i`, `tee`, `mv`, `cp`) rather than on words in the command, so a command
-  that only reads or mentions `priority:` is not refused. Tests for both directions.
-- `started:` and `finished:` written by `rft_set_status`: keep, but only in vaults that use
-  dates, so other vaults' notes do not change.
-- Done when: each point has a test, and the server and web tests still pass.
+- **Footnotes are searched.** `withoutChildren` (vault.ts) cuts the "Children in the tree" list
+  the way `childrenAt` finds it, so the footnotes after it stay in `rft_search` and in the
+  rebalance words; the children's links still do not count as the note's words.
+- **The shell guards decide on the files a command writes** (`hooks/lib/shell.ts`). The command
+  is split into words with its quotes and escapes, a `cd` moves the folder, and the files written
+  are read from it: redirections, `tee`, `sed -i`, `perl -i`, `awk -i inplace`, `mv` and `cp`
+  (both ends), `rm`, `truncate`, `dd of=`. A glob matches as the shell would. A locked note is
+  refused when it is one of those files; a priority or a date when the command holds such a line
+  and writes a file in the vault. A command that only reads a note, or writes elsewhere while
+  mentioning `priority:`, now passes. A script run by an interpreter (python, node, a shell `-c`,
+  a heredoc) may write anything: for it the guards keep the old rule, the note or vault it names.
+- **`started:` and `finished:`** are written by `rft_set_status` only in a vault that uses dates
+  (a milestone, or a note with `due:` or `start:`).
+- Tests: `tests/shell.test.ts` (15 commands that write a note, 10 that do not, scripts, globs,
+  and the guard through tool calls both ways), a footnote search, `rft_set_status` in a vault
+  with no dates. 221 plugin tests and 74 server tests pass.
 
 ## 0.24.0 — Ask Claude in a subagent
 

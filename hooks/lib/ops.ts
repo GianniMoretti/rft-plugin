@@ -17,6 +17,7 @@ import {
 } from './vault'
 import { cleanSummary, withSummary } from './map'
 import type { Feature } from './tools'
+import { featuresInUse } from './tools'
 import { checkSuggestion, fullText } from './priority'
 
 /** Why Claude may not change a locked note's text, and what it does instead. */
@@ -359,7 +360,9 @@ export function tagsReport(loaded: Loaded): string {
 /**
  * Changes a note's status, with a note appended and a new summary when given. With `date`, a
  * note that starts running records that day (`started:`, once) and one done records it too
- * (`finished:`): the calendar's runs, and real durations to set against the estimates.
+ * (`finished:`): the calendar's runs, and real durations to set against the estimates. Only in a
+ * vault that uses dates (a milestone, or a note with `due:` or `start:`), so other vaults' notes
+ * do not change.
  */
 export async function setStatus(io: Io, loaded: Loaded, ref: string, status: string, note?: string, summary?: string, date?: string): Promise<string> {
   const id = resolveId(loaded.tree, ref)
@@ -370,8 +373,9 @@ export async function setStatus(io: Io, loaded: Loaded, ref: string, status: str
   if (note && isLocked(prev)) throw new RftError(lockedText(n, 'set the status without a note, and propose the text with rft_suggest'))
   let next = withStatus(prev, n, status, note)
   if (summary?.trim()) next = withSummary(next, summary)
-  if (date && status === 'running' && !front(next).started) next = setField(next, 'started', date, 'status')
-  if (date && status === 'done' && n.status !== 'done') next = setField(next, 'finished', date, front(next).started ? 'started' : 'status')
+  const dated = date && featuresInUse(loaded, false).has('dates')
+  if (dated && status === 'running' && !front(next).started) next = setField(next, 'started', date, 'status')
+  if (dated && status === 'done' && n.status !== 'done') next = setField(next, 'finished', date, front(next).started ? 'started' : 'status')
   await io.write(join(loaded.config.vault, n.path), next)
   const fresh = await load(io, loaded.config)
   const report = await sync(io, fresh)

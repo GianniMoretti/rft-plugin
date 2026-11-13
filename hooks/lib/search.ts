@@ -7,7 +7,7 @@
 
 import type { Digest } from './map'
 import type { Loaded, RftNode } from './vault'
-import { MARK, bodyOf, conceptPath } from './vault'
+import { MARK, bodyOf, conceptPath, withoutChildren } from './vault'
 
 const STOP = new Set(('a an and are as at be by for from has have in is it its of on or that the this to was were ' +
   'what when which with not no but if then than into over under via we our you your').split(' '))
@@ -42,7 +42,7 @@ function docs(loaded: Loaded): Doc[] {
     const tf = new Map<string, number>()
     const add = (text: string, weight: number) => { for (const w of words(text)) tf.set(w, (tf.get(w) ?? 0) + weight) }
     // the children list is the children's titles, not this note's content
-    const body = bodyOf(texts[n.id] ?? '').replace(/\n## Children in the tree\n[\s\S]*?(?=\n## |$)/, '\n')
+    const body = withoutChildren(bodyOf(texts[n.id] ?? ''))
     const concepts = conceptPath(tree.concepts ?? {}, n.concept).map(c => tree.concepts?.[c]?.name ?? '')
     add(`${n.id} ${n.title}`, 3)
     add(n.summary ?? '', 3)

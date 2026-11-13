@@ -4,7 +4,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { addNode, setConcept } from '../hooks/lib/ops'
 import { search, searchReport, words } from '../hooks/lib/search'
-import { load, readConfig } from '../hooks/lib/vault'
+import { load, readConfig, withoutChildren } from '../hooks/lib/vault'
 import { MemoryFs, demoFiles } from './fixture'
 
 const loaded = async () => {
@@ -20,6 +20,18 @@ const loaded = async () => {
 }
 
 describe('search', () => {
+  test('a footnote after the children list is searched; the children links are not', async () => {
+    const files = demoFiles()
+    const path = Object.keys(files).find(k => k.includes('/E01 '))!
+    files[path] = `${files[path]!.trimEnd()}\n\n[^1]: Checked against the zebrafish protocol.\n`
+    const io = new MemoryFs(files).io()
+    const l = await load(io, (await readConfig(io))!)
+    expect(search(l, 'zebrafish')[0]?.id).toBe('E01')
+    // D01 is only a child link of E01: not a match for E01
+    expect(search(l, 'better variant').map(h => h.id)).not.toContain('E01')
+    expect(withoutChildren('a\n## Children in the tree\n- [[x]]\n\n[^1]: note\n')).toBe('a\n[^1]: note\n')
+  })
+
   test('words: lowercase, accents and stop words out', () => {
     expect(words('The Café of Régularisation, v2!')).toEqual(['cafe', 'regularisation', 'v2'])
   })

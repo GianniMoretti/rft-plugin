@@ -30,6 +30,7 @@ import { changesPriority, priorityText, suggestPriority } from './lib/priority'
 import { addDeadline, changesDates, checkDeadline, datesText, deadlineQuestion, deadlinesLine, suggestDates, suggestDeadline } from './lib/schedule'
 import { RECALL_HINT, searchesVault } from './lib/recall'
 import { eagerTools, featuresInUse } from './lib/tools'
+import { matches, shellWrites } from './lib/shell'
 import type { Feature } from './lib/tools'
 import { SMALL_TREE, mapGaps, mapReport, mapWarnings, projectMap, readDigests, resolveConcept, setDigest, setSummaries } from './lib/map'
 import { CONFIG_PATH, LEGEND, MARK, NODE_TYPES, bodyOf, counts, countsLine, isAbsolute, join, locate, readConfig, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
@@ -1054,9 +1055,25 @@ async function submitPending($: EngineInterface): Promise<void> {
 }
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
-// a shell command that may write a file: a redirection, an in-place editor, a move, copy or
-// removal, a script
-const SHELL_WRITES = /(^|[^<>&0-9])>{1,2}(?!&)|\b(tee|mv|cp|rm|truncate|dd|python3?|node|ruby|perl|sed\s[^|;&]*-i|awk\s[^|;&]*-i)\b/
+
+type SnapNode = RftSnapshot['nodes'][string]
+
+/**
+ * What a shell command writes in the vault: the notes among the files it writes, whether any of
+ * them is in the vault, and whether it runs a script (whose writes the command does not show).
+ */
+async function shellTouches($: EngineInterface, cmd: string, vault: string, nodes: SnapNode[]) {
+  const w = shellWrites(cmd, resolvePath(await $.session.cwd(), '.'))
+  return {
+    files: w.files,
+    notes: nodes.filter(n => w.files.some(f => matches(f, join(vault, n.path)))),
+    inVault: w.files.some(f => f.startsWith(`${vault}/`)),
+    script: w.script,
+  }
+}
+
+/** For a script, whose writes are not known: the note the command names, by name or id. */
+const namedIn = (cmd: string, nodes: SnapNode[]) => nodes.find(n => cmd.includes(n.name) || new RegExp(`\\b${n.id}\\b`).test(cmd)) ?? null
 const COMMENTS_BY_HAND = `The tree view and the rft tools write the comments files (${COMMENTS_DIR}/): use rft_comment and rft_suggest.`
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
@@ -1073,13 +1090,16 @@ async function lockedEdit($: EngineInterface, e: Record<string, unknown>): Promi
   const vault = resolvePath(s.vault, '.')
   if (tool === 'Bash') {
     const cmd = String(e.command ?? '')
-    if (!SHELL_WRITES.test(cmd)) return null
-    if (cmd.includes(`${COMMENTS_DIR}/`)) return COMMENTS_BY_HAND
+    const t = await shellTouches($, cmd, vault, Object.values(s.nodes))
+    if (t.files.some(f => f.startsWith(`${vault}/${COMMENTS_DIR}/`)) || (t.script && cmd.includes(`${COMMENTS_DIR}/`))) return COMMENTS_BY_HAND
+    const locked = t.notes.find(n => n.locked)
+    if (locked) return lockedText(locked)
+    if (!t.script) return null
+    // a script: the locked note it names by its file name (the id, then the title's first word, or a glob)
     for (const n of Object.values(s.nodes)) {
       if (!n.locked) continue
       const word = escapeRe(n.title.split(' ')[0] ?? '')
-      const named = cmd.includes(n.name) || new RegExp(`\\b${n.id}(?:[*?]|(?:\\\\ | )${word})`).test(cmd)
-      if (named) return lockedText(n)
+      if (cmd.includes(n.name) || new RegExp(`\\b${n.id}(?:[*?]|(?:\\\\ | )${word})`).test(cmd)) return lockedText(n)
     }
     return null
   }
@@ -1128,8 +1148,12 @@ async function priorityEdit($: EngineInterface, e: Record<string, unknown>): Pro
   const vault = resolvePath(s.vault, '.')
   if (tool === 'Bash') {
     const cmd = String(e.command ?? '')
-    if (!SHELL_WRITES.test(cmd) || !PRIORITY_LINE.test(cmd)) return null
-    const named = Object.values(s.nodes).find(n => cmd.includes(n.name) || new RegExp(`\\b${n.id}\\b`).test(cmd)) ?? null
+    if (!PRIORITY_LINE.test(cmd)) return null
+    const t = await shellTouches($, cmd, vault, Object.values(s.nodes))
+    if (t.notes.length || t.inVault) return priorityText(t.notes[0] ?? null)
+    if (!t.script) return null
+    // a script: the vault or a note it names
+    const named = namedIn(cmd, Object.values(s.nodes))
     const folder = vault.split('/').pop()
     return named || cmd.includes(vault) || (folder && cmd.includes(`${folder}/`)) ? priorityText(named) : null
   }
@@ -1160,8 +1184,12 @@ async function datesEdit($: EngineInterface, e: Record<string, unknown>): Promis
   const vault = resolvePath(s.vault, '.')
   if (tool === 'Bash') {
     const cmd = String(e.command ?? '')
-    if (!SHELL_WRITES.test(cmd) || !DATE_LINE.test(cmd)) return null
-    const named = Object.values(s.nodes).find(n => cmd.includes(n.name) || new RegExp(`\\b${n.id}\\b`).test(cmd)) ?? null
+    if (!DATE_LINE.test(cmd)) return null
+    const t = await shellTouches($, cmd, vault, Object.values(s.nodes))
+    if (t.notes.length || t.inVault) return datesText(t.notes[0] ?? null)
+    if (!t.script) return null
+    // a script: the vault or a note it names
+    const named = namedIn(cmd, Object.values(s.nodes))
     const folder = vault.split('/').pop()
     return named || cmd.includes(vault) || (folder && cmd.includes(`${folder}/`)) ? datesText(named) : null
   }

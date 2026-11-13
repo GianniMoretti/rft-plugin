@@ -134,6 +134,17 @@ describe('reading dates', () => {
     expect(warnings).toContain('E05: start "tomorrow" is not a date (2026-11-27)')
   })
 
+  test('in a vault that uses no dates, rft_set_status writes no started: or finished:', async () => {
+    const fs = new MemoryFs(demoFiles())
+    const io = fs.io()
+    const l = await load(io, (await readConfig(io))!)
+    await setStatus(io, l, 'E02', 'done', undefined, undefined, '2026-11-14')
+    const fm = front(fs.read(`vault/experiments/${E02}.md`))
+    expect(fm.status).toBe('done')
+    expect(fm.started).toBeUndefined()
+    expect(fm.finished).toBeUndefined()
+  })
+
   test('rft_set_status records the day a run started and the day it finished, once', async () => {
     const { fs, io, l } = await setup(example1())
     await setStatus(io, l, 'E03', 'running', undefined, undefined, '2026-11-10')

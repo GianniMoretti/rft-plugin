@@ -1321,6 +1321,14 @@ export function childrenAt(t: string): { start: number; end: number; body: strin
   return { start, end, body: t.slice(start, end) }
 }
 
+/** The text without its "Children in the tree" list (heading and links); what follows it, footnotes included, stays. */
+export function withoutChildren(t: string): string {
+  const c = childrenAt(t)
+  if (!c) return t
+  const head = t.lastIndexOf('## Children in the tree\n', c.start)
+  return `${t.slice(0, head)}${t.slice(c.end)}`
+}
+
 /** Adds `- [[child]]` to the parent's "Children in the tree" section, creating it when missing. */
 export function withChildListed(text: string, childName: string): string {
   const line = `- [[${childName}]]`
