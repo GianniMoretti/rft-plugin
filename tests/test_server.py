@@ -10,6 +10,7 @@ import json
 import os
 import queue
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -298,6 +299,7 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.get("/app.js")[0], 200)
         self.assertEqual(self.get("/layout.js")[0], 200)
         self.assertEqual(self.get("/theme.js")[0], 200)
+        self.assertEqual(self.get("/markdown.js")[0], 200)
         self.assertEqual(self.get("/vendor/d3.v7.9.0.min.js")[0], 200)
         self.assertEqual(self.get("/vendor/katex.v0.16.22.min.js")[0], 200)
         self.assertEqual(self.get("/vendor/katex.v0.16.22.min.css")[0], 200)
@@ -409,6 +411,372 @@ class ServerTest(unittest.TestCase):
         self.assertTrue(data.endswith(b"---\r\nOne\r\nTwo\r\n"))
         self.assertNotIn(b"\n", data.replace(b"\r\n", b""))
 
+    # ------------------------------------------------------------ comments, suggestions, lock
+
+    def comment(self, nid, payload, **kw):
+        return self.write("POST", "/api/comment", {"id": nid, **payload}, **kw)
+
+    def discussed_note(self, nid="D07", text=None):
+        """A scratch note whose comments file goes with it."""
+        p = self.scratch_note(nid, text)
+        self.addCleanup((self.vault / ".comments" / f"{nid}.json").unlink, missing_ok=True)
+        return p
+
+    def test_locate_finds_a_quote_by_its_context(self):
+        body = "A cat. The dog runs. A cat sleeps. The end."
+        # the second "A cat", by what comes after it
+        self.assertEqual(rft_server.locate(body, "A cat", "dog runs. ", " sleeps"), (21, 26, True))
+        self.assertEqual(rft_server.locate(body, "A cat", "", ". The dog"), (0, 5, True))
+        # the quote edited: the text between its context, not exact
+        edited = "A cat. The dog walks. A cat sleeps. The end."
+        self.assertEqual(rft_server.locate(edited, "runs", "A cat. The dog ", ". A cat sleeps"), (15, 20, False))
+        # its context gone too: detached
+        self.assertIsNone(rft_server.locate("Something else entirely.", "runs", "The dog ", ". A cat"))
+        self.assertIsNone(rft_server.locate("", "x", "", ""))
+        # the quote and the text after it edited: beside what came before, text that begins as it did
+        body = "## What\nMixup alpha 0.2 or 1.0, CutMix (alpha 1.0); 200 epochs[^2]."
+        self.assertEqual(rft_server.locate(body, "Mixup alpha 0.2 and 1.0", "## What\n", ", CutMix; 200 epochs; 5 seeds["), (8, 31, False))
+        # or, before what came after, text that ends as it did
+        self.assertEqual(rft_server.locate("A brand new opening of the line, then the end.", "old opening of the line", "gone before ", ", then the end."), (8, 31, False))
+        self.assertIsNone(rft_server.locate("Nothing alike here at all.", "Mixup alpha", "## What\n", ", CutMix"))
+
+    def test_a_thread_keeps_its_context_up_to_date(self):
+        p = self.discussed_note()
+        self.comment("D07", {"action": "new", "kind": "comment", "quote": "Text of D07", "prefix": "", "suffix": "", "text": "?"})
+        # the text before the quote rewritten, the quote kept: the next action takes the context anew
+        p.write_text(p.read_text().replace("# D07 · Scratch\n\n", "# D07 · Scratch\n\nA new first paragraph.\n\n"))
+        self.comment("D07", {"action": "reply", "thread": "c1", "text": "More."})
+        saved = json.loads((self.vault / ".comments" / "D07.json").read_text())["threads"][0]
+        self.assertEqual(saved["prefix"], " D07 · Scratch\n\nA new first paragraph.\n\n")
+        # and so does a save of the note's text from the page
+        n = json.loads(self.get("/api/note?id=D07")[2])
+        self.put("D07", {"body": n["body"].replace("A new first paragraph.", "Rewritten."), "version": n["version"]})
+        saved = json.loads((self.vault / ".comments" / "D07.json").read_text())["threads"][0]
+        self.assertTrue(saved["prefix"].endswith("Rewritten.\n\n"))
+
+    def test_a_comment_thread_from_posting_to_history(self):
+        self.discussed_note()
+        status, n = self.comment("D07", {"action": "new", "kind": "comment", "quote": "Text of D07", "prefix": "Scratch\n\n", "suffix": ".", "text": " Is this right? "})
+        self.assertEqual(status, 200)
+        [t] = n["threads"]
+        self.assertEqual((t["id"], t["kind"], t["state"], t["quote"]), ("c1", "comment", "open", "Text of D07"))
+        self.assertEqual(n["body"][t["at"][0]:t["at"][1]], "Text of D07")
+        self.assertTrue(t["exact"])
+        self.assertEqual(t["prefix"], "\n# D07 · Scratch\n\n")
+        self.assertEqual(t["messages"], [{"by": "you", "at": t["messages"][0]["at"], "text": "Is this right?"}])
+        self.assertRegex(t["messages"][0]["at"], r"^\d{4}-\d\d-\d\d \d\d:\d\d$")
+        nodes = {x["id"]: x for x in json.loads(self.get("/api/tree")[2])["nodes"]}
+        self.assertEqual(nodes["D07"]["threads"], 1)
+        self.assertEqual(self.comment("D07", {"action": "reply", "thread": "c1", "text": "Yes."})[1]["threads"][0]["messages"][-1]["text"], "Yes.")
+        status, n = self.comment("D07", {"action": "resolve", "thread": "c1"})
+        self.assertEqual((status, n["threads"][0]["state"], n["threads"][0]["closed"]["by"]), (200, "resolved", "you"))
+        # kept as history, and no longer counted as open
+        nodes = {x["id"]: x for x in json.loads(self.get("/api/tree")[2])["nodes"]}
+        self.assertEqual(nodes["D07"]["threads"], 0)
+        self.assertEqual(self.comment("D07", {"action": "reply", "thread": "c1", "text": "More."})[0], 409)
+        self.assertEqual(self.comment("D07", {"action": "reopen", "thread": "c1"})[1]["threads"][0]["state"], "open")
+        # the next thread gets the next id; the comments file is plain JSON beside the notes
+        self.comment("D07", {"action": "new", "kind": "comment", "quote": "Scratch", "prefix": "", "suffix": "", "text": "Title?"})
+        saved = json.loads((self.vault / ".comments" / "D07.json").read_text())
+        self.assertEqual([x["id"] for x in saved["threads"]], ["c1", "c2"])
+        self.assertEqual(saved["next"], 3)
+
+    def test_a_thread_on_text_no_longer_in_the_note_is_refused(self):
+        self.discussed_note()
+        status, res = self.comment("D07", {"action": "new", "kind": "comment", "quote": "Not here", "prefix": "", "suffix": "", "text": "?"})
+        self.assertEqual(status, 409)
+        self.assertIn("select it again", res["error"])
+        self.assertIn("body", res)
+        self.assertFalse((self.vault / ".comments" / "D07.json").exists())
+
+    def test_a_suggestion_accepted_is_written_into_the_note(self):
+        p = self.discussed_note()
+        before = p.read_text()
+        _, n = self.comment("D07", {"action": "new", "kind": "suggestion", "quote": "Text of D07.", "prefix": "", "suffix": "", "text": "", "replacement": "Better text, with $x$."})
+        self.assertEqual(n["threads"][0]["replacement"], "Better text, with $x$.")
+        status, n = self.comment("D07", {"action": "accept", "thread": "c1"})
+        self.assertEqual((status, n["threads"][0]["state"]), (200, "accepted"))
+        self.assertEqual(p.read_text(), before.replace("Text of D07.", "Better text, with $x$."))
+        self.assertEqual(n["body"], "\n# D07 · Scratch\n\nBetter text, with $x$.\n")
+        self.assertEqual(self.comment("D07", {"action": "accept", "thread": "c1"})[0], 400)
+
+    def test_a_suggestion_on_text_that_changed_is_not_accepted(self):
+        p = self.discussed_note()
+        self.comment("D07", {"action": "new", "kind": "suggestion", "quote": "Text of D07.", "prefix": "", "suffix": "", "text": "", "replacement": "New."})
+        p.write_text(p.read_text().replace("Text of D07.", "Text of D07, edited by Claude."))
+        changed = p.read_text()
+        n = json.loads(self.get("/api/note?id=D07")[2])
+        self.assertFalse(n["threads"][0]["exact"])
+        status, res = self.comment("D07", {"action": "accept", "thread": "c1"})
+        self.assertEqual(status, 409)
+        self.assertIn("the text changed", res["error"])
+        self.assertEqual(p.read_text(), changed)
+        self.assertEqual(self.comment("D07", {"action": "reject", "thread": "c1"})[1]["threads"][0]["state"], "rejected")
+
+    def test_an_instruction_is_a_suggestion_without_a_replacement(self):
+        self.discussed_note()
+        _, n = self.comment("D07", {"action": "new", "kind": "suggestion", "quote": "Text of D07.", "prefix": "", "suffix": "", "text": "Add the numbers.", "replacement": "Text of D07."})
+        self.assertIsNone(n["threads"][0]["replacement"])
+        status, res = self.comment("D07", {"action": "accept", "thread": "c1"})
+        self.assertEqual(status, 409)
+        self.assertIn("no replacement yet", res["error"])
+        # a suggestion needs a change or an instruction; a comment needs its text
+        self.assertEqual(self.comment("D07", {"action": "new", "kind": "suggestion", "quote": "Scratch", "text": ""})[0], 400)
+        self.assertEqual(self.comment("D07", {"action": "new", "kind": "comment", "quote": "Scratch", "text": " "})[0], 400)
+        self.assertEqual(self.comment("D07", {"action": "resolve", "thread": "c1"})[0], 400)
+
+    def test_ask_claude_hands_the_thread_to_the_session(self):
+        self.discussed_note()
+        self.session(None)
+        self.comment("D07", {"action": "new", "kind": "comment", "quote": "Scratch", "prefix": "", "suffix": "", "text": "Why?"})
+        status, n = self.comment("D07", {"action": "ask", "thread": "c1"})
+        self.assertEqual(status, 200)
+        self.assertEqual(self.asked, [("RFT_ASK", {"id": "D07", "thread": "c1"})])
+        self.assertRegex(n["threads"][0]["asked"], r"^\d{4}-")
+
+        def gone(request):
+            raise OSError("broken pipe")
+
+        self.session(gone)
+        self.comment("D07", {"action": "new", "kind": "comment", "quote": "Text of D07", "prefix": "", "suffix": "", "text": "And this?"})
+        status, res = self.comment("D07", {"action": "ask", "thread": "c2"})
+        self.assertEqual(status, 503)
+        self.assertIsNone(json.loads(self.get("/api/note?id=D07")[2])["threads"][1]["asked"])
+
+    def test_comments_need_the_page_and_its_key(self):
+        self.discussed_note()
+        payload = {"action": "new", "kind": "comment", "quote": "Scratch", "prefix": "", "suffix": "", "text": "x"}
+        self.assertEqual(self.comment("D07", payload, key=None)[0], 403)
+        self.assertEqual(self.comment("D07", payload, origin="http://evil.example")[0], 403)
+        self.assertEqual(self.comment("D07", {"action": "dance", "thread": "c1"})[0], 404)
+        self.assertEqual(self.comment("D07", {**payload, "text": "x" * 20_001})[0], 413)
+        self.assertEqual(self.comment("D99", payload)[0], 404)
+        self.assertEqual(self.write("POST", "/api/comment", {"action": "new"})[0], 400)
+        self.assertFalse((self.vault / ".comments" / "D07.json").exists())
+        self.assertEqual(self.comment("D07", payload)[0], 200)
+        self.assertEqual(self.comment("D07", {"action": "dance", "thread": "c1"})[0], 400)
+
+    def test_lock_and_unlock_a_note(self):
+        p = self.scratch_note()
+        before = p.read_text()
+        status, n = self.write("POST", "/api/lock", {"id": "D07", "locked": True})
+        self.assertEqual((status, n["locked"]), (200, True))
+        self.assertEqual(p.read_text(), before.replace("\n---\n", "\nlocked: true\n---\n", 1))
+        nodes = {x["id"]: x for x in json.loads(self.get("/api/tree")[2])["nodes"]}
+        self.assertTrue(nodes["D07"]["locked"])
+        self.assertFalse(nodes["D00"]["locked"])
+        # locking twice keeps one line; unlocking gives the note back as it was
+        self.write("POST", "/api/lock", {"id": "D07", "locked": True})
+        self.assertEqual(p.read_text().count("locked:"), 1)
+        status, n = self.write("POST", "/api/lock", {"id": "D07", "locked": False})
+        self.assertEqual((status, n["locked"], p.read_text()), (200, False, before))
+        self.assertEqual(self.write("POST", "/api/lock", {"id": "D07", "locked": True}, key=None)[0], 403)
+        self.assertEqual(self.write("POST", "/api/lock", {"id": "D07", "locked": "yes"})[0], 400)
+        self.assertEqual(p.read_text(), before)
+
+    # ------------------------------------------------------------ priorities
+
+    def priority(self, payload, **kw):
+        return self.write("POST", "/api/priority", payload, **kw)
+
+    def nodes(self):
+        return {x["id"]: x for x in json.loads(self.get("/api/tree")[2])["nodes"]}
+
+    def with_priority(self, path, priority):
+        """A fixture note given `priority` for one test, as it was afterwards."""
+        before = path.read_text()
+        self.addCleanup(path.write_text, before)
+        path.write_text(re.sub(r"(status: \w+\n)", rf"\1priority: {priority}\n", before, count=1))
+
+    def test_priority_set_changed_and_taken_away(self):
+        p = self.scratch_note()
+        before = p.read_text()
+        self.assertEqual(self.priority({"id": "D07", "priority": "high"}), (200, {"id": "D07", "priority": "high"}))
+        self.assertEqual(p.read_text(), before.replace("status: idea\n", "status: idea\npriority: high\n", 1))
+        self.assertEqual(self.nodes()["D07"]["priority"], "high")
+        self.assertNotIn("priority", self.nodes()["D00"])
+        # changed in place, one line; null takes it away and gives the note back as it was
+        self.priority({"id": "D07", "priority": "low"})
+        self.assertEqual(p.read_text().count("priority:"), 1)
+        self.assertEqual(self.priority({"id": "D07", "priority": None}), (200, {"id": "D07", "priority": None}))
+        self.assertEqual(p.read_text(), before)
+
+    def test_accepting_or_dismissing_claudes_suggestion(self):
+        suggestion = 'suggested_priority: high\nsuggested_priority_why: "It unblocks D05"\n'
+        text = note("D07", "direction", "idea", "D00 Root question", "Scratch").replace("status: idea\n", "status: idea\n" + suggestion)
+        p = self.scratch_note(text=text)
+        n = self.nodes()["D07"]
+        self.assertEqual((n.get("priority"), n["suggestedPriority"], n["suggestedWhy"]), (None, "high", "It unblocks D05"))
+        # dismissed: the suggestion goes, and no priority comes
+        self.assertEqual(self.priority({"id": "D07", "dismiss": True}), (200, {"id": "D07", "priority": None}))
+        self.assertEqual(p.read_text(), text.replace(suggestion, ""))
+        self.assertNotIn("suggestedPriority", self.nodes()["D07"])
+        # accepted, or another priority chosen: either answers the suggestion
+        p.write_text(text)
+        self.priority({"id": "D07", "priority": "medium"})
+        self.assertEqual(p.read_text(), text.replace(suggestion, "priority: medium\n"))
+        self.assertNotIn("suggestedPriority", self.nodes()["D07"])
+
+    def test_priority_limits_count_the_open_notes_only(self):
+        self.with_priority(self.vault / "experiments" / "E01 First run.md", "urgent")  # E01 is running
+        self.scratch_note()
+        status, err = self.priority({"id": "D07", "priority": "urgent"})
+        self.assertEqual((status, err["holders"]), (409, ["E01"]))
+        self.assertIn("urgent is full: E01 already holds it (at most 1 open note). Lower one of them first.", err["error"])
+        self.assertNotIn("priority", self.nodes()["D07"])
+        # the note that holds it may set it again; a note that is done does not count
+        self.assertEqual(self.priority({"id": "E01", "priority": "urgent"})[0], 200)
+        self.with_priority(self.vault / "directions" / "D00 Root question.md", "low")
+        self.assertEqual(self.priority({"id": "D00", "priority": "urgent"})[0], 200)
+        # five high ideas fill high; medium still has room, low has no limit
+        for i in range(5):
+            self.scratch_note(f"D1{i}", note(f"D1{i}", "direction", "idea", "D00 Root question", "Scratch")
+                              .replace("status: idea\n", "status: idea\npriority: high\n"))
+        status, err = self.priority({"id": "D07", "priority": "high"})
+        self.assertEqual((status, err["holders"]), (409, ["D10", "D11", "D12", "D13", "D14"]))
+        self.assertIn("D10, D11, D12, D13, D14 already hold it (at most 5 open notes)", err["error"])
+        self.assertEqual(self.priority({"id": "D07", "priority": "medium"})[0], 200)
+        self.assertEqual(self.priority({"id": "D07", "priority": "low"})[0], 200)
+
+    def test_priority_bad_requests(self):
+        p = self.scratch_note()
+        before = p.read_text()
+        for payload in ({"id": "D07"}, {"id": "D07", "priority": "top"}, {"id": "D07", "priority": 1},
+                        {"id": "D07", "priority": "High"}, {"priority": "high"}, {"id": "D07", "dismiss": "yes"}):
+            self.assertEqual(self.priority(payload)[0], 400, payload)
+        self.assertEqual(self.priority({"id": "D07", "priority": "high"}, key=None)[0], 403)
+        self.assertEqual(self.priority({"id": "D07", "priority": "high"}, origin="http://evil.example")[0], 403)
+        self.assertEqual(self.priority({"id": "D99", "priority": "high"})[0], 404)
+        self.assertEqual(p.read_text(), before)
+
+    def test_priorities_match_the_plugin_and_the_page(self):
+        """PRIORITIES, their limits and the open statuses, as hooks/lib/vault.ts and web/kanban.js give them."""
+        root = Path(__file__).resolve().parents[1]
+        words = lambda s: tuple(re.findall(r"'(\w+)'", s))
+        limits = lambda s: {k: None if v == "null" else int(v) for k, v in re.findall(r"(\w+): (\d+|null)", s)}
+        ts = (root / "hooks" / "lib" / "vault.ts").read_text()
+        self.assertEqual(words(re.search(r"export const PRIORITIES = \[(.*?)\]", ts).group(1)), rft_server.PRIORITIES)
+        self.assertEqual(limits(re.search(r"export const PRIORITY_LIMITS[^=]*= \{(.*?)\}", ts).group(1)), rft_server.PRIORITY_LIMITS)
+        self.assertEqual(words(re.search(r"export const OPEN_STATUSES[^=]*= \[(.*?)\]", ts).group(1)), rft_server.OPEN_STATUSES)
+        js = (root / "web" / "kanban.js").read_text()
+        self.assertEqual(words(re.search(r"const PRIORITIES = \[(.*?)\]", js).group(1)), rft_server.PRIORITIES)
+        self.assertEqual(limits(re.search(r"const LIMITS = \{(.*?)\}", js).group(1)), rft_server.PRIORITY_LIMITS)
+        self.assertEqual(words(re.search(r"const OPEN = \[(.*?)\]", js).group(1)), rft_server.OPEN_STATUSES)
+
+    # ------------------------------------------------------------ dates and deadlines
+
+    def dates(self, payload, **kw):
+        return self.write("POST", "/api/dates", payload, **kw)
+
+    def milestone(self, payload, **kw):
+        return self.write("POST", "/api/milestone", payload, **kw)
+
+    def scratch_experiment(self, extra=""):
+        """An experiment of its own, E17, planned, with more frontmatter after its status."""
+        p = self.vault / "experiments" / "E17 Scratch run.md"
+        p.write_text(note("E17", "experiment", "planned", "D00 Root question", "Scratch run").replace("status: planned\n", "status: planned\n" + extra))
+        self.addCleanup(p.unlink)
+        return p
+
+    def milestones_dir(self):
+        d = self.vault / "milestones"
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        return d
+
+    def test_tree_has_the_dates_and_the_deadlines(self):
+        self.scratch_experiment('start: 2026-11-27\nest: 1w\ngpus: 2\nafter: ["[[E01 First run]]"]\nsuggested_est: 4d\n'
+                                'suggested_dates_why: "Two seeds fewer"\ndue: soon\n')
+        d = self.milestones_dir()
+        d.mkdir()
+        (d / "M01 Workshop paper.md").write_text('---\nid: M01\ntype: milestone\nstatus: open\ndue: 2026-12-05 23:59 AoE\n'
+                                                 'needs: ["[[E17 Scratch run]]", "[[E99 Gone]]"]\n---\n\n# M01 · Workshop paper\n')
+        tree = json.loads(self.get("/api/tree")[2])
+        e17 = {n["id"]: n for n in tree["nodes"]}["E17"]
+        keys = ("start", "est", "gpus", "after", "suggestedEst", "suggestedDatesWhy", "due", "suggestedStart")
+        self.assertEqual({k: e17.get(k) for k in keys}, {"start": "2026-11-27", "est": 7, "gpus": 2, "after": ["E01"], "suggestedEst": 4,
+                                                         "suggestedDatesWhy": "Two seeds fewer", "due": None, "suggestedStart": None})
+        self.assertEqual(tree["milestones"], [{"id": "M01", "name": "M01 Workshop paper", "title": "Workshop paper", "path": "milestones/M01 Workshop paper.md",
+                                               "status": "open", "due": "2026-12-05 23:59 AoE", "needs": ["E17"], "missing": ["E99 Gone"]}])
+        self.assertIsNone(tree["gpus"])  # no config given
+
+    def test_dates_set_cleared_and_suggestion_answered(self):
+        p = self.scratch_experiment('suggested_start: 2026-11-20\nsuggested_est: 4d\nsuggested_dates_why: "Before M01"\n')
+        before = p.read_text()
+        plain = re.sub(r"suggested_.*\n", "", before)
+        # dismissed: the suggestion goes, and no date comes
+        self.assertEqual(self.dates({"id": "E17", "dismiss": True}), (200, {"id": "E17"}))
+        self.assertEqual(p.read_text(), plain)
+        # set (accepting, or setting other dates, answers the suggestion): after the status, due, start, est
+        p.write_text(before)
+        self.assertEqual(self.dates({"id": "E17", "start": "2026-11-20", "est": "4d"}), (200, {"id": "E17", "start": "2026-11-20", "est": "4d"}))
+        self.assertEqual(p.read_text(), plain.replace("status: planned\n", "status: planned\nstart: 2026-11-20\nest: 4d\n"))
+        # changed in place, one line; null takes a date away
+        self.dates({"id": "E17", "est": "1w"})
+        self.assertEqual(p.read_text().count("est:"), 1)
+        self.assertEqual((self.nodes()["E17"]["start"], self.nodes()["E17"]["est"]), ("2026-11-20", 7))
+        self.dates({"id": "E17", "start": None, "est": None, "due": "2026-12-01 14:00"})
+        n = self.nodes()["E17"]
+        self.assertEqual((n.get("start"), n.get("est"), n["due"]), (None, None, "2026-12-01 14:00"))
+        # any note can have a due date
+        self.assertEqual(self.dates({"id": "D01", "due": "2026-12-01"})[0], 200)
+        self.addCleanup(self.dates, {"id": "D01", "due": None})
+
+    def test_dates_bad_requests(self):
+        p = self.scratch_experiment()
+        before = p.read_text()
+        for payload in ({"id": "E17"}, {"id": "E17", "start": "soon"}, {"id": "E17", "est": "1.5d"}, {"id": "E17", "due": "next friday"},
+                        {"id": "E17", "start": 3}, {"id": "E17", "priority": "high"}, {"start": "2026-11-20"}, {"id": "E17", "dismiss": "yes"}):
+            self.assertEqual(self.dates(payload)[0], 400, payload)
+        self.assertEqual(self.dates({"id": "D01", "est": "3d"})[0], 422)  # only experiments run
+        self.assertEqual(self.dates({"id": "E17", "start": "2026-11-20"}, key=None)[0], 403)
+        self.assertEqual(self.dates({"id": "E17", "start": "2026-11-20"}, origin="http://evil.example")[0], 403)
+        self.assertEqual(self.dates({"id": "E99", "start": "2026-11-20"})[0], 404)
+        self.assertEqual(p.read_text(), before)
+
+    def test_deadline_added_changed_and_answered(self):
+        d = self.milestones_dir()
+        status, res = self.milestone({"title": "  Workshop: paper? ", "due": "2026-12-05", "needs": ["E01", "E01"]})
+        self.assertEqual((status, res), (201, {"id": "M01", "name": "M01 Workshop paper"}))
+        p = d / "M01 Workshop paper.md"
+        self.assertEqual(p.read_text(), '---\nid: M01\ntype: milestone\nstatus: open\ndue: 2026-12-05\nneeds: ["[[E01 First run]]"]\n---\n\n# M01 · Workshop paper\n')
+        # changed: the due date in place, the needs, the status
+        self.assertEqual(self.milestone({"id": "M01", "due": "2026-12-05 23:59 AoE", "needs": ["E01", "D01"], "status": "done"}), (200, {"id": "M01"}))
+        self.assertEqual(p.read_text(), '---\nid: M01\ntype: milestone\nstatus: done\ndue: 2026-12-05 23:59 AoE\n'
+                                        'needs: ["[[E01 First run]]", "[[D01 Next idea]]"]\n---\n\n# M01 · Workshop paper\n')
+        self.milestone({"id": "M01", "needs": []})
+        self.assertNotIn("needs:", p.read_text())
+        # Claude's suggestion: accepted, it is open; dismissed, it stays, so it is not suggested again
+        s = d / "M02 Venue X paper.md"
+        s.write_text('---\nid: M02\ntype: milestone\nstatus: suggested\ndue: 2027-03-05 23:59 AoE\nsource: https://venue-x.org/dates\n'
+                     'why: "Main results in"\n---\n\n# M02 · Venue X paper\n')
+        self.assertEqual(self.milestone({"id": "M02", "accept": True})[0], 200)
+        self.assertIn("status: open\n", s.read_text())
+        self.milestone({"id": "M02", "dismiss": True})
+        tree = json.loads(self.get("/api/tree")[2])
+        self.assertEqual({m["id"]: m["status"] for m in tree["milestones"]}, {"M01": "done", "M02": "dismissed"})
+        self.assertEqual(tree["milestones"][1]["source"], "https://venue-x.org/dates")
+        # ids are never reused: the next one after every milestone on disk
+        self.assertEqual(self.milestone({"title": "Talk", "due": "2026-12-10"})[1]["id"], "M03")
+
+    def test_deadline_bad_requests(self):
+        d = self.milestones_dir()
+        for payload in ({"title": "Talk"}, {"title": "Talk", "due": "soon"}, {"title": "  ?? ", "due": "2026-12-10"},
+                        {"title": "Talk", "due": "2026-12-10", "needs": ["E99"]}, {"title": "Talk", "due": "2026-12-10", "needs": "E01"},
+                        {"due": "2026-12-10"}):
+            self.assertEqual(self.milestone(payload)[0], 400, payload)
+        self.assertFalse(d.exists())
+        self.assertEqual(self.milestone({"title": "Talk", "due": "2026-12-10"}, key=None)[0], 403)
+        self.assertEqual(self.milestone({"id": "M09", "status": "done"})[0], 404)
+        self.assertEqual(self.milestone({"title": "Talk", "due": "2026-12-10"})[0], 201)
+        for payload in ({"id": "M01"}, {"id": "M01", "status": "suggested"}, {"id": "M01", "due": "soon"}, {"id": "M01", "accept": "yes"}):
+            self.assertEqual(self.milestone(payload)[0], 400, payload)
+
+    def test_due_dates_read_as_the_page_reads_them(self):
+        """DUE_RE and the milestone statuses, as web/schedule.js has them."""
+        js = (Path(__file__).resolve().parents[1] / "web" / "schedule.js").read_text()
+        self.assertEqual(re.search(r"const DUE_RE = /(.*)/i\n", js).group(1), rft_server.DUE_RE.pattern)
+        self.assertEqual(tuple(re.findall(r"'(\w+)'", re.search(r"const MILESTONE_STATUSES = \[(.*?)\]", js).group(1))), rft_server.MILESTONE_STATUSES)
+
     def test_add_node_asks_the_session_and_answers_the_new_id(self):
         self.session(self.plugin)
         status, res = self.post({"parent": "E01", "type": "direction", "title": "  Then this  "})
@@ -484,6 +852,11 @@ class ServerTest(unittest.TestCase):
         self.assertEqual((nodes["D01"]["parent"], nodes["D01"]["origin"]), ("D00", ["E01"]))
         self.assertNotIn("origin", nodes["E01"])
 
+    def test_move_relays_the_unlock_the_user_agreed_to_in_the_page(self):
+        self.session(self.mover)
+        self.assertEqual(self.move({"id": "D01", "parent": "D00", "unlock": True})[0], 200)
+        self.assertEqual(self.asked, [("RFT_MOVE_NODE", {"id": "D01", "parent": "D00", "unlock": True})])
+
     def test_serves_a_reference_pdf_from_papers_only(self):
         papers = self.vault / "papers" / "Runs"
         papers.mkdir(parents=True)
@@ -513,7 +886,8 @@ class ServerTest(unittest.TestCase):
         self.session(self.mover)
         for payload, status in [({"id": "D01"}, 400), ({"id": "D01", "parent": 3}, 400), ({"id": "D42", "parent": "D00"}, 404),
                                 ({"id": "D00", "parent": "E01"}, 400), ({"id": "D01", "parent": "E01"}, 400),
-                                ({"id": "E01", "parent": "D01"}, 400), ({"id": "E01", "parent": "E01"}, 400)]:
+                                ({"id": "E01", "parent": "D01"}, 400), ({"id": "E01", "parent": "E01"}, 400),
+                                ({"id": "D01", "parent": "D00", "unlock": "yes"}, 400)]:
             self.assertEqual(self.move(payload)[0], status, payload)
         self.assertEqual(self.move({"id": "D01", "parent": "D00"}, key=None)[0], 403)
         self.assertEqual(self.move({"id": "D01", "parent": "D00"}, origin="http://evil.example")[0], 403)

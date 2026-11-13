@@ -113,7 +113,7 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
 
   | tool | does |
   |---|---|
-  | `rft_add_node` | creates a note with the next free id, a sanitised title (no `^ # \| [ ]`), the template sections, and links it under its parent; it answers with the notes already in the tree close to the new one ("have we tried this?") |
+  | `rft_add_node` | creates a note with the next free id, a sanitised title (no `^ # \| [ ]`), the template sections, and links it under its parent, with no priority (Claude may suggest one); it answers with the notes already in the tree close to the new one ("have we tried this?") |
   | `rft_set_status` | changes a status (frontmatter, tag, Status line), optionally appending results or the reason |
   | `rft_move_node` | moves a note and its subtree under another parent, after you agree; the note keeps its past parents (`origin:`) and a dated `## History` line |
   | `rft_set_refs` | replaces the reference notes a note builds on (`refs:`); `rft_add_node` takes `refs` too |
@@ -123,7 +123,11 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_set_summary` | sets the one-line `summary:` of one or more notes (Claude writes one for every note, and updates it when a result arrives) |
   | `rft_set_digest` | writes a concept's digest in the vault's `map/` folder: state, key results, dead ends, open questions; the map says when it is out of date |
   | `rft_supersede` | marks a note whose result a newer one overturns (`superseded_by:` and a History line); the map, search, graph and tree view show it as superseded, so the old number is not built on |
-  | `rft_next` | what is still open, by concept: experiments running, planned and never run, directions with nothing tried under them (with their age), and the digests' open questions |
+  | `rft_next` | what is still open: the deadlines first (nearest first, with what puts them at risk) and the GPU clashes, your priorities, then by concept the experiments running, planned and never run, directions with nothing tried under them (with their age, the higher priorities first), the digests' open questions, and the priorities Claude suggested that wait for you |
+  | `rft_suggest_priority` | suggests a priority for a note, with a one-line reason (`suggested_priority:`); you accept or dismiss it in the tree view. Claude never sets a priority itself (see Priorities) |
+  | `rft_suggest_dates` | suggests an experiment's start and/or estimate, with a one-line reason (`suggested_start:`, `suggested_est:`); you accept or dismiss it. Claude never sets a date itself (see Deadlines and the calendar) |
+  | `rft_add_deadline` | adds a deadline you gave Claude in the chat (a milestone, with the notes it needs), once you confirm it in a dialog |
+  | `rft_suggest_deadline` | suggests a paper submission deadline, read from the venue's official dates page (`source:`); you accept or dismiss it in the Calendar |
   | `rft_collect_papers` | downloads, in the background, the open-access PDFs of reference notes (arXiv, OpenReview, PMLR, ACL Anthology, NeurIPS/CVF proceedings, ...) into `vault/papers/<concept>/<year> <first author> <title>.pdf`, linked from each note (`pdf:`); saved PDFs follow their concept. Never from paywalled publishers |
   | `rft_set_tags` | replaces a note's topical tags (lowercase kebab-case), keeping the project, type and status tags |
   | `rft_set_type` | changes the type of a note made with the wrong one: the next free id of the new type, the file moved to that type's folder, the type's sections (no text lost), every link to it renamed |
@@ -136,6 +140,9 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_tree` | prints the tree or a subtree |
   | `rft_validate` | checks ids, types, statuses, titles, parents, broken wikilinks, derived fields |
   | `rft_sync` | regenerates children / up / down, the index tree and the canvas after hand edits |
+  | `rft_comments` | a note's comments and suggestions, or the notes with open threads |
+  | `rft_comment` | replies in a thread (or closes a suggestion it made in the note), or starts a comment on a quote |
+  | `rft_suggest` | proposes new text for a quote, or the text an open suggestion asks for; you accept or reject it |
 
 - **The outline pane** opens as a sidebar at session start in the terminal and VS Code where the
   surface docks panes (turn this off with the `autoOpen` option), and with `/rft list`: an indented, coloured outline of the tree, the same on
@@ -154,9 +161,15 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
 - **In the terminal and elsewhere** it prints the address, e.g. `http://127.0.0.1:41234/?token=…`, and
   opens the outline pane. Open the address in any browser on the same machine.
 
-- A tidy tree, **top-down**, **left-right** or **radial** (never a force layout): circles
-  filled by status and ringed by type, arrows from parent to child. The layout button shows
-  the current layout as a symbol and switches to the next one.
+- A tidy tree, **top-down**, **left-right** or **radial** (never a force layout), arrows from
+  parent to child. Each note is a solid shape: a circle, or a **star** for the note that starts a
+  concept, with a small star inside in that concept's colour. Its colour is its type (direction violet, experiment teal, reference pink, theory
+  blue), and how strong that colour is says its status: full when done, then running, planned,
+  and palest as an idea. Dropped notes fade (shape, title and the link into them), discussed and
+  moved ones half as much, so what is still open stands out; hovering or reading one shows it in
+  full. An open note's priority glows around it in the priority's colour (as on the kanban: urgent
+  red, high orange, medium blue, low grey), brighter the higher, and an urgent one pulses.
+  The layout button shows the current layout as a symbol and switches to the next one.
 - An infinite canvas: drag to pan, scroll or pinch to zoom. One button fits the whole tree,
   then centres on the root; panning or zooming by hand makes it fit again.
   Labels show more of the title the closer you zoom.
@@ -192,12 +205,61 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   stays, the type's missing sections are added, and every link to it is renamed. Like
   **Add child**, the session that ran `/rft` does it with `rft_set_type`'s code, at no model turn.
   The root stays a direction.
+- **Footnotes** show as in a book's margin: a mark `[^1]` in the text, its text on a line
+  `[^1]: …` (indented lines continue it), or inline `^[…]`, as Obsidian writes them. Each mark is
+  numbered in reading order and has a number in the drawer's right margin; hover either (or tap
+  it) to read the footnote, links and LaTeX included. Select text and choose **Footnote** to add
+  one: its mark goes after the selection, its text at the end of the note.
+- **The highlighter** (the marker left of **Add child**) is a mode of the drawer, like a pen:
+  while it is on, the text you select is highlighted at once, `==like this==` in the note, as
+  Obsidian writes it, so Obsidian shows it too; selecting inside or across a highlight, or
+  clicking one, takes it out. A selection over several lines gets one highlight per line, and one
+  that cuts into bold, italics or a link grows to hold it whole; code and formula blocks take
+  none. **Esc** or the marker turns it off; **Comment**, **Suggest** and **Footnote** wait until
+  then.
+- **The margin column**: when the drawer leaves the text room beside it (drag its left edge to
+  widen it), the margin shows each footnote's text level with its mark, and a card for each open
+  comment or suggestion level with its text: its kind, a suggestion's new text, and the last
+  message, cut short. Hover a card to light up its text; click it to open the thread below. On a
+  narrower drawer the margin keeps only the footnotes' numbers.
+- **Comments and suggestions**, as in Overleaf, discuss a part of a note before anyone edits it.
+  Select text in the drawer and choose:
+  - **Comment**: a question or remark on that text;
+  - **Suggest**: new text for it (the markdown as written, to change), or, with the text left
+    as it is, what should change in words, for Claude to write.
+
+  Open threads are marked in the text (a suggestion as the old text struck through and the new
+  text after it) and listed under the note, where you **Reply**, **Resolve** a comment, **Accept**
+  a suggestion (its new text is written into the note) or **Reject** it. Closed threads stay in
+  the note's **History**, and **Reopen** brings one back.
+  - **Ask Claude** (on a thread, or **Post and ask Claude** / **Post and suggest** when posting) sends the thread to the session that
+    ran `/rft`, as a turn of its own. Claude answers only when asked. It answers in the thread: a
+    comment gets a reply and no edit. A suggestion on a note that is not locked is made in the
+    note and closed as *applied*. On a locked note Claude writes the new text as a suggestion
+    for you to accept.
+  - A thread keeps its quote and the text around it, so it is found again after the note is
+    edited. When the quoted text itself changed, the thread says what it now reads, and its
+    suggestion can no longer be accepted. When the text is gone, the thread says so.
+  - The threads live beside the notes, one file per note: `vault/.comments/<id>.json`, a dot
+    folder Obsidian leaves alone. They follow a note whose type (and id) changes.
+- **Lock** (the padlock in the drawer) makes a note yours: `locked: true` in its frontmatter.
+  Claude then changes nothing in its text, only suggests changes, which you accept. The plugin
+  refuses Claude's Edit and Write on a locked note, shell commands that write to it and name its
+  file (as far as a command shows that), and `rft_set_status` notes and `rft_set_code` on it.
+  Status, tags and the tree's derived fields still change. Your own edits in the drawer are not
+  affected, and neither are Obsidian's. Moving a locked note, or marking it superseded, writes a
+  line in its **History**, so it unlocks the note, and only once you agree: the session asks you
+  (Claude cannot answer for you), and the tree view's **Move** says so first (its button becomes
+  **Move and unlock**). If you keep it locked, nothing changes. Its locked parents and the notes
+  below it ask nothing and stay locked: they only get the tree's derived changes.
 - The drawer lists the references a note **builds on**, and on a reference the notes that
   **cite** it, each a link to its node; a reference whose paper was saved links its PDF.
 - **Move** (an arrow out of a node, in the drawer) moves the note shown, and every note below it, under another note:
   pick it from the list (or type its id), **Move** or Enter. As with **Add child**, the plugin
   makes the move with `rft_move_node`'s code. A moved note shows where it came from at the top
   of the drawer, and **Came from** draws a faint dashed link from its previous parent.
+- **Tree**, **Concepts**, **Kanban** and **Calendar** at the top switch between the reasoning tree,
+  the concept tree, the kanban and the calendar (below).
 - Hover a node to highlight its path to the root; **search** (Enter jumps to the next match).
 - **Filters** opens a side panel: topical tags (with counts, matching **any** or **all**), type,
   status (the same filter as clicking the legend), and a date range. Notes that do not match
@@ -208,6 +270,79 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   system's theme; then it keeps the choice, for every project.
 - It follows the vault live, and keeps the zoom, layout, folds, filters and text size between
   visits.
+
+### The kanban and priorities
+
+**Kanban** shows the notes in one column per status: idea → planned → running → done, then
+dropped, discussed and moved as narrow folded strips (click one to open it, its head to fold it
+again), and a column for any other status a note was given by hand. Each note is a card: its dot
+(the type's colour at its status's strength, as in the tree), id and title, its summary, its priority, its concept and its date. Click a card to read the
+note in the drawer; the board makes room for it.
+
+- **Order by Priority** (the default: urgent, high, medium, low, then the notes with none; newest
+  first within each) or **Date** (newest first, by the date the note was made).
+- **The filters apply**: type, status (a hidden status hides its column), concepts, tags and the
+  date range, and the concept focus. Notes that do not match are left off the board (the dim /
+  hide choice is the tree's). The search lights up the matching cards, and Enter goes to the next.
+- **Priority** is yours alone: `priority:` in the note's frontmatter, `urgent`, `high`, `medium` or
+  `low`, set with the menu on a card or in the drawer (**No priority** takes it away). A new note
+  has none. Among the open notes (idea, planned, running) at most **1 is urgent, 5 high and 10
+  medium**; low has no limit, and a note that is done, dropped, discussed or moved does not count.
+  A full priority is offered greyed out, naming the notes that hold it: lower one of them first.
+  The bar above the board shows how the open notes use each priority.
+- **Claude only suggests** a priority: `rft_suggest_priority`, or `rft_add_node` for a new note,
+  writes `suggested_priority:` and a one-line `suggested_priority_why:`. The card and the drawer
+  show it in a dashed box with its reason: **Accept** makes it the note's priority (greyed out
+  while that priority is full), **Dismiss** drops it; setting another priority answers it too.
+  Claude's own Edit, Write and shell writes that add, change or remove a note's `priority:` are
+  refused, so it cannot set one, even by hand. `rft_next` lists your priorities first, and
+  `rft_validate` warns about a priority that is none of the four and about a limit exceeded by
+  hand.
+- A menu you are in is not redrawn under you while notes change on disk; the board follows once
+  you leave it. The standalone `/rft-view` page shows the kanban read-only.
+
+### Deadlines and the calendar
+
+**Calendar** (beside Kanban) shows the deadlines and the experiments' runs, as a **Timeline** or a
+**Month**. The dates are yours alone, as priorities are: Claude suggests them, and its own edits
+that change them are refused.
+
+- **Deadlines** of any kind are milestones: one note each in `vault/milestones/` (outside the
+  tree), e.g. `M01 Workshop paper.md`, with `due:` and the notes it `needs:` done first. A due date
+  is a day, a local time or a time in a zone: `2026-11-13`, `2026-11-13 14:00`,
+  `2026-11-13 23:59 AoE` (or `UTC`, `+01:00`); a zoned one also shows the time where you are.
+  **+ Deadline** adds one (click a day of the Month to start on it); a deadline's name opens its
+  editor (due date, needs, **Done**). Any note can also have a `due:` of its own.
+- **An experiment's run**: `start:` (a day) and `est:` (`3d`, `2w`), set in the note's drawer or
+  by dragging its bar on the Timeline (the bar moves the start, its right end the estimate).
+  `rft_set_status` records `started:` and `finished:`. `after:` names the runs it waits for, and
+  `gpus:` how many GPUs it takes (one when not given).
+- **Planning**, backwards from each deadline in whole days: what it needs must end by its due day;
+  each note's latest start is the due day less its estimate (and less those that come after it),
+  its slack the days from its earliest start (today, its start, the end of what it waits for) to
+  that. A deadline is **at risk** (red) at 0 days of slack or less, or when a note it needs was
+  dropped, superseded or is missing; amber when 3 days or fewer are left. The cards above the
+  calendar say which note puts it at risk and how ("E04 3d over its 3d estimate", "E05 must start
+  today").
+- **Timeline**: one row per experiment with dates, or needed by a deadline, by concept: its run
+  (planned, running, done; a run over its estimate hatched in red, one with no end fading out),
+  Claude's suggestion dashed, and for a run not planned yet the latest it may run, dotted (drag it
+  to plan the run). The deadlines are lines across the rows, today a band. With `gpus:` in the
+  config, a strip below shows the GPUs taken each day, red above the capacity. **‹ Today ›**
+  scroll, **− +** zoom.
+- **Month**: the runs across each week, the deadlines on their days (Claude's dashed, done ones
+  struck through).
+- **Claude suggests** a start and an estimate (`rft_suggest_dates`) and paper submissions
+  (`rft_suggest_deadline`, read from the venue's official dates page, never from memory); you
+  **Accept** or **Dismiss** them in the drawer and in the Calendar. A dismissed deadline stays
+  in the vault as dismissed, so it is not suggested again. A deadline you tell Claude in the chat
+  it adds with `rft_add_deadline`, once you confirm it in a dialog.
+- `rft_next` lists the deadlines first, with what puts them at risk, and the GPU clashes; session
+  start names the deadlines of the next 14 days that are at risk. A kanban card shows the
+  deadline nearest it.
+- **`vault/rft.ics`**, rewritten by `rft_sync` when the dates change, holds the deadlines and the
+  planned runs (never the suggestions), for any calendar app to import; **.ics** in the Calendar
+  downloads the same.
 
 ### Concepts
 
@@ -238,7 +373,7 @@ In the tree view, the concept button switches the overlay from off to **Regions*
 - Concept colours are a palette of their own, apart from the status colours; a concept legend
   shows while the overlay is on. It lists the top-level concepts, each with an arrow that
   unfolds its sub-concepts, and the whole legend folds to one line (**Legend ▸**).
-- **Concept tree** shows a tree of the concepts: each sized by its notes, with a bar of their
+- **Concepts** (at the top) shows a tree of the concepts: each sized by its notes, with a bar of their
   statuses, in the same layout as the reasoning tree (top-down, left-right or radial). Click one to go back to the reasoning tree on its start note, its region briefly
   highlighted; **focus** shows only that concept's subtree.
 - **Focus** is also reachable from the legend, a badge, and the concept path at the top of the
@@ -247,7 +382,7 @@ In the tree view, the concept button switches the overlay from off to **Regions*
 - Concepts are also a filter in **Filters**.
 
 A link can open the view in a given state, e.g. `?layout=lr&concepts=regions`,
-`?view=concepts`, or `?focus=D02&note=E05`.
+`?view=concepts`, `?view=kanban&order=date`, `?view=calendar&cal=month`, or `?focus=D02&note=E05`.
 
 ### Code repos
 
@@ -313,10 +448,14 @@ one outside it (anywhere on disk) only to the page carrying the key below, so an
 the machine cannot read your files through it, nor learn whether one exists. An image is sent
 with a policy that runs nothing in it, an SVG's scripts included. A reference's saved PDF is
 served only from the vault's `papers/` folder. It answers only requests for
-a loopback host name. It writes one thing, a note's text
-from **Edit**, its frontmatter kept as it is; a new note from **Add child**, a note's new type
-from **Change type**, or a move from **Move**, it asks the session that started it to make (a line on its
-output, which the plugin reads). It does any of these only for
+a loopback host name. It writes a note's text from **Edit**, **Footnote**, **Highlight** or an
+accepted suggestion, its frontmatter kept as it is; the `locked:` line from the padlock; the
+`priority:` line from the kanban or the drawer (which also clears Claude's suggested priority), within
+the limits; a note's `due:`, `start:` and `est:` from the Calendar or the drawer (which also clear
+Claude's suggested dates); a deadline in `vault/milestones/` (a new one, its due date, needs and
+status, Claude's suggested one accepted or dismissed); and a note's comments file in `vault/.comments/`. A new note from **Add child**, a note's new type from
+**Change type**, or a move from **Move**, it asks the session that started it to make, and **Ask
+Claude** to answer (a line on its output, which the plugin reads). It does any of these only for
 the page itself carrying the project's key, which the address `/rft` prints holds (`?token=…`):
 neither another web page nor another user of the machine can change or add a note. Open that address once and the browser
 remembers the key, which stays the same across restarts (kept, readable by you alone, in
@@ -367,14 +506,16 @@ and it runs. The terminal's typeahead lists them.
 
 ```json
 { "version": 1, "vault": "vault", "project": "my-project", "canvas": true, "mermaid": false,
-  "lastId": { "E": 12, "D": 9 }, "webPort": 0, "requireRefs": true }
+  "lastId": { "E": 12, "D": 9 }, "webPort": 0, "requireRefs": true, "gpus": 2 }
 ```
 
 `mermaid: true` also writes `Reasoning tree (diagram).md`, a Mermaid flowchart Obsidian draws
 natively. `lastId` keeps ids from being reused after a note is deleted. `webPort` fixes the
 tree view's port (0: a free one), handy for a standing `ssh -L` forward. `requireRefs: true`
 (set by `/rft-init` on a new vault, off on an adopted one) makes `rft_validate` warn about
-experiments and directions in work that name no reference. A config that holds
+experiments and directions in work that name no reference. `gpus` is how many GPUs the
+experiments share: the Calendar and `rft_next` report the days the planned and running ones need
+more. A config that holds
 only `tree` is a link to a tree in another folder (see above). The code a concept runs on is
 linked in its note, not in the config (see Code repos).
 
@@ -400,9 +541,13 @@ session with the plugin loaded from this folder.
   the server's lifecycle).
 - `hooks/lib/vault.ts`: the vault model; `hooks/lib/ops.ts` the operations; `hooks/lib/page.ts`
   the standalone page.
-- `web/`: the tree view (`index.html`, `app.js`, `app.css`; `filters.js`, `layout.js` and
-  `concepts.js` hold the pure filter, radial layout and concept logic; `theme.js` the light and dark
-  themes; vendored d3), one codebase for the live view and `/rft-view`.
+- `hooks/lib/comments.ts`: comments, suggestions and locked notes, as Claude's tools see them.
+- `hooks/lib/priority.ts`: priorities, their limits and Claude's suggested ones.
+- `web/`: the tree view (`index.html`, `app.js`, `app.css`; `filters.js`, `kanban.js`, `layout.js` and
+  `concepts.js` hold the pure filter, kanban, radial layout and concept logic; `markdown.js` the note
+  renderer, footnotes and the map from the page back to the note's text; `theme.js` the light and
+  dark themes; vendored d3), one codebase for the live view and `/rft-view`, which shows the
+  threads read-only.
 - `server/rft_server.py`: the local server (Python standard library).
 - `skills/rft-manual/SKILL.md`: the manual; `tests/`: the mod's tests on an in-memory vault, the
   outline pane on every surface, and the server's tests.

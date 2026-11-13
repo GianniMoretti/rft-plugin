@@ -1,10 +1,14 @@
 // rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-concepts, /rft-literature, /rft-rebalance,
 // /rft-summarize, /rft-next, /rft-view), the model's tools (rft_add_node, rft_set_status, rft_set_summary, rft_map, rft_set_digest, rft_move_node, rft_set_refs, rft_search,
-// rft_graph, rft_supersede, rft_next, rft_collect_papers, rft_set_tags, rft_set_type, rft_set_concept, rft_concepts, rft_set_repos, rft_code,
-// rft_set_code, rft_tags, rft_tree, rft_validate, rft_sync), the operating rules
+// rft_graph, rft_supersede, rft_next, rft_suggest_priority, rft_suggest_dates, rft_add_deadline, rft_suggest_deadline, rft_collect_papers, rft_set_tags, rft_set_type, rft_set_concept, rft_concepts, rft_set_repos, rft_code,
+// rft_set_code, rft_tags, rft_tree, rft_validate, rft_sync, rft_comments, rft_comment, rft_suggest), the operating rules
 // injected into the system prompt, the outline pane, and the web view: /rft starts a local
-// server (server/rft_server.py) for the interactive tree page (web/), and makes the notes that
-// page adds, retypes or moves (fromView). Everything is
+// server (server/rft_server.py) for the interactive tree page (web/), makes the notes that
+// page adds, retypes or moves (fromView), and asks Claude to answer the threads the user asks
+// it to (askFromView). Claude's own edits of a locked note are refused (lockedEdit), and so are
+// its writes of a note's priority, the user's alone (priorityEdit), and of the dates, the user's too
+// (datesEdit): a note's due:, start: and est:, and a deadline's due:.
+// Everything is
 // inert without `.rft/config.json` in the session's folder or a folder above it; that config
 // may be a link (`{"tree": "../notes"}`) to a tree kept elsewhere.
 
@@ -12,8 +16,9 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { RftSnapshot } from '../types'
+import { COMMENTS_DIR, LockedChange, askText, comment as addComment, commentsReport, isLocked, readComments, suggest as addSuggestion } from './lib/comments'
 import type { CodeEnv, Git } from './lib/ops'
-import { addNode, codeReport, conceptsReport, exportHtml, initVault, loadActive, moveNode, rulesText, setCode, setConcept, setRefs, setRepos, setStatus, setTags, setType, tagsReport, today, treeReport } from './lib/ops'
+import { addNode, codeReport, conceptsReport, exportHtml, initVault, loadActive, lockedText, moveNode, rulesText, setCode, setConcept, setRefs, setRepos, setStatus, setTags, setType, tagsReport, today, treeReport } from './lib/ops'
 import { ASSET_PATHS } from './lib/page'
 import type { Config, Io, Loaded, NodeType, Tree } from './lib/vault'
 import { OPEN_HOSTS, planPapers } from './lib/papers'
@@ -21,9 +26,11 @@ import { searchReport, similarNotes } from './lib/search'
 import { graphReport } from './lib/graph'
 import { candidates, candidatesReport } from './lib/rebalance'
 import { nextReport, supersede } from './lib/knowledge'
+import { changesPriority, priorityText, suggestPriority } from './lib/priority'
+import { addDeadline, changesDates, checkDeadline, datesText, deadlineQuestion, deadlinesLine, suggestDates, suggestDeadline } from './lib/schedule'
 import { RECALL_HINT, searchesVault } from './lib/recall'
 import { SMALL_TREE, mapGaps, mapReport, mapWarnings, projectMap, readDigests, resolveConcept, setDigest, setSummaries } from './lib/map'
-import { LEGEND, MARK, NODE_TYPES, bodyOf, counts, countsLine, isAbsolute, join, locate, readConfig, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
+import { CONFIG_PATH, LEGEND, MARK, NODE_TYPES, bodyOf, counts, countsLine, isAbsolute, join, locate, readConfig, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
 
 const PANE = 'rft-tree'
 const TITLE = 'Reasoning tree'
@@ -94,6 +101,8 @@ const TOOLS = {
         tags: { type: 'array', items: { type: 'string' }, description: '1-3 short topical tags, lowercase kebab-case, reused from rft_tags when they fit (the project, type and status tags are added anyway).' },
         refs: { type: 'array', items: { type: 'string' }, description: 'Ids of the reference notes (R..) it builds on: for an experiment, the paper(s) whose setup it starts from; for a direction, the work it extends. Add missing references first.' },
         summary: { type: 'string', description: 'One line (at most 240 characters) on what the note is about, specific enough to read instead of the note: what is tested and on what, the idea, the paper\'s main claim. Always give it.' },
+        suggested_priority: { type: 'string', enum: ['urgent', 'high', 'medium', 'low'], description: 'Optional: the priority you suggest for this work, only with a clear reason. The note itself gets no priority (the user\'s alone); they accept or dismiss the suggestion in the tree view.' },
+        priority_why: { type: 'string', description: 'With suggested_priority: why, in one line (what it unblocks, what makes it pressing or not).' },
       },
       required: ['type', 'title'],
     },
@@ -146,6 +155,61 @@ const TOOLS = {
       required: ['id', 'status'],
     },
   },
+  rft_suggest_priority: {
+    description:
+      'Suggest a priority for a note: urgent, high, medium or low (among the open notes at most 1 urgent, 5 high and 10 medium). Priorities are the user\'s alone: this writes only a suggestion with its reason, which the user accepts or dismisses in the tree view (the kanban, or the note\'s drawer); you never set priority: yourself, and edits that change it are refused. Suggest one when you have a clear reason: it unblocks other work, the user said it matters, it is cheap and decisive, or it no longer matters as much.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id (e.g. E12) or full name of the note.' },
+        priority: { type: 'string', enum: ['urgent', 'high', 'medium', 'low'] },
+        why: { type: 'string', description: 'Why, in one line (at most 240 characters): shown to the user next to the suggestion.' },
+      },
+      required: ['id', 'priority', 'why'],
+    },
+  },
+  rft_suggest_dates: {
+    description:
+      'Suggest a start (a day) and/or an estimate (3d, 2w) for an experiment, with why. Dates are the user\'s: due:, start: and est: are set by them in the tree view (the Calendar, or the note\'s drawer), and your edits that change them are refused; this writes only a suggestion, which the user accepts or dismisses. Suggest when you can say why: a deadline needs it done by then, it waits for another run, the GPUs are taken until then, or the code shows how long a run takes. The plan keeps to the user\'s dates until they accept.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id (e.g. E12) or full name of the experiment.' },
+        start: { type: 'string', description: 'The day to start, YYYY-MM-DD.' },
+        est: { type: 'string', description: 'How long the run takes, in days or weeks: 3d, 2w.' },
+        why: { type: 'string', description: 'Why, in one line (at most 240 characters): shown to the user next to the suggestion.' },
+      },
+      required: ['id', 'why'],
+    },
+  },
+  rft_add_deadline: {
+    description:
+      'Add a deadline the user gave you (a meeting, a submission they named, a talk, a thesis chapter): a milestone in the vault\'s milestones/, outside the tree, with the notes it needs done first. The plugin asks the user to confirm it in a dialog you cannot answer; if they decline, nothing is added: do not try again unless they ask. Never add a deadline the user did not give you: for a paper submission you think fits, use rft_suggest_deadline.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'What is due, e.g. "Workshop paper", "Supervisor meeting".' },
+        due: { type: 'string', description: 'When: 2026-11-13 (the day), 2026-11-13 14:00 (local time), or 2026-11-13 23:59 AoE (AoE, UTC or +01:00).' },
+        needs: { type: 'array', items: { type: 'string' }, description: 'Ids of the notes that must be done before it (experiments, mostly).' },
+      },
+      required: ['title', 'due'],
+    },
+  },
+  rft_suggest_deadline: {
+    description:
+      'Suggest a paper submission deadline (or another one from an official page) the work could aim for: a milestone with status suggested, which the user accepts or dismisses in the tree view\'s Calendar; it is not planned for until then. Read the dates from the venue\'s official dates page now (web search, fetch), never from memory: deadlines move every year. Give that page as source, the exact time and zone it states (most are 23:59 AoE), and one milestone per date (abstract, paper, supplementary). Suggest only when the user names a venue or asks for deadlines.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'E.g. "CVPR 2027 paper", "CVPR 2027 abstract".' },
+        due: { type: 'string', description: 'As the official page states it: 2026-11-13 23:59 AoE, or a day.' },
+        source: { type: 'string', description: 'The official dates page it was read from (https://…).' },
+        why: { type: 'string', description: 'Why this venue fits the work, in one line.' },
+        needs: { type: 'array', items: { type: 'string' }, description: 'Ids of the notes the paper needs done first.' },
+      },
+      required: ['title', 'due', 'source', 'why'],
+    },
+  },
   rft_set_summary: {
     description:
       'Set the one-line summary (summary: in the frontmatter) of one or more notes: what the note is about and, once known, what it found, with the key number. Summaries are what rft_map and later sessions read instead of the notes, so make them specific. Takes many at once, for filling in an existing tree.',
@@ -167,7 +231,7 @@ const TOOLS = {
   },
   rft_supersede: {
     description:
-      'Mark a note whose result a newer one overturns (superseded_by: in its frontmatter, and a dated History line): a corrected number, a bug found in the run, a better-controlled rerun that changes the conclusion. rft_map, rft_search and rft_graph then show it as superseded, so nobody builds on the old result. Without by, clears the mark. Then update the concept\'s digest.',
+      'Mark a note whose result a newer one overturns (superseded_by: in its frontmatter, and a dated History line): a corrected number, a bug found in the run, a better-controlled rerun that changes the conclusion. rft_map, rft_search and rft_graph then show it as superseded, so nobody builds on the old result. Without by, clears the mark. Then update the concept\'s digest. On a locked note the plugin asks the user to unlock it first; if they keep it locked, nothing changes.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -201,7 +265,7 @@ const TOOLS = {
   },
   rft_move_node: {
     description:
-      'Move a note and its whole subtree under another parent, when it belongs to another line of research. The note keeps where it came from (origin: and a dated History line), the old parent stops listing it, the new one lists it, and the index and canvas follow. Only after the user has agreed to the move.',
+      'Move a note and its whole subtree under another parent, when it belongs to another line of research. The note keeps where it came from (origin: and a dated History line), the old parent stops listing it, the new one lists it, and the index and canvas follow. Only after the user has agreed to the move. A locked note: the plugin asks the user to unlock it first; if they keep it locked, it does not move.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -329,6 +393,44 @@ const TOOLS = {
       properties: { relayout: { type: 'boolean', description: 'Discard manual moves of canvas cards.' } },
     },
   },
+  rft_comments: {
+    description:
+      'The comments and suggestions on a note: threads on a part of its text, written by the user in the tree view, or by you. Each with its quote, state, replacement, messages, and whether the quoted text is still in the note. Without id: the notes with open threads. Answer a thread when the user asks you to (the tree view\'s Ask Claude sends you the thread).',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'Id (e.g. E12) or full name of the note; omit for every note with open threads.' } },
+    },
+  },
+  rft_comment: {
+    description:
+      'Write in a note\'s discussion, never in the note itself. With thread: your reply in that thread; on an open suggestion of a note that is not locked, once you made the change in the note yourself, applied: true closes it (text: what you changed). Without thread: a new comment on quote, the exact text of the note it is about.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id (e.g. E12) or full name of the note.' },
+        thread: { type: 'string', description: 'The thread to answer, e.g. c3.' },
+        quote: { type: 'string', description: 'A new comment: the exact text of the note below its frontmatter, markdown included, occurring once in it.' },
+        text: { type: 'string', description: 'The reply or comment (markdown), short: the user reads it in the note drawer.' },
+        applied: { type: 'boolean', description: 'On a suggestion thread: you made the change in the note yourself; closes the thread.' },
+      },
+      required: ['id'],
+    },
+  },
+  rft_suggest: {
+    description:
+      'Propose a change to a note\'s text without making it: the user accepts or rejects it in the tree view, and an accepted one is written into the note. The only way to change a locked note. With thread: the replacement for that open suggestion (an instruction gets its text, or a revised one). Without thread: a new suggestion replacing quote with replacement.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id (e.g. E12) or full name of the note.' },
+        thread: { type: 'string', description: 'The suggestion thread to answer, e.g. c3.' },
+        quote: { type: 'string', description: 'A new suggestion: the exact text to replace, below the frontmatter, markdown included, occurring once in the note.' },
+        replacement: { type: 'string', description: 'The new text for the quote, in markdown (an empty string deletes it).' },
+        text: { type: 'string', description: 'Optional: why, in a line or two.' },
+      },
+      required: ['id', 'replacement'],
+    },
+  },
 } as const
 
 // Module state: reset on a reload, when `session.start` runs again and sets it anew.
@@ -338,8 +440,8 @@ let rules: string | null = null
 // rft_graph was used yet this session (the hint stops then)
 let recall: { vault: string; cwd: string; used: boolean } | null = null
 let poller: { cancel: () => void } | null = null
-// a prompt a command wants Claude to answer, submitted by the poller
-let pendingPrompt: string | null = null
+// prompts for Claude to answer, from a command or the tree view, submitted by the poller
+const pendingPrompts: string[] = []
 const registeredTools = new Set<string>()
 
 const EMPTY: RftSnapshot = { isActive: false, vault: '', project: '', nodes: {}, roots: [], concepts: {}, signature: '', problems: [], error: null }
@@ -401,6 +503,11 @@ async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> 
       } catch { /* the list of notes instead */ }
     }
     rules = rulesText(treeOf(s), config, shownVault(h, config), { cwd: h.cwd, root: h.root, home: await homeOf($) }, map)
+    // the deadlines close at hand that are at risk, so the session starts from them
+    try {
+      const line = deadlinesLine(await loadActive(h.io), today())
+      if (line) rules += `\n\n${line}`
+    } catch { /* the rules without it */ }
     recall = { vault: resolvePath(h.root, vaultOf(h, config)), cwd: h.cwd, used: false }
   }
   // each registration on its own, so one refusal leaves the rest working
@@ -492,8 +599,39 @@ async function homeOf($: EngineInterface): Promise<string | undefined> {
 /** How the tools reach the code of the tree's concepts. */
 const codeEnv = async ($: EngineInterface, h: Here): Promise<CodeEnv> => ({ root: h.root, git: gitOf($), home: await homeOf($), date: today() })
 
-/** Runs one of the rft tools; its text is the tool's result. */
-async function runTool($: EngineInterface, name: string, i: Record<string, unknown>): Promise<string> {
+const UNLOCK_ASK = {
+  move: { doing: 'Moving it', yes: 'Move and unlock', anyway: 'Move it anyway?', kept: 'it was not moved' },
+  supersede: { doing: 'Marking it as superseded', yes: 'Mark and unlock', anyway: 'Mark it anyway?', kept: 'it was not marked' },
+} as const
+
+/**
+ * A change that unlocks a locked note (a move, a supersede mark: each writes a History line into
+ * its text). Tried locked first; a LockedChange asks the user in the session's own dialog, which
+ * the model cannot answer, unless they agreed already in the tree view (`agreed`). A dismissed
+ * dialog, or a run with no one to ask, keeps the note locked.
+ */
+async function unlocking($: EngineInterface, change: (unlock: boolean) => Promise<string>, agreed = false): Promise<string> {
+  try {
+    return await change(agreed)
+  } catch (err) {
+    if (!(err instanceof LockedChange)) throw err
+    const say = UNLOCK_ASK[err.change]
+    let answer = ''
+    try {
+      answer = await $.ui.ask(`${err.node.name} is locked. ${say.doing} unlocks it and adds a line to its History. ${say.anyway}`,
+        { options: [say.yes, 'Keep it locked'], header: 'Locked note' })
+    } catch { /* dismissed, or no one to ask */ }
+    if (answer !== say.yes) throw new Error(`${err.node.name} is locked and the user kept it locked: ${say.kept}. Do not try again unless the user asks.`)
+    return change(true)
+  }
+}
+
+/**
+ * Runs one of the rft tools; its text is the tool's result. `view`: what the tree view's request
+ * carries beyond the tool's input (that the user agreed there to unlock the note); never the
+ * model's.
+ */
+async function runTool($: EngineInterface, name: string, i: Record<string, unknown>, view: { unlock?: boolean } = {}): Promise<string> {
   const h = await mustHere($)
   const io = h.io
   const loaded = await loadActive(io)
@@ -508,6 +646,7 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       const node = await addNode(io, loaded, {
         type: i.type as NodeType, title: String(i.title ?? ''), parent: str(i.parent) ?? null,
         status: str(i.status), date: today(), sections, code: str(i.code), tags: strings(i.tags), refs: strings(i.refs), summary: str(i.summary),
+        suggestedPriority: str(i.suggested_priority), priorityWhy: str(i.priority_why),
       }, await codeEnv($, h))
       const similar = similarNotes(loaded, node.id)
       return `${node.report}\nId: ${node.id}\nNote: ${join(shownVault(h, loaded.config), node.path)}${similar ? `\n${similar}` : ''}`
@@ -519,7 +658,7 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
     case 'rft_set_code':
       return setCode(io, loaded, await codeEnv($, h), String(i.id ?? ''), typeof i.text === 'string' ? i.text : undefined, typeof i.reproduce === 'string' ? i.reproduce : undefined)
     case 'rft_move_node':
-      return moveNode(io, loaded, String(i.id ?? ''), String(i.parent ?? ''), today(), str(i.why))
+      return unlocking($, unlock => moveNode(io, loaded, String(i.id ?? ''), String(i.parent ?? ''), today(), str(i.why), unlock), view.unlock)
     case 'rft_set_refs':
       return setRefs(io, loaded, String(i.id ?? ''), strings(i.refs))
     case 'rft_search':
@@ -540,7 +679,22 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
     case 'rft_tags':
       return tagsReport(loaded)
     case 'rft_set_status':
-      return setStatus(io, loaded, String(i.id ?? ''), String(i.status ?? ''), str(i.note), str(i.summary))
+      return setStatus(io, loaded, String(i.id ?? ''), String(i.status ?? ''), str(i.note), str(i.summary), today())
+    case 'rft_suggest_dates':
+      return suggestDates(io, loaded, String(i.id ?? ''), { start: i.start, est: i.est }, i.why)
+    case 'rft_suggest_deadline':
+      return suggestDeadline(io, loaded, { title: i.title, due: i.due, needs: i.needs, source: i.source, why: i.why })
+    case 'rft_add_deadline': {
+      const d = checkDeadline(loaded, { title: i.title, due: i.due, needs: i.needs })
+      let answer = ''
+      try {
+        answer = await $.ui.ask(deadlineQuestion(d), { options: ['Add it', "Don't add"], header: 'Deadline' })
+      } catch { /* dismissed, or no one to ask */ }
+      if (answer !== 'Add it') return `The user did not add it: no deadline was written. Do not try again unless the user asks.`
+      return addDeadline(io, loaded, d)
+    }
+    case 'rft_suggest_priority':
+      return suggestPriority(io, loaded, String(i.id ?? ''), i.priority, i.why)
     case 'rft_set_summary': {
       const given: Record<string, string> = {}
       for (const [k, v] of Object.entries((i.summaries as Record<string, unknown> | undefined) ?? {})) if (typeof v === 'string') given[k] = v
@@ -548,7 +702,7 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       return setSummaries(io, loaded, given)
     }
     case 'rft_supersede':
-      return supersede(io, loaded, String(i.id ?? ''), str(i.by) ?? null, str(i.why), today())
+      return unlocking($, unlock => supersede(io, loaded, String(i.id ?? ''), str(i.by) ?? null, str(i.why), today(), unlock))
     case 'rft_next':
       return nextReport(io, loaded, today(), str(i.concept))
     case 'rft_map':
@@ -567,6 +721,12 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       if (v.warnings.length) lines.push('Warnings:', ...v.warnings.map(x => `- ${x}`))
       return lines.join('\n')
     }
+    case 'rft_comments':
+      return commentsReport(io, loaded, str(i.id))
+    case 'rft_comment':
+      return addComment(io, loaded, { id: String(i.id ?? ''), thread: str(i.thread), quote: typeof i.quote === 'string' ? i.quote : undefined, text: i.text, applied: i.applied === true })
+    case 'rft_suggest':
+      return addSuggestion(io, loaded, { id: String(i.id ?? ''), thread: str(i.thread), quote: typeof i.quote === 'string' ? i.quote : undefined, replacement: i.replacement, text: i.text })
     case 'rft_sync': {
       const r = await sync(io, loaded, { relayout: i.relayout === true })
       return r.changed.length
@@ -618,6 +778,7 @@ async function startServer($: EngineInterface): Promise<string> {
   const args = [
     join(root, 'server/rft_server.py'), '--vault', vault, '--web', join(root, 'web'),
     '--project', config.project, '--port', String(config.webPort ?? 0),
+    '--config', join(h.root, CONFIG_PATH),
   ]
   const failures: string[] = []
   for (const python of ['python3', 'python']) {
@@ -650,6 +811,7 @@ async function spawnServer($: EngineInterface, argv: string[]): Promise<string> 
           for (const l of lines) {
             const m = /RFT_SERVER_URL (\S+)/.exec(l)
             if (m) found(m[1]!)
+            else if (l.startsWith(ASK)) void askFromView($, l.slice(ASK.length))
             else {
               const asked = FROM_VIEW.find(a => l.startsWith(a.line))
               if (asked) void fromView($, asked, l.slice(asked.line.length))
@@ -686,14 +848,38 @@ const FROM_VIEW = [
   { line: 'RFT_MOVE_NODE ', tool: 'rft_move_node', fields: ['id', 'parent'], what: 'move a note' },
 ] as const
 
-/** A change the tree view asks for (POST api/node, api/type or api/move, relayed by the server). */
+/**
+ * A change the tree view asks for (POST api/node, api/type or api/move, relayed by the server). A
+ * move with `unlock: true` was agreed in the page, which warned that the note is locked.
+ */
 async function fromView($: EngineInterface, asked: (typeof FROM_VIEW)[number], request: string): Promise<void> {
   try {
     const r = JSON.parse(request) as Record<string, unknown>
-    await runTool($, asked.tool, Object.fromEntries(asked.fields.map(f => [f, r[f]])))
+    await runTool($, asked.tool, Object.fromEntries(asked.fields.map(f => [f, r[f]])), { unlock: r.unlock === true })
     await refresh($, true)
   } catch (err) {
     $.ui.toast(`rft: the tree view could not ${asked.what} (${message(err)})`)
+  }
+}
+
+const ASK = 'RFT_ASK '
+
+/**
+ * A thread the user asks Claude to answer from the tree view (its Ask Claude, relayed by the
+ * server): a prompt with the thread, submitted by the poller as a turn of its own.
+ */
+async function askFromView($: EngineInterface, request: string): Promise<void> {
+  try {
+    const r = JSON.parse(request) as Record<string, unknown>
+    const h = await mustHere($)
+    const loaded = await loadActive(h.io)
+    const id = String(r.id ?? '')
+    const n = loaded.tree.nodes[id]
+    if (!n) throw new Error(`"${id}" is not a note of the tree`)
+    const c = await readComments(h.io, loaded.config.vault, id)
+    pendingPrompts.push(askText(loaded, c, id, String(r.thread ?? ''), join(shownVault(h, loaded.config), n.path)))
+  } catch (err) {
+    $.ui.toast(`rft: the tree view could not ask Claude (${message(err)})`)
   }
 }
 
@@ -841,16 +1027,139 @@ const webHelp = (url: string) => {
   ].join('\n')
 }
 
-/** Submits a prompt a command queued; called from the poller, outside any command's dispatch. */
+/** Submits the prompts a command or the tree view queued; called from the poller, outside any command's dispatch. */
 async function submitPending($: EngineInterface): Promise<void> {
-  const text = pendingPrompt
-  if (!text) return
-  pendingPrompt = null
-  try {
-    await $.prompt.submit({ text })
-  } catch (err) {
-    $.ui.toast(`rft: could not ask Claude (${message(err)}); ask it yourself, e.g. "propose concepts for the tree"`)
+  while (pendingPrompts.length) {
+    const text = pendingPrompts.shift()!
+    try {
+      await $.prompt.submit({ text })
+    } catch (err) {
+      $.ui.toast(`rft: could not ask Claude (${message(err)}); ask it yourself, e.g. "${text.split('\n')[0]!.slice(0, 80)}"`)
+    }
   }
+}
+
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+// a shell command that may write a file: a redirection, an in-place editor, a move, copy or
+// removal, a script
+const SHELL_WRITES = /(^|[^<>&0-9])>{1,2}(?!&)|\b(tee|mv|cp|rm|truncate|dd|python3?|node|ruby|perl|sed\s[^|;&]*-i|awk\s[^|;&]*-i)\b/
+const COMMENTS_BY_HAND = `The tree view and the rft tools write the comments files (${COMMENTS_DIR}/): use rft_comment and rft_suggest.`
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/**
+ * Why Claude may not make this tool call, or null: it would edit a locked note (Edit, Write; a
+ * shell command that writes and names the note's file, as far as the command shows it), or a
+ * comments file by hand.
+ */
+async function lockedEdit($: EngineInterface, e: Record<string, unknown>): Promise<string | null> {
+  const tool = String(e.tool)
+  if (!EDIT_TOOLS.has(tool) && tool !== 'Bash') return null
+  const s = await read($, snapshot)
+  if (!s?.isActive || !s.vault) return null
+  const vault = resolvePath(s.vault, '.')
+  if (tool === 'Bash') {
+    const cmd = String(e.command ?? '')
+    if (!SHELL_WRITES.test(cmd)) return null
+    if (cmd.includes(`${COMMENTS_DIR}/`)) return COMMENTS_BY_HAND
+    for (const n of Object.values(s.nodes)) {
+      if (!n.locked) continue
+      const word = escapeRe(n.title.split(' ')[0] ?? '')
+      const named = cmd.includes(n.name) || new RegExp(`\\b${n.id}(?:[*?]|(?:\\\\ | )${word})`).test(cmd)
+      if (named) return lockedText(n)
+    }
+    return null
+  }
+  const raw = e.file_path ?? e.notebook_path
+  if (typeof raw !== 'string') return null
+  const abs = resolvePath(resolvePath(await $.session.cwd(), '.'), raw)
+  if (abs.startsWith(`${vault}/${COMMENTS_DIR}/`)) return COMMENTS_BY_HAND
+  const n = Object.values(s.nodes).find(x => join(vault, x.path) === abs)
+  if (!n) return null
+  try {
+    return isLocked(await $.fs.read(abs)) ? lockedText(n) : null
+  } catch {
+    return null
+  }
+}
+
+/** A `priority:` line, not `suggested_priority:`. */
+const PRIORITY_LINE = /(^|[^\w])priority\s*:/m
+
+/** A note's text once an Edit, MultiEdit or Write has run on `before`; null when the call would fail or is another one. */
+function afterCall(tool: string, e: Record<string, unknown>, before: string): string | null {
+  if (tool === 'Write') return typeof e.content === 'string' ? e.content : null
+  const edits = tool === 'Edit' ? [e] : tool === 'MultiEdit' && Array.isArray(e.edits) ? (e.edits as Record<string, unknown>[]) : null
+  if (!edits) return null
+  let text = before
+  for (const x of edits) {
+    const from = x.old_string, to = x.new_string
+    if (typeof from !== 'string' || typeof to !== 'string') return null
+    if (!from) { if (text) return null; text = to; continue } // an empty old_string makes a new file
+    if (!text.includes(from)) return null
+    text = x.replace_all === true ? text.split(from).join(to) : text.replace(from, () => to)
+  }
+  return text
+}
+
+/**
+ * Why Claude may not make this tool call, or null: it would change a note's `priority:`, the
+ * user's alone (an Edit or Write of a note in the vault that adds, changes or removes the field;
+ * a shell command that writes, holds a `priority:` line and names the vault or a note).
+ */
+async function priorityEdit($: EngineInterface, e: Record<string, unknown>): Promise<string | null> {
+  const tool = String(e.tool)
+  if (!EDIT_TOOLS.has(tool) && tool !== 'Bash') return null
+  const s = await read($, snapshot)
+  if (!s?.isActive || !s.vault) return null
+  const vault = resolvePath(s.vault, '.')
+  if (tool === 'Bash') {
+    const cmd = String(e.command ?? '')
+    if (!SHELL_WRITES.test(cmd) || !PRIORITY_LINE.test(cmd)) return null
+    const named = Object.values(s.nodes).find(n => cmd.includes(n.name) || new RegExp(`\\b${n.id}\\b`).test(cmd)) ?? null
+    const folder = vault.split('/').pop()
+    return named || cmd.includes(vault) || (folder && cmd.includes(`${folder}/`)) ? priorityText(named) : null
+  }
+  const raw = e.file_path
+  if (typeof raw !== 'string' || !raw.endsWith('.md')) return null
+  const abs = resolvePath(resolvePath(await $.session.cwd(), '.'), raw)
+  if (!abs.startsWith(`${vault}/`)) return null
+  let before = ''
+  try { before = await $.fs.read(abs) } catch { /* a new file */ }
+  const after = afterCall(tool, e, before)
+  if (after === null || !changesPriority(before, after)) return null
+  return priorityText(Object.values(s.nodes).find(x => join(vault, x.path) === abs) ?? null)
+}
+
+/** A `due:`, `start:` or `est:` line, not `suggested_start:` or `suggested_est:`. */
+const DATE_LINE = /(^|[^\w])(due|start|est)\s*:/m
+
+/**
+ * Why Claude may not make this tool call, or null: it would change a date, the user's alone (an
+ * Edit or Write of a note or a milestone in the vault that adds, changes or removes `due:`,
+ * `start:` or `est:`; a shell command that writes, holds such a line and names the vault or a note).
+ */
+async function datesEdit($: EngineInterface, e: Record<string, unknown>): Promise<string | null> {
+  const tool = String(e.tool)
+  if (!EDIT_TOOLS.has(tool) && tool !== 'Bash') return null
+  const s = await read($, snapshot)
+  if (!s?.isActive || !s.vault) return null
+  const vault = resolvePath(s.vault, '.')
+  if (tool === 'Bash') {
+    const cmd = String(e.command ?? '')
+    if (!SHELL_WRITES.test(cmd) || !DATE_LINE.test(cmd)) return null
+    const named = Object.values(s.nodes).find(n => cmd.includes(n.name) || new RegExp(`\\b${n.id}\\b`).test(cmd)) ?? null
+    const folder = vault.split('/').pop()
+    return named || cmd.includes(vault) || (folder && cmd.includes(`${folder}/`)) ? datesText(named) : null
+  }
+  const raw = e.file_path
+  if (typeof raw !== 'string' || !raw.endsWith('.md')) return null
+  const abs = resolvePath(resolvePath(await $.session.cwd(), '.'), raw)
+  if (!abs.startsWith(`${vault}/`)) return null
+  let before = ''
+  try { before = await $.fs.read(abs) } catch { /* a new file */ }
+  const after = afterCall(tool, e, before)
+  if (after === null || !changesDates(before, after)) return null
+  return datesText(Object.values(s.nodes).find(x => join(vault, x.path) === abs) ?? null)
 }
 
 /**
@@ -985,7 +1294,7 @@ export const register: Register = (on, options) => {
       if (e.args.trim() !== 'suggest') return { text: conceptsReport(loaded) }
       // a prompt cannot be submitted from the command's own hook (the turn would wait on it), and a
       // timer started here ends with it: the session's poller submits it at its next tick
-      pendingPrompt = SUGGEST_CONCEPTS
+      pendingPrompts.push(SUGGEST_CONCEPTS)
       return { text: `${conceptsReport(loaded)}\n\nClaude will propose a concept split in a moment; nothing changes until you confirm it.` }
     } catch (err) {
       return { text: message(err) }
@@ -1001,7 +1310,7 @@ export const register: Register = (on, options) => {
       const id = resolveId(loaded.tree, subject)
       const concept = Object.values(loaded.tree.concepts ?? {}).find(c => c.root && c.name.toLowerCase() === subject.toLowerCase())
       const where = id ? loaded.tree.nodes[id]!.name : concept ? `${loaded.tree.nodes[concept.root!]!.name} (the start of the concept "${concept.name}")` : null
-      pendingPrompt = literaturePrompt(id ? `${loaded.tree.nodes[id]!.title}` : concept ? concept.name : subject, where)
+      pendingPrompts.push(literaturePrompt(id ? `${loaded.tree.nodes[id]!.title}` : concept ? concept.name : subject, where))
       return { text: `Claude will search the literature on ${where ?? JSON.stringify(subject)} in a moment and add what it reads as reference notes; directions and experiments only after you choose.` }
     } catch (err) {
       return { text: message(err) }
@@ -1015,11 +1324,11 @@ export const register: Register = (on, options) => {
       // --full: Claude reads the map of the whole tree; otherwise it judges the plugin's candidates
       const full = /(^|\s)--full(\s|$)/.test(e.args)
       const scope = e.args.replace(/(^|\s)--full(?=\s|$)/, ' ').trim()
-      if (full) pendingPrompt = rebalancePrompt(scope)
+      if (full) pendingPrompts.push(rebalancePrompt(scope))
       else {
         const list = candidates(loaded, { scope: scope || undefined })
         if (!list.length) return { text: `${conceptsReport(loaded)}\n\nNo note sits clearly closer to another concept than to its own${scope ? ` in ${scope}` : ''}: nothing to propose. /rft-rebalance --full asks Claude to look at the whole tree anyway.` }
-        pendingPrompt = candidatesPrompt(scope, candidatesReport(loaded, list))
+        pendingPrompts.push(candidatesPrompt(scope, candidatesReport(loaded, list)))
       }
       // submitted by the poller, as for /rft-concepts suggest
       return { text: `${conceptsReport(loaded)}\n\nClaude will propose moves in a moment, as a table${full ? '' : ', from the candidates the plugin found'}; nothing moves until you confirm.` }
@@ -1046,7 +1355,7 @@ export const register: Register = (on, options) => {
       if (scope && !c) return { text: `"${scope}" is not a concept: /rft-concepts lists them.` }
       const gaps = await mapGaps(io, loaded, c ?? undefined)
       if (!gaps.notes && !gaps.digests.length) return { text: `The map${c ? ` of "${c.name}"` : ''} is complete: every note has a summary and every concept a current digest.` }
-      pendingPrompt = summarizePrompt(c ? c.name : '')
+      pendingPrompts.push(summarizePrompt(c ? c.name : ''))
       return {
         text: `To write${c ? ` in "${c.name}"` : ''}: ${gaps.notes} note summar${gaps.notes === 1 ? 'y' : 'ies'} and ${gaps.digests.length} digest(s)${gaps.digests.length ? ` (${gaps.digests.slice(0, 8).join(', ')}${gaps.digests.length > 8 ? ', …' : ''})` : ''}. ` +
           'Claude will start in a moment, concept by concept. It reads every note without a summary once, so on a large tree this is a long, one-off job; /rft-summarize <concept> does one line of research at a time.',
@@ -1070,8 +1379,11 @@ export const register: Register = (on, options) => {
         katex: await $.fs.read(join(root, ASSET_PATHS.katex)),
         katexCss: await $.fs.read(join(root, ASSET_PATHS.katexCss)),
         filters: await $.fs.read(join(root, ASSET_PATHS.filters)),
+        kanban: await $.fs.read(join(root, ASSET_PATHS.kanban)),
+        schedule: await $.fs.read(join(root, ASSET_PATHS.schedule)),
         layout: await $.fs.read(join(root, ASSET_PATHS.layout)),
         concepts: await $.fs.read(join(root, ASSET_PATHS.concepts)),
+        markdown: await $.fs.read(join(root, ASSET_PATHS.markdown)),
         theme: await $.fs.read(join(root, ASSET_PATHS.theme)),
       }
       const path = await exportHtml(io, loaded, assets)
@@ -1097,6 +1409,11 @@ export const register: Register = (on, options) => {
       } catch (err) {
         return answer(err instanceof Error ? err.message : String(err), true)
       }
+    }
+    if (rules) {
+      const call = e as unknown as Record<string, unknown>
+      const why = (await lockedEdit($, call)) ?? (await priorityEdit($, call)) ?? (await datesEdit($, call))
+      if (why) return { deny: why }
     }
     const ran = await next(e)
     if (rules && !READ_ONLY.test(tool)) await poll($)

@@ -13,7 +13,13 @@
   <h1 id="title">Reasoning tree</h1>
   <span id="counts" class="muted"></span>
   <span id="live" class="live" title="Live: follows the vault"></span>
-  <div class="group" role="group" aria-label="View">
+  <div class="group pages" role="group" aria-label="Page">
+    <button data-show="tree" aria-pressed="true" title="The reasoning tree: every note under the one it came from">Tree</button>
+    <button data-show="concepts" aria-pressed="false" title="A tree whose nodes are the concepts">Concepts</button>
+    <button data-show="kanban" aria-pressed="false" title="The notes in one column per status, ordered by priority or date">Kanban</button>
+    <button data-show="calendar" aria-pressed="false" title="The deadlines and the runs: a timeline, or a month">Calendar</button>
+  </div>
+  <div class="group tree-only" role="group" aria-label="View">
     <!-- each toggle shows the symbol of its state (or of what a click does); its tooltip names it -->
     <button id="layout" class="cycle icon-btn" title="Layout: Top-down (click: Left-right)" aria-label="Layout: Top-down (click: Left-right)">
       <svg data-v="td" class="ico on" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7v5M6 17v-5h12v5"/><circle cx="12" cy="5" r="2.6" fill="currentColor" stroke="none"/><circle cx="6" cy="19" r="2.6" fill="currentColor" stroke="none"/><circle cx="18" cy="19" r="2.6" fill="currentColor" stroke="none"/></svg>
@@ -34,15 +40,14 @@
     <span id="font-size" class="muted" title="Text size">100 %</span>
     <button id="font-up" title="Larger text">A+</button>
   </div>
-  <div class="group" role="group" aria-label="Concepts">
+  <div class="group tree-only" role="group" aria-label="Concepts">
     <button id="cmode" class="cycle icon-btn" title="Concept overlay: off (click: regions)" aria-label="Concept overlay: off (click: regions)">
       <svg data-v="off" class="ico on" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="7" stroke-dasharray="3 2.6" opacity="0.6"/><path d="M5 20L19 4"/></svg>
       <svg data-v="regions" class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="3.5" width="11" height="17" rx="5.5" fill="#f783ac" fill-opacity="0.35" stroke="#f783ac"/><rect x="11" y="7" width="10.5" height="13" rx="5.2" fill="#3bc9db" fill-opacity="0.35" stroke="#3bc9db"/></svg>
       <svg data-v="arrows" class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 11.2L18 6M15.4 9.9L18 6l-4.7-.6" stroke="#f783ac"/><path d="M6.5 12.8L18 18M13.3 18.6L18 18l-2.6-3.9" stroke="#3bc9db"/><circle cx="4.5" cy="12" r="2.6" fill="currentColor" stroke="none"/></svg>
     </button>
-    <button id="view-toggle" aria-pressed="false" title="A tree whose nodes are the concepts">Concept tree</button>
   </div>
-  <div class="group">
+  <div class="group tree-only">
     <button id="origins-toggle" class="icon-btn" aria-pressed="false" aria-label="Came from" title="Came from: dashed links from where each moved note came from">
       <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="17" r="2.6" fill="currentColor" stroke="none"/><path d="M7 14.5C9 7 15 5 18.5 7.5" stroke-dasharray="2.4 2.4"/><circle cx="19" cy="9" r="2.6" fill="currentColor" stroke="none"/></svg>
     </button>
@@ -61,13 +66,19 @@
   <aside id="legend" aria-label="Legend and filter">
     <button id="legend-toggle" class="legend-toggle" aria-expanded="true" title="Show or hide the legend">Legend <span class="caret">▾</span></button>
     <div id="legend-body">
-    <div class="legend-title">Status <span class="muted">(click to filter)</span></div>
+    <div class="legend-title">Type <span class="muted">(the colour)</span></div>
+    <div class="row"><span class="tdot tone direction s-done"></span>Direction (D..)</div>
+    <div class="row"><span class="tdot tone experiment s-done"></span>Experiment (E..)</div>
+    <div class="row"><span class="tdot tone reference s-done"></span>Reference (R..)</div>
+    <div class="row"><span class="tdot tone theory s-done"></span>Theory (T..)</div>
+    <div class="row"><svg class="star-ico" viewBox="-13 -13 26 26" aria-hidden="true"><path d="M0.00,-12.50L3.53,-4.85L11.89,-3.86L5.71,1.85L7.35,10.11L0.00,6.00L-7.35,10.11L-5.71,1.85L-11.89,-3.86L-3.53,-4.85Z"/><path class="core" d="M0.00,-6.50L1.83,-2.52L6.18,-2.01L2.97,0.96L3.82,5.26L0.00,3.12L-3.82,5.26L-2.97,0.96L-6.18,-2.01L-1.83,-2.52Z"/></svg>Starts a concept (inside: its colour)</div>
+    <div class="legend-title">Status <span class="muted">(how strong; click to filter)</span></div>
     <div id="statuses"></div>
-    <div class="legend-title">Type</div>
-    <div class="row"><span class="ring ring-direction"></span>Direction (D..)</div>
-    <div class="row"><span class="ring ring-experiment"></span>Experiment (E..)</div>
-    <div class="row"><span class="ring ring-reference"></span>Reference (R..)</div>
-    <div class="row"><span class="ring ring-theory"></span>Theory (T..)</div>
+    <div class="legend-title">Priority <span class="muted">(open notes: a glow)</span></div>
+    <div class="row"><span class="glow p-urgent"></span>urgent (pulses)</div>
+    <div class="row"><span class="glow p-high"></span>high</div>
+    <div class="row"><span class="glow p-medium"></span>medium</div>
+    <div class="row"><span class="glow p-low"></span>low</div>
     <div id="concept-legend" hidden>
       <div class="legend-title">Concepts <span class="muted">(click to focus)</span></div>
       <div id="concepts-list"></div>
@@ -78,16 +89,16 @@
   <aside id="filters" hidden aria-label="Filters">
     <div class="fhead"><strong>Filters</strong><button id="filters-close" title="Close">✕</button></div>
     <section>
-      <div class="ftitle">Notes that do not match are</div>
+      <div class="ftitle">In the tree, notes that do not match are</div>
       <label><input type="radio" name="fmode" value="dim"> dimmed (the tree keeps its shape)</label>
       <label><input type="radio" name="fmode" value="hide"> hidden (their ancestors stay)</label>
     </section>
     <section>
       <div class="ftitle">Type</div>
-      <label><input type="checkbox" data-ftype="direction"> <span class="ring ring-direction"></span> Directions (D..)</label>
-      <label><input type="checkbox" data-ftype="experiment"> <span class="ring ring-experiment"></span> Experiments (E..)</label>
-      <label><input type="checkbox" data-ftype="reference"> <span class="ring ring-reference"></span> References (R..)</label>
-      <label><input type="checkbox" data-ftype="theory"> <span class="ring ring-theory"></span> Theory (T..)</label>
+      <label><input type="checkbox" data-ftype="direction"> <span class="tdot tone direction s-done"></span> Directions (D..)</label>
+      <label><input type="checkbox" data-ftype="experiment"> <span class="tdot tone experiment s-done"></span> Experiments (E..)</label>
+      <label><input type="checkbox" data-ftype="reference"> <span class="tdot tone reference s-done"></span> References (R..)</label>
+      <label><input type="checkbox" data-ftype="theory"> <span class="tdot tone theory s-done"></span> Theory (T..)</label>
     </section>
     <section>
       <div class="ftitle">Status</div>
@@ -109,6 +120,47 @@
       <label class="date">To <input type="date" id="fdate-to"></label>
     </section>
   </aside>
+  <section id="kanban" hidden aria-label="The notes by status">
+    <div class="kb-bar">
+      <span class="seg" role="group" aria-label="Order of the cards">Order by
+        <button data-kb-order="priority" title="The highest priority first, the notes without one last; newest first within each">Priority</button><button data-kb-order="date" title="Newest first, by the date each note was made">Date</button>
+      </span>
+      <span id="kb-limits" class="kb-limits"></span>
+      <span id="kb-count" class="muted"></span>
+    </div>
+    <div id="kb-cols" class="kb-cols"></div>
+  </section>
+  <section id="calendar" hidden aria-label="The deadlines and the runs">
+    <div class="cal-bar">
+      <span class="seg" role="group" aria-label="Calendar">
+        <button data-cal-mode="timeline" title="One row per experiment: its run as a bar, the deadlines as lines, the GPUs below">Timeline</button><button data-cal-mode="month" title="The month: the deadlines on their days, the runs across them">Month</button>
+      </span>
+      <span class="seg" role="group" aria-label="Move">
+        <button id="cal-prev" title="Earlier" aria-label="Earlier">‹</button><button id="cal-today" title="Go to today">Today</button><button id="cal-next" title="Later" aria-label="Later">›</button>
+      </span>
+      <strong id="cal-range" class="cal-range"></strong>
+      <span class="seg cal-timeline-only" role="group" aria-label="Zoom">
+        <button id="cal-zoom-out" title="Narrower days" aria-label="Narrower days">−</button><button id="cal-zoom-in" title="Wider days" aria-label="Wider days">+</button>
+      </span>
+      <button id="cal-add" class="cal-edit" title="Add a deadline: a submission, a meeting, a talk">+ Deadline</button>
+      <a id="cal-ics" class="cal-ics" download="rft.ics" title="The deadlines and the planned runs as a calendar file, for any calendar app (the suggestions left out)">.ics</a>
+      <span id="cal-gpus" class="cal-gpus muted"></span>
+    </div>
+    <form id="cal-adder" class="cal-adder" hidden>
+      <input id="cal-add-title" type="text" autocomplete="off" placeholder="What is due" aria-label="What is due" required>
+      <input id="cal-add-day" type="date" aria-label="The day" required>
+      <input id="cal-add-time" type="time" aria-label="The time (optional)" title="The time (optional)">
+      <select id="cal-add-zone" aria-label="The time zone" title="The time's zone: local, or as the call for papers states it">
+        <option value="">local time</option><option value="AoE">AoE</option><option value="UTC">UTC</option>
+      </select>
+      <input id="cal-add-needs" type="text" autocomplete="off" placeholder="Needs (e.g. E03, E04)" aria-label="The notes it needs done first" list="cal-ids">
+      <datalist id="cal-ids"></datalist>
+      <button type="submit" class="primary">Add</button>
+      <button type="button" id="cal-add-cancel">Cancel</button>
+    </form>
+    <div id="cal-deadlines" class="cal-deadlines" aria-label="The deadlines"></div>
+    <div id="cal-body" class="cal-body"></div>
+  </section>
   <aside id="drawer" hidden>
     <div id="drawer-concept" class="drawer-concept"></div>
     <div id="drawer-code" class="drawer-code muted" hidden></div>
@@ -118,8 +170,15 @@
         <button id="drawer-type" class="icon-btn" hidden aria-label="Change type" title="Change the note's type: it gets a new id of that type, and links to it follow">
           <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 18.93A8 8 0 1 1 18.93 8"/><path d="M20 4.1L18.93 8l-3.9-1"/><circle cx="12" cy="12" r="3"/></svg>
         </button>
+        <button id="drawer-lock" class="icon-btn cycle" hidden aria-pressed="false" aria-label="Lock">
+          <svg class="ico lock-open on" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.6-1.7"/></svg>
+          <svg class="ico lock-closed" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+        </button>
         <button id="drawer-edit" class="icon-btn" hidden aria-label="Edit" title="Edit the note's text (Ctrl+S saves, Esc cancels)">
           <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l1-4.5L15.5 5a2.1 2.1 0 0 1 3 0l.5.5a2.1 2.1 0 0 1 0 3L8.5 19z"/><path d="M13.5 7l3.5 3.5"/></svg>
+        </button>
+        <button id="drawer-hl" class="icon-btn" hidden aria-pressed="false" aria-label="Highlighter" title="Highlighter: while it is on, the text you select is highlighted (==like this== in the note, as Obsidian writes it), and a highlight you select or click is taken out (Esc turns it off)">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M15.4 4.4l4.2 4.2-7.5 7.5-4.2-4.2z"/><path d="M7.9 11.9l-1.9 3.6 2.5 2.5 3.6-1.9"/><path d="M3.5 21.2h11" stroke="#e8c300" stroke-width="3.2"/></svg>
         </button>
         <button id="drawer-add" class="icon-btn" hidden aria-label="Add a child note" title="Add a direction, an experiment, a reference or a theory note under this note">
           <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.6" fill="currentColor" stroke="none"/><path d="M6 9v6a2 2 0 0 0 2 2h2.5"/><path d="M17.5 13.5v7M14 17h7"/></svg>
@@ -130,6 +189,9 @@
         <button id="drawer-close" title="Close">✕</button>
       </span>
     </div>
+    <div id="drawer-priority" class="drawer-priority" hidden></div>
+    <div id="drawer-dates" class="drawer-dates" hidden></div>
+    <p id="hl-hint" class="hl-hint" hidden>Highlighter on: select text to highlight it; select or click a highlight to take it out. <kbd>Esc</kbd> turns it off.</p>
     <p id="edit-nokey" class="edit-nokey" hidden>To edit or add notes, open the address <code>/rft</code> printed (it ends in
       <code>?token=…</code>) once: this browser then remembers its key.</p>
     <form id="adder" class="adder" hidden>
@@ -180,6 +242,27 @@
     <div id="drawer-origin" class="drawer-origin muted" hidden></div>
     <div id="drawer-refs" class="drawer-origin muted" hidden></div>
     <article id="note"></article>
+    <section id="threads" hidden aria-label="Comments and suggestions"></section>
+    <div id="sel-bar" class="sel-bar" hidden role="toolbar" aria-label="On the selected text">
+      <button type="button" data-compose="comment" title="Discuss this part of the note">Comment</button>
+      <button type="button" data-compose="suggestion" title="Propose new text for it, or say what should change">Suggest</button>
+      <button type="button" data-compose="footnote" title="Add a footnote here: a mark in the text, its text in the margin">Footnote</button>
+      <span id="sel-msg" class="muted"></span>
+    </div>
+    <form id="composer" class="composer" hidden>
+      <div class="composer-title"><b id="composer-kind"></b> <span class="muted">on</span></div>
+      <blockquote id="composer-quote" class="t-quote"></blockquote>
+      <label id="composer-repl-label" for="composer-repl" class="muted">Replace with (markdown). Leave it as it is to say in words what should change.</label>
+      <textarea id="composer-repl" rows="3"></textarea>
+      <textarea id="composer-text" rows="3"></textarea>
+      <div class="editor-bar">
+        <button id="composer-post" type="submit" class="primary" title="Ctrl+Enter">Post</button>
+        <button id="composer-ask" type="button" title="Post it and ask Claude to answer it: a turn of the session that ran /rft">Post and ask Claude</button>
+        <button id="composer-cancel" type="button" title="Esc">Cancel</button>
+        <span id="composer-msg" class="muted" role="status"></span>
+      </div>
+    </form>
+    <div id="fn-pop" class="fn-pop" hidden role="tooltip"></div>
     <div id="editor" hidden>
       <textarea id="note-text" aria-label="The note's text, in markdown"></textarea>
       <div class="editor-bar">
@@ -192,13 +275,19 @@
       <div class="muted editor-hint">The text below the frontmatter: status, parent and tags change through Claude.</div>
     </div>
   </aside>
+  <!-- the drawer's left edge: drag it to widen or narrow the note; shown with the drawer -->
+  <div id="drawer-resize" role="separator" aria-orientation="vertical" aria-controls="drawer" tabindex="0"
+    aria-label="Width of the note" title="Drag to resize the note (double-click: back to the default width)"></div>
 </main>
 <div id="tooltip" hidden></div>
 <script src="vendor/d3.v7.9.0.min.js" data-rft-inline></script>
 <script src="vendor/katex.v0.16.22.min.js" data-rft-inline></script>
 <script src="filters.js" data-rft-inline></script>
+<script src="kanban.js" data-rft-inline></script>
+<script src="schedule.js" data-rft-inline></script>
 <script src="layout.js" data-rft-inline></script>
 <script src="concepts.js" data-rft-inline></script>
+<script src="markdown.js" data-rft-inline></script>
 <script src="app.js" data-rft-inline></script>
 </body>
 </html>

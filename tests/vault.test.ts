@@ -4,6 +4,8 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { addNode, initVault, moveNode, setRefs, setStatus, setTags, setType, tagsReport } from '../hooks/lib/ops'
+import { LockedChange } from '../hooks/lib/comments'
+import { supersede } from '../hooks/lib/knowledge'
 import { staticPage } from '../hooks/lib/page'
 import { TYPES, bodyOf, canvasJson, compactTree, front, load, locate, noteText, parseTags, readConfig, resolvePath, retyped, sanitiseTag, sanitiseTitle, sync, topicalTags, validate } from '../hooks/lib/vault'
 import { D00, D01, E01, E02, MemoryFs, WEB_FILES, demoFiles } from './fixture'
@@ -218,6 +220,39 @@ describe('vault', () => {
     expect(loaded.tree.nodes.D01!.origin).toEqual(['E01', 'D00'])
   })
 
+  test('a move keeps the footnotes after the parents\' children lists, even those that link the note', async () => {
+    const files = demoFiles()
+    const withNote = (path: string) => {
+      files[path] = files[path]!.replace(/Text of (\w+)\./, 'Text of $1.[^1]') + `\n[^1]: compare with [[${D01}]],\n    which disagrees.\n`
+    }
+    withNote(`vault/experiments/${E01}.md`)
+    withNote(`vault/directions/${D00}.md`)
+    const { fs, io, loaded } = await loadDemo(new MemoryFs(files))
+    await sync(io, loaded)
+    await moveNode(io, loaded, 'D01', 'D00', '2026-02-01')
+    const footnote = `\n\n[^1]: compare with [[${D01}]],\n    which disagrees.\n`
+    // the old parent stops listing it, its footnote stays
+    expect(fs.read(`vault/experiments/${E01}.md`)).toEndWith(`## Children in the tree${footnote}`)
+    // the new parent lists it in the list, before its footnote, though the footnote already links it
+    expect(fs.read(`vault/directions/${D00}.md`)).toEndWith(`## Children in the tree\n- [[${E01}]]\n- [[${D01}]]${footnote}`)
+    expect(await validate(io, loaded)).toEqual({ errors: [], warnings: [] })
+  })
+
+  test('a locked note moves, or is marked superseded, only unlocked: refused before anything is written', async () => {
+    const files = demoFiles()
+    const path = `vault/directions/${D01}.md`
+    files[path] = files[path]!.replace('\n---\n', '\nlocked: true\n---\n')
+    const { fs, io, loaded } = await loadDemo(new MemoryFs(files))
+    const snapshot = () => Object.fromEntries([...fs.files].map(([k, f]) => [k, f.text]))
+    const before = snapshot()
+    await expect(moveNode(io, loaded, 'D01', 'D00', '2026-02-01')).rejects.toThrow(LockedChange)
+    await expect(supersede(io, loaded, 'D01', 'E01', 'rerun', '2026-02-01')).rejects.toThrow(LockedChange)
+    expect(snapshot()).toEqual(before)
+    expect(await moveNode(io, loaded, 'D01', 'D00', '2026-02-01', undefined, true)).toContain(`${D01} is unlocked now`)
+    expect(front(fs.read(path)).locked).toBeUndefined()
+    expect(fs.read(path)).toContain(`## History\n- 2026-02-01: moved from [[${E01}]] to [[${D00}]]`)
+  })
+
   test('a move refuses the root, the same parent and the note\'s own subtree', async () => {
     const { io, loaded } = await loadDemo()
     await expect(moveNode(io, loaded, 'D00', 'E01', '2026-02-01')).rejects.toThrow(/root of the tree/)
@@ -326,8 +361,10 @@ describe('vault', () => {
 
   test('the static page inlines the web view and embeds the tree with every note', async () => {
     const { tree, texts } = (await loadDemo()).loaded
-    const html = staticPage({ html: WEB_FILES['web/index.html']!, css: 'a{}', js: 'go()', d3: 'd3()', katex: 'kx()', katexCss: '.katex{}', filters: 'filt()', layout: 'lay()', concepts: 'con()', theme: 'thm()' }, tree, texts, 'demo', 'v1')
+    const html = staticPage({ html: WEB_FILES['web/index.html']!, css: 'a{}', js: 'go()', d3: 'd3()', katex: 'kx()', katexCss: '.katex{}', filters: 'filt()', kanban: 'kan()', schedule: 'sch()', layout: 'lay()', concepts: 'con()', markdown: 'mdn()', theme: 'thm()' }, tree, texts, 'demo', 'v1', { E02: [{ id: 'c1', quote: '<b>', at: [1, 4] }] })
     const data = JSON.parse(/window\.RFT_DATA = (.*?);<\/script>/.exec(html)![1]!)
+    expect(data.comments).toEqual({ E02: [{ id: 'c1', quote: '<b>', at: [1, 4] }] })
+    expect(html).not.toContain('<b>') // escaped inside the script
     expect(data.tree.project).toBe('demo')
     expect(data.tree.roots).toEqual(['D00'])
     expect(data.tree.nodes).toHaveLength(4)
@@ -335,7 +372,10 @@ describe('vault', () => {
     expect(data.bodies.E02).not.toContain('status: running')
     expect(html).toContain('<style>a{}</style>')
     expect(html).toContain('<script>filt()</script>')
+    expect(html).toContain('<script>kan()</script>')
+    expect(html).toContain('<script>sch()</script>')
     expect(html).toContain('<script>lay()</script>')
+    expect(html).toContain('<script>mdn()</script>')
     expect(html).toContain('<style>.katex{}</style>')
     expect(html).toContain('<script>kx()</script>')
     expect(html).toMatch(/<head><script>thm\(\)<\/script><style>/) // the theme before the first paint

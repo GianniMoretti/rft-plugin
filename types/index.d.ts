@@ -12,6 +12,8 @@ export type RftNodeState = {
   path: string
   tags: string[]
   concept: string
+  /** `locked: true`: Claude only suggests changes to it. */
+  locked: boolean
 }
 
 export type RftConceptState = {

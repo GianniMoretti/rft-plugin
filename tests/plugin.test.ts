@@ -2,10 +2,12 @@
 // the commands, and the tree pane on the terminal and the desktop.
 
 import type { On } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
+import { isLocked } from '../hooks/lib/comments'
 import { addNode, loadActive, setType, today } from '../hooks/lib/ops'
-import { CWD, D01, E02, MemoryFs, WEB_FILES, demoAt, demoFiles, paneProps, world } from './fixture'
+import { CWD, D00, D01, E01, E02, MemoryFs, WEB_FILES, demoAt, demoFiles, paneProps, world } from './fixture'
 
 const SURFACES = ['terminal', 'desktop'] as const
 // the `name` of skills/rft-manual/SKILL.md
@@ -35,7 +37,7 @@ describe('activation', () => {
     const w = world(on, demoFiles())
     on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.tools).toEqual(['rft_add_node', 'rft_set_repos', 'rft_code', 'rft_set_code', 'rft_set_status', 'rft_set_summary', 'rft_map', 'rft_supersede', 'rft_next', 'rft_set_digest', 'rft_move_node', 'rft_set_refs', 'rft_search', 'rft_graph', 'rft_collect_papers', 'rft_set_tags', 'rft_set_type', 'rft_set_concept', 'rft_concepts', 'rft_tags', 'rft_tree', 'rft_validate', 'rft_sync'])
+    expect(w.tools).toEqual(['rft_add_node', 'rft_set_repos', 'rft_code', 'rft_set_code', 'rft_set_status', 'rft_suggest_priority', 'rft_suggest_dates', 'rft_add_deadline', 'rft_suggest_deadline', 'rft_set_summary', 'rft_map', 'rft_supersede', 'rft_next', 'rft_set_digest', 'rft_move_node', 'rft_set_refs', 'rft_search', 'rft_graph', 'rft_collect_papers', 'rft_set_tags', 'rft_set_type', 'rft_set_concept', 'rft_concepts', 'rft_tags', 'rft_tree', 'rft_validate', 'rft_sync', 'rft_comments', 'rft_comment', 'rft_suggest'])
     expect(w.opened).toEqual(['rft-tree'])
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
     const rules = res.sections.find(s => s.id === 'rft:rules')
@@ -50,7 +52,7 @@ describe('activation', () => {
     on('prompt.compose', () => ({ sections: [] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
     expect(w.commands).toEqual(['rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-next', 'rft-summarize', 'rft-view'])
-    expect(w.tools).toHaveLength(23)
+    expect(w.tools).toHaveLength(30)
     expect(w.opened).toEqual(['rft-tree'])
     expect(w.toasts.join()).toContain('/rft')
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
@@ -205,7 +207,8 @@ describe('commands', () => {
 
   test('/rft-view writes one standalone page: the web view with the tree and the notes inlined', async ($, on) => {
     mock.clock(on)
-    const w = world(on, { ...demoFiles(), ...WEB_FILES })
+    const thread = { id: 'c1', kind: 'comment', state: 'open', quote: 'Text of E02.', prefix: '', suffix: '', replacement: null, asked: null, messages: [], closed: null }
+    const w = world(on, { ...demoFiles(), ...WEB_FILES, 'vault/.comments/E02.json': JSON.stringify({ note: 'E02', next: 2, threads: [thread] }) })
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
     const res = await $.command.run({ command: 'rft-view', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } } as never)
     expect(res.text).toContain(`file://${CWD}/vault/tree.html`)
@@ -218,6 +221,12 @@ describe('commands', () => {
     expect(html).toContain('window.RFT_DATA = {"tree":{"project":"demo"')
     expect(html).toContain('Text of D01.')
     expect(html.indexOf('window.RFT_DATA')).toBeLessThan(html.indexOf('console.log(window.RFT_DATA'))
+    // each note's threads, placed in its text, for the page to show read-only
+    const data = JSON.parse(/window\.RFT_DATA = (.*?);<\/script>/.exec(html)![1]!)
+    const body = data.bodies.E02 as string
+    expect(data.comments.E02).toHaveLength(1)
+    expect(body.slice(...(data.comments.E02[0].at as [number, number]))).toBe('Text of E02.')
+    expect(data.comments.E02[0].exact).toBe(true)
   })
 })
 
@@ -274,7 +283,7 @@ describe('web view', () => {
     const argv = srv.seen[0]!
     expect(argv[0]).toBe('python3')
     expect(argv[1]).toMatch(/server\/rft_server\.py$/)
-    expect(argv.slice(2)).toEqual(['--vault', `${CWD}/vault`, '--web', expect.stringMatching(/\/web$/), '--project', 'demo', '--port', '0'])
+    expect(argv.slice(2)).toEqual(['--vault', `${CWD}/vault`, '--web', expect.stringMatching(/\/web$/), '--project', 'demo', '--port', '0', '--config', `${CWD}/.rft/config.json`])
     const again = await $.command.run(RUN(''))
     expect(again.text).toContain('http://127.0.0.1:5555/')
     expect(srv.seen).toHaveLength(1)
@@ -476,6 +485,35 @@ describe('web view', () => {
     expect(texts(w.fs)).toEqual(before)
   })
 
+  test('a locked note the tree view moves is moved unlocked once agreed there, and otherwise asked about', async ($, on) => {
+    mock.clock(on)
+    const files = demoFiles()
+    const path = `vault/experiments/${E02}.md`
+    files[path] = files[path]!.replace('\n---\n', '\nlocked: true\n---\n')
+    const w = world(on, files)
+    const srv = fakeServer(on)
+    const asked: string[] = []
+    on('tool.call', (_$, e) => {
+      if (e.tool !== 'AskUserQuestion') return { result: 'ok', text: 'ok' } as never
+      asked.push(String(e.tool))
+      return { deny: 'The user dismissed the dialog' } as never
+    })
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    await $.command.run(RUN(''))
+    // not agreed in the page (an older page, say): the session asks, and a dismissed dialog keeps it
+    srv.print(`RFT_MOVE_NODE ${JSON.stringify({ id: 'E02', parent: 'E01' })}\n`)
+    await until(() => w.toasts.length > 0)
+    expect(asked).toEqual(['AskUserQuestion'])
+    expect(w.toasts.join()).toContain(`the tree view could not move a note (${E02} is locked and the user kept it locked`)
+    expect(isLocked(w.fs.read(path))).toBe(true)
+    // agreed in the page: moved and unlocked, with no dialog
+    srv.print(`RFT_MOVE_NODE ${JSON.stringify({ id: 'E02', parent: 'E01', unlock: true })}\n`)
+    await until(() => w.fs.read(path).includes('## History'))
+    expect(w.fs.read(path)).toContain(`moved from [[${D01}]] to [[${E01}]]`)
+    expect(isLocked(w.fs.read(path))).toBe(false)
+    expect(asked).toHaveLength(1)
+  })
+
   test('/rft outside an RFT project starts nothing', async ($, on) => {
     mock.clock(on)
     world(on, {})
@@ -557,7 +595,7 @@ describe('linked trees', () => {
     const srv = fakeServer(on)
     on('prompt.compose', () => ({ sections: [] }))
     await $.session.start({ cwd: REPO, source: 'startup' } as never)
-    expect(w.tools).toHaveLength(23)
+    expect(w.tools).toHaveLength(30)
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
     expect(res.sections.find(s => s.id === 'rft:rules')?.text).toContain(`notes in \`${TREE}/vault/\``)
     expect((await $.tool.call({ tool: 'mcp__rft__rft_tree' } as never)).text).toContain(`theory notes in ${TREE}/vault/.`)
@@ -592,7 +630,7 @@ describe('linked trees', () => {
     mock.clock(on)
     const w = world(on, linked(), { cwd: `${TREE}/analysis` })
     await $.session.start({ cwd: `${TREE}/analysis`, source: 'startup' } as never)
-    expect(w.tools).toHaveLength(23)
+    expect(w.tools).toHaveLength(30)
     const tree = await $.tool.call({ tool: 'mcp__rft__rft_tree' } as never)
     expect(tree.text).toMatch(/^demo: 2 directions, 2 experiments/)
   })
@@ -650,5 +688,70 @@ describe('linked trees', () => {
     const res = await $.command.run(INIT('Another question'))
     expect(res.text).toContain(`works on the reasoning tree in ${TREE} (linked by ${LINK})`)
     expect([...w.fs.files.keys()].filter(k => k.startsWith('/phd/code/'))).toEqual([LINK])
+  })
+})
+
+describe('locked notes', () => {
+  const E02_PATH = `vault/experiments/${E02}.md`
+
+  /** The demo project with `locked` notes, and the session's dialog answered by `answer.value` (null: dismissed): the questions it asked. */
+  async function lockedSession($: Engine, on: On, locked: string[], first: string | null) {
+    mock.clock(on)
+    const files = demoFiles()
+    for (const p of locked) files[p] = files[p]!.replace('\n---\n', '\nlocked: true\n---\n')
+    const w = world(on, files)
+    const asked: string[] = []
+    const answer = { value: first }
+    on('tool.call', (_$, e) => {
+      if (e.tool !== 'AskUserQuestion') return { result: 'ok', text: 'ok' } as never
+      const q = (e as unknown as { questions: { question: string; options: { label: string }[] }[] }).questions[0]!
+      asked.push(`${q.question} [${q.options.map(o => o.label).join(' | ')}]`)
+      if (answer.value === null) return { deny: 'The user dismissed the dialog' } as never
+      return { result: { questions: [q], answers: { [q.question]: answer.value } }, text: `"${q.question}"="${answer.value}"` } as never
+    })
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    return { w, asked, answer }
+  }
+
+  test('moving a locked note asks the user, in the session; it moves, unlocked, when they agree', async ($, on) => {
+    const { w, asked } = await lockedSession($, on, [E02_PATH], 'Move and unlock')
+    const res = await $.tool.call({ tool: 'mcp__rft__rft_move_node', id: 'E02', parent: 'E01' } as never)
+    expect(asked).toEqual([`${E02} is locked. Moving it unlocks it and adds a line to its History. Move it anyway? [Move and unlock | Keep it locked]`])
+    expect(res.text).toContain(`Moved ${E02} from ${D01} to ${E01}.`)
+    expect(res.text).toContain(`${E02} is unlocked now: the user agreed.`)
+    expect(isLocked(w.fs.read(E02_PATH))).toBe(false)
+    expect(w.fs.read(E02_PATH)).toContain(`## History\n- ${today()}: moved from [[${D01}]] to [[${E01}]]`)
+  })
+
+  test('a locked note the user keeps locked does not move, whatever Claude passes', async ($, on) => {
+    const { w, asked, answer } = await lockedSession($, on, [E02_PATH], null)
+    const before = texts(w.fs)
+    // a move refused for another reason asks nothing
+    const there = await $.tool.call({ tool: 'mcp__rft__rft_move_node', id: 'E02', parent: 'D01' } as never)
+    expect(there.text).toContain('is already under')
+    expect(asked).toEqual([])
+    // dismissed, kept, or another answer typed under Other; Claude's own unlock: true is not the user's yes
+    for (const reply of [null, 'Keep it locked', 'Move and unlock, please']) {
+      answer.value = reply
+      const res = await $.tool.call({ tool: 'mcp__rft__rft_move_node', id: 'E02', parent: 'E01', unlock: true } as never)
+      expect({ reply, error: res.isError, text: res.text }).toEqual({ reply, error: true, text: `${E02} is locked and the user kept it locked: it was not moved. Do not try again unless the user asks.` })
+    }
+    expect(asked).toHaveLength(3)
+    expect(texts(w.fs)).toEqual(before)
+  })
+
+  test('locked parents and children of a moved note ask nothing and stay locked; a supersede mark asks', async ($, on) => {
+    const near = [`vault/experiments/${E01}.md`, `vault/directions/${D00}.md`, E02_PATH]
+    const { w, asked } = await lockedSession($, on, near, 'Mark and unlock')
+    const moved = await $.tool.call({ tool: 'mcp__rft__rft_move_node', id: 'D01', parent: 'D00' } as never)
+    expect(moved.text).toContain(`Moved ${D01} and the 1 note(s) below it from ${E01} to ${D00}.`)
+    expect(asked).toEqual([])
+    for (const p of near) expect({ p, locked: isLocked(w.fs.read(p)) }).toEqual({ p, locked: true })
+    const marked = await $.tool.call({ tool: 'mcp__rft__rft_supersede', id: 'E02', by: 'E01', why: 'a cleaner rerun' } as never)
+    expect(asked).toEqual([`${E02} is locked. Marking it as superseded unlocks it and adds a line to its History. Mark it anyway? [Mark and unlock | Keep it locked]`])
+    expect(marked.text).toContain(`${E02} is marked as superseded by ${E01}`)
+    expect(marked.text).toContain(`${E02} is unlocked now: the user agreed.`)
+    expect(isLocked(w.fs.read(E02_PATH))).toBe(false)
+    expect(w.fs.read(E02_PATH)).toContain(`superseded by [[${E01}]] (a cleaner rerun)`)
   })
 })

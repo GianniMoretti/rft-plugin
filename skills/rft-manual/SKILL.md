@@ -1,6 +1,6 @@
 ---
 name: rft-manual
-description: Operating manual of the Reasoning Flow Tree, the tree of experiment (E..), direction (D..), reference (R..) and theory (T..) notes that records a research project's reasoning, grouped into concepts (lines of research) that can link the code repositories they run on. Use in a project with .rft/config.json whenever an experiment is planned, launched or finished, an idea or question comes up (even a rejected one), a paper or literature review is read, a new field comes up (offer a literature search first), a definition, method or taxonomy is written down, an idea is dropped or moved, a branch belongs under another note (move it), a new line of research opens (propose a concept, ask for its code), work starts on an experiment whose concept links code, or the user asks about the tree, the vault, its concepts, its code or what was tried (start from rft_map).
+description: Operating manual of the Reasoning Flow Tree, the tree of experiment (E..), direction (D..), reference (R..) and theory (T..) notes that records a research project's reasoning, grouped into concepts (lines of research) that can link the code repositories they run on. Use in a project with .rft/config.json whenever an experiment is planned, launched or finished, an idea or question comes up (even a rejected one), a paper or literature review is read, a new field comes up (offer a literature search first), a definition, method or taxonomy is written down, an idea is dropped or moved, a branch belongs under another note (move it), a new line of research opens (propose a concept, ask for its code), work starts on an experiment whose concept links code, the user asks Claude to answer a comment or suggestion from the tree view, a note is locked, a note's priority comes up (suggest one, never set it), or the user asks about the tree, the vault, its concepts, its code or what was tried (start from rft_map).
 ---
 
 # Reasoning Flow Tree (rft)
@@ -220,10 +220,73 @@ The map says what holds now, not only what was done.
   and graph then show it as `[superseded by …]`; never quote or build on such a result without
   saying it was overturned. Then rewrite the concept's digest so its key results are the ones
   that hold. `rft_supersede(id)` without `by` clears the mark.
-- **What is still open**: `rft_next [concept]` (and `/rft-next` for the user) lists, by concept,
-  the experiments running, those planned and never run, the directions with nothing tried under
-  them (oldest first, with their age) and the open questions of the digests. Call it when asked
-  what to do next and before proposing new work: pick up an open thread before opening a new one.
+- **What is still open**: `rft_next [concept]` (and `/rft-next` for the user) lists the user's
+  priorities first (the open notes they made urgent, high or medium), then, by concept, the
+  experiments running, those planned and never run, the directions with nothing tried under them
+  (the higher priorities first, then the oldest, with their age) and the open questions of the
+  digests, and last the suggested priorities still waiting for the user. Call it when asked what
+  to do next and before proposing new work: pick up an open thread before opening a new one, and
+  what the user made urgent or high before the rest.
+
+## Priorities
+
+A note's priority (`priority:` in its frontmatter: `urgent`, `high`, `medium` or `low`) is the
+user's alone. They set it in the tree view (the kanban, or the note's drawer); a new note has
+none. Among the open notes (idea, planned, running) at most 1 is urgent, 5 high and 10 medium;
+low has no limit, and a note that is done, dropped, discussed or moved does not count.
+
+- **Never set, change or remove `priority:`** yourself. Edit, Write and shell writes that change
+  it are refused; no rft tool writes it.
+- **Suggest one** when you have a clear reason: it unblocks other work, the user said it matters,
+  it is cheap and decisive, or it matters less than its priority says. `rft_suggest_priority {id,
+  priority, why}` writes `suggested_priority:` and a one-line `suggested_priority_why:`, or pass
+  `suggested_priority` and `priority_why` to `rft_add_node` for a new note of work to do. The user
+  accepts it (it becomes the priority) or dismisses it in the tree view. Do not suggest one for
+  every note: leave it out when you have no reason.
+- When a priority is full, a suggestion of it can only be accepted once the user lowers one of the
+  notes that hold it; the tool's answer names them, so tell the user when it matters.
+- `rft_validate` warns about a priority that is none of the four and about a limit exceeded by
+  hand edits.
+
+## Deadlines and dates
+
+Deadlines of any kind (a submission, a rebuttal, a meeting, a talk, a thesis chapter) are
+**milestones**: one note each in the vault's `milestones/` folder, outside the reasoning tree,
+with `due:` and the notes that must be done first (`needs:`). Experiments carry the plan of their
+run: `start:` (a day) and `est:` (whole days or weeks: `3d`, `2w`); any note can have a `due:` of
+its own. A due date is a day, a local time, or a time in a zone:
+`2026-11-13`, `2026-11-13 14:00`, `2026-11-13 23:59 AoE` (or `UTC`, `+01:00`).
+
+- **The dates are the user's.** Never write `due:`, `start:` or `est:`, on a note or a milestone:
+  Edit, Write and shell writes that change them are refused. The user sets them in the tree view's
+  Calendar (dragging a run, + Deadline) or the note's drawer.
+- **Suggest a start or an estimate** when you can say why (a deadline needs the run done by then,
+  it waits for another run, the GPUs are taken until then, the code shows how long a run takes):
+  `rft_suggest_dates {id, start, est, why}`. The user accepts or dismisses it.
+- **A deadline the user gives you** ("supervisor meeting Friday at 14:00, I need E12 by then"):
+  `rft_add_deadline {title, due, needs}`. The plugin asks the user to confirm it in a dialog you
+  cannot answer; if they decline, leave it.
+- **Paper submissions**: only when the user names a venue or asks which deadlines fit, find the
+  venue's official dates page and read it now (web search, fetch), never from memory: dates move
+  every year, and extensions happen. Suggest one milestone per date (abstract, paper,
+  supplementary) with `rft_suggest_deadline {title, due, source, why, needs}`, with the time and
+  zone the page states (most are 23:59 AoE). It waits, dashed, in the Calendar until the user
+  accepts or dismisses it.
+- Write `gpus:` on an experiment that takes more than one GPU (from its command and config), and
+  `after:` (wikilinks) on one that waits for another run. With `gpus:` in `.rft/config.json`, the
+  plugin reports the days the planned and running experiments need more GPUs than there are.
+- `rft_set_status` records `started:` the day a run starts and `finished:` the day it is done:
+  the calendar's runs, and real durations to set against the estimates.
+- **Planning** is backwards from each deadline, in whole days: what a deadline needs must end by
+  its due day, so a note's latest start is the due day less its estimate (less those of the notes
+  that come after it). Slack is the days between its earliest start (today, its `start:`, the end
+  of the notes it waits for) and that latest start. A deadline is **at risk** at 0 days of slack or
+  less, or when a note it needs was dropped, superseded or is missing. `rft_next` lists the
+  deadlines first, nearest first, with what puts each at risk; session start names the ones of the
+  next 14 days at risk. When one is at risk, say so and propose what would save it (a suggested
+  start, a smaller run, a priority suggestion), without changing the dates.
+- The vault's `rft.ics` holds the deadlines and the planned runs (never the suggestions), for any
+  calendar app to import; `rft_sync` keeps it current.
 
 ## Restructuring the tree
 
@@ -304,7 +367,11 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 | `rft_map` | the project map, or one concept's digest and notes with their summaries |
 | `rft_set_digest` | write a concept's digest (state, key results, dead ends, open questions) |
 | `rft_supersede` | mark a note whose result a newer one overturns (`superseded_by:`), or clear the mark |
-| `rft_next` | what is still open by concept: running, planned, unexplored directions, open questions |
+| `rft_next` | the deadlines (nearest first, what puts them at risk) and GPU clashes, the user's priorities, then what is still open by concept: running, planned, unexplored directions, open questions |
+| `rft_suggest_priority` | suggest a priority for a note, with why; the user accepts or dismisses it (never set `priority:` yourself) |
+| `rft_suggest_dates` | suggest an experiment's start and/or estimate, with why; the user accepts or dismisses it (never set `start:`, `est:` or `due:` yourself) |
+| `rft_add_deadline` | add a deadline the user gave you (title, due, needs); they confirm it in a dialog |
+| `rft_suggest_deadline` | suggest a paper submission read now from the venue's official dates page (`source`), with why |
 | `rft_move_node` | move a note and its subtree under another parent, keeping its origin, after the user agrees |
 | `rft_set_refs` | replace the reference notes a note builds on (`refs:`) |
 | `rft_search` | search every note (titles, summaries, tags, concepts, text), best first with each summary, matching concepts first; filters by type, status, concept, tag |
@@ -321,6 +388,9 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 | `rft_tree` | the current tree, or the subtree of one node (`root`, `depth`) |
 | `rft_validate` | errors (bad ids, statuses, titles, missing parents, broken links) and warnings |
 | `rft_sync` | regenerate children / up / down, the tree in `00 Index.md`, the canvas |
+| `rft_comments` | a note's comments and suggestions (open ones in full, the history in short), or the notes with open threads |
+| `rft_comment` | reply in a thread (`applied: true` closes a suggestion you made in an unlocked note), or start a comment on a `quote` |
+| `rft_suggest` | propose new text for a `quote`, or the replacement an open suggestion asks for; the user accepts it |
 
 Before proposing an experiment or an idea, `rft_search` whether the tree already has it; to
 answer "what did we try on X", look at the map and search first, and read only the notes that
@@ -333,10 +403,45 @@ error. Never edit `up:` / `down:` by hand, nor the list under `## The tree` in t
 A note made with the wrong type is fixed with `rft_set_type`, never renamed by hand: its id, its
 folder and every link to it change together.
 
+## Locked notes, comments and suggestions
+
+- **A locked note** (`locked: true` in its frontmatter; the user sets it with the padlock in the
+  tree view) is the user's: never change its text. Edit, Write and shell commands that write to
+  it are refused, and so are `rft_set_status` with a note and `rft_set_code` on it. Propose each
+  change with `rft_suggest {id, quote, replacement}`, one per passage; the user accepts or rejects
+  it in the tree view, and an accepted one is written into the note. Its status, tags and derived
+  fields still change through the rft tools. Never unlock a note: that is the user's alone.
+  `rft_move_node` and `rft_supersede` write a line in its History, so on a locked note the plugin
+  asks the user whether to unlock it; if they keep it locked the call fails and nothing changes:
+  do not retry it, and do not work around it (e.g. by moving its children instead).
+- **The discussion of a note** is kept beside it, in `<vault>/.comments/<id>.json`, written by
+  the tree view and the rft tools only (never by hand). A thread is on a part of the text, its
+  quote (the note's markdown as written), found again after edits from the text around it:
+  - a **comment** discusses that part before any edit;
+  - a **suggestion** has new text for it, or says in words what should change (an instruction,
+    with no replacement yet).
+- **Answer a thread only when the user asks**: the tree view's **Ask Claude** sends you the thread
+  as a prompt. Answer in the thread, not in the chat:
+  - a comment: read what the question needs, reply with `rft_comment {id, thread, text}`, and do
+    not edit the note; propose a change with `rft_suggest` if one is needed;
+  - a suggestion on a locked note: write the new text with `rft_suggest {id, thread,
+    replacement, text}`; the user accepts it;
+  - a suggestion on a note that is not locked: make the change in the note yourself, then close the
+    thread with `rft_comment {id, thread, applied: true, text: what you changed}`;
+  - unclear or wrong: reply with `rft_comment` and change nothing.
+- **Quotes** are exact text of the note below its frontmatter, markdown included, occurring once
+  in it: quote more of the text around it when a phrase repeats.
+- **Footnotes** are part of the note, as Obsidian writes them: a mark `[^1]` and its text on a line
+  `[^1]: …` at the end (indented lines continue it), or inline `^[…]`. The tree view shows them in
+  the margin. Keep them when you edit a note.
+- **Highlights** `==text==` are the user's, as Obsidian writes them: keep them when you edit a note.
+
 ## Note layout
 
 Frontmatter: `id`, `type` (`experiment` | `direction` | `reference` | `theory`), `status`, `date` (YYYY-MM-DD),
 `summary: "<one line>"`, `superseded_by: "[[<newer note>]]"` when a newer result overturns it,
+`priority: <urgent | high | medium | low>` when the user gave it one (theirs alone),
+`suggested_priority:` and `suggested_priority_why: "<one line>"` while your suggestion waits,
 `parent: "[[<parent name>]]"` (`""` for the root), `children`, `up`, `down`,
 `tags: [<project>, <type>, <topical tags...>, <status>]`, and on a note that starts a
 concept `concept: "<name>"`, `concept_summary: "<one line>"` and, when it links code,
@@ -349,6 +454,7 @@ sections — experiments: What, Why, Result, Directions found; directions: Idea,
 references: Source, Summary, Method, Key results, Relevance, Directions found; theory notes:
 Statement, Builds on, Explanation, Open questions, Status — then **History** on a moved note
 (one dated line per move), and last **Children in the tree**, a list of links to the children.
+A locked note has `locked: true`; footnote texts (`[^1]: …`) come after the sections.
 In a concept with code, experiments and directions also have a **Code** section, before Result
 (experiments) or Status (directions).
 
@@ -365,5 +471,7 @@ gets a direction node.
 `/rft` starts the interactive tree view (a local page; the user opens its address in a
 browser) and the outline pane; `/rft text` prints the tree; `/rft-view` writes a standalone
 `<vault>/tree.html`; Obsidian shows `Reasoning tree.canvas`. The user can edit a note's text
-(not its frontmatter) and add notes, with their default status, in the tree view, so re-read a
-note before changing it, and the tree (`rft_tree`) before relying on the copy you were given.
+(not its frontmatter), add notes with their default status, lock a note, set its priority (on the
+kanban, which shows the notes in one column per status), add footnotes and highlights, and
+comment on and suggest changes to a note's text in the tree view, so re-read a note before
+changing it, and the tree (`rft_tree`) before relying on the copy you were given.

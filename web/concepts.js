@@ -7,7 +7,7 @@
 
   const ROOT = 'root'
   // kept apart from the status colours (green, orange, yellow, red, grey, blue) and from the
-  // type rings (violet, teal): pinks, sands, cyans, periwinkles, browns, olives
+  // type colours of the notes (violet, teal): pinks, sands, cyans, periwinkles, browns, olives
   const PALETTE = ['#f783ac', '#e8a65d', '#3bc9db', '#91a7ff', '#c9879b', '#a9b04a', '#ff922b', '#da77f2']
 
   /** The concepts by id; a tree without concepts has just the project root. */

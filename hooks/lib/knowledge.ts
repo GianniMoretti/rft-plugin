@@ -1,27 +1,40 @@
 // State of knowledge: a result that overturns another marks it (superseded_by:), so an older
 // number is not built on; and what is still open, by concept (rft_next, /rft-next): directions
-// never explored, experiments planned and never run, the open questions of the digests.
+// never explored, experiments planned and never run, the open questions of the digests; the
+// user's priorities first, and in each list the higher priorities before the rest; before them the
+// deadlines, nearest first, with what puts them at risk, and the days the runs need more GPUs.
 
+import { LockedChange, isLocked } from './comments'
 import type { Digest } from './map'
 import { readDigests, resolveConcept } from './map'
+import { scheduleReport } from './schedule'
 import type { Io, Loaded, RftNode } from './vault'
-import { MARK, conceptOrder, conceptPath, join, load, removeField, resolveId, setField, withHistory } from './vault'
+import { MARK, OPEN_STATUSES, PRIORITIES, conceptOrder, conceptPath, join, load, removeField, resolveId, setField, withHistory } from './vault'
 
 export class KnowledgeError extends Error {}
 
-/** Marks `ref` as overturned by `by` (or, with no `by`, clears the mark), with a dated History line. */
-export async function supersede(io: Io, loaded: Loaded, ref: string, by: string | null, why: string | undefined, date: string): Promise<string> {
+/**
+ * Marks `ref` as overturned by `by` (or, with no `by`, clears the mark), with a dated History line.
+ * A locked note is changed only unlocked, once the user agrees (`unlock`).
+ */
+export async function supersede(io: Io, loaded: Loaded, ref: string, by: string | null, why: string | undefined, date: string, unlock = false): Promise<string> {
   const { tree, config } = loaded
   const id = resolveId(tree, ref)
   if (!id) throw new KnowledgeError(`"${ref}" is not a note of the tree`)
   const n = tree.nodes[id]!
-  const text = loaded.texts[id]!
+  const wasLocked = isLocked(loaded.texts[id]!)
+  /** The note's text to write into, checked once nothing else refuses the change. */
+  const writable = () => {
+    if (wasLocked && !unlock) throw new LockedChange(n, 'supersede')
+    return wasLocked ? removeField(loaded.texts[id]!, 'locked') : loaded.texts[id]!
+  }
+  const unlocked = wasLocked ? ` ${n.name} is unlocked now: the user agreed.` : ''
   const reason = why?.trim() ? ` (${why.trim().replace(/\s+/g, ' ')})` : ''
   if (!by?.trim()) {
     if (!n.supersededBy) return `${n.name} is not marked as superseded.`
-    await io.write(join(config.vault, n.path), withHistory(removeField(text, 'superseded_by'), `- ${date}: no longer superseded by [[${tree.nodes[n.supersededBy]?.name ?? n.supersededBy}]]${reason}`))
+    await io.write(join(config.vault, n.path), withHistory(removeField(writable(), 'superseded_by'), `- ${date}: no longer superseded by [[${tree.nodes[n.supersededBy]?.name ?? n.supersededBy}]]${reason}`))
     Object.assign(loaded, await load(io, config))
-    return `${n.name} is no longer marked as superseded.`
+    return `${n.name} is no longer marked as superseded.${unlocked}`
   }
   const newer = resolveId(tree, by)
   if (!newer) throw new KnowledgeError(`"${by}" is not a note of the tree`)
@@ -31,11 +44,11 @@ export async function supersede(io: Io, loaded: Loaded, ref: string, by: string 
     if (at === id) throw new KnowledgeError(`${newer} is already superseded, through the chain, by ${id}`)
   }
   const m = tree.nodes[newer]!
-  const out = withHistory(setField(text, 'superseded_by', `"[[${m.name}]]"`, 'summary'), `- ${date}: superseded by [[${m.name}]]${reason}`)
+  const out = withHistory(setField(writable(), 'superseded_by', `"[[${m.name}]]"`, 'summary'), `- ${date}: superseded by [[${m.name}]]${reason}`)
   await io.write(join(config.vault, n.path), out)
   Object.assign(loaded, await load(io, config))
   return `${n.name} is marked as superseded by ${m.name}: its result is no longer to be built on. ` +
-    `Update the digest of its concept (rft_set_digest) so the current result is the one it states${n.summary ? '' : ', and give it a summary'}.`
+    `Update the digest of its concept (rft_set_digest) so the current result is the one it states${n.summary ? '' : ', and give it a summary'}.${unlocked}`
 }
 
 /** The note that holds now, following a chain of superseded results. */
@@ -59,8 +72,13 @@ const ageDays = (date: string, today: string) => {
 
 const line = (n: RftNode, today: string) => {
   const age = ageDays(n.date, today)
-  return `  ${MARK[n.status] ?? '-'} ${n.name}${age !== null && age > 0 ? ` (${age}d)` : ''}${n.summary ? ` — ${n.summary}` : ''}`
+  return `  ${MARK[n.status] ?? '-'} ${n.name}${n.priority ? ` [${n.priority}]` : ''}${age !== null && age > 0 ? ` (${age}d)` : ''}${n.summary ? ` — ${n.summary}` : ''}`
 }
+
+/** A note's priority as a rank, highest first; a note without one after every priority. */
+const rank = (n: RftNode) => (n.priority ? PRIORITIES.indexOf(n.priority) : PRIORITIES.length)
+/** The order of a list: when some note in it has a priority, the higher ones first; then the oldest. */
+const orderOf = (notes: RftNode[]) => (notes.some(n => n.priority) ? 'by priority, then oldest first' : 'oldest first')
 
 const capped = (items: string[], max: number) => (items.length > max ? [...items.slice(0, max), `  … ${items.length - max} more`] : items)
 
@@ -76,7 +94,7 @@ export async function nextReport(io: Io, loaded: Loaded, today: string, ref?: st
   for (const c of conceptOrder(concepts)) {
     if (scope && !conceptPath(concepts, c.id).includes(scope.id)) continue
     const own = Object.values(tree.nodes).filter(n => n.concept === c.id && !n.supersededBy)
-    const byDate = (a: RftNode, b: RftNode) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id)
+    const byDate = (a: RftNode, b: RftNode) => rank(a) - rank(b) || a.date.localeCompare(b.date) || a.id.localeCompare(b.id)
     // a direction is unexplored while nothing has been tried under it
     const ideas = own.filter(n => n.type === 'direction' && n.status === 'idea' && !n.children.some(k => tree.nodes[k]?.type === 'experiment')).sort(byDate)
     const planned = own.filter(n => n.type === 'experiment' && n.status === 'planned').sort(byDate)
@@ -86,10 +104,25 @@ export async function nextReport(io: Io, loaded: Loaded, today: string, ref?: st
     total += ideas.length + planned.length + questions.length
     out.push(`## ${c.name}${c.root ? ` (${c.root})` : ''}`)
     if (running.length) out.push(`Running (${running.length}):`, ...capped(running.map(n => line(n, today)), max))
-    if (planned.length) out.push(`Planned, never run (${planned.length}, oldest first):`, ...capped(planned.map(n => line(n, today)), max))
-    if (ideas.length) out.push(`Directions not explored yet (${ideas.length}, oldest first):`, ...capped(ideas.map(n => line(n, today)), max))
+    if (planned.length) out.push(`Planned, never run (${planned.length}, ${orderOf(planned)}):`, ...capped(planned.map(n => line(n, today)), max))
+    if (ideas.length) out.push(`Directions not explored yet (${ideas.length}, ${orderOf(ideas)}):`, ...capped(ideas.map(n => line(n, today)), max))
     if (questions.length) out.push(`Open questions (from the digest${digests[c.id] && digests[c.id]!.updated ? ` of ${digests[c.id]!.updated}` : ''}):`, ...capped(questions.map(q => `  - ${q}`), max))
   }
-  if (!out.length) return `Nothing open${scope ? ` in ${scope.name}` : ''}: no unexplored direction, no planned experiment, no open question in the digests.`
-  return `${total} open item(s)${scope ? ` in ${scope.name}` : ''}, by concept (age in days since the note was made):\n\n${out.join('\n')}`
+  // the user's priorities across the concepts in scope: the open notes they made urgent, high or medium
+  const inScope = (n: RftNode) => !scope || conceptPath(concepts, n.concept).includes(scope.id)
+  const focus = Object.values(tree.nodes)
+    .filter(n => inScope(n) && !n.supersededBy && n.priority && n.priority !== 'low' && OPEN_STATUSES.includes(n.status))
+    .sort((a, b) => rank(a) - rank(b) || a.date.localeCompare(b.date) || a.id.localeCompare(b.id))
+  const head = focus.length ? [`## Your priorities (${focus.length}; the user sets them in the tree view)`, ...capped(focus.map(n => line(n, today)), 2 * max), ''] : []
+  const waiting = Object.values(tree.nodes).filter(n => inScope(n) && n.suggestedPriority)
+  const tail = waiting.length
+    ? ['', `Suggested priorities waiting for the user (the tree view's kanban or note drawer): ${waiting.map(n => `${n.id} ${n.suggestedPriority}`).join(', ')}.`]
+    : []
+  const sched = scheduleReport(loaded, today)
+  tail.push(...(sched.tail.length && !tail.length ? [''] : []), ...sched.tail)
+  if (!out.length && !focus.length) {
+    const none = `Nothing open${scope ? ` in ${scope.name}` : ''}: no unexplored direction, no planned experiment, no open question in the digests.`
+    return sched.head.length ? `${sched.head.join('\n')}\n${none}${tail.join('\n')}` : `${none}${tail.join('\n')}`
+  }
+  return `${total} open item(s)${scope ? ` in ${scope.name}` : ''}, by concept (age in days since the note was made):\n\n${[...sched.head, ...head, ...out, ...tail].join('\n')}`
 }
