@@ -2,7 +2,8 @@
 // every turn, so only the tools a session uses most are there; the rest wait behind ToolSearch
 // (the model sees their names and loads a schema when it needs one). A group of feature tools
 // joins the prompt when the vault uses that feature: dates when there are deadlines or dated
-// notes, priorities when a note has one, comments when a note has a thread or is locked.
+// notes, priorities when a note has one, rft_suggest when a note is locked, comments when a note has a thread.
+// The rules for these features enter the session's rules on the same condition (ops.ts rulesText).
 
 import type { Loaded } from './vault'
 
@@ -15,6 +16,7 @@ export const CORE_TOOLS = [
 export const FEATURE_TOOLS = {
   dates: ['rft_suggest_dates', 'rft_add_deadline', 'rft_suggest_deadline'],
   priorities: ['rft_suggest_priority'],
+  locks: ['rft_suggest'],
   comments: ['rft_comments', 'rft_comment', 'rft_suggest'],
 } as const
 
@@ -26,7 +28,8 @@ export function featuresInUse(loaded: Loaded, threads: boolean): Set<Feature> {
   const out = new Set<Feature>()
   if ((loaded.milestones ?? []).length || nodes.some(n => n.due || n.start)) out.add('dates')
   if (nodes.some(n => n.priority || n.suggestedPriority)) out.add('priorities')
-  if (threads || nodes.some(n => n.locked)) out.add('comments')
+  if (nodes.some(n => n.locked)) out.add('locks')
+  if (threads) out.add('comments')
   return out
 }
 

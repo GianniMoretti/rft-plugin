@@ -107,8 +107,9 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   (grouped by concept once there are concepts), so it knows to create an experiment's node
   *before* launching it, record only real results, add a direction for every new idea, and
   propose a concept when a new line of research opens (and ask whether code for it exists). A
-  session started inside a concept's repo is told which concept that code belongs to. The full
-  manual is the `rft-manual` skill.
+  session started inside a concept's repo is told which concept that code belongs to. The rules
+  for priorities, dates, locked notes and comments are given in full only in a vault that uses
+  them. The full manual is the `rft-manual` skill.
 - **Tools** Claude calls to keep the tree consistent. Only the ones a session uses most
   (`rft_add_node`, `rft_set_status`, `rft_set_summary`, `rft_search`, `rft_map`, `rft_graph`,
   `rft_next`, `rft_move_node`) have their full definition in the prompt from the start. The

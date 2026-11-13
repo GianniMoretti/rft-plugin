@@ -1,7 +1,7 @@
 # Roadmap
 
 Planned work, split into release packages in the order they should ship. Each
-package is one minor version (the current release is 0.21.0; 0.20.0 brought Alex's PR #5: comments
+package is one minor version (the current release is 0.22.0; 0.20.0 brought Alex's PR #5: comments
 and suggestions, locked notes, priorities, deadlines and the calendar) and lists what it contains, how it
 could be done, and when it is done. A package builds only on the ones before it.
 
@@ -21,7 +21,7 @@ could be done, and when it is done. A package builds only on the ones before it.
 | 0.19.0 | State of knowledge (done) | 0.16.0 |
 | 0.20.0 | Alex's PR #5 merged (done) | – |
 | 0.21.0 | Lean tool list (done) | 0.20.0 |
-| 0.22.0 | Rules on demand | 0.20.0 |
+| 0.22.0 | Rules on demand (done) | 0.20.0 |
 | 0.23.0 | Fixes from the PR #5 review | 0.20.0 |
 | 0.24.0 | Ask Claude in a subagent | 0.20.0 |
 | 1.0.0 | One release with everything, measured | 0.21.0–0.24.0 |
@@ -212,15 +212,27 @@ from the start. A deferred tool shows only its name until the model loads it wit
 - Tests: `tests/tools.test.ts` covers a vault with no features and each feature's trigger, and
   checks that a deferred tool still answers.
 
-## 0.22.0 — Rules on demand
+## 0.22.0 — Rules on demand (done)
 
-- The four PR #5 bullets enter the rules only when the vault uses the feature: priorities when
-  a note has `priority:`, dates when `milestones/` or a note's `due:`/`start:` exists, locks
-  when a note is locked, comments when a thread is open.
-- Otherwise the guard teaches at the moment it matters: a refused Edit of `priority:`, a date or
-  a locked note says why and which tool to use instead, so the rule is not needed beforehand.
-- Done when: the rules are back to their 0.19 size in a vault without these features, and the
-  plugin tests check both cases (feature used, feature absent).
+- The four PR #5 rules enter the session's rules only when the vault uses the feature, on the
+  same conditions that bring its tools into the prompt (`hooks/lib/tools.ts`): priorities when
+  a note has `priority:` or a suggested one, dates when there is a milestone or a note with
+  `due:` or `start:`, locks when a note is locked, comments when a comments file exists.
+  Locks are now a group of their own: a locked note brings `rft_suggest` only, not the comment
+  tools.
+- For the features not in use, one line instead: priorities, dates and the text of a locked
+  note are the user's to set, and edits that change them are refused with the tool to suggest
+  a change instead. The refusals (`priorityText`, `datesText`, `lockedText`) already say the
+  rest; **Ask Claude**'s prompt says how to answer a thread on its own.
+- Activation reads the vault once, for the features, the project map and the deadlines.
+- Measured:
+  - Rules: about 2,200 characters shorter in a vault with none of the features, about 300
+    longer than 0.19's.
+  - Session start on the replica vault: 45,131 input tokens in 0.21, 44,455 now (50,652 in
+    0.20, 47,108 in 0.19).
+  - Headless check in a copy of the demo vault, which has no priorities: asked to make a note
+    urgent, Claude wrote a suggested priority and did not touch `priority:` (3 turns).
+- Tests: in `tests/tools.test.ts`, the rules with no features, with some, and with all of them.
 
 ## 0.23.0 — Fixes from the PR #5 review
 

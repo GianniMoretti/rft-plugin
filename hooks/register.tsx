@@ -496,30 +496,31 @@ async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> 
   } catch (err) {
     failed.push(`reading the vault (${message(err)})`)
   }
+  // the core tools and the tools of the features the vault uses sit in the prompt, and their rules in the rules; the rest wait behind ToolSearch
+  let features = new Set<Feature>()
+  let loaded: Loaded | null = null
+  if (h && config) {
+    try {
+      loaded = await loadActive(h.io)
+      const threads = (await h.io.list(join(config.vault, COMMENTS_DIR)).catch(() => [])).some(f => f.name.endsWith('.json'))
+      features = featuresInUse(loaded, threads)
+    } catch { /* the core tools only */ }
+  }
   if (s && config && h) {
     // a large tree starts from the project map; a small one from its list of notes
     let map: string | undefined
-    if (Object.keys(s.nodes).length > SMALL_TREE) {
+    if (loaded && Object.keys(s.nodes).length > SMALL_TREE) {
       try {
-        const loaded = await loadActive(h.io)
         map = projectMap(loaded, await readDigests(h.io, loaded))
       } catch { /* the list of notes instead */ }
     }
-    rules = rulesText(treeOf(s), config, shownVault(h, config), { cwd: h.cwd, root: h.root, home: await homeOf($) }, map)
+    rules = rulesText(treeOf(s), config, shownVault(h, config), { cwd: h.cwd, root: h.root, home: await homeOf($) }, map, features)
     // the deadlines close at hand that are at risk, so the session starts from them
     try {
-      const line = deadlinesLine(await loadActive(h.io), today())
+      const line = loaded ? deadlinesLine(loaded, today()) : null
       if (line) rules += `\n\n${line}`
     } catch { /* the rules without it */ }
     recall = { vault: resolvePath(h.root, vaultOf(h, config)), cwd: h.cwd, used: false }
-  }
-  // the core tools and the tools of the features the vault uses sit in the prompt; the rest wait behind ToolSearch
-  let features = new Set<Feature>()
-  if (h && config) {
-    try {
-      const threads = (await h.io.list(join(config.vault, COMMENTS_DIR)).catch(() => [])).some(f => f.name.endsWith('.json'))
-      features = featuresInUse(await loadActive(h.io), threads)
-    } catch { /* the core tools only */ }
   }
   const eager = eagerTools(features)
   // each registration on its own, so one refusal leaves the rest working
