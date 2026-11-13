@@ -109,7 +109,12 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   propose a concept when a new line of research opens (and ask whether code for it exists). A
   session started inside a concept's repo is told which concept that code belongs to. The full
   manual is the `rft-manual` skill.
-- **Tools** Claude calls to keep the tree consistent:
+- **Tools** Claude calls to keep the tree consistent. Only the ones a session uses most
+  (`rft_add_node`, `rft_set_status`, `rft_set_summary`, `rft_search`, `rft_map`, `rft_graph`,
+  `rft_next`, `rft_move_node`) have their full definition in the prompt from the start. The
+  others are listed by name and loaded when Claude needs one, which keeps every turn cheaper. The
+  date, priority and comment tools join the first group in a vault that uses those features
+  (it has deadlines or dated notes, priorities, comment threads or locked notes).
 
   | tool | does |
   |---|---|

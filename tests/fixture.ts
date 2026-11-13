@@ -128,14 +128,14 @@ export class MemoryFs {
   }
 }
 
-export type World = { fs: MemoryFs; tools: string[]; opened: string[]; commands: string[]; seen: string[]; toasts: string[] }
+export type World = { fs: MemoryFs; tools: string[]; deferred: string[]; opened: string[]; commands: string[]; seen: string[]; toasts: string[] }
 
 /** Answers everything the plugin asks of the session from memory. */
 /** `refuse` names commands the engine refuses to register, as it refuses a skill's name. */
 /** `cwd`: the session's folder, in a world keyed by absolute path (see `MemoryFs`). */
 /** `git`: answers `git -C <dir> <args>` (see `fakeGit`). */
 export function world(on: On, files: Record<string, string>, opts: { refuse?: string[]; surfaces?: string[]; cwd?: string; git?: GitAnswer } = {}): World {
-  const w: World = { fs: new MemoryFs(files, opts.cwd !== undefined), tools: [], opened: [], commands: [], seen: [], toasts: [] }
+  const w: World = { fs: new MemoryFs(files, opts.cwd !== undefined), tools: [], deferred: [], opened: [], commands: [], seen: [], toasts: [] }
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.cwd', () => ({ value: opts.cwd ?? CWD }))
   on('fs.read', (_$, e) => ({ value: w.fs.read(e.path) }))
@@ -159,7 +159,7 @@ export function world(on: On, files: Record<string, string>, opts: { refuse?: st
   on('ui.toast', (_$, e) => { w.toasts.push(JSON.stringify(e)); return { value: undefined } })
   on('session.surfaces', () => ({ value: (opts.surfaces ?? ['terminal']) as never }))
   on('ui.log', () => ({ value: undefined }))
-  on('tool.register', (_$, e) => { w.tools.push(e.name); return { value: { tool: `mcp__rft__${e.name}` } } })
+  on('tool.register', (_$, e) => { w.tools.push(e.name); if (e.isDeferred !== false) w.deferred.push(e.name); return { value: { tool: `mcp__rft__${e.name}` } } })
   on('ui.open', (_$, e) => { w.opened.push(e.id); return { value: { isPlaced: true as const } } })
   return w
 }

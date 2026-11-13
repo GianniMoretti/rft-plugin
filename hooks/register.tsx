@@ -29,6 +29,8 @@ import { nextReport, supersede } from './lib/knowledge'
 import { changesPriority, priorityText, suggestPriority } from './lib/priority'
 import { addDeadline, changesDates, checkDeadline, datesText, deadlineQuestion, deadlinesLine, suggestDates, suggestDeadline } from './lib/schedule'
 import { RECALL_HINT, searchesVault } from './lib/recall'
+import { eagerTools, featuresInUse } from './lib/tools'
+import type { Feature } from './lib/tools'
 import { SMALL_TREE, mapGaps, mapReport, mapWarnings, projectMap, readDigests, resolveConcept, setDigest, setSummaries } from './lib/map'
 import { CONFIG_PATH, LEGEND, MARK, NODE_TYPES, bodyOf, counts, countsLine, isAbsolute, join, locate, readConfig, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
 
@@ -84,7 +86,7 @@ const treeOf = (s: RftSnapshot): Tree => ({ nodes: s.nodes, roots: s.roots, conc
 const TOOLS = {
   rft_add_node: {
     description:
-      'Add a node to the reasoning tree: an experiment (something run or computed), a direction (an idea, question or hypothesis, rejected ones included), a reference (a paper, method or literature review that was read, summarised and commented, with a source that can be checked) or a theory note (a definition, method, taxonomy or argument of the project\'s own, built on the other notes). Assigns the next free id, sanitises the title, writes the note from the template, links it under its parent and regenerates the index and canvas. Create an experiment BEFORE launching it (status planned or running). In a concept that links code, an experiment or direction gets a ## Code section with the repos\' current commits: read the code first and pass its description as sections.Code, or write it after with rft_set_code.',
+      'Add a node to the reasoning tree: an experiment (something run or computed), a direction (an idea, question or hypothesis, rejected ones included), a reference (a paper, method or literature review that was read, summarised and commented, with a source that can be checked) or a theory note (a definition, method, taxonomy or argument of the project\'s own, built on the other notes). Assigns the id and links it under its parent. Create an experiment BEFORE launching it (status planned or running). In a concept that links code, the note gets a ## Code section with the repos\' commits: pass sections.Code after reading the code, or use rft_set_code later.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -101,7 +103,7 @@ const TOOLS = {
         tags: { type: 'array', items: { type: 'string' }, description: '1-3 short topical tags, lowercase kebab-case, reused from rft_tags when they fit (the project, type and status tags are added anyway).' },
         refs: { type: 'array', items: { type: 'string' }, description: 'Ids of the reference notes (R..) it builds on: for an experiment, the paper(s) whose setup it starts from; for a direction, the work it extends. Add missing references first.' },
         summary: { type: 'string', description: 'One line (at most 240 characters) on what the note is about, specific enough to read instead of the note: what is tested and on what, the idea, the paper\'s main claim. Always give it.' },
-        suggested_priority: { type: 'string', enum: ['urgent', 'high', 'medium', 'low'], description: 'Optional: the priority you suggest for this work, only with a clear reason. The note itself gets no priority (the user\'s alone); they accept or dismiss the suggestion in the tree view.' },
+        suggested_priority: { type: 'string', enum: ['urgent', 'high', 'medium', 'low'], description: 'Optional, only with a clear reason: a priority to suggest; the user accepts or dismisses it.' },
         priority_why: { type: 'string', description: 'With suggested_priority: why, in one line (what it unblocks, what makes it pressing or not).' },
       },
       required: ['type', 'title'],
@@ -442,7 +444,8 @@ let recall: { vault: string; cwd: string; used: boolean } | null = null
 let poller: { cancel: () => void } | null = null
 // prompts for Claude to answer, from a command or the tree view, submitted by the poller
 const pendingPrompts: string[] = []
-const registeredTools = new Set<string>()
+// each registered tool and whether it waits behind ToolSearch, so a new placement registers it again
+const registeredTools = new Map<string, boolean>()
 
 const EMPTY: RftSnapshot = { isActive: false, vault: '', project: '', nodes: {}, roots: [], concepts: {}, signature: '', problems: [], error: null }
 
@@ -510,12 +513,22 @@ async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> 
     } catch { /* the rules without it */ }
     recall = { vault: resolvePath(h.root, vaultOf(h, config)), cwd: h.cwd, used: false }
   }
+  // the core tools and the tools of the features the vault uses sit in the prompt; the rest wait behind ToolSearch
+  let features = new Set<Feature>()
+  if (h && config) {
+    try {
+      const threads = (await h.io.list(join(config.vault, COMMENTS_DIR)).catch(() => [])).some(f => f.name.endsWith('.json'))
+      features = featuresInUse(await loadActive(h.io), threads)
+    } catch { /* the core tools only */ }
+  }
+  const eager = eagerTools(features)
   // each registration on its own, so one refusal leaves the rest working
   for (const [name, spec] of Object.entries(TOOLS)) {
-    if (registeredTools.has(name)) continue
+    const isDeferred = !eager.has(name)
+    if (registeredTools.get(name) === isDeferred) continue
     try {
-      await $.tool.register({ name, description: spec.description, inputSchema: spec.inputSchema as Record<string, unknown>, isDeferred: false })
-      registeredTools.add(name)
+      await $.tool.register({ name, description: spec.description, inputSchema: spec.inputSchema as Record<string, unknown>, isDeferred })
+      registeredTools.set(name, isDeferred)
     } catch (err) {
       failed.push(`tool ${name} (${message(err)})`)
     }

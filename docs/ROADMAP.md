@@ -1,7 +1,7 @@
 # Roadmap
 
 Planned work, split into release packages in the order they should ship. Each
-package is one minor version (the current release is 0.20.0, which brings Alex's PR #5: comments
+package is one minor version (the current release is 0.21.0; 0.20.0 brought Alex's PR #5: comments
 and suggestions, locked notes, priorities, deadlines and the calendar) and lists what it contains, how it
 could be done, and when it is done. A package builds only on the ones before it.
 
@@ -20,7 +20,7 @@ could be done, and when it is done. A package builds only on the ones before it.
 | 0.18.0 | Cheaper rebalancing (done) | 0.16.0 |
 | 0.19.0 | State of knowledge (done) | 0.16.0 |
 | 0.20.0 | Alex's PR #5 merged (done) | – |
-| 0.21.0 | Lean tool list | 0.20.0 |
+| 0.21.0 | Lean tool list (done) | 0.20.0 |
 | 0.22.0 | Rules on demand | 0.20.0 |
 | 0.23.0 | Fixes from the PR #5 review | 0.20.0 |
 | 0.24.0 | Ask Claude in a subagent | 0.20.0 |
@@ -189,22 +189,28 @@ before (tokens, turns).
   `rft_add_node`). About 2,500 tokens more in every session. The next two packages take
   this back.
 
-## 0.21.0 — Lean tool list
+## 0.21.0 — Lean tool list (done)
 
-Every tool is registered with `isDeferred: false`, so all 30 schemas sit in the prompt from the
-start. A deferred tool shows only its name until the model loads it with ToolSearch.
+Every tool used to be registered with `isDeferred: false`, so all 30 schemas sat in the prompt
+from the start. A deferred tool shows only its name until the model loads it with ToolSearch.
 
-- Keep in the prompt only the tools a session uses most: `rft_add_node`, `rft_set_status`,
-  `rft_set_summary`, `rft_search`, `rft_map`, `rft_graph`, `rft_next`, `rft_move_node`. Defer
-  the rest: the deadline and date tools, priorities, comments, papers, code and repos, digests,
-  types, tags, validate, sync.
-- A `tool.describe` hook brings a deferred group back into the prompt when the vault uses it:
-  the date tools when there are milestones, the comment tools when there are open threads.
-- Shorten the longest descriptions (`rft_suggest` 3,400 characters, `rft_add_node` 3,500): what
-  the model needs to choose the tool stays; the details move to the tool's answer or its error.
-- Done when: the tool definitions in the prompt stay under 10,000 characters in a vault that
-  uses none of the PR #5 features, and a headless test of each deferred tool shows the model
-  still finds it (ToolSearch, then the call).
+- In the prompt from the start: `rft_add_node`, `rft_set_status`, `rft_set_summary`,
+  `rft_search`, `rft_map`, `rft_graph`, `rft_next`, `rft_move_node` (`hooks/lib/tools.ts`).
+- A feature's tools join them when the vault uses it, decided at activation: the date tools
+  when there is a milestone or a note with `due:` or `start:`, the priority tool when a note has
+  a priority or a suggested one, the comment tools when there is a comments file or a locked
+  note. Every other tool is deferred. No `tool.describe` hook was needed: the placement is given
+  at registration, and a later activation registers a tool again when its placement changed.
+- `rft_add_node`'s description is shorter.
+- Measured:
+  - Tool definitions in the prompt, in a vault that uses none of the features: from 27,300 to
+    8,800 characters.
+  - Session start on the replica vault (a trivial prompt, input tokens): 47,108 in 0.19,
+    50,652 in 0.20, 45,131 now. That is 5,500 fewer than 0.20 and 2,000 fewer than 0.19.
+  - Headless check: asked for the tags and the validator, Claude loaded `rft_tags` and
+    `rft_validate` through ToolSearch and answered in 4 turns.
+- Tests: `tests/tools.test.ts` covers a vault with no features and each feature's trigger, and
+  checks that a deferred tool still answers.
 
 ## 0.22.0 — Rules on demand
 
