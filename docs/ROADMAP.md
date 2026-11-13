@@ -1,8 +1,8 @@
 # Roadmap
 
 Planned work, split into release packages in the order they should ship. Each
-package is one minor version (the current release is 0.19.0, which also brings Alex's
-changes: note types, light theme, LaTeX, images, code repos) and lists what it contains, how it
+package is one minor version (the current release is 0.20.0, which brings Alex's PR #5: comments
+and suggestions, locked notes, priorities, deadlines and the calendar) and lists what it contains, how it
 could be done, and when it is done. A package builds only on the ones before it.
 
 | Version | Package | Depends on |
@@ -19,6 +19,12 @@ could be done, and when it is done. A package builds only on the ones before it.
 | 0.17.0 | Recall (done) | 0.16.0 |
 | 0.18.0 | Cheaper rebalancing (done) | 0.16.0 |
 | 0.19.0 | State of knowledge (done) | 0.16.0 |
+| 0.20.0 | Alex's PR #5 merged (done) | – |
+| 0.21.0 | Lean tool list | 0.20.0 |
+| 0.22.0 | Rules on demand | 0.20.0 |
+| 0.23.0 | Fixes from the PR #5 review | 0.20.0 |
+| 0.24.0 | Ask Claude in a subagent | 0.20.0 |
+| 1.0.0 | One release with everything, measured | 0.21.0–0.24.0 |
 
 ---
 
@@ -171,11 +177,78 @@ before (tokens, turns).
 
 ---
 
+## 0.20.0 — Alex's PR #5 merged (done)
+
+- Comments and suggestions on a note's text (Overleaf-style), with **Ask Claude**; locked notes;
+  a kanban view and the user's priorities; deadlines (milestones), experiment dates, GPUs, a
+  calendar page and `rft.ics`; a markdown renderer with footnotes and highlights.
+- Merged with 0.16–0.19 as it was: 204 plugin tests and 74 server tests pass.
+- Its cost, measured at the start of a session in a vault that uses none of it: the rules grow
+  by about 2,500 characters (four bullets: priorities, dates, locks, comments) and the tool
+  definitions from 19,700 to 27,300 characters (seven new tools, plus priority fields on
+  `rft_add_node`). About 2,500 tokens more in every session. The next two packages take
+  this back.
+
+## 0.21.0 — Lean tool list
+
+Every tool is registered with `isDeferred: false`, so all 30 schemas sit in the prompt from the
+start. A deferred tool shows only its name until the model loads it with ToolSearch.
+
+- Keep in the prompt only the tools a session uses most: `rft_add_node`, `rft_set_status`,
+  `rft_set_summary`, `rft_search`, `rft_map`, `rft_graph`, `rft_next`, `rft_move_node`. Defer
+  the rest: the deadline and date tools, priorities, comments, papers, code and repos, digests,
+  types, tags, validate, sync.
+- A `tool.describe` hook brings a deferred group back into the prompt when the vault uses it:
+  the date tools when there are milestones, the comment tools when there are open threads.
+- Shorten the longest descriptions (`rft_suggest` 3,400 characters, `rft_add_node` 3,500): what
+  the model needs to choose the tool stays; the details move to the tool's answer or its error.
+- Done when: the tool definitions in the prompt stay under 10,000 characters in a vault that
+  uses none of the PR #5 features, and a headless test of each deferred tool shows the model
+  still finds it (ToolSearch, then the call).
+
+## 0.22.0 — Rules on demand
+
+- The four PR #5 bullets enter the rules only when the vault uses the feature: priorities when
+  a note has `priority:`, dates when `milestones/` or a note's `due:`/`start:` exists, locks
+  when a note is locked, comments when a thread is open.
+- Otherwise the guard teaches at the moment it matters: a refused Edit of `priority:`, a date or
+  a locked note says why and which tool to use instead, so the rule is not needed beforehand.
+- Done when: the rules are back to their 0.19 size in a vault without these features, and the
+  plugin tests check both cases (feature used, feature absent).
+
+## 0.23.0 — Fixes from the PR #5 review
+
+- Footnotes in search and in the rebalance words: cut the "Children in the tree" list only, not
+  what follows it.
+- The shell guard for locked notes, priorities and dates: decide on the file a command writes
+  (redirect, `sed -i`, `tee`, `mv`, `cp`) rather than on words in the command, so a command
+  that only reads or mentions `priority:` is not refused. Tests for both directions.
+- `started:` and `finished:` written by `rft_set_status`: keep, but only in vaults that use
+  dates, so other vaults' notes do not change.
+- Done when: each point has a test, and the server and web tests still pass.
+
+## 0.24.0 — Ask Claude in a subagent
+
+The backlog item below, now scheduled: each answer to a thread runs in a background subagent,
+so the main conversation does not grow with every **Ask Claude**. Done when stated there.
+
+## 1.0.0 — One release with everything, measured
+
+- A fixed benchmark on a replica vault (a copy, never the real one), run headless before and
+  after: the size of the session start (rules and tool definitions), and the cost and turns of
+  four tasks: a recall question, adding an experiment, a rebalance, `/rft-next`.
+- Target: the session start no larger than 0.19's, and each task no costlier than in 0.19.
+- An end-to-end check of the tree view in a browser: comments, suggestions, Ask Claude,
+  kanban, calendar, the lock dialog.
+- README, the manual skill and this roadmap describe one coherent plugin.
+
+---
+
 ## Backlog
 
 Ideas for possible future work, not scheduled in a package yet.
 
-- **Answer threads in a subagent.** Today **Ask Claude** submits the thread as a turn of the
+- **Answer threads in a subagent** (scheduled as 0.24.0). Today **Ask Claude** submits the thread as a turn of the
   session that ran `/rft` (`askFromView` queues it, `submitPending` calls `$.prompt.submit`),
   so every answer adds rows to the main chat. Instead, start a background subagent with
   `$.agent.spawn({ prompt: askText(...) })`, perhaps of a type of the plugin's own
