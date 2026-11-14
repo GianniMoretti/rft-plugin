@@ -106,7 +106,11 @@ main { position: relative; flex: 1; min-height: 0; }
   pointer-events: none; }
 .node.dim, .link.dim { opacity: 0.15; }
 .node.hl text.label { font-weight: 700; }
-#legend { position: absolute; left: 10px; bottom: 10px; padding: 8px 10px; border-radius: 8px;
+/* the bottom-left corner: the scratchpad's button stacked just above the legend, whatever its height */
+#corner { position: absolute; left: 10px; bottom: 10px; max-height: calc(100% - 20px); display: flex;
+  flex-direction: column; align-items: flex-start; gap: 6px; pointer-events: none; }
+#corner > * { pointer-events: auto; }
+#legend { padding: 8px 10px; border-radius: 8px; min-height: 0;
   background: var(--panel); border: 1px solid var(--line); font-size: 12px; max-width: 240px; }
 .legend-title { font-weight: 600; margin: 4px 0 2px; }
 .row { display: flex; align-items: center; gap: 6px; cursor: default; user-select: none; }
@@ -223,7 +227,7 @@ button.linkish { border: 0; background: none; color: var(--accent); padding: 0; 
 @keyframes rft-flash-label { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
 #concept-legend .row { cursor: pointer; }
 #concept-legend .row.on { font-weight: 700; }
-#legend { max-height: calc(100% - 20px); overflow: auto; }
+#legend { overflow: auto; }
 .legend-toggle { border: 0; background: none; padding: 0; font: inherit; font-weight: 600; color: var(--fg); cursor: pointer; }
 #legend.closed .caret { display: inline-block; transform: rotate(-90deg); }
 #legend.closed #legend-body { display: none; }
@@ -595,3 +599,32 @@ a.cal-dl-name:hover { text-decoration: underline; }
   max-width: min(560px, calc(100vw - 32px)); padding: 10px 14px; border-radius: 8px;
   background: var(--panel); color: var(--fg); border: 1px solid var(--line);
   box-shadow: 0 4px 18px rgb(0 0 0 / 0.25); cursor: pointer; font-size: 0.92em; }
+/* the scratchpad: quick notes and to-dos (web/scratchpad.js); its button over the legend, with the
+   number of open to-dos, and its panel under the button, in the legend's place while it is open */
+#pad-toggle { position: relative; padding: 6px; border-radius: 8px; background: var(--panel); color: var(--muted); }
+#pad-toggle:hover, #pad-toggle[aria-expanded="true"] { color: var(--accent); border-color: var(--accent); }
+#pad-toggle .ico { width: 18px; height: 18px; }
+#pad-toggle[hidden] { display: none; }
+.pad-badge { position: absolute; top: -6px; right: -7px; min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: 8px; background: var(--accent); color: var(--panel); font-size: 10px; font-weight: 700;
+  line-height: 16px; text-align: center; }
+.pad-badge[hidden] { display: none; }
+#pad { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0;
+  width: min(calc(380px * var(--font-scale)), calc(100vw - 20px)); height: calc(440px * var(--font-scale));
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 6px 24px light-dark(#1f232822, #00000066); font-size: calc(13px * var(--font-scale)); }
+#pad[hidden] { display: none; }
+#corner:has(> #pad:not([hidden])) > #legend { display: none; }
+.pad-head { display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--line); }
+.pad-head #pad-count { flex: 1; font-size: 0.9em; }
+.pad-head button { padding: 1px 7px; }
+#pad-text { flex: 1; min-height: 0; width: 100%; resize: none; border: 0; padding: 10px 12px; margin: 0;
+  background: var(--panel); color: var(--fg); tab-size: 4; outline: none;
+  font: calc(13px * var(--font-scale))/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+#pad-text::placeholder { color: var(--muted); opacity: 0.8; }
+.pad-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 8px 5px 12px;
+  border-top: 1px solid var(--line); font-size: 0.88em; color: var(--muted); }
+.pad-foot button { padding: 1px 7px; font-size: 1em; }
+#pad-msg { flex: 1; min-width: 0; }
+#pad-msg.error { color: var(--dropped); flex: none; }
+.pad-file { margin-left: auto; }

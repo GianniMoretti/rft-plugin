@@ -6,7 +6,7 @@ import type { Milestone } from './dates'
 import type { Tree } from './vault'
 import { bodyOf, conceptOrder, tagCounts } from './vault'
 
-export type PageAssets = { html: string; css: string; js: string; d3: string; katex: string; katexCss: string; filters: string; kanban: string; layout: string; concepts: string; markdown: string; theme: string; schedule: string }
+export type PageAssets = { html: string; css: string; js: string; d3: string; katex: string; katexCss: string; filters: string; kanban: string; layout: string; concepts: string; markdown: string; theme: string; schedule: string; scratchpad: string }
 
 export const ASSET_PATHS = {
   html: 'web/index.html',
@@ -18,6 +18,7 @@ export const ASSET_PATHS = {
   layout: 'web/layout.js',
   concepts: 'web/concepts.js',
   markdown: 'web/markdown.js',
+  scratchpad: 'web/scratchpad.js',
   theme: 'web/theme.js',
   d3: 'web/vendor/d3.v7.9.0.min.js',
   katex: 'web/vendor/katex.v0.16.22.min.js',
@@ -51,5 +52,6 @@ export function staticPage(a: PageAssets, tree: Tree, texts: Record<string, stri
     .replace(/<script src="layout\.js" data-rft-inline><\/script>/, () => script(a.layout))
     .replace(/<script src="concepts\.js" data-rft-inline><\/script>/, () => script(a.concepts))
     .replace(/<script src="markdown\.js" data-rft-inline><\/script>/, () => script(a.markdown))
+    .replace(/<script src="scratchpad\.js" data-rft-inline><\/script>/, () => script(a.scratchpad))
     .replace(/<script src="app\.js" data-rft-inline><\/script>/, () => script(`window.RFT_DATA = ${data};`) + script(a.js))
 }

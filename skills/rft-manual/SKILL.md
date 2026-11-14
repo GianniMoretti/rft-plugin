@@ -479,4 +479,6 @@ browser) and the outline pane; `/rft text` prints the tree; `/rft-view` writes a
 (not its frontmatter), add notes with their default status, lock a note, set its priority (on the
 kanban, which shows the notes in one column per status), add footnotes and highlights, and
 comment on and suggest changes to a note's text in the tree view, so re-read a note before
-changing it, and the tree (`rft_tree`) before relying on the copy you were given.
+changing it, and the tree (`rft_tree`) before relying on the copy you were given. The tree view's
+scratchpad, `<vault>/Scratchpad.md`, holds the user's quick notes and to-dos: it is not a note of
+the tree; read it when they point you to it, and change it only when they ask.

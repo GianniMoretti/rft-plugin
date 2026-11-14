@@ -1533,6 +1533,7 @@ export const register: Register = (on, options) => {
         layout: await $.fs.read(join(root, ASSET_PATHS.layout)),
         concepts: await $.fs.read(join(root, ASSET_PATHS.concepts)),
         markdown: await $.fs.read(join(root, ASSET_PATHS.markdown)),
+        scratchpad: await $.fs.read(join(root, ASSET_PATHS.scratchpad)),
         theme: await $.fs.read(join(root, ASSET_PATHS.theme)),
       }
       const path = await exportHtml(io, loaded, assets)

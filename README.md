@@ -286,6 +286,13 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
 - **A−** / **A+** set the size of the labels and the note text.
 - The sun / moon button switches between light and dark. Until it is used the view follows the
   system's theme; then it keeps the choice, for every project.
+- **The scratchpad** (the note icon just above the legend) holds quick notes and to-dos, saved
+  as you type to `Scratchpad.md` at the vault's top: plain markdown that Obsidian shows too, and
+  not a note of the tree. A to-do is a list item with a box, `- [ ] …`: **Ctrl/Cmd+Enter** makes
+  the line a to-do or ticks it, **Enter** continues a list (on an empty item it ends it), **+ To-do**
+  adds one, and the icon shows how many are open. A change made meanwhile in Obsidian or by Claude
+  comes in; one that crosses your typing asks you to **Keep mine** or **Take theirs**. **Esc**
+  closes it. It is on every page; `/rft-view` leaves it out.
 - It follows the vault live, and keeps the zoom, layout, folds, filters and text size between
   visits.
 
@@ -568,7 +575,8 @@ session with the plugin loaded from this folder.
   answer threads; `hooks/lib/update.ts` `/rft-update` and the vault's format.
 - `web/`: the tree view (`index.html`, `app.js`, `app.css`; `filters.js`, `kanban.js`, `layout.js` and
   `concepts.js` hold the pure filter, kanban, radial layout and concept logic; `markdown.js` the note
-  renderer, footnotes and the map from the page back to the note's text; `theme.js` the light and
+  renderer, footnotes and the map from the page back to the note's text; `scratchpad.js` the
+  scratchpad's to-dos and lists, and its panel; `theme.js` the light and
   dark themes; vendored d3), one codebase for the live view and `/rft-view`, which shows the
   threads read-only.
 - `server/rft_server.py`: the local server (Python standard library).

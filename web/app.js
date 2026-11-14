@@ -3,7 +3,8 @@
 // `api/tree`, reads notes from `api/note` and writes a note's edited text back to it, asks
 // `api/node` for a new note under the one shown and `api/type` to change its type, and keeps a
 // note's discussion (comments, suggestions) with `api/comment`, its lock with `api/lock` and its
-// priority (the user's alone; also the answer to Claude's suggested one) with `api/priority`; or
+// priority (the user's alone; also the answer to Claude's suggested one) with `api/priority`, and
+// mounts the scratchpad (web/scratchpad.js, `api/scratchpad`); or
 // inlined into a standalone tree.html by /rft-view, where `window.RFT_DATA` holds the tree,
 // every note's text and its threads, and nothing is edited.
 (function () {
@@ -3682,6 +3683,8 @@
 
   function first() {
     if (TOKEN) store.set('key', TOKEN)
+    // the scratchpad lives on the server: the standalone page has none
+    if (!EMBED) window.RftScratchpad.mount({ key: editKey, store, every: POLL_MS })
     render(false)
     hasView = true
     requestAnimationFrame(() => initialView())

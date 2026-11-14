@@ -7,8 +7,9 @@ accepted suggestion); the `locked:` line of its frontmatter; its `priority:` lin
 alone (which also answers Claude's `suggested_priority:`); its dates, the user's too (`due:`,
 `start:`, `est:`, which also answer Claude's suggested ones); the deadlines in vault/milestones/
 (a new one, its due date, the notes it needs, its status, and Claude's suggested ones accepted or
-dismissed); and its discussion, the comments and suggestions on parts of its text, in
-vault/.comments/<id>.json (as hooks/lib/comments.ts reads it). A new note, or a note's new type, it never writes itself: it asks the session that runs it,
+dismissed); its discussion, the comments and suggestions on parts of its text, in
+vault/.comments/<id>.json (as hooks/lib/comments.ts reads it); and the user's scratchpad, quick
+notes and to-dos in vault/Scratchpad.md. A new note, or a note's new type, it never writes itself: it asks the session that runs it,
 with a line `RFT_ADD_NODE {"parent", "type", "title"}` or `RFT_SET_TYPE {"id", "type"}` on stdout,
 and the plugin makes the change as the rft_add_node or rft_set_type tool does (no model turn), then
 answers the note's id once it is on disk. `RFT_ASK {"id", "thread"}` asks the session's Claude to
@@ -16,7 +17,8 @@ answer a thread (a model turn). It binds 127.0.0.1 only, takes requests only for
 host name (so a web page elsewhere cannot reach it through DNS rebinding), serves nothing but an
 allow-list of page files, and reads or writes a note only by its id, in a markdown file that
 resolves inside one of the vault's note folders (experiments/, directions/, references/,
-theory/), and a deadline only in milestones/. A write (PUT api/note, POST api/node, api/type, api/comment, api/lock,
+theory/), a deadline only in milestones/, and the scratchpad only as a plain file at the vault's
+top. A write (PUT api/note, PUT api/scratchpad, POST api/node, api/type, api/comment, api/lock,
 api/priority, api/dates, api/milestone) must also come from the page itself (its
 Origin) and carry the vault's key, which is in the address the server prints, so neither
 another web page nor another user of the machine can change a note. The key is kept in the
@@ -70,6 +72,7 @@ PAGE_FILES = {
     "/concepts.js": ("concepts.js", "text/javascript; charset=utf-8"),
     "/theme.js": ("theme.js", "text/javascript; charset=utf-8"),
     "/markdown.js": ("markdown.js", "text/javascript; charset=utf-8"),
+    "/scratchpad.js": ("scratchpad.js", "text/javascript; charset=utf-8"),
     "/vendor/d3.v7.9.0.min.js": ("vendor/d3.v7.9.0.min.js", "text/javascript; charset=utf-8"),
     "/vendor/LICENSE-d3.txt": ("vendor/LICENSE-d3.txt", "text/plain; charset=utf-8"),
     "/vendor/katex.v0.16.22.min.js": ("vendor/katex.v0.16.22.min.js", "text/javascript; charset=utf-8"),
@@ -114,6 +117,9 @@ DAY_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 DUE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}):(\d{2}))?(?:\s*(AoE|UTC|Z|[+-]\d{2}:?\d{2}))?$", re.I)
 EST_RE = re.compile(r"^(\d+)\s*([dw])?$", re.I)
 DATE_FIELDS = ("due", "start", "est")
+# the user's quick notes and to-dos: one markdown file at the vault's top, outside the tree (no
+# note folder holds it, so neither the tree nor its version sees it), as web/scratchpad.js shows it
+SCRATCHPAD = "Scratchpad.md"
 DATE_SUGGESTION_FIELDS = ("suggested_start", "suggested_est", "suggested_dates_why")
 FORBIDDEN_TITLE = re.compile(r'[\^#|\[\]\\/:*"<>?]')
 
@@ -954,6 +960,61 @@ class Vault:
             self._write_note(path, text, frame % "\n".join(fields), body)
         return 200, {"id": mid}
 
+    # ------------------------------------------------------------ the scratchpad
+
+    def _scratchpad_file(self) -> Path | None:
+        """The scratchpad's file at the vault's top; None when that name is held by something else
+        than a plain file (a folder, a link), which is then neither read nor written."""
+        path = self.root / SCRATCHPAD
+        return None if path.is_symlink() or (path.exists() and not path.is_file()) else path
+
+    def scratchpad(self) -> tuple[int, dict]:
+        """The scratchpad as the page shows it: its text (newlines as \\n) and version; empty, with
+        no version, until it is first written."""
+        path = self._scratchpad_file()
+        if path is None:
+            return 422, {"error": f"{SCRATCHPAD} in the vault is not a plain file"}
+        try:
+            data = path.read_bytes()
+        except FileNotFoundError:
+            return 200, {"name": SCRATCHPAD, "text": "", "version": None}
+        text = data.decode("utf-8", errors="replace").replace("\r\n", "\n")
+        return 200, {"name": SCRATCHPAD, "text": text, "version": version_of(data)}
+
+    def write_scratchpad(self, text: str, version: str | None, force: bool = False) -> tuple[int, dict]:
+        """Writes the scratchpad, as it is given (made when there is none), in the newlines the
+        file had. Refused, with the text as it is now, when the file changed since `version` (None:
+        it was not made yet), unless `force`."""
+        path = self._scratchpad_file()
+        if path is None:
+            return 422, {"error": f"{SCRATCHPAD} in the vault is not a plain file"}
+        with self._write_lock:
+            try:
+                data = path.read_bytes()
+            except FileNotFoundError:
+                data = None
+            now = None if data is None else version_of(data)
+            if not force and version != now:
+                return 409, {"error": "the scratchpad changed since it was read", "version": now,
+                             "text": "" if data is None else data.decode("utf-8", errors="replace").replace("\r\n", "\n")}
+            try:
+                old = "" if data is None else data.decode("utf-8")
+            except UnicodeDecodeError:
+                return 422, {"error": f"{SCRATCHPAD} is not UTF-8 text; edit it in an editor"}
+            text = text.replace("\r\n", "\n")
+            # (a lone surrogate, which JSON can carry and UTF-8 cannot, becomes "?")
+            out = (text.replace("\n", "\r\n") if "\r\n" in old else text).encode("utf-8", errors="replace")
+            # a new file renamed over the old one: a reader never sees half of it
+            tmp = path.with_name(f".{path.name}.rft-tmp")
+            try:
+                tmp.write_bytes(out)
+                if data is not None:
+                    os.chmod(tmp, stat.S_IMODE(path.stat().st_mode))
+                os.replace(tmp, path)
+            finally:
+                tmp.unlink(missing_ok=True)
+        return 200, {"name": SCRATCHPAD, "version": version_of(out)}
+
     # ------------------------------------------------------------ comments and suggestions
 
     def _comments_file(self, nid: str) -> Path:
@@ -1280,6 +1341,8 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 return self._json(200, note, head_only) if note else self._json(404, {"error": "no such note"}, head_only)
             if route == "/api/image":
                 return self._image(parse_qs(url.query), head_only)
+            if route == "/api/scratchpad":
+                return self._json(*vault.scratchpad(), head_only)
             if route == "/api/paper":
                 path = vault.paper((parse_qs(url.query).get("id") or [""])[0])
                 if path is None:
@@ -1323,7 +1386,18 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             return url, req
 
         def do_PUT(self):
-            """PUT api/note?id=<id> {"body": "...", "version": "<as read>"} or {"body": "...", "force": true}."""
+            """PUT api/note?id=<id> {"body": "...", "version": "<as read>"} or {"body": "...", "force": true};
+            PUT api/scratchpad {"text": "...", "version": "<as read>" or null} or {"text": "...", "force": true}."""
+            if urlsplit(self.path).path == "/api/scratchpad":
+                got = self._write_request("/api/scratchpad", MAX_NOTE_BYTES)
+                if got is None:
+                    return
+                _, req = got
+                force = req.get("force") is True
+                version = req.get("version", False)
+                if not isinstance(req.get("text"), str) or not (force or version is None or isinstance(version, str)):
+                    return self._json(400, {"error": "expected {text, version} (null before the file is made) or {text, force: true}"})
+                return self._json(*vault.write_scratchpad(req["text"], None if force else version, force))
             got = self._write_request("/api/note", MAX_NOTE_BYTES)
             if got is None:
                 return

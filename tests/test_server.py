@@ -300,6 +300,7 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.get("/layout.js")[0], 200)
         self.assertEqual(self.get("/theme.js")[0], 200)
         self.assertEqual(self.get("/markdown.js")[0], 200)
+        self.assertEqual(self.get("/scratchpad.js")[0], 200)
         self.assertEqual(self.get("/vendor/d3.v7.9.0.min.js")[0], 200)
         self.assertEqual(self.get("/vendor/katex.v0.16.22.min.js")[0], 200)
         self.assertEqual(self.get("/vendor/katex.v0.16.22.min.css")[0], 200)
@@ -327,6 +328,7 @@ class ServerTest(unittest.TestCase):
         try:
             port = server.server_address[1]
             self.assertEqual(self.put("E01", {"body": "x", "force": True}, port=port)[0], 405)
+            self.assertEqual(self.write("PUT", "/api/scratchpad", {"text": "x", "force": True}, port=port)[0], 405)
             self.assertEqual(self.post({"parent": "D00", "type": "direction", "title": "x"}, port=port)[0], 405)
         finally:
             server.shutdown()
@@ -410,6 +412,84 @@ class ServerTest(unittest.TestCase):
         data = p.read_bytes()
         self.assertTrue(data.endswith(b"---\r\nOne\r\nTwo\r\n"))
         self.assertNotIn(b"\n", data.replace(b"\r\n", b""))
+
+    # ------------------------------------------------------------ the scratchpad
+
+    def pad(self, payload, **kw):
+        return self.write("PUT", "/api/scratchpad", payload, **kw)
+
+    def fresh_pad(self):
+        """No scratchpad yet; whatever a test writes is removed afterwards."""
+        p = self.vault / "Scratchpad.md"
+        p.unlink(missing_ok=True)
+        self.addCleanup(p.unlink, missing_ok=True)
+        return p
+
+    def test_scratchpad_made_on_first_write_and_outside_the_tree(self):
+        p = self.fresh_pad()
+        tree = json.loads(self.get("/api/tree")[2])
+        status, _, body = self.get("/api/scratchpad")
+        self.assertEqual((status, json.loads(body)), (200, {"name": "Scratchpad.md", "text": "", "version": None}))
+        status, res = self.pad({"text": "- [ ] email the lab\nidea: try X", "version": None})
+        self.assertEqual(status, 200)
+        self.assertEqual(p.read_text(), "- [ ] email the lab\nidea: try X")  # as given: no newline added
+        got = json.loads(self.get("/api/scratchpad")[2])
+        self.assertEqual((got["text"], got["version"]), ("- [ ] email the lab\nidea: try X", res["version"]))
+        self.assertEqual(self.pad({"text": "", "version": got["version"]})[0], 200)
+        self.assertEqual(p.read_text(), "")
+        # not a note: the tree, and its version, stay as they were
+        self.assertEqual(json.loads(self.get("/api/tree")[2]), tree)
+        self.assertEqual([f.name for f in self.vault.iterdir() if f.name.endswith(".rft-tmp")], [])
+
+    def test_scratchpad_refused_when_it_changed(self):
+        p = self.fresh_pad()
+        # made elsewhere (Obsidian, Claude) after the page read that there was none
+        p.write_text("from Obsidian")
+        status, res = self.pad({"text": "mine", "version": None})
+        self.assertEqual((status, res["text"]), (409, "from Obsidian"))
+        # changed elsewhere after the page's last save
+        _, ok = self.pad({"text": "mine", "version": res["version"]})
+        p.write_text("from Claude")
+        status, res = self.pad({"text": "mine, more", "version": ok["version"]})
+        self.assertEqual((status, res["text"]), (409, "from Claude"))
+        self.assertEqual(p.read_text(), "from Claude")
+        # with the version it answered, or with force, the write goes through
+        self.assertEqual(self.pad({"text": "mine, more", "version": res["version"]})[0], 200)
+        p.write_text("again")
+        self.assertEqual(self.pad({"text": "mine, forced", "force": True})[0], 200)
+        self.assertEqual(p.read_text(), "mine, forced")
+
+    def test_scratchpad_needs_the_page_and_its_key(self):
+        p = self.fresh_pad()
+        body = {"text": "changed", "force": True}
+        self.assertEqual(self.pad(body, key=None)[0], 403)
+        self.assertEqual(self.pad(body, key="wrong")[0], 403)
+        self.assertEqual(self.pad(body, origin="http://evil.example")[0], 403)
+        self.assertEqual(self.pad(body, host="evil.example")[0], 403)
+        self.assertEqual(self.pad(body, ctype="text/plain")[0], 415)
+        self.assertEqual(self.pad(b"not json")[0], 400)
+        self.assertEqual(self.pad({"text": "no version"})[0], 400)
+        self.assertEqual(self.pad({"text": "x", "version": 3})[0], 400)
+        self.assertEqual(self.pad({"text": 3, "force": True})[0], 400)
+        for m in ["POST", "DELETE", "PATCH"]:
+            self.assertEqual(self.get("/api/scratchpad", method=m)[0], 405, m)
+        self.assertFalse(p.exists())
+
+    def test_scratchpad_keeps_crlf_and_writes_no_link(self):
+        p = self.fresh_pad()
+        p.write_bytes(b"a\r\nb\r\n")
+        got = json.loads(self.get("/api/scratchpad")[2])
+        self.assertEqual(got["text"], "a\nb\n")
+        self.assertEqual(self.pad({"text": "a\nb\nc\n", "version": got["version"]})[0], 200)
+        self.assertEqual(p.read_bytes(), b"a\r\nb\r\nc\r\n")
+        # a link (here to a file outside the vault) is neither read nor written through
+        p.unlink()
+        os.symlink(self.root / "secret.md", p)
+        secret = (self.root / "secret.md").read_bytes()
+        self.assertEqual(self.get("/api/scratchpad")[0], 422)
+        self.assertEqual(self.pad({"text": "pwned", "force": True})[0], 422)
+        self.assertEqual((self.root / "secret.md").read_bytes(), secret)
+        self.assertTrue(p.is_symlink())
 
     # ------------------------------------------------------------ comments, suggestions, lock
 

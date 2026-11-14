@@ -63,6 +63,28 @@
 <main>
   <svg id="canvas" aria-label="The reasoning tree"><defs><marker id="arrow" viewBox="0 -4 8 8" refX="8" refY="0" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,-4L8,0L0,4Z"></path></marker></defs><g id="viewport"><g id="regions"></g><g id="origins"></g><g id="links"></g><g id="nodes"></g><g id="badges"></g></g></svg>
   <svg id="concept-canvas" hidden aria-label="The concept tree"><g id="cviewport"></g></svg>
+  <!-- the bottom-left corner: the scratchpad's button just above the legend; the open scratchpad takes the legend's place -->
+  <div id="corner">
+  <button id="pad-toggle" class="icon-btn" hidden aria-expanded="false" aria-controls="pad" title="Scratchpad: quick notes and to-dos" aria-label="Scratchpad: quick notes and to-dos">
+    <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h14a1 1 0 0 1 1 1v10l-6 6H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 20v-5a1 1 0 0 1 1-1h5"/><path d="M8 8h8M8 11.5h5"/></svg>
+    <span id="pad-badge" class="pad-badge" hidden></span>
+  </button>
+  <section id="pad" hidden aria-label="Scratchpad">
+    <div class="pad-head">
+      <strong>Scratchpad</strong>
+      <span id="pad-count" class="muted"></span>
+      <button id="pad-add" type="button" title="A new to-do below the caret's line (Ctrl/Cmd+Enter makes a line a to-do, or ticks it)">+ To-do</button>
+      <button id="pad-close" type="button" title="Close (Esc)" aria-label="Close the scratchpad">✕</button>
+    </div>
+    <textarea id="pad-text" aria-label="The scratchpad's text, in markdown" readonly
+      placeholder="Quick notes and to-dos, saved as you type.&#10;&#10;- [ ] a to-do: Ctrl/Cmd+Enter ticks it&#10;- Enter continues a list"></textarea>
+    <div class="pad-foot">
+      <span id="pad-msg" role="status"></span>
+      <button id="pad-keep" type="button" class="primary" hidden title="Save your text over the newer one">Keep mine</button>
+      <button id="pad-take" type="button" hidden title="Drop your text and take the newer one">Take theirs</button>
+      <span class="pad-file muted" title="In the vault's top folder, beside 00 Index.md: plain markdown that Obsidian shows too, and not a note of the tree">Scratchpad.md</span>
+    </div>
+  </section>
   <aside id="legend" aria-label="Legend and filter">
     <button id="legend-toggle" class="legend-toggle" aria-expanded="true" title="Show or hide the legend">Legend <span class="caret">▾</span></button>
     <div id="legend-body">
@@ -87,6 +109,7 @@
     <div class="hint muted">Drag to pan, scroll to zoom. Click a node to read it, double-click or ± to fold. Arrow keys: ↑ parent, ↓ child, ← → siblings.</div>
     </div>
   </aside>
+  </div>
   <aside id="filters" hidden aria-label="Filters">
     <div class="fhead"><strong>Filters</strong><button id="filters-close" title="Close">✕</button></div>
     <section>
@@ -289,6 +312,7 @@
 <script src="layout.js" data-rft-inline></script>
 <script src="concepts.js" data-rft-inline></script>
 <script src="markdown.js" data-rft-inline></script>
+<script src="scratchpad.js" data-rft-inline></script>
 <script src="app.js" data-rft-inline></script>
 </body>
 </html>
