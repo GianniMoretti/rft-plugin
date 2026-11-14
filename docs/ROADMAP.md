@@ -23,7 +23,7 @@ could be done, and when it is done. A package builds only on the ones before it.
 | 0.21.0 | Lean tool list (done) | 0.20.0 |
 | 0.22.0 | Rules on demand (done) | 0.20.0 |
 | 0.23.0 | Fixes from the PR #5 review (done) | 0.20.0 |
-| 0.24.0 | Ask Claude in a subagent | 0.20.0 |
+| 0.24.0 | Ask Claude in a subagent (done) | 0.20.0 |
 | 1.0.0 | One release with everything, measured | 0.21.0–0.24.0 |
 
 ---
@@ -253,10 +253,25 @@ from the start. A deferred tool shows only its name until the model loads it wit
   and the guard through tool calls both ways), a footnote search, `rft_set_status` in a vault
   with no dates. 221 plugin tests and 74 server tests pass.
 
-## 0.24.0 — Ask Claude in a subagent
+## 0.24.0 — Ask Claude in a subagent (done)
 
-The backlog item below, now scheduled: each answer to a thread runs in a background subagent,
-so the main conversation does not grow with every **Ask Claude**. Done when stated there.
+- **Ask Claude** starts a background subagent of the plugin's own type, `rft:thread`
+  (`$.agent.register`, hidden from the model by `agent.offer`), instead of a turn of the
+  session. The main conversation does not grow with each answer, and the answer starts at once,
+  without waiting for the session to be idle.
+- **The subagent only reads** (Read, Grep, Glob). A subagent the plugin starts runs beneath the
+  plugin's own call, where the plugin's hooks do not answer it: neither the rft tools nor the
+  guards of locked notes, priorities and dates would hold there (seen in a real session). So its
+  final message is the answer, and the plugin writes it into the thread when its
+  `turn.complete` arrives: a reply, or for a suggestion the text between `<replacement>` tags, a
+  replacement the user accepts or rejects. A suggestion is no longer applied to the note by
+  Claude; when the quoted text moved since, the replacement goes into the reply.
+- **Its report is dropped** before the main conversation reads it: the task notification, or the
+  hand-back message (`peer`) naming the subagent's id. The transcript keeps a dim
+  "Prompt dropped by a hook" line and no model turn.
+- When no subagent starts, the thread goes to the session as before (`askText`).
+- Checked in a real session: Ask Claude on a comment and on a suggestion each answered in the
+  thread, the note unchanged, and no new turn in the main transcript. 227 plugin tests pass.
 
 ## 1.0.0 — One release with everything, measured
 
@@ -272,21 +287,5 @@ so the main conversation does not grow with every **Ask Claude**. Done when stat
 
 ## Backlog
 
-Ideas for possible future work, not scheduled in a package yet.
+Ideas for possible future work, not scheduled in a package yet. None open at the moment.
 
-- **Answer threads in a subagent** (scheduled as 0.24.0). Today **Ask Claude** submits the thread as a turn of the
-  session that ran `/rft` (`askFromView` queues it, `submitPending` calls `$.prompt.submit`),
-  so every answer adds rows to the main chat. Instead, start a background subagent with
-  `$.agent.spawn({ prompt: askText(...) })`, perhaps of a type of the plugin's own
-  (`$.agent.register`, hidden from the model with `agent.offer`), and toast when its
-  `turn.complete` arrives. The answer lands in the thread, as now. Unlike `/btw`, it needs tools
-  (`rft_comment`, `rft_suggest`, Edit). The prompt from `askText` already holds what the
-  subagent needs, so a fresh agent should do; a fork would also see the conversation. It would
-  also start at once, without waiting for the session to be idle.
-  To check first: whether the finished subagent still leaves a task notification in the main
-  chat (if so, drop it in a `prompt.submit` hook); whether it gets the plugin's tools; whether
-  its Edit of an unlocked note is refused when it cannot ask for permission (the lock guard, a
-  `tool.call` hook, holds in subagents too); and what two asks on one note at once should do.
-
-  Done when: Ask Claude on a comment and on a suggestion each answer in the thread, and the
-  main transcript (ctrl+o) shows no new row.

@@ -289,6 +289,43 @@ export function askText(loaded: Loaded, c: Comments, id: string, thread: string,
   ].join('\n')
 }
 
+/**
+ * The task of the read-only subagent that answers one thread (Ask Claude): its final message is
+ * the answer, which the plugin writes into the thread (`answerThread`). It edits nothing, so a
+ * change to the note is a replacement the user accepts in the tree view.
+ */
+export function subagentAskText(loaded: Loaded, c: Comments, id: string, thread: string, path: string): string {
+  const n = loaded.tree.nodes[id]
+  const t = c.threads.find(x => x.id === thread)
+  if (!n || !t) throw new CommentError(`${id} has no thread ${thread}`)
+  const todo = t.kind === 'comment'
+    ? 'It is a comment: a discussion of this part of the note. Your final message is your reply in the thread, as the user will read it (markdown, short).'
+    : `It is a suggestion. Your final message is the new text for the quoted part, between <replacement> and </replacement>, ${t.replacement == null ? 'written as the instruction says' : 'from the proposed replacement, adapted only where the note needs it'}, then one line on why; the user accepts or rejects it in the tree view. When the suggestion is unclear or looks wrong, write no replacement: your final message is then your reply.`
+  return [
+    `Answer thread ${t.id} on ${n.name} (${path}). Read what it needs (the note, and its code, results or references when the question is about them) and nothing more.`,
+    '',
+    threadText(bodyOf(loaded.texts[id] ?? ''), t, true),
+    '',
+    todo,
+  ].join('\n')
+}
+
+/** Writes a thread subagent's final message into its thread: a replacement for a suggestion, else a reply. */
+export async function answerThread(io: Io, loaded: Loaded, id: string, thread: string, answer: string, now = stamp()): Promise<string> {
+  const m = /<replacement>\n?([\s\S]*?)\n?<\/replacement>/.exec(answer)
+  const text = (m ? answer.replace(m[0], '') : answer).trim()
+  if (m) {
+    try {
+      return await suggest(io, loaded, { id, thread, replacement: m[1]!, text }, now)
+    } catch (err) {
+      // the text moved, or the thread is a comment: the replacement goes into the reply
+      if (!(err instanceof CommentError)) throw err
+      return comment(io, loaded, { id, thread, text: `${text}\n\n${m[1]}`.trim() }, now)
+    }
+  }
+  return comment(io, loaded, { id, thread, text: text || '(no answer)' }, now)
+}
+
 /** Moves a note's comments when its id changes (rft_set_type). */
 export async function renameComments(io: Io, vault: string, from: string, to: string): Promise<void> {
   if (!(await io.exists(commentsPath(vault, from)))) return

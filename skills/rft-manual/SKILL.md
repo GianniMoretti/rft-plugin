@@ -421,7 +421,7 @@ folder and every link to it change together.
   - a **suggestion** has new text for it, or says in words what should change (an instruction,
     with no replacement yet).
 - **Answer a thread only when the user asks**: the tree view's **Ask Claude** sends you the thread
-  as a prompt. Answer in the thread, not in the chat:
+  as a prompt (when it cannot answer it in a subagent). Answer in the thread, not in the chat:
   - a comment: read what the question needs, reply with `rft_comment {id, thread, text}`, and do
     not edit the note; propose a change with `rft_suggest` if one is needed;
   - a suggestion on a locked note: write the new text with `rft_suggest {id, thread,

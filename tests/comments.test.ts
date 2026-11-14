@@ -5,9 +5,11 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import type { Comments, Thread } from '../hooks/lib/comments'
-import { anchorFor, askText, comment, commentsPath, commentsReport, locate, readComments, suggest } from '../hooks/lib/comments'
+import { anchorFor, answerThread, askText, comment, commentsPath, commentsReport, locate, readComments, suggest } from '../hooks/lib/comments'
 import { loadActive, setCode, setStatus, setType } from '../hooks/lib/ops'
 import { CWD, E01, E02, MemoryFs, demoFiles, world } from './fixture'
+import { Answers } from '../hooks/lib/answers'
+import { subagentAskText } from '../hooks/lib/comments'
 
 const E02_PATH = `vault/experiments/${E02}.md`
 const NOW = '2026-11-07 10:02'
@@ -267,5 +269,103 @@ describe('in a session', () => {
     expect(prompts).toHaveLength(1)
     expect(prompts[0]).toContain(`answer thread c1 on ${E02} (vault/experiments/${E02}.md)`)
     expect(prompts[0]).toContain('- user · 2026-11-07 10:02: Is this right?')
+  })
+})
+
+describe('Ask Claude in a subagent', () => {
+  test('the thread goes to a background subagent of the plugin\'s own type; with none started, to a turn of the session', async ($, on) => {
+    const clock = mock.clock(on)
+    const files = demoFiles()
+    files['vault/.comments/E02.json'] = JSON.stringify({ note: 'E02', next: 2, threads: [thread({ asked: NOW })] })
+    world(on, files)
+    const prompts: string[] = []
+    on('prompt.submit', (_$, e) => { prompts.push(String(e.text)); return { text: e.text } as never })
+    const registered: string[] = []
+    on('agent.register', (_$, e) => { registered.push(`${e.name}:${(e.tools ?? []).join(',')}`); return { value: { agent: `rft:${e.name}` } } as never })
+    // the test kit has no Agent tool beneath: the spawn is seen, and no subagent starts
+    const spawned: Record<string, unknown>[] = []
+    on('agent.spawn', (_$, e) => { spawned.push(e as never); return { model: 'm' } as never })
+    const lines: string[] = []
+    let wake = () => undefined as void
+    on('process.spawn', async function* (_$: unknown, _e: unknown, next: { signal: AbortSignal }) {
+      yield { stream: 'stdout' as const, text: 'RFT_SERVER_URL http://127.0.0.1:5555/?token=k\n' }
+      const aborted = new Promise<boolean>(resolve => next.signal.addEventListener('abort', () => resolve(true)))
+      for (;;) {
+        while (lines.length) yield { stream: 'stdout' as const, text: lines.shift()! }
+        if (await Promise.race([aborted, new Promise<boolean>(resolve => { wake = () => resolve(false) })])) break
+      }
+      return { value: { code: null, signal: 'SIGTERM' } }
+    } as never)
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    expect(registered).toHaveLength(1)
+    // it only reads: in a subagent the plugin starts, the plugin's own tools and guards do not answer
+    expect(registered[0]).toBe('thread:Read,Grep,Glob')
+    await $.command.run({ command: 'rft', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } } as never)
+    lines.push(`RFT_ASK ${JSON.stringify({ id: 'E02', thread: 'c1' })}\n`)
+    wake()
+    for (let i = 0; i < 200 && !spawned.length; i++) await new Promise(resolve => setTimeout(resolve, 5))
+    expect(spawned).toHaveLength(1)
+    expect(spawned[0]).toMatchObject({ subagent_type: 'rft:thread', run_in_background: true })
+    expect(String(spawned[0]!.prompt)).toContain(`Answer thread c1 on ${E02}`)
+    expect(String(spawned[0]!.prompt)).toContain('Your final message is your reply')
+    await clock.advance(5000)
+    expect(prompts).toHaveLength(1)
+    expect(prompts[0]).toContain(`answer thread c1 on ${E02}`)
+    expect(prompts[0]).toContain('rft_comment')
+  })
+
+  test('a thread\'s subagent ends: its thread is known, and its report never reaches the main conversation', () => {
+    const a = new Answers()
+    const job = { id: 'E02', thread: 'c1', what: 'thread c1 on E02' }
+    a.watch('agent-7', job)
+    expect(a.ended('agent-9')).toBeNull()
+    expect(a.ended('agent-7')).toEqual(job)
+    expect(a.ended('agent-7')).toBeNull()
+    expect(a.isNotification('<task-notification><task-id>agent-9</task-id></task-notification>', 'task-notification')).toBe(false)
+    expect(a.isNotification('a prompt naming agent-7', undefined)).toBe(false)
+    expect(a.isNotification('<task-notification><task-id>agent-7</task-id></task-notification>', 'task-notification')).toBe(true)
+    // once only
+    expect(a.isNotification('<task-notification><task-id>agent-7</task-id></task-notification>', 'task-notification')).toBe(false)
+    // a subagent's hand-back arrives as another session's message
+    a.watch('agent-8', job)
+    expect(a.isNotification('Another Claude session sent a message:\n<agent-message from="agent-8">report</agent-message>', 'peer')).toBe(true)
+  })
+
+  test('the subagent\'s final message goes into its thread: a reply, or a replacement for a suggestion', async () => {
+    const { fs, io, loaded } = await project({ threads: [thread({ asked: NOW }), thread({ id: 'c2', kind: 'suggestion', asked: NOW })] })
+    const before = fs.read(E02_PATH)
+    expect(subagentAskText(loaded, saved(fs), 'E02', 'c2', 'x.md')).toContain('<replacement>')
+    expect(await answerThread(io, loaded, 'E02', 'c1', ' Yes: 5 seeds. ', NOW)).toContain('E02 c1: replied')
+    expect(await answerThread(io, loaded, 'E02', 'c2', '<replacement>\nCutMix closes the gap.\n</replacement>\nFrom E05.', NOW)).toContain('replacement written')
+    const [c1, c2] = saved(fs).threads
+    expect(c1!.messages.at(-1)).toEqual({ by: 'claude', at: NOW, text: 'Yes: 5 seeds.' })
+    expect(c1!.asked).toBeNull()
+    expect(c2).toMatchObject({ replacement: 'CutMix closes the gap.', asked: null, state: 'open' })
+    expect(c2!.messages.at(-1)).toEqual({ by: 'claude', at: NOW, text: 'From E05.' })
+    // the note itself is the user's to change, by accepting
+    expect(fs.read(E02_PATH)).toBe(before)
+  })
+
+  test('a replacement that no longer fits goes into the reply', async () => {
+    const { fs, io, loaded } = await project({ threads: [thread({ kind: 'suggestion', quote: 'Text of E02 as it was.', prefix: 'x', suffix: 'y' })] })
+    expect(await answerThread(io, loaded, 'E02', 'c1', '<replacement>New.</replacement>\nWhy.', NOW)).toContain('replied')
+    expect(saved(fs).threads[0]!.messages.at(-1)!.text).toBe('Why.\n\nNew.')
+  })
+
+  test('a task notification in a session goes through unless it is a thread answer\'s', async ($, on) => {
+    mock.clock(on)
+    world(on, demoFiles())
+    on('prompt.submit', (_$, e) => ({ text: e.text }) as never)
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const other = await $.prompt.submit({ text: '<task-notification><task-id>agent-9</task-id></task-notification>', origin: { kind: 'task-notification' } } as never)
+    expect((other as { drop?: string }).drop).toBeUndefined()
+  })
+
+  test('the plugin\'s thread agent is not offered to the model', async ($, on) => {
+    mock.clock(on)
+    world(on, demoFiles())
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const r = await $.agent.offer({ agent: 'rft:thread', description: '', source: 'plugin' } as never)
+    expect(r.isOffered).toBe(false)
   })
 })

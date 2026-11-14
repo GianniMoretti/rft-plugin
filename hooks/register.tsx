@@ -16,7 +16,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { RftSnapshot } from '../types'
-import { COMMENTS_DIR, LockedChange, askText, comment as addComment, commentsReport, isLocked, readComments, suggest as addSuggestion } from './lib/comments'
+import { COMMENTS_DIR, LockedChange, answerThread, askText, comment as addComment, commentsReport, isLocked, readComments, subagentAskText, suggest as addSuggestion } from './lib/comments'
 import type { CodeEnv, Git } from './lib/ops'
 import { addNode, codeReport, conceptsReport, exportHtml, initVault, loadActive, lockedText, moveNode, rulesText, setCode, setConcept, setRefs, setRepos, setStatus, setTags, setType, tagsReport, today, treeReport } from './lib/ops'
 import { ASSET_PATHS } from './lib/page'
@@ -31,6 +31,7 @@ import { addDeadline, changesDates, checkDeadline, datesText, deadlineQuestion, 
 import { RECALL_HINT, searchesVault } from './lib/recall'
 import { eagerTools, featuresInUse } from './lib/tools'
 import { matches, shellWrites } from './lib/shell'
+import { Answers, type ThreadJob } from './lib/answers'
 import type { Feature } from './lib/tools'
 import { SMALL_TREE, mapGaps, mapReport, mapWarnings, projectMap, readDigests, resolveConcept, setDigest, setSummaries } from './lib/map'
 import { CONFIG_PATH, LEGEND, MARK, NODE_TYPES, bodyOf, counts, countsLine, isAbsolute, join, locate, readConfig, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
@@ -523,6 +524,7 @@ async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> 
     } catch { /* the rules without it */ }
     recall = { vault: resolvePath(h.root, vaultOf(h, config)), cwd: h.cwd, used: false }
   }
+  await registerThreadAgent($)
   const eager = eagerTools(features)
   // each registration on its own, so one refusal leaves the rest working
   for (const [name, spec] of Object.entries(TOOLS)) {
@@ -892,9 +894,54 @@ async function askFromView($: EngineInterface, request: string): Promise<void> {
     const n = loaded.tree.nodes[id]
     if (!n) throw new Error(`"${id}" is not a note of the tree`)
     const c = await readComments(h.io, loaded.config.vault, id)
-    pendingPrompts.push(askText(loaded, c, id, String(r.thread ?? ''), join(shownVault(h, loaded.config), n.path)))
+    const thread = String(r.thread ?? '')
+    const path = join(shownVault(h, loaded.config), n.path)
+    await answerInSubagent($, { id, thread, what: `thread ${thread} on ${id}` }, subagentAskText(loaded, c, id, thread, path), () => askText(loaded, c, id, thread, path))
   } catch (err) {
     $.ui.toast(`rft: the tree view could not ask Claude (${message(err)})`)
+  }
+}
+
+// ---------------------------------------------------------------- answers in a subagent
+
+/**
+ * The agent type that answers a thread: it only reads, and its final message is the answer, which
+ * the plugin writes into the thread when it ends. A subagent the plugin starts runs beneath the
+ * plugin's own call, where the plugin's hooks (its tools, the guards of locked notes, priorities
+ * and dates) do not answer it, so it is given neither the rft tools nor a tool that writes.
+ */
+const THREAD_AGENT = {
+  name: 'thread',
+  description: 'Answers a comment or suggestion thread of the rft tree view (started by the plugin only).',
+  prompt: 'You answer one discussion thread on a note of a research project\'s reasoning tree (rft); the notes are markdown files in the vault. The task says which thread and what your final message holds: the plugin writes it into the thread as it is, so it is the answer itself, with nothing about what you did.',
+  tools: ['Read', 'Grep', 'Glob'],
+} as const
+// `rft:thread` once registered; until then (or when refused) the general-purpose agent answers
+let threadAgent: string | null = null
+// the subagents answering threads
+const answers = new Answers()
+
+async function registerThreadAgent($: EngineInterface): Promise<void> {
+  if (threadAgent) return
+  try {
+    threadAgent = (await $.agent.register({ ...THREAD_AGENT, tools: [...THREAD_AGENT.tools] })).agent
+  } catch { /* the general-purpose agent instead */ }
+}
+
+/**
+ * Answers a thread in a background subagent, so the main conversation does not grow with each
+ * Ask Claude; when no subagent can start, as a turn of the session, as before.
+ */
+async function answerInSubagent($: EngineInterface, job: ThreadJob, prompt: string, inSession: () => string): Promise<void> {
+  try {
+    if (!threadAgent) throw new Error('no thread agent')
+    const r = await $.agent.spawn({ prompt, description: `rft: answer ${job.what}`, subagentType: threadAgent })
+    const deny = (r as { deny?: string }).deny
+    if (deny || !r.agentId) throw new Error(deny ?? 'no subagent started')
+    answers.watch(r.agentId, job)
+    $.ui.toast(`rft: Claude is answering ${job.what} in the background`)
+  } catch {
+    pendingPrompts.push(inSession())
   }
 }
 
@@ -1254,6 +1301,32 @@ export const register: Register = (on, options) => {
 
     return next(e)
   })
+
+  // a thread's subagent finished: its final message goes into the thread, and its report is kept
+  // from the main conversation
+  on('turn.complete', async ($, e, next) => {
+    const job = answers.ended(e.agentId)
+    if (job) {
+      try {
+        if (e.isAborted || !e.answer?.trim()) throw new Error('stopped')
+        const h = await mustHere($)
+        await answerThread(h.io, await loadActive(h.io), job.id, job.thread, e.answer)
+        $.ui.toast(`rft: ${job.what} answered in the tree view`)
+        await refresh($, true)
+      } catch (err) {
+        $.ui.toast(`rft: ${job.what} was not answered (${message(err)})`)
+      }
+    }
+    return next(e)
+  })
+
+  on('prompt.submit', async ($, e, next) => {
+    if (answers.isNotification(e.text, e.origin?.kind)) return { drop: 'rft: a thread answer, already in the tree view' }
+    return next(e)
+  })
+
+  // the thread agent is the plugin's own: the model is not offered it
+  on('agent.offer', { agent: 'rft:thread' }, () => ({ isOffered: false }))
 
   on('prompt.compose', async ($, e, next) => {
     const composed = await next(e)

@@ -238,11 +238,12 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   text after it) and listed under the note, where you **Reply**, **Resolve** a comment, **Accept**
   a suggestion (its new text is written into the note) or **Reject** it. Closed threads stay in
   the note's **History**, and **Reopen** brings one back.
-  - **Ask Claude** (on a thread, or **Post and ask Claude** / **Post and suggest** when posting) sends the thread to the session that
-    ran `/rft`, as a turn of its own. Claude answers only when asked. It answers in the thread: a
-    comment gets a reply and no edit. A suggestion on a note that is not locked is made in the
-    note and closed as *applied*. On a locked note Claude writes the new text as a suggestion
-    for you to accept.
+  - **Ask Claude** (on a thread, or **Post and ask Claude** / **Post and suggest** when posting) sends the thread to a background
+    Claude (a subagent of the session that ran `/rft`), so the main chat does not grow with each
+    answer. Claude answers only when asked, and in the thread: a comment gets a reply, a
+    suggestion gets its new text as a replacement for you to accept or reject. The subagent only
+    reads; the note changes only when you accept. When no subagent can start, the thread goes to
+    the session as a turn of its own.
   - A thread keeps its quote and the text around it, so it is found again after the note is
     edited. When the quoted text itself changed, the thread says what it now reads, and its
     suggestion can no longer be accepted. When the text is gone, the thread says so.
