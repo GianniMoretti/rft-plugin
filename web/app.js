@@ -40,6 +40,7 @@
   let matchSet = new Set() // the notes that pass the filters
   let shownSet = new Set() // the notes drawn: all of them, or with "hide" the matches and their ancestors
   let selected = null
+  const lastChild = new Map() // a note → its child shown last, where ↓ goes back to
   let matchAt = -1
   let positions = new Map()
   let hasView = false
@@ -494,6 +495,7 @@
     gNodes.selectAll('g.node').attr('class', n => nodeClass(n.data))
     markCards()
     const n = byId.get(id)
+    if (n.parent) lastChild.set(n.parent, id)
     const drawer = document.getElementById('drawer')
     drawer.hidden = false
     renderConceptPath(document.getElementById('drawer-concept'), n.concept, 'Focus on this concept')
@@ -552,6 +554,56 @@
     select(id)
     centreOn(id)
   }
+
+  // ---------------------------------------------------------------- the arrow keys
+
+  // In the tree, the arrow keys walk from the note shown: ↑ to its parent, ↓ to a child (the one
+  // shown last, else the first; a folded note unfolds), ← → along its siblings. With no note
+  // shown they start at the top. They leave a field, the open drawer and the other pages alone.
+  let keysInDrawer = false // the last click was in the drawer: there the arrows scroll the note
+
+  /** The notes at the top of the drawn tree. */
+  const drawnTops = () => (focus ? [concepts.get(focus).root] : tree.roots.length === 1 ? tree.roots : tree.roots.filter(id => shownSet.has(id)))
+
+  /** Whether a note is in the drawn tree, folded away or not. */
+  function walkable(id) {
+    if (!byId.has(id)) return false
+    const tops = drawnTops()
+    return tops.includes(id) || (shownSet.has(id) && ancestors(id).some(a => tops.includes(a)))
+  }
+
+  /** Pans to a note only when it is off the visible canvas (beside the drawer) or near its edge. */
+  function keepInView(id) {
+    const p = positions.get(id)
+    if (!p) return
+    const el = svg.node()
+    const w = el.clientWidth - (drawer.hidden ? 0 : drawer.offsetWidth), h = el.clientHeight, m = 60
+    const [x, y] = d3.zoomTransform(el).apply(p.p)
+    if (x > m && y > m && x < w - m && y < h - m) return
+    svg.transition().duration(300).call(zoom.translateTo, p.p[0], p.p[1], [Math.max(0, w) / 2, h / 2])
+    setViewNext('fit')
+  }
+
+  document.addEventListener('pointerdown', ev => { keysInDrawer = Boolean(ev.target.closest && ev.target.closest('#drawer')) }, true)
+  document.addEventListener('keydown', ev => {
+    const dir = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' }[ev.key]
+    if (!dir || !tree || view !== 'tree' || editing || ev.defaultPrevented || ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return
+    if ((keysInDrawer && !drawer.hidden) || (ev.target.closest && ev.target.closest('input, textarea, select, [contenteditable], #drawer, #drawer-resize'))) return
+    const tops = drawnTops()
+    const to = walkable(selected)
+      ? L.step(dir, selected, {
+          roots: tops,
+          kids: id => byId.get(id).children.filter(walkable),
+          parentOf: id => (tops.includes(id) ? null : byId.get(id).parent),
+          last: lastChild,
+        })
+      : tops[0]
+    ev.preventDefault()
+    if (!to || to === selected) return
+    reveal(to)
+    select(to)
+    keepInView(to)
+  })
 
   // ---------------------------------------------------------------- editing a note's text
 
