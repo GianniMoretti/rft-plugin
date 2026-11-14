@@ -1,4 +1,4 @@
-// rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-concepts, /rft-literature, /rft-rebalance,
+// rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-concepts, /rft-literature, /rft-rebalance, /rft-update,
 // /rft-summarize, /rft-next, /rft-view), the model's tools (rft_add_node, rft_set_status, rft_set_summary, rft_map, rft_set_digest, rft_move_node, rft_set_refs, rft_search,
 // rft_graph, rft_supersede, rft_next, rft_suggest_priority, rft_suggest_dates, rft_add_deadline, rft_suggest_deadline, rft_collect_papers, rft_set_tags, rft_set_type, rft_set_concept, rft_concepts, rft_set_repos, rft_code,
 // rft_set_code, rft_tags, rft_tree, rft_validate, rft_sync, rft_comments, rft_comment, rft_suggest), the operating rules
@@ -32,6 +32,7 @@ import { RECALL_HINT, searchesVault } from './lib/recall'
 import { eagerTools, featuresInUse } from './lib/tools'
 import { matches, shellWrites } from './lib/shell'
 import { Answers, type ThreadJob } from './lib/answers'
+import { applyUpdate, behindLine, planText, planUpdate } from './lib/update'
 import type { Feature } from './lib/tools'
 import { SMALL_TREE, mapGaps, mapReport, mapWarnings, projectMap, readDigests, resolveConcept, setDigest, setSummaries } from './lib/map'
 import { CONFIG_PATH, LEGEND, MARK, NODE_TYPES, bodyOf, isLiterature, counts, countsLine, isAbsolute, join, locate, readConfig, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
@@ -507,6 +508,9 @@ async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> 
       const threads = (await h.io.list(join(config.vault, COMMENTS_DIR)).catch(() => [])).some(f => f.name.endsWith('.json'))
       features = featuresInUse(loaded, threads)
     } catch { /* the core tools only */ }
+    // a vault an older version made: one toast, nothing changed until /rft-update apply
+    const line = behindLine(config)
+    if (line) $.ui.toast(line)
   }
   if (s && config && h) {
     // a large tree starts from the project map; a small one from its list of notes
@@ -579,6 +583,7 @@ async function registerCommands($: EngineInterface): Promise<void> {
   await attempt('rft-rebalance', () => $.command.register({ name: 'rft-rebalance', description: 'Ask Claude to propose moving branches under the line of research they belong to; nothing moves until you confirm', argumentHint: '[concept or note id] [--full]' }))
   await attempt('rft-next', () => $.command.register({ name: 'rft-next', description: 'What is still open, by concept: running and planned experiments, unexplored directions, open questions', argumentHint: '[concept]' }))
   await attempt('rft-summarize', () => $.command.register({ name: 'rft-summarize', description: 'Ask Claude to write the missing one-line note summaries and concept digests (the project map)', argumentHint: '[concept]' }))
+  await attempt('rft-update', () => $.command.register({ name: 'rft-update', description: 'Bring a vault made by an older version up to this one: shows what it adds; apply writes it', argumentHint: '[apply] [--sections]' }))
   await attempt('rft-view', () => $.command.register({ name: 'rft-view', description: 'Write a standalone HTML view of the tree to <vault>/tree.html' }))
   if (failed.length) reportFailures($, failed)
 }
@@ -1451,6 +1456,31 @@ export const register: Register = (on, options) => {
       }
       // submitted by the poller, as for /rft-concepts suggest
       return { text: `${conceptsReport(loaded)}\n\nClaude will propose moves in a moment, as a table${full ? '' : ', from the candidates the plugin found'}; nothing moves until you confirm.` }
+    } catch (err) {
+      return { text: message(err) }
+    }
+  })
+
+  // /rft-update: what an older vault lacks; `apply` writes it, then the derived files are synced
+  on('command.run', { command: 'rft-update' }, async ($, e) => {
+    try {
+      const words = e.args.trim().split(/\s+/).filter(Boolean)
+      const unknown = words.filter(w => w !== 'apply' && w !== '--sections')
+      if (unknown.length) return { text: `Usage: /rft-update [apply] [--sections] (not ${unknown.join(' ')}).` }
+      const sections = words.includes('--sections')
+      const io = (await mustHere($)).io
+      const loaded = await loadActive(io)
+      const plan = await planUpdate(io, loaded, { sections })
+      if (!words.includes('apply') || !plan.changes.length || plan.from > plan.to) return { text: planText(plan, sections) }
+      await applyUpdate(io, plan)
+      const fresh = await loadActive(io)
+      const synced = await sync(io, fresh)
+      const check = await validate(io, await loadActive(io))
+      await refresh($, true)
+      return {
+        text: `Updated the vault to format ${plan.to}: ${plan.changes.length} file(s) written${synced.changed.length ? `, ${synced.changed.length} derived file(s) refreshed` : ''}. ` +
+          `Validation: ${check.errors.length} errors, ${check.warnings.length} warnings${check.errors.length + check.warnings.length ? ' (rft_validate lists them).' : '.'}`,
+      }
     } catch (err) {
       return { text: message(err) }
     }

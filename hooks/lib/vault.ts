@@ -184,6 +184,7 @@ export type Concept = {
 }
 
 export type Config = {
+  /** The vault's format (FORMAT), not the plugin's version. */
   version: number
   vault: string
   project: string
@@ -226,8 +227,14 @@ export const join = (...parts: string[]) =>
 
 // ---------------------------------------------------------------- config
 
+/**
+ * The vault's format: what a vault of this plugin holds (folders, templates, config). It grows only
+ * when that changes, not with each release; /rft-update brings an older vault up to it.
+ */
+export const FORMAT = 2
+
 export const defaultConfig = (project: string): Config => ({
-  version: 1, vault: 'vault', project, canvas: true, mermaid: false,
+  version: FORMAT, vault: 'vault', project, canvas: true, mermaid: false,
   lastId: Object.fromEntries(NODE_TYPES.map(t => [TYPES[t].prefix, 0])),
 })
 
@@ -240,7 +247,8 @@ export async function readConfig(io: Io): Promise<Config | null> {
     raw = {}
   }
   const base = defaultConfig(raw.project ?? 'project')
-  return { ...base, ...raw, lastId: { ...base.lastId, ...(raw.lastId ?? {}) } }
+  // a config with no version is from the first format
+  return { ...base, ...raw, version: typeof raw.version === 'number' ? raw.version : 1, lastId: { ...base.lastId, ...(raw.lastId ?? {}) } }
 }
 
 export const writeConfig = (io: Io, config: Config) =>

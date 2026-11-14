@@ -25,7 +25,8 @@ could be done, and when it is done. A package builds only on the ones before it.
 | 0.23.0 | Fixes from the PR #5 review (done) | 0.20.0 |
 | 0.24.0 | Ask Claude in a subagent (done) | 0.20.0 |
 | 0.25.0 | One note per literature search (done) | – |
-| 1.0.0 | One release with everything, measured | 0.21.0–0.25.0 |
+| 0.26.0 | /rft-update (done) | – |
+| 1.0.0 | One release with everything, measured | 0.21.0–0.26.0 |
 
 ---
 
@@ -289,6 +290,25 @@ from the start. A deferred tool shows only its name until the model loads it wit
 - Tests: the note's sections, its papers, the download plan and the PDF lines, its colour in the
   diagram and on the canvas; the /rft-literature prompt. 228 plugin tests and 74 server tests
   pass.
+
+## 0.26.0 — /rft-update (done)
+
+- **The vault's format** is the config's `version` (`FORMAT` in vault.ts, now 2): it grows only
+  when what a vault holds changes, not with each release. New vaults get the current one; a
+  config with none is format 1.
+- **`/rft-update`** lists what the vault lacks next to what this plugin makes: the folders and
+  templates of each note type (an outdated template is replaced by the current one), the
+  config's format, and the changes of any migration between the two formats (`MIGRATIONS` in
+  update.ts, empty so far: add one when a format change has to rewrite what is there).
+  `/rft-update apply` writes them, then runs rft_sync and rft_validate. No model turn.
+- **Notes are not changed.** `--sections` also adds the sections each note's type has gained, as
+  empty headings before its children list; locked notes are left as they are and named.
+- **A toast at session start** when the vault's format is older (or newer) than the plugin's,
+  read from the config alone.
+- The demo vault in `examples/demo` is updated to format 2.
+- Checked on a copy of a real vault from format 1: two folders, four templates and the config
+  written, the diagram refreshed, 0 errors and 0 warnings, the notes untouched, and a second run
+  with nothing to do; 0 model turns. 232 plugin tests pass.
 
 ## 1.0.0 — One release with everything, measured
 

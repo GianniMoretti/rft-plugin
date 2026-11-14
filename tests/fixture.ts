@@ -57,7 +57,7 @@ export const WEB_FILES: Record<string, string> = {
 
 export function demoFiles(): Record<string, string> {
   return {
-    '.rft/config.json': JSON.stringify({ version: 1, vault: 'vault', project: 'demo', canvas: true, mermaid: false, lastId: { E: 2, D: 1 } }),
+    '.rft/config.json': JSON.stringify({ version: 2, vault: 'vault', project: 'demo', canvas: true, mermaid: false, lastId: { E: 2, D: 1 } }),
     [`vault/directions/${D00}.md`]: note('D00', 'direction', 'done', '', 'Does the thing work', [E01]),
     [`vault/experiments/${E01}.md`]: note('E01', 'experiment', 'done', D00, 'First check', [D01]),
     [`vault/directions/${D01}.md`]: note('D01', 'direction', 'idea', E01, 'A better variant', [E02]),

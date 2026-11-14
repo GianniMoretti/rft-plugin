@@ -20,7 +20,7 @@ describe('activation', () => {
     const w = world(on, {})
     on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.commands).toEqual(['rft', 'rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-next', 'rft-summarize', 'rft-view'])
+    expect(w.commands).toEqual(['rft', 'rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-next', 'rft-summarize', 'rft-update', 'rft-view'])
     expect(w.tools).toEqual([])
     expect(w.opened).toEqual([])
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
@@ -51,7 +51,7 @@ describe('activation', () => {
     const w = world(on, demoFiles(), { refuse: ['rft'] })
     on('prompt.compose', () => ({ sections: [] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.commands).toEqual(['rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-next', 'rft-summarize', 'rft-view'])
+    expect(w.commands).toEqual(['rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-next', 'rft-summarize', 'rft-update', 'rft-view'])
     expect(w.tools).toHaveLength(30)
     expect(w.opened).toEqual(['rft-tree'])
     expect(w.toasts.join()).toContain('/rft')
@@ -61,7 +61,7 @@ describe('activation', () => {
 
   test('no command takes the name of the plugin skill', async () => {
     // a plugin skill named <x> is the command /rft:<x>; the engine refuses a command of the same name
-    expect(['rft', 'rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-next', 'rft-summarize', 'rft-view']).not.toContain(SKILL)
+    expect(['rft', 'rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-next', 'rft-summarize', 'rft-update', 'rft-view']).not.toContain(SKILL)
   })
 
   test('autoOpen off keeps the pane closed', { options: { autoOpen: false } }, async ($, on) => {

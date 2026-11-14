@@ -474,7 +474,7 @@ gets a direction node.
 
 `/rft` starts the interactive tree view (a local page; the user opens its address in a
 browser) and the outline pane; `/rft text` prints the tree; `/rft-view` writes a standalone
-`<vault>/tree.html`; Obsidian shows `Reasoning tree.canvas`. The user can edit a note's text
+`<vault>/tree.html`; `/rft-update` brings a vault made by an older version up to date (point the user to it when a session says the vault is older); Obsidian shows `Reasoning tree.canvas`. The user can edit a note's text
 (not its frontmatter), add notes with their default status, lock a note, set its priority (on the
 kanban, which shows the notes in one column per status), add footnotes and highlights, and
 comment on and suggest changes to a note's text in the tree view, so re-read a note before
