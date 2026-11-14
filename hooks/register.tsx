@@ -21,7 +21,7 @@ import type { CodeEnv, Git } from './lib/ops'
 import { addNode, codeReport, conceptsReport, exportHtml, initVault, loadActive, lockedText, moveNode, rulesText, setCode, setConcept, setRefs, setRepos, setStatus, setTags, setType, tagsReport, today, treeReport } from './lib/ops'
 import { ASSET_PATHS } from './lib/page'
 import type { Config, Io, Loaded, NodeType, Tree } from './lib/vault'
-import { OPEN_HOSTS, planPapers } from './lib/papers'
+import { OPEN_HOSTS, jobNote, planPapers, withEntryPdf } from './lib/papers'
 import { searchReport, similarNotes } from './lib/search'
 import { graphReport } from './lib/graph'
 import { candidates, candidatesReport } from './lib/rebalance'
@@ -34,7 +34,7 @@ import { matches, shellWrites } from './lib/shell'
 import { Answers, type ThreadJob } from './lib/answers'
 import type { Feature } from './lib/tools'
 import { SMALL_TREE, mapGaps, mapReport, mapWarnings, projectMap, readDigests, resolveConcept, setDigest, setSummaries } from './lib/map'
-import { CONFIG_PATH, LEGEND, MARK, NODE_TYPES, bodyOf, counts, countsLine, isAbsolute, join, locate, readConfig, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
+import { CONFIG_PATH, LEGEND, MARK, NODE_TYPES, bodyOf, isLiterature, counts, countsLine, isAbsolute, join, locate, readConfig, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
 
 const PANE = 'rft-tree'
 const TITLE = 'Reasoning tree'
@@ -1000,13 +1000,17 @@ function runPapers($: EngineInterface, h: Here, child: ReturnType<EngineInterfac
   })()
 }
 
-/** Writes `pdf: "[[<file>]]"` into the reference note (read afresh: the user may have edited it). */
-async function linkPaper(h: Here, id: string, file: string): Promise<void> {
+/**
+ * Writes `pdf: "[[<file>]]"` into the reference note, or for one paper of a literature note
+ * (`R05#2`) a `PDF:` line in its entry (read afresh: the user may have edited it).
+ */
+async function linkPaper(h: Here, job: string, file: string): Promise<void> {
+  const { id, entry } = jobNote(job)
   const loaded = await loadActive(h.io)
   const n = loaded.tree.nodes[id]
   if (!n) return
   const text = loaded.texts[id]!
-  const next = setField(text, 'pdf', `"[[${file}]]"`, 'tags')
+  const next = entry ? withEntryPdf(text, entry, file) : setField(text, 'pdf', `"[[${file}]]"`, 'tags')
   if (next !== text) await h.io.write(join(loaded.config.vault, n.path), next)
 }
 
@@ -1255,7 +1259,7 @@ async function datesEdit($: EngineInterface, e: Record<string, unknown>): Promis
  * The literature search: `subject` is a topic in words, a note id or a concept name; the
  * references go under that note, the concept's start note, or the note the topic belongs to.
  */
-const literaturePrompt = (subject: string, where: string | null) => `Run a thorough literature search on ${JSON.stringify(subject)} for this project (rft-manual skill, "Literature"). ${where ? `Place the references under ${where}.` : 'First find where it belongs in the tree (rft_tree, rft_concepts): the note or concept it is about; if it opens a new field, ask me where to put it before adding notes.'} Use the search tools you have (web search, deep research, arXiv); prefer peer-reviewed papers, well-known preprints and surveys, the most cited and the most recent. Read each source before writing about it. For each key paper (usually 4 to 10), add one reference note with rft_add_node (type reference): Source with a link that can be checked (DOI, arXiv id or URL), Summary, Method, Key results as the paper reports them (with the table or section), and under Relevance what it means for this project; status done once summarised from the paper itself, planned if only found. Never invent a citation or a result. Once the notes are written, call rft_collect_papers with their ids: it saves the open-access PDFs in the background. Then give me a short synthesis: what is known, what is open, which setups an experiment could start from; list the directions it suggests and ask which ones to add. Do not add directions or experiments until I say which.`
+const literaturePrompt = (subject: string, where: string | null) => `Run a thorough literature search on ${JSON.stringify(subject)} for this project (rft-manual skill, "Literature"). ${where ? `Place it under ${where}.` : 'First find where it belongs in the tree (rft_tree, rft_concepts): the note or concept it is about; if it opens a new field, ask me where to put it before adding a note.'} Use the search tools you have (web search, deep research, arXiv); prefer peer-reviewed papers, well-known preprints and surveys, the most cited and the most recent. Read each source before writing about it; never invent a citation or a result. Write the whole search as ONE literature note, not a note per paper: rft_add_node with type reference, tags ["literature"], title "Literature on <topic>", status done, and sections Search (what was searched, with which tools, on what date), Papers (one entry per key paper, usually 4 to 10, each starting with a "### <year> <first author> — <title>" line, then a link that can be checked (DOI, arXiv id or URL), what it claims and how, its key results as reported (with the table or section), and what it means for this project), Synthesis (what is known, what is open, which setups an experiment could start from) and Relevance (in a line or two). Then call rft_collect_papers with the note's id: it saves the open-access PDFs in the background and links each under its entry. Then give me a short synthesis in the chat and list the directions it suggests, and the papers that deserve a reference note of their own; add those only once I say which.`
 
 /** The rebalancing request; `scope` (a concept name or a note id) narrows it to one part of the tree. */
 const rebalancePrompt = (scope: string) => `Propose a rebalancing of the reasoning tree (rft-manual skill, "Restructuring the tree")${scope ? `, limited to ${JSON.stringify(scope)} (a concept or a note: consider the branches in it, and moves into it or out of it)` : ''}. Over time some branches grow out of one line of research but belong to another: an experiment hung under the note that happened to come before it, an idea that opened a different line, a branch that would sit better under another concept. Start from the map: rft_map, then rft_map <concept> for the concepts involved (their digests and one-line note summaries); read a note's file only when its summary leaves the move in doubt. For each branch that clearly belongs elsewhere, propose one move: the note to move (its subtree goes with it), its parent now, the new parent, and why in one line. Keep the tree's history in mind: a note that came out of a result stays where the reasoning produced it unless it really is part of another line; when in doubt, leave it. Moves only: if a new concept would help, say so separately (rft_set_concept, after the user agrees). Present the moves as a short numbered table, say what you would leave as it is, and ask me which moves to apply. Do not call rft_move_node until I say yes; then apply only the moves I confirm, each with its why, and finish with rft_validate.`
@@ -1426,7 +1430,7 @@ export const register: Register = (on, options) => {
       const concept = Object.values(loaded.tree.concepts ?? {}).find(c => c.root && c.name.toLowerCase() === subject.toLowerCase())
       const where = id ? loaded.tree.nodes[id]!.name : concept ? `${loaded.tree.nodes[concept.root!]!.name} (the start of the concept "${concept.name}")` : null
       pendingPrompts.push(literaturePrompt(id ? `${loaded.tree.nodes[id]!.title}` : concept ? concept.name : subject, where))
-      return { text: `Claude will search the literature on ${where ?? JSON.stringify(subject)} in a moment and add what it reads as reference notes; directions and experiments only after you choose.` }
+      return { text: `Claude will search the literature on ${where ?? JSON.stringify(subject)} in a moment and write it as one literature note; notes for single papers, directions and experiments only after you choose.` }
     } catch (err) {
       return { text: message(err) }
     }
@@ -1577,6 +1581,7 @@ export const register: Register = (on, options) => {
             ? <Button key={`fold-${id}`} plain onPress={() => toggleFold($, id)}>{isFolded ? '▸' : '▾'}</Button>
             : <Text dimColor>·</Text>}
           <Text color={STATUS_COLOR[n.status] ?? 'inactive'}>{` ${MARK[n.status] ?? '-'} `}</Text>
+          {isLiterature(n) ? <Text color="ide">{`${LITERATURE_MARK} `}</Text> : null}
           <Button key={`node-${id}`} label={`${n.id} ${title}${isFolded ? ` +${n.children.length}` : ''}`} plain onPress={() => selectNode($, id)} />
           {sel === id ? <Text color="claude">{' ◀'}</Text> : null}
         </Box>,
@@ -1616,7 +1621,7 @@ export const register: Register = (on, options) => {
           : <Text dimColor>Run /rft for the interactive tree view in a browser.</Text>}
         {s.error ? <Text color="error">{s.error}</Text> : null}
         {s.problems.length ? <Text color="warning">{`${s.problems.length} problem(s), e.g. ${s.problems[0]}`}</Text> : null}
-        <Text dimColor>{LEGEND}</Text>
+        <Text dimColor>{`${LEGEND} · ${LITERATURE_MARK} literature search`}</Text>
         <Box flexDirection="row" gap={1} flexWrap="wrap">
           <Button key="fold-all" label="Fold all" onPress={() => foldAll($, foldable)} />
           <Button key="unfold-all" label="Unfold all" onPress={() => foldAll($, [])} />
@@ -1629,6 +1634,9 @@ export const register: Register = (on, options) => {
 }
 
 const READ_ONLY = /^(Read|Grep|Glob|LS|WebFetch|WebSearch|ToolSearch|TodoWrite)$/
+
+/** The pane's mark of a literature note (the web view and the canvas give it a colour of its own). */
+const LITERATURE_MARK = '▤'
 
 const STATUS_COLOR: Record<string, 'success' | 'warning' | 'suggestion' | 'error' | 'inactive' | 'ide'> = {
   done: 'success', running: 'warning', planned: 'suggestion', idea: 'suggestion',

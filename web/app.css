@@ -8,7 +8,7 @@
   --link-hl: light-dark(#1f2328, #e6e8ee); --accent: light-dark(#7048e8, #9775fa);
   --label-halo: light-dark(#fbfbfd, #0f1115); --direction: light-dark(#7048e8, #9775fa);
   --experiment: light-dark(#0ca678, #20c997); --reference: light-dark(#d6336c, #f06595);
-  --theory: light-dark(#3b5bdb, #5c7cfa); --done: light-dark(#2f9e44, #40c057);
+  --theory: light-dark(#3b5bdb, #5c7cfa); --literature: light-dark(#0c8599, #22b8cf); --done: light-dark(#2f9e44, #40c057);
   --running: light-dark(#e8590c, #fd7e14); --planned: light-dark(#e8a400, #fab005);
   --idea: light-dark(#f2c94c, #ffe066); --dropped: light-dark(#e03131, #fa5252); --discussed: #868e96;
   --moved: light-dark(#1c7ed6, #4dabf7);
@@ -63,6 +63,7 @@ main { position: relative; flex: 1; min-height: 0; }
 .tone.experiment { --hue: var(--experiment); }
 .tone.reference { --hue: var(--reference); }
 .tone.theory { --hue: var(--theory); }
+.tone.literature { --hue: var(--literature); }
 .tone.s-done { --i: 100%; }
 .tone.s-running { --i: 74%; }
 .tone.s-planned { --i: 52%; }

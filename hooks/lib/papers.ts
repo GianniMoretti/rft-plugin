@@ -3,7 +3,7 @@
 // background downloader (server/rft_papers.py) runs. Pure functions over a loaded vault.
 
 import type { Loaded, RftNode, Tree } from './vault'
-import { ROOT_CONCEPT, front, linkTarget } from './vault'
+import { ROOT_CONCEPT, front, isLiterature, linkTarget } from './vault'
 
 /** Hosts whose papers are open access; arXiv's are always used. */
 export const OPEN_HOSTS = [
@@ -51,6 +51,46 @@ export function paperDir(tree: Tree, n: RftNode): string {
 /** The PDF a reference links (`pdf:`), relative to the vault. */
 export const pdfOf = (text: string) => linkTarget(front(text).pdf)
 
+/** A literature note's papers: the `### ` entries of its Papers section, each with its heading and text. */
+export function literaturePapers(text: string): { heading: string; text: string; start: number; end: number }[] {
+  const sec = /^## Papers\n/m.exec(text)
+  if (!sec) return []
+  const from = sec.index + sec[0].length
+  const stop = /^## /m.exec(text.slice(from))
+  const end = stop ? from + stop.index : text.length
+  const out: { heading: string; text: string; start: number; end: number }[] = []
+  const re = /^### (.*)$/gm
+  re.lastIndex = 0
+  const body = text.slice(from, end)
+  const heads = [...body.matchAll(re)]
+  heads.forEach((m, i) => {
+    const start = from + m.index!
+    const stopAt = i + 1 < heads.length ? from + heads[i + 1]!.index! : end
+    out.push({ heading: m[1]!.trim(), text: text.slice(start, stopAt), start, end: stopAt })
+  })
+  return out
+}
+
+/** The line that links a literature entry's saved PDF. */
+const PDF_LINE = /^PDF: \[\[([^\]]+)\]\]$/m
+
+/**
+ * A literature note with the PDF `file` linked under its paper `n` (1-based), as a `PDF:` line at
+ * the end of the entry; the text unchanged when the entry is gone or already links one.
+ */
+export function withEntryPdf(text: string, n: number, file: string): string {
+  const e = literaturePapers(text)[n - 1]
+  if (!e || PDF_LINE.test(e.text)) return text
+  const body = e.text.replace(/\s+$/, '')
+  return text.slice(0, e.start) + `${body}\nPDF: [[${file}]]\n\n` + text.slice(e.end).replace(/^\n+/, '')
+}
+
+/** A paper job's note and, for a literature note, its entry: `R05#2` is R05's second paper. */
+export const jobNote = (id: string): { id: string; entry: number | null } => {
+  const m = /^(.*)#(\d+)$/.exec(id)
+  return m ? { id: m[1]!, entry: Number(m[2]) } : { id, entry: null }
+}
+
 export type PaperJob =
   | { op: 'fetch'; id: string; arxiv?: string; url?: string; dir: string; title: string; year: string }
   | { op: 'move'; id: string; from: string; dir: string }
@@ -73,6 +113,19 @@ export function planPapers(loaded: Loaded, ids: string[] = [], hosts = OPEN_HOST
     if (n.status === 'dropped' && !ids.length) continue
     const text = texts[id]!
     const dir = paperDir(tree, n)
+    if (isLiterature(n)) {
+      // one job per paper of its Papers section; a saved one stays where it is
+      const entries = literaturePapers(text)
+      if (!entries.length) { plan.skipped.push({ id, why: 'no ### entries under Papers' }); continue }
+      entries.forEach((e, i) => {
+        const at = `${id}#${i + 1}`
+        if (PDF_LINE.test(e.text)) return void plan.saved.push(at)
+        const src = paperSource(e.text, hosts)
+        if (!src) return void plan.skipped.push({ id: at, why: `${e.heading}: no arXiv id or open-access PDF link` })
+        plan.jobs.push({ op: 'fetch', id: at, ...src, dir, title: e.heading, year: '' })
+      })
+      continue
+    }
     const pdf = pdfOf(text)
     if (pdf) {
       if (pdf.slice(0, pdf.lastIndexOf('/')) !== dir) plan.jobs.push({ op: 'move', id, from: pdf, dir })

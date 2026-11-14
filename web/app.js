@@ -249,7 +249,8 @@
   const sideOf = id => (stars.has(id) ? STAR_R * STAR_SIDE : R)
   /** The priority a note glows with: only an open note's (as only they count towards the limits). */
   const glowOf = d => (K.isOpen(d) && HALO[d.priority] ? d.priority : null)
-  const toneOf = d => `tone ${TYPES.includes(d.type) ? d.type : 'other'} s-${STATUSES.includes(d.status) ? d.status : 'other'}`
+  // a literature search (a reference note tagged literature) has a colour of its own
+  const toneOf = d => `tone ${d.type === 'reference' && (d.tags || []).includes('literature') ? 'literature' : TYPES.includes(d.type) ? d.type : 'other'} s-${STATUSES.includes(d.status) ? d.status : 'other'}`
 
   // ---------------------------------------------------------------- drawing
 

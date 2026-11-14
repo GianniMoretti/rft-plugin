@@ -24,7 +24,8 @@ could be done, and when it is done. A package builds only on the ones before it.
 | 0.22.0 | Rules on demand (done) | 0.20.0 |
 | 0.23.0 | Fixes from the PR #5 review (done) | 0.20.0 |
 | 0.24.0 | Ask Claude in a subagent (done) | 0.20.0 |
-| 1.0.0 | One release with everything, measured | 0.21.0–0.24.0 |
+| 0.25.0 | One note per literature search (done) | – |
+| 1.0.0 | One release with everything, measured | 0.21.0–0.25.0 |
 
 ---
 
@@ -272,6 +273,22 @@ from the start. A deferred tool shows only its name until the model loads it wit
 - When no subagent starts, the thread goes to the session as before (`askText`).
 - Checked in a real session: Ask Claude on a comment and on a suggestion each answered in the
   thread, the note unchanged, and no new turn in the main transcript. 227 plugin tests pass.
+
+## 0.25.0 — One note per literature search (done)
+
+- **`/rft-literature` writes one literature note**, not a reference note per paper: an R note
+  tagged `literature`, titled `Literature on <topic>`, with sections Search, Papers (one `###`
+  entry per paper: link, claims, key results, relevance), Synthesis, Relevance and Directions
+  found. Notes for single papers, like directions and experiments, come only once the user
+  chooses them. The session rules and the manual say the same.
+- **A colour of its own**: cyan in the web view (and its legend), on the canvas and in the
+  Mermaid diagram; `▤` before its title in the pane, with a line in the pane's legend.
+- **PDFs per paper**: `rft_collect_papers` on a literature note downloads each entry's
+  open-access paper and links it with a `PDF:` line at the end of the entry. A saved PDF of a
+  literature note is not moved when its concept changes.
+- Tests: the note's sections, its papers, the download plan and the PDF lines, its colour in the
+  diagram and on the canvas; the /rft-literature prompt. 228 plugin tests and 74 server tests
+  pass.
 
 ## 1.0.0 — One release with everything, measured
 

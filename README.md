@@ -12,7 +12,9 @@ interactive tree (pan, zoom, click a node to read it) in a browser.
   source that can be checked, and what they mean for the project. Experiments and directions
   link the references they build on (`refs:`), so every result can be traced to the papers
   behind it. When the work turns to a new field or concept, Claude offers a literature search
-  first (`/rft-literature` asks for one directly).
+  first (`/rft-literature` asks for one directly). A search is written as one **literature
+  note** (an R note tagged `literature`, shown in cyan) that lists every paper found; single
+  papers get notes of their own only when you choose them.
 - **Theory (T..)**: the project's own definitions, methods, taxonomies and arguments, built on
   the directions, experiments and references.
 - **Concepts**: named lines of research. A note can start one, and its subtree belongs to it
@@ -134,7 +136,7 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_suggest_dates` | suggests an experiment's start and/or estimate, with a one-line reason (`suggested_start:`, `suggested_est:`); you accept or dismiss it. Claude never sets a date itself (see Deadlines and the calendar) |
   | `rft_add_deadline` | adds a deadline you gave Claude in the chat (a milestone, with the notes it needs), once you confirm it in a dialog |
   | `rft_suggest_deadline` | suggests a paper submission deadline, read from the venue's official dates page (`source:`); you accept or dismiss it in the Calendar |
-  | `rft_collect_papers` | downloads, in the background, the open-access PDFs of reference notes (arXiv, OpenReview, PMLR, ACL Anthology, NeurIPS/CVF proceedings, ...) into `vault/papers/<concept>/<year> <first author> <title>.pdf`, linked from each note (`pdf:`); saved PDFs follow their concept. Never from paywalled publishers |
+  | `rft_collect_papers` | downloads, in the background, the open-access PDFs of reference notes (arXiv, OpenReview, PMLR, ACL Anthology, NeurIPS/CVF proceedings, ...) into `vault/papers/<concept>/<year> <first author> <title>.pdf`, linked from each note (`pdf:`; in a literature note, a `PDF:` line under each paper); saved PDFs follow their concept. Never from paywalled publishers |
   | `rft_set_tags` | replaces a note's topical tags (lowercase kebab-case), keeping the project, type and status tags |
   | `rft_set_type` | changes the type of a note made with the wrong one: the next free id of the new type, the file moved to that type's folder, the type's sections (no text lost), every link to it renamed |
   | `rft_tags` | lists the topical tags in use with counts, so Claude reuses them |
@@ -493,7 +495,7 @@ needs no network.
 | `/rft-init [starting question]` | activate RFT here and create (or adopt) the vault |
 | `/rft-concepts` | print the concept tree |
 | `/rft-concepts suggest` | ask Claude to propose a concept split; nothing changes until you confirm |
-| `/rft-literature <topic, id or concept>` | ask Claude for a literature search: one reference note per key paper read, under the note or concept it is about, then a synthesis and the directions it suggests (added only once you choose) |
+| `/rft-literature <topic, id or concept>` | ask Claude for a literature search: one literature note with every key paper read, under the note or concept it is about, then a synthesis, the directions it suggests and the papers worth a note of their own (added only once you choose) |
 | `/rft-rebalance [concept or id] [--full]` | ask Claude to propose moving branches under the line of research they belong to, as a table of moves; only the ones you confirm are made, each keeping its origin. The plugin first finds the candidates (notes whose words and references sit closer to another concept than to their own) and Claude judges only those; `--full` has Claude review the whole tree instead |
 | `/rft-next [concept]` | print what is still open, by concept: running and planned experiments, unexplored directions, open questions (no model turn) |
 | `/rft-summarize [concept]` | ask Claude to write the missing note summaries and concept digests of an existing tree, concept by concept (a one-off job) |

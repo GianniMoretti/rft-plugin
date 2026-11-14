@@ -4,8 +4,8 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { addNode, setConcept } from '../hooks/lib/ops'
-import { folderName, paperSource, planPapers } from '../hooks/lib/papers'
-import { load, readConfig, setField } from '../hooks/lib/vault'
+import { folderName, jobNote, literaturePapers, paperSource, planPapers, withEntryPdf } from '../hooks/lib/papers'
+import { canvasJson, isLiterature, load, mermaidNote, readConfig, setField } from '../hooks/lib/vault'
 import { MemoryFs, demoFiles } from './fixture'
 
 const loadDemo = async () => {
@@ -44,5 +44,41 @@ describe('papers', () => {
     expect(plan.jobs).toEqual([{ op: 'move', id: a.id, from: 'papers/Better variants/2017 Zhang mixup.pdf', dir: 'papers/Variants v2' }])
     expect(plan.skipped).toEqual([{ id: 'E01', why: 'not a reference note' }])
     expect(folderName('  a/b: c?  ')).toBe('a b c')
+  })
+
+  test('a literature search is one note: its own sections and colour, a PDF for each paper it lists', async () => {
+    const { fs, io, loaded } = await loadDemo()
+    const papers = [
+      '### 2018 Zhang — mixup: Beyond empirical risk minimization', 'arXiv:1710.09412. Mixes pairs of images and labels.', '',
+      '### 2019 Yun — CutMix', 'https://openreview.net/pdf?id=abc — cuts and pastes patches.', '',
+      '### 2020 Someone — A book', 'A printed book.',
+    ].join('\n')
+    const lit = await addNode(io, loaded, { type: 'reference', title: 'Literature on mixing augmentations', parent: 'D01', date: '2026-02-01', tags: ['literature'], status: 'done', sections: { Search: 'Mixing augmentations; arXiv, web.', Papers: papers, Synthesis: 'CutMix helps at small data.' } })
+    const path = `vault/${lit.path}`
+    const text = fs.read(path)
+    expect([...text.matchAll(/^## (.*)$/gm)].map(m => m[1])).toEqual(['Search', 'Papers', 'Synthesis', 'Relevance', 'Directions found', 'Children in the tree'])
+    let fresh = await load(io, loaded.config)
+    expect(isLiterature(fresh.tree.nodes[lit.id]!)).toBe(true)
+    expect(literaturePapers(text).map(e => e.heading)).toEqual(['2018 Zhang — mixup: Beyond empirical risk minimization', '2019 Yun — CutMix', '2020 Someone — A book'])
+    const plan = planPapers(fresh, [lit.id])
+    expect(plan.jobs).toEqual([
+      { op: 'fetch', id: `${lit.id}#1`, arxiv: '1710.09412', dir: 'papers/General', title: '2018 Zhang — mixup: Beyond empirical risk minimization', year: '' },
+      { op: 'fetch', id: `${lit.id}#2`, url: 'https://openreview.net/pdf?id=abc', dir: 'papers/General', title: '2019 Yun — CutMix', year: '' },
+    ])
+    expect(plan.skipped).toEqual([{ id: `${lit.id}#3`, why: '2020 Someone — A book: no arXiv id or open-access PDF link' }])
+    expect(jobNote(`${lit.id}#2`)).toEqual({ id: lit.id, entry: 2 })
+    expect(jobNote(lit.id)).toEqual({ id: lit.id, entry: null })
+    // the second paper saved: a PDF line at the end of its entry, the rest as it was
+    const linked = withEntryPdf(text, 2, 'papers/General/2019 Yun CutMix.pdf')
+    expect(literaturePapers(linked)[1]!.text).toBe('### 2019 Yun — CutMix\nhttps://openreview.net/pdf?id=abc — cuts and pastes patches.\nPDF: [[papers/General/2019 Yun CutMix.pdf]]\n\n')
+    expect(literaturePapers(linked)[2]!.text).toBe(literaturePapers(text)[2]!.text)
+    expect(withEntryPdf(linked, 2, 'other.pdf')).toBe(linked)
+    fs.write(path, linked)
+    fresh = await load(io, loaded.config)
+    expect(planPapers(fresh, [lit.id]).saved).toEqual([`${lit.id}#2`])
+    // its own colour in the diagram and on the canvas
+    expect(mermaidNote(fresh.tree)).toContain(`:::lit`)
+    expect(mermaidNote(fresh.tree)).toContain('classDef lit ')
+    expect(canvasJson(fresh.tree)).toContain('"color": "#0c8599"')
   })
 })
