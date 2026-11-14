@@ -21,8 +21,9 @@ children / up / down fields are derived from their `parent:` field by the rft to
   path was not taken.
 - **Reference (R..)**, in `references/`: what was *found in the literature*: a paper, a method
   or a literature review, summarised, with the project's own reading of it. New directions,
-  theory notes and sometimes experiments come out of it. A review can hold one child reference
-  per key paper.
+  theory notes and sometimes experiments come out of it. A literature search is one literature
+  note (tagged `literature`) that lists its papers; a paper gets a note of its own only when the
+  user chooses it.
 - **Theory (T..)**, in `theory/`: the project's *own understanding*: definitions of concepts,
   methods, taxonomies of methodologies, proofs and arguments, built on directions, experiments
   and references.

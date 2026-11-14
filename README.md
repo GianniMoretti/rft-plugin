@@ -516,11 +516,12 @@ and it runs. The terminal's typeahead lists them.
 `.rft/config.json`:
 
 ```json
-{ "version": 1, "vault": "vault", "project": "my-project", "canvas": true, "mermaid": false,
+{ "version": 2, "vault": "vault", "project": "my-project", "canvas": true, "mermaid": false,
   "lastId": { "E": 12, "D": 9 }, "webPort": 0, "requireRefs": true, "gpus": 2 }
 ```
 
-`mermaid: true` also writes `Reasoning tree (diagram).md`, a Mermaid flowchart Obsidian draws
+`version` is the vault's format, not the plugin's: it changes only when what a vault holds
+changes, and `/rft-update` brings a vault of an older format up to date. `mermaid: true` also writes `Reasoning tree (diagram).md`, a Mermaid flowchart Obsidian draws
 natively. `lastId` keeps ids from being reused after a note is deleted. `webPort` fixes the
 tree view's port (0: a free one), handy for a standing `ssh -L` forward. `requireRefs: true`
 (set by `/rft-init` on a new vault, off on an adopted one) makes `rft_validate` warn about
@@ -554,6 +555,9 @@ session with the plugin loaded from this folder.
   the standalone page.
 - `hooks/lib/comments.ts`: comments, suggestions and locked notes, as Claude's tools see them.
 - `hooks/lib/priority.ts`: priorities, their limits and Claude's suggested ones.
+- `hooks/lib/tools.ts`: which tools sit in the prompt from the start; `hooks/lib/shell.ts` the
+  files a shell command writes (the guards' input); `hooks/lib/answers.ts` the subagents that
+  answer threads; `hooks/lib/update.ts` `/rft-update` and the vault's format.
 - `web/`: the tree view (`index.html`, `app.js`, `app.css`; `filters.js`, `kanban.js`, `layout.js` and
   `concepts.js` hold the pure filter, kanban, radial layout and concept logic; `markdown.js` the note
   renderer, footnotes and the map from the page back to the note's text; `theme.js` the light and
@@ -562,6 +566,10 @@ session with the plugin loaded from this folder.
 - `server/rft_server.py`: the local server (Python standard library).
 - `skills/rft-manual/SKILL.md`: the manual; `tests/`: the mod's tests on an in-memory vault, the
   outline pane on every surface, and the server's tests.
+- `bench/bench.py`: the token benchmark. It runs tasks headless (`claude -p`) on fresh copies of a
+  project, once per plugin folder, and prints the input tokens, output tokens, cost and turns of
+  each: `python3 bench/bench.py --project <copy> --tasks tasks.json --plugin old=<folder>
+  --plugin new=. --runs 3`. The project is copied, never changed.
 
 ## License
 

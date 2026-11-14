@@ -26,7 +26,7 @@ could be done, and when it is done. A package builds only on the ones before it.
 | 0.24.0 | Ask Claude in a subagent (done) | 0.20.0 |
 | 0.25.0 | One note per literature search (done) | – |
 | 0.26.0 | /rft-update (done) | – |
-| 1.0.0 | One release with everything, measured | 0.21.0–0.26.0 |
+| 1.0.0 | One release with everything, measured (done) | 0.21.0–0.26.0 |
 
 ---
 
@@ -310,15 +310,33 @@ from the start. A deferred tool shows only its name until the model loads it wit
   written, the diagram refreshed, 0 errors and 0 warnings, the notes untouched, and a second run
   with nothing to do; 0 model turns. 232 plugin tests pass.
 
-## 1.0.0 — One release with everything, measured
+## 1.0.0 — One release with everything, measured (done)
 
-- A fixed benchmark on a replica vault (a copy, never the real one), run headless before and
-  after: the size of the session start (rules and tool definitions), and the cost and turns of
-  four tasks: a recall question, adding an experiment, a rebalance, `/rft-next`.
-- Target: the session start no larger than 0.19's, and each task no costlier than in 0.19.
-- An end-to-end check of the tree view in a browser: comments, suggestions, Ask Claude,
-  kanban, calendar, the lock dialog.
-- README, the manual skill and this roadmap describe one coherent plugin.
+- **The benchmark** (`bench/bench.py`): tasks run headless on fresh copies of a replica vault
+  (about 400 notes, 21 concepts), with 0.19.0 and with 1.0.0. Input tokens (input, cache
+  creation and cache reads), Opus:
+
+  | task | 0.19.0 | 1.0.0 | |
+  |---|---|---|---|
+  | session start ("Reply with just OK.") | 47,453 | 44,826 | −5.5% |
+  | a recall question ("have we tried …?") | 97,339 | 91,688 | −5.8% |
+  | adding a planned experiment (mean of 3) | 197,448 | 152,754 | −23% |
+  | `/rft-rebalance`, `/rft-next` | 0 | 0 | no model turn headless |
+
+  One run of adding an experiment gave 145k against 185k the other way round: a single run
+  varies with what the model chooses to read, hence the three runs. `/rft-rebalance` queues its
+  model turn for the next tick, which a headless run never reaches, so its model part is not
+  measured; the candidates it hands Claude are found locally, as in 0.19.
+- **Target met**: the session start is smaller than 0.19's, and no task costs more.
+- **The tree view, end to end**, in the desktop app's built-in browser on a copy of the demo:
+  a priority set on the kanban, a deadline added in the calendar, a comment and a suggestion
+  posted on a quote, the suggestion accepted into the note, a note locked, and the move dialog
+  of a locked note ("Move and unlock"); Ask Claude was checked in a real session in 0.24.0.
+  It found that the built-in browser refuses `confirm()` and `alert()`: Accept never wrote the
+  note, and an edited note could not be left. The page now asks with a second press ("Write
+  it?", or a notice for unsaved changes), and its errors show as a notice in the page.
+- **One coherent plugin**: README, the manual and this roadmap describe 1.0.0 (Ask Claude in the
+  background, literature notes, `/rft-update`, the vault's format, the benchmark).
 
 ---
 

@@ -303,7 +303,7 @@ describe('Ask Claude in a subagent', () => {
     await $.command.run({ command: 'rft', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } } as never)
     lines.push(`RFT_ASK ${JSON.stringify({ id: 'E02', thread: 'c1' })}\n`)
     wake()
-    for (let i = 0; i < 200 && !spawned.length; i++) await new Promise(resolve => setTimeout(resolve, 5))
+    for (let i = 0; i < 200 && !spawned.length; i++) await new Promise(resolve => globalThis.setTimeout(resolve, 5))
     expect(spawned).toHaveLength(1)
     expect(spawned[0]).toMatchObject({ subagent_type: 'rft:thread', run_in_background: true })
     expect(String(spawned[0]!.prompt)).toContain(`Answer thread c1 on ${E02}`)
