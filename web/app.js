@@ -558,7 +558,7 @@
   // ---------------------------------------------------------------- the arrow keys
 
   // In the tree, the arrow keys walk from the note shown: ↑ to its parent, ↓ to a child (the one
-  // shown last, else the first; a folded note unfolds), ← → along its siblings. With no note
+  // shown last, else the first; a folded note unfolds), ← → round its siblings. With no note
   // shown they start at the top. They leave a field, the open drawer and the other pages alone.
   let keysInDrawer = false // the last click was in the drawer: there the arrows scroll the note
 

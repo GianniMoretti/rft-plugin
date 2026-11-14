@@ -109,12 +109,12 @@ describe('arrow keys', () => {
     expect(L.step('down', 'D00', walk({ last: new Map([['D00', 'D03']]) }))).toBe('E01')
   })
 
-  test('left and right move along the siblings, without wrapping', () => {
+  test('left and right move along the siblings, round from the last to the first', () => {
     expect(L.step('right', 'E01', walk())).toBe('D01')
     expect(L.step('right', 'D01', walk())).toBe('E02')
-    expect(L.step('right', 'E02', walk())).toBe(null)
+    expect(L.step('right', 'E02', walk())).toBe('E01')
     expect(L.step('left', 'D01', walk())).toBe('E01')
-    expect(L.step('left', 'E01', walk())).toBe(null)
+    expect(L.step('left', 'E01', walk())).toBe('E02')
     expect(L.step('left', 'D03', walk())).toBe('D02')
   })
 
@@ -129,7 +129,9 @@ describe('arrow keys', () => {
     const two = walk({ roots: ['D00', 'D10'] })
     expect(L.step('right', 'D00', two)).toBe('D10')
     expect(L.step('left', 'D10', two)).toBe('D00')
-    expect(L.step('right', 'D10', two)).toBe(null)
+    expect(L.step('right', 'D10', two)).toBe('D00')
+    // an only child, or a single top: round to itself
+    expect(L.step('right', 'D00', walk())).toBe('D00')
     // a note the walk does not know has no siblings
     expect(L.step('right', 'X99', two)).toBe(null)
   })

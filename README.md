@@ -184,8 +184,9 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
 - The title is the project's name, or the root note's concept when it declares one.
 - Click a node to read its note in a side drawer; links in the note jump to their node. The
   arrow keys walk the tree from the note shown: ↑ to its parent, ↓ to a child (the one shown
-  last, else the first; a folded note unfolds), ← → along its siblings. Once you click in the
-  drawer they scroll the note instead, until you click the tree again. LaTeX
+  last, else the first; a folded note unfolds), ← → round its siblings (past the last, the first
+  again). Once you click in the drawer they scroll the note instead, until you click the tree
+  again. LaTeX
   renders as in Obsidian: `$…$` inline, `$$…$$` displayed (on one line or several); a `$` in
   code, `\$`, and amounts like "$5 and $10" stay text.
 - Images show as in Obsidian: `![[name.png]]` and `![alt](path/to/fig.png)`, with a width as
