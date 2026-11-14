@@ -159,21 +159,24 @@
       syncReadOnly()
     }
 
+    /** Reads the file; false when the server has no scratchpad (one started before it existed). */
     async function load() {
       try {
         const res = await fetch('api/scratchpad', { cache: 'no-store' })
+        if (res.status === 404) return false
         const got = await res.json().catch(() => ({}))
         if (!res.ok || typeof got.text !== 'string') {
           if (saved === null) setMsg(`Not read: ${got.error || `the server answered ${res.status}`}.`, true)
-          return
+          return true
         }
         if (theirs) theirs = { text: got.text, version: got.version }
-        if (saving || theirs || dirty() || (saved !== null && got.version === version)) return
+        if (saving || theirs || dirty() || (saved !== null && got.version === version)) return true
         version = got.version
         setText(got.text)
       } catch (e) {
         // the page's own light says when the server is gone
       }
+      return true
     }
 
     async function save(force = false) {
@@ -268,12 +271,6 @@
       setMsg('')
       setText(t.text)
     })
-    // a change elsewhere comes in; a save the server missed goes again
-    setInterval(() => {
-      if (document.hidden) return
-      if (failed && dirty() && !saving) save()
-      else load()
-    }, every)
     document.addEventListener('visibilitychange', () => { if (!document.hidden) load() })
     // leaving the page: what was typed in the last moment still goes
     window.addEventListener('pagehide', () => {
@@ -286,8 +283,18 @@
       }).catch(() => {})
     })
 
-    btn.hidden = false
-    load().then(() => { if (store.get('scratchpadOpen', false)) setOpen(true, false) })
+    // the button only once the server is known to keep a scratchpad
+    load().then(found => {
+      if (!found) return
+      btn.hidden = false
+      // a change elsewhere comes in; a save the server missed goes again
+      setInterval(() => {
+        if (document.hidden) return
+        if (failed && dirty() && !saving) save()
+        else load()
+      }, every)
+      if (store.get('scratchpadOpen', false)) setOpen(true, false)
+    })
   }
 
   root.RftScratchpad = { todos, continueList, toggleTodo, newTodo, mount }

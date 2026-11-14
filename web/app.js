@@ -3683,8 +3683,9 @@
 
   function first() {
     if (TOKEN) store.set('key', TOKEN)
-    // the scratchpad lives on the server: the standalone page has none
-    if (!EMBED) window.RftScratchpad.mount({ key: editKey, store, every: POLL_MS })
+    // the scratchpad lives on the server: the standalone page has none, and a server started
+    // before it existed serves neither its script nor api/scratchpad
+    if (!EMBED && window.RftScratchpad) window.RftScratchpad.mount({ key: editKey, store, every: POLL_MS })
     render(false)
     hasView = true
     requestAnimationFrame(() => initialView())
