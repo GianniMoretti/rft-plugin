@@ -61,6 +61,8 @@ from pathlib import Path
 from html import unescape as html_unescape
 from urllib.parse import parse_qs, quote, urlsplit
 
+import rft_queue  # the experiment queue, beside this file
+
 # the node types by folder (ID_RE below has their id letters), as TYPES in hooks/lib/vault.ts has them
 SUBDIRS = {"experiments": "experiment", "directions": "direction", "references": "reference", "theory": "theory"}
 TYPES = tuple(SUBDIRS.values())
@@ -77,6 +79,7 @@ PAGE_FILES = {
     "/theme.js": ("theme.js", "text/javascript; charset=utf-8"),
     "/markdown.js": ("markdown.js", "text/javascript; charset=utf-8"),
     "/scratchpad.js": ("scratchpad.js", "text/javascript; charset=utf-8"),
+    "/queue.js": ("queue.js", "text/javascript; charset=utf-8"),
     "/artifacts.js": ("artifacts.js", "text/javascript; charset=utf-8"),
     "/vendor/d3.v7.9.0.min.js": ("vendor/d3.v7.9.0.min.js", "text/javascript; charset=utf-8"),
     "/vendor/LICENSE-d3.txt": ("vendor/LICENSE-d3.txt", "text/plain; charset=utf-8"),
@@ -537,6 +540,9 @@ class Vault:
         self.image_tops = [self.root] + ([outer] if outer and outer != self.root else [])
         self._names: dict[Path, tuple[float, dict[str, list[tuple[str, str]]]]] = {}
         self._names_lock = threading.Lock()
+        # the experiment queue (vault/.queue/): the monitor reads it, and the user reorders, pauses,
+        # cancels and retries jobs; its runner, a process of its own, runs them
+        self.queue = rft_queue.Queue(self.root)
 
     def signature(self) -> str:
         parts = []
@@ -1505,6 +1511,24 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             if data:
                 self.wfile.write(data)
 
+        def _queue_log(self, q: dict, head_only: bool):
+            """GET api/queue/log?id=<job>&lines=<n>: the end of a job's output, only for the page carrying
+            the key (X-RFT-Token, a header no other page can send): a log may hold what a note does not."""
+            given = self.headers.get("X-RFT-Token") or ""
+            if not token or not secrets.compare_digest(given, token):
+                return self._json(403, {"error": "the key is missing or out of date: open the address /rft printed"}, head_only)
+            jid = (q.get("id") or [""])[0]
+            try:
+                lines = int((q.get("lines") or ["40"])[0])
+            except ValueError:
+                lines = 40
+            try:
+                return self._json(200, {"id": jid, "text": vault.queue.log(jid, lines)}, head_only)
+            except rft_queue.NotFound as err:
+                return self._json(404, {"error": str(err)}, head_only)
+            except (rft_queue.QueueError, OSError) as err:
+                return self._json(409, {"error": str(err)}, head_only)
+
         def _json(self, status: int, obj, head_only=False):
             self._send(status, json.dumps(obj, ensure_ascii=False).encode(), "application/json; charset=utf-8", head_only)
 
@@ -1541,6 +1565,10 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 return self._artifact(parse_qs(url.query), head_only)
             if route == "/api/scratchpad":
                 return self._json(*vault.scratchpad(), head_only)
+            if route == "/api/queue":
+                return self._json(*queue_snapshot(vault.queue), head_only)
+            if route == "/api/queue/log":
+                return self._queue_log(parse_qs(url.query), head_only)
             if route == "/api/paper":
                 path = vault.paper((parse_qs(url.query).get("id") or [""])[0])
                 if path is None:
@@ -1621,6 +1649,11 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             (Claude's suggested dates only); POST api/milestone {"title", "due", "needs"?: [ids]} (a new
             deadline), {"id": "M..", "due"?, "needs"?, "status"?} or {"id", "accept" | "dismiss": true}."""
             route = urlsplit(self.path).path
+            if route == "/api/queue":
+                got = self._write_request("/api/queue", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                return self._json(*queue_change(vault.queue, got[1]))
             if route == "/api/dates":
                 got = self._write_request("/api/dates", MAX_NODE_BYTES)
                 if got is None:
@@ -1703,6 +1736,46 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
         do_DELETE = do_PATCH = _refuse
 
     return Handler
+
+
+def queue_snapshot(q) -> tuple[int, dict]:
+    """GET api/queue: the GPUs, the jobs waiting and running, the last ones that ended. A queue with
+    work and no runner (the machine restarted, the runner stopped) gets one."""
+    try:
+        snap = q.snapshot(100)
+    except rft_queue.QueueError as err:
+        return 500, {"error": str(err)}
+    if not snap["runner"] and any(j["state"] == "running" or (j["state"] == "pending" and not snap["paused"]) for j in snap["jobs"]):
+        try:
+            q.wake()
+        except OSError:
+            pass
+    return 200, snap
+
+
+QUEUE_OPS = ('expected {op: "move", id, before?: "top" or a job id or null}, {op: "cancel", id}, {op: "retry", id}, '
+             '{op: "pause", paused: true or false} or {op: "gpus", allowed: [GPU indices] or null}')
+
+
+def queue_change(q, req: dict) -> tuple[int, dict]:
+    """POST api/queue: the user's change to the queue, from the monitor."""
+    op, jid = req.get("op"), req.get("id")
+    try:
+        if op == "move" and isinstance(jid, str) and (req.get("before") is None or isinstance(req.get("before"), str)):
+            return 200, {"job": q.move(jid, req.get("before"))}
+        if op == "cancel" and isinstance(jid, str):
+            return 200, {"job": q.cancel(jid, "cancelled in the tree view")}
+        if op == "retry" and isinstance(jid, str):
+            return 200, {"job": q.retry(jid, by="user")}
+        if op == "pause" and isinstance(req.get("paused"), bool):
+            return 200, q.pause(req["paused"])
+        if op == "gpus" and "allowed" in req:
+            return 200, q.allow(req["allowed"])
+    except rft_queue.NotFound as err:
+        return 404, {"error": str(err)}
+    except rft_queue.QueueError as err:
+        return 409, {"error": str(err)}
+    return 400, {"error": QUEUE_OPS}
 
 
 def vault_key(vault: Path) -> str:
