@@ -515,6 +515,7 @@
     renderDrawerPriority(n)
     renderDrawerDates(n)
     markRows()
+    syncNotebook(n)
     const summary = document.getElementById('drawer-summary')
     summary.textContent = n.summary || ''
     summary.hidden = !n.summary
@@ -1315,6 +1316,7 @@
     hideSelBar()
     fnPop.hidden = true
     document.getElementById('drawer').hidden = true
+    hideNotebook()
     selected = null
     gNodes.selectAll('g.node').attr('class', n => nodeClass(n.data))
     markCards()
@@ -1774,6 +1776,127 @@
     }
   })
 
+  // ---------------------------------------------------------------- an experiment's notebook (server/rft_notebook.py)
+
+  // the marimo notebook that rebuilds an experiment's Result, on the left while its note is open on
+  // the right: the server starts the editor of the experiment's repo (POST api/notebook, with the
+  // key: the editor runs code) and the page frames it, one frame for every notebook. Closed by
+  // hand, it stays closed for the notes opened after, until the drawer's notebook button opens it.
+  const nbPane = document.getElementById('nbpane')
+  const nbFrame = document.getElementById('nb-frame')
+  const nbMsg = document.getElementById('nb-msg')
+  const nbRun = document.getElementById('nb-run')
+  const nbTab = document.getElementById('nb-tab')
+  const nbBtn = document.getElementById('drawer-notebook')
+  const nbUrls = new Map() // note id → its editor's address, once the server gave it
+  let nbShown = null // the note whose notebook the pane shows
+  let nbClosed = Boolean(store.get('notebookClosed', false))
+
+  /** Shows or hides the notebook pane for the note just opened. */
+  function syncNotebook(n) {
+    const has = Boolean(n && n.notebook) && !EMBED
+    nbBtn.hidden = !has
+    if (!has || nbClosed) { hideNotebook(); return }
+    openNotebook(n)
+  }
+
+  async function openNotebook(n) {
+    nbShown = n.id
+    nbPane.hidden = false
+    nbBtn.setAttribute('aria-pressed', 'true')
+    document.getElementById('nb-title').textContent = `${n.id} · notebook`
+    nbRun.textContent = A.reproducedText(n.reproduced)
+    nbRun.className = `nb-run${n.reproduced && n.reproduced.state ? ` r-${n.reproduced.state}` : ''}`
+    nbRun.title = n.reproduced ? 'The last run by rft_run_notebook, which checks RESULTS against the note\'s Result' : 'Claude runs it with rft_run_notebook'
+    let url = nbUrls.get(n.id)
+    if (!url) {
+      if (!editKey()) { showNbMsg('Open the address /rft printed: the notebook runs code, so it needs the key.'); return }
+      showNbMsg('Starting the notebook in its repo\'s environment… (the first time can take a minute)')
+      try {
+        const res = await fetch('api/notebook', {
+          method: 'POST',
+          cache: 'no-store',
+          headers: { 'Content-Type': 'application/json', 'X-RFT-Token': editKey() },
+          body: JSON.stringify({ id: n.id }),
+        })
+        const reply = await res.json().catch(() => ({}))
+        if (!res.ok || typeof reply.url !== 'string') throw new Error(reply.error || `the server answered ${res.status}`)
+        url = reply.url
+        nbUrls.set(n.id, url)
+      } catch (e) {
+        if (nbShown === n.id) showNbMsg(`The notebook did not open: ${e.message}`)
+        return
+      }
+      if (nbShown !== n.id) return
+    }
+    nbMsg.hidden = true
+    nbFrame.hidden = false
+    nbTab.href = url
+    openFrame(nbFrame, url, { title: `The notebook of ${n.id}`, allow: 'clipboard-read; clipboard-write' })
+  }
+
+  function showNbMsg(text) {
+    nbMsg.textContent = text
+    nbMsg.hidden = false
+    nbFrame.hidden = true
+  }
+
+  /** The pane hidden; its frame kept, so the same notebook comes back as it was. */
+  function hideNotebook() {
+    nbShown = null
+    nbPane.hidden = true
+    nbBtn.setAttribute('aria-pressed', 'false')
+  }
+
+  nbBtn.addEventListener('click', () => {
+    nbClosed = !nbPane.hidden
+    store.set('notebookClosed', nbClosed)
+    const n = selected && byId.get(selected)
+    if (nbClosed || !n) hideNotebook()
+    else openNotebook(n)
+  })
+  document.getElementById('nb-close').addEventListener('click', () => {
+    nbClosed = true
+    store.set('notebookClosed', true)
+    hideNotebook()
+  })
+
+  // its right edge drags (arrow keys once focused), a double-click restores the default
+  const nbResizer = document.getElementById('nbpane-resize')
+  const NB_MIN = 320
+  function setNotebookWidth(w, save = true) {
+    const v = Number(w)
+    const width = w == null || !Number.isFinite(v) ? null : Math.round(Math.min(window.innerWidth * 0.92, Math.max(NB_MIN, v)))
+    if (width == null) mainEl.style.removeProperty('--nb-w')
+    else mainEl.style.setProperty('--nb-w', `${width}px`)
+    if (save) store.set('notebookWidth', width)
+  }
+  setNotebookWidth(store.get('notebookWidth', null), false)
+  let nbDrag = null
+  nbResizer.addEventListener('pointerdown', ev => {
+    if (ev.button !== 0) return
+    ev.preventDefault()
+    nbResizer.setPointerCapture(ev.pointerId)
+    nbDrag = { x: ev.clientX, w: nbPane.offsetWidth }
+    document.body.classList.add('resizing')
+  })
+  nbResizer.addEventListener('pointermove', ev => { if (nbDrag) setNotebookWidth(nbDrag.w + ev.clientX - nbDrag.x, false) })
+  const nbEnd = () => {
+    if (!nbDrag) return
+    nbDrag = null
+    document.body.classList.remove('resizing')
+    store.set('notebookWidth', nbPane.offsetWidth)
+  }
+  nbResizer.addEventListener('pointerup', nbEnd)
+  nbResizer.addEventListener('lostpointercapture', nbEnd)
+  nbResizer.addEventListener('dblclick', () => setNotebookWidth(null))
+  nbResizer.addEventListener('keydown', ev => {
+    const d = { ArrowLeft: -1, ArrowRight: 1 }[ev.key]
+    if (!d) return
+    ev.preventDefault()
+    setNotebookWidth(nbPane.offsetWidth + d * (ev.shiftKey ? 120 : 30))
+  })
+
   // ---------------------------------------------------------------- a concept's artifact (web/artifacts.js)
 
   // the page of a concept's results Claude writes (vault/artifacts/), shown in the drawer in a note's
@@ -1800,6 +1923,7 @@
     closeAdder(); closeMover(); closeRetyper(); closeComposer(); hideSelBar(); setHighlighting(false)
     fnPop.hidden = true
     selected = null
+    hideNotebook()
     gNodes.selectAll('g.node').attr('class', n => nodeClass(n.data))
     markCards()
     artifactShown = cid
