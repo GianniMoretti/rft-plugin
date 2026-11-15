@@ -628,3 +628,28 @@ a.cal-dl-name:hover { text-decoration: underline; }
 #pad-msg { flex: 1; min-width: 0; }
 #pad-msg.error { color: var(--dropped); flex: none; }
 .pad-file { margin-left: auto; }
+
+/* a concept's artifact, in the drawer in a note's place: wider than a note by default (its own
+   width once dragged), its header above a frame that scrolls on its own */
+main { --artifact-w: max(var(--drawer-w), min(calc(820px * var(--font-scale)), 62vw)); }
+main.artifact-open #drawer { width: min(var(--artifact-w), 92vw); }
+main.artifact-open #drawer-resize { right: min(var(--artifact-w), 92vw); }
+main.artifact-open:has(#drawer:not([hidden])) #kanban, main.artifact-open:has(#drawer:not([hidden])) #calendar { right: min(var(--artifact-w), 92vw); }
+#drawer.artifact-mode:not([hidden]) { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; }
+#drawer.artifact-mode > :not(#artifact-view) { display: none !important; }
+#artifact-view:not([hidden]) { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+#artifact-view .drawer-head { align-items: flex-start; }
+.art-title { font-size: 1.15em; margin: 6px 0 2px; }
+.art-summary { margin: 0 0 2px; }
+.art-state { margin: 4px 0 2px; font-size: 0.9em; color: var(--muted); }
+.art-state.stale { color: var(--running); }
+.art-state.fresh::before, .art-state.stale::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--done); }
+.art-state.stale::before { background: var(--running); }
+.art-subs { font-size: 0.9em; color: var(--muted); margin: 2px 0; }
+.art-subs a { cursor: pointer; text-decoration: none; }
+.art-subs a:hover { text-decoration: underline; }
+.art-sub.none, .art-sub.empty { opacity: 0.7; }
+.art-frame:not([hidden]) { flex: 1; min-height: 0; margin: 8px -16px 0; border-top: 1px solid var(--line); }
+.art-frame iframe { display: block; width: 100%; height: 100%; border: 0; background: var(--panel); }
+/* a concept's name on its region or badge opens its artifact */
+#badges .badge { cursor: pointer; }

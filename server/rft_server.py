@@ -285,9 +285,21 @@ def result_of(text: str) -> str:
     return "\n".join(lines[start + 1:end]).strip()
 
 
+def has_result(status: str, text: str) -> bool:
+    """Whether an experiment has a result: done, or a Result that says something once it runs (a
+    planned experiment or an idea has none, whatever its Result holds), as hasResultIn in hooks/lib/vault.ts."""
+    return status == "done" or (status not in ("planned", "idea") and result_of(text) != "")
+
+
 def experiment_key(n: dict, text: str) -> str:
     """What a concept's artifact is written from, for one experiment, as experimentKey in hooks/lib/artifacts.ts."""
     return fnv(f"{n['id']}|{n['status']}|{n['title']}|{n.get('summary') or ''}|{n.get('supersededBy') or ''}|{result_of(text)}")
+
+
+def image_key(key: str) -> str:
+    """The key an artifact's frame gets for its images: it reads image files as the vault key does,
+    and writes nothing, so a script of the artifact that learns it can change no note."""
+    return hashlib.sha256(f"{key}:images".encode()).hexdigest()[:32]
 
 
 def artifact_head(text: str) -> dict | None:
@@ -609,7 +621,7 @@ class Vault:
                 nodes[nid].update({k: v for k, v in plan.items() if v})
                 if ftype == "experiment":
                     texts[nid] = text
-                    if nodes[nid]["status"] == "done" or result_of(text):
+                    if has_result(nodes[nid]["status"], text):
                         nodes[nid]["hasResult"] = True
                 after_of[nid] = link_targets(fm.get("after"))
                 cname = unquote(fm.get("concept"))
@@ -1431,21 +1443,23 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 self.wfile.write(body)
 
         def _artifact(self, q: dict, head_only: bool):
-            """GET api/artifact?concept=<id>[&theme=dark][&y=<px>][&token=<key>]: the concept's artifact as
-            a document of its own, in a sandbox: its theme, the base style and the frame's runtime first,
-            its images through api/image (with the key, when this request carries it)."""
+            """GET api/artifact?concept=<id>[&theme=dark][&y=<px>][&token=<image key>]: the concept's artifact
+            as a document of its own, in a sandbox: its theme, the base style and the frame's runtime first,
+            its images through api/image (with the image key when this request carries it or the vault key:
+            never the vault key itself, which a script of the page could read)."""
             one = lambda k: (q.get(k) or [""])[0]
             cid = one("concept")
             page = vault.artifact(cid)
             if page is None:
                 return self._send(404, b"no artifact for this concept", "text/plain", head_only)
-            keyed = bool(token) and secrets.compare_digest(one("token").encode(), token.encode())
+            given = one("token").encode()
+            keyed = bool(token) and (secrets.compare_digest(given, token.encode()) or secrets.compare_digest(given, image_key(token).encode()))
 
             def image(m):
                 src = m.group(3)
                 if re.match(r"^\s*(data:|https?:|//)", src, re.I):
                     return m.group(0)
-                url = f"api/image?artifact={cid}&amp;src={quote(html_unescape(src), safe='')}" + (f"&amp;token={token}" if keyed else "")
+                url = f"api/image?artifact={cid}&amp;src={quote(html_unescape(src), safe='')}" + (f"&amp;token={image_key(token)}" if keyed else "")
                 return f"{m.group(1)}{m.group(2)}{url}{m.group(2)}"
 
             theme = "dark" if one("theme") == "dark" else "light"
@@ -1463,7 +1477,8 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             not in the vault is refused whether it exists or not, so nothing outside can be probed."""
             one = lambda k: (q.get(k) or [""])[0]
             path = vault.artifact_image(one("artifact"), one("src")) if one("artifact") else vault.image(one("note"), one("src"))
-            keyed = bool(token) and secrets.compare_digest(one("token").encode(), token.encode())
+            given = one("token").encode()
+            keyed = bool(token) and (secrets.compare_digest(given, token.encode()) or secrets.compare_digest(given, image_key(token).encode()))
             if path is None or not (keyed or vault.inside(path)):
                 if keyed:
                     return self._send(404, b"no such image", "text/plain", head_only)

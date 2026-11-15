@@ -1209,6 +1209,8 @@ class ArtifactTest(unittest.TestCase):
         (vault / "experiments" / "E06 Cosine.md").write_text(note("E06", "experiment", "done", "D04 Mixup", "Cosine").replace("Text of E06.", "## Result\n+1 point."))
         (vault / "experiments" / "E07 Third.md").write_text(note("E07", "experiment", "running", "D04 Mixup", "Third").replace("Text of E07.", "## Result\nPartial: +0.5."))
         (vault / "experiments" / "E08 Planned.md").write_text(note("E08", "experiment", "planned", "D04 Mixup", "Planned").replace("Text of E08.", "## Result\n"))
+        # planned: no result, whatever its Result holds
+        (vault / "experiments" / "E09 Later.md").write_text(note("E09", "experiment", "planned", "D04 Mixup", "Later").replace("Text of E09.", "## Result\nNot run yet."))
         head = {"concept": "D04", "name": "Mix-based augmentation", "updated": "2026-03-01",
                 "basis": {"E05": "33efe36b", "E06": "00000000", "E03": "12345678"}}
         cls.page = '<h1>Mix</h1>\n<p><a href="#E05">E05</a> <img src="fig.png"> <img src="data:image/png;base64,AA=="> <img src="https://x.org/a.png"> <img src="/abs/out.png"></p>\n'
@@ -1247,6 +1249,9 @@ class ArtifactTest(unittest.TestCase):
         self.assertTrue(nodes["E05"]["hasResult"])
         self.assertTrue(nodes["E07"]["hasResult"])
         self.assertNotIn("hasResult", nodes["E08"])
+        self.assertNotIn("hasResult", nodes["E09"])
+        self.assertFalse(rft_server.has_result("planned", "## Result\nNot run yet."))
+        self.assertTrue(rft_server.has_result("dropped", "## Result\nBug in the loader."))
         self.assertNotIn("hasResult", nodes["D04"])
 
     def test_the_key_of_an_experiment_is_the_plugins(self):
@@ -1296,14 +1301,19 @@ class ArtifactTest(unittest.TestCase):
         self.assertIn('src="data:image/png;base64,AA=="', html)
         self.assertIn('src="https://x.org/a.png"', html)  # left to the policy, which blocks it
         self.assertIn('src="api/image?artifact=D04&amp;src=%2Fabs%2Fout.png"', html)
-        keyed = self.get(f"/api/artifact?concept=D04&token={KEY}")[2].decode()
-        self.assertIn(f'src="api/image?artifact=D04&amp;src=fig.png&amp;token={KEY}"', keyed)
+        # the frame gets the image key, which reads images and writes nothing, never the vault key
+        ikey = rft_server.image_key(KEY)
+        for given in (KEY, ikey):
+            keyed = self.get(f"/api/artifact?concept=D04&token={given}")[2].decode()
+            self.assertIn(f'src="api/image?artifact=D04&amp;src=fig.png&amp;token={ikey}"', keyed)
+            self.assertNotIn(KEY, keyed)
         self.assertNotIn("token=", self.get("/api/artifact?concept=D04&token=wrong")[2].decode())
         status, ctype, data = self.get("/api/image?artifact=D04&src=fig.png")
         self.assertEqual((status, ctype, data), (200, "image/png", b"\x89PNG fig"))
         out = quote(str(self.root / "out.png"), safe="")
         self.assertEqual(self.get(f"/api/image?artifact=D04&src={out}")[0], 403)
         self.assertEqual(self.get(f"/api/image?artifact=D04&src={out}&token={KEY}")[2], b"\x89PNG out")
+        self.assertEqual(self.get(f"/api/image?artifact=D04&src={out}&token={ikey}")[2], b"\x89PNG out")
         self.assertEqual(self.get("/api/image?artifact=D99&src=fig.png")[0], 403)
 
     def test_only_an_artifact_of_the_vault_by_its_concept(self):

@@ -42,6 +42,11 @@ describe('artifacts: results and their keys', () => {
     expect(l.tree.nodes[sweep.id]!.hasResult).toBeUndefined()
     await setStatus(io, l, sweep.id, 'done')
     expect(l.tree.nodes[sweep.id]!.hasResult).toBe(true)
+    // a planned experiment has none, whatever its Result holds; once it runs, its Result counts
+    const later = await addNode(io, l, { type: 'experiment', title: 'Later', parent: 'D01', date: '2026-02-01', status: 'planned', sections: { Result: 'Not run yet.' } })
+    expect(l.tree.nodes[later.id]!.hasResult).toBeUndefined()
+    await setStatus(io, l, later.id, 'running')
+    expect(l.tree.nodes[later.id]!.hasResult).toBe(true)
   })
 
   test("an experiment's key is FNV-1a over its id, status, title, summary, superseding note and Result, as the server computes it", () => {

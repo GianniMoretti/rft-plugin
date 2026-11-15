@@ -538,7 +538,7 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
         if (why) nodes[id]!.suggestedWhy = why
       }
       readPlan(nodes[id]!, fm)
-      if (fmType === 'experiment' && (nodes[id]!.status === 'done' || resultOf(text))) nodes[id]!.hasResult = true
+      if (fmType === 'experiment' && hasResultIn(nodes[id]!.status, text)) nodes[id]!.hasResult = true
       afterRef[id] = linksIn(fm.after)
       texts[id] = text
       parentRef[id] = linkTarget(fm.parent)
@@ -874,6 +874,14 @@ export function resultOf(text: string): string {
   const at = sectionAt(lines, 'Result')
   return at ? lines.slice(at.start + 1, at.end).map(l => l.line).join('\n').trim() : ''
 }
+
+/**
+ * Whether an experiment has a result: it is done, or its Result says something while it runs or
+ * after (a planned experiment or an idea has none, whatever its Result holds: "Not run yet."). As
+ * has_result in server/rft_server.py.
+ */
+export const hasResultIn = (status: string, text: string) =>
+  status === 'done' || (status !== 'planned' && status !== 'idea' && resultOf(text) !== '')
 
 /** A note's `## Code` section, read back; null when it has none. */
 export function codeSection(text: string): CodeSection | null {

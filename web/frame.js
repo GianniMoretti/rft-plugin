@@ -33,10 +33,12 @@
     }
   })
 
-  let marks = {}
+  let marks = null // id → { cls, title }, once the page sent them; a link to no note in it is marked missing
   function decorate() {
+    if (!marks) return
     for (const el of links()) {
-      const m = marks[noteOf(el)]
+      const id = noteOf(el)
+      const m = marks[id] || { cls: 'rft-note missing', title: `No note ${id} in the tree` }
       el.classList.forEach(c => { if (c === 'rft-note' || c === 'missing' || c === 'superseded' || c.startsWith('s-')) el.classList.remove(c) })
       if (!m) continue
       for (const c of m.cls.split(' ')) if (c) el.classList.add(c)

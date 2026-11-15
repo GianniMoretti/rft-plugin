@@ -4,7 +4,8 @@
 // `api/node` for a new note under the one shown and `api/type` to change its type, and keeps a
 // note's discussion (comments, suggestions) with `api/comment`, its lock with `api/lock` and its
 // priority (the user's alone; also the answer to Claude's suggested one) with `api/priority`, and
-// mounts the scratchpad (web/scratchpad.js, `api/scratchpad`); or
+// mounts the scratchpad (web/scratchpad.js, `api/scratchpad`), and shows a concept's artifact in the
+// drawer when the concept is clicked (web/artifacts.js; `api/artifact`, in a sandboxed frame); or
 // inlined into a standalone tree.html by /rft-view, where `window.RFT_DATA` holds the tree,
 // every note's text and its threads, and nothing is edited.
 (function () {
@@ -53,6 +54,9 @@
   let view = 'tree' // tree: the reasoning tree; concepts: the concept tree
   let focus = null // the concept whose subtree alone is drawn, or null
   let shown = null // the note in the drawer as last read: { id, body, version }
+  let artifactShown = null // the concept whose artifact the drawer shows instead of a note, or null
+  let pendingArtifact = null // ?artifact=<concept id>: the artifact to open once the tree is drawn
+  const A = window.RftArtifacts
   let editing = null // while a note's text is edited: { id, version, lead, text (as opened), newer (on a conflict) }
   let saving = false
   let adding = false
@@ -121,6 +125,7 @@
       if (CAL_MODES.includes(q.get('cal'))) calMode = q.get('cal')
       if (q.has('focus')) focus = q.get('focus') || null
       if (q.has('note')) selected = q.get('note')
+      if (q.has('artifact')) pendingArtifact = q.get('artifact')
       buildArrowMarkers()
       buildHalos()
       layoutKind = store.get('layout', 'td')
@@ -132,6 +137,8 @@
       if (fq.has('hide')) filters = F.normalise({ ...filters, mode: 'hide' })
       setFont(new URLSearchParams(location.search).get('font') || store.get('font', 1), false)
       setDrawerWidth(store.get('drawerWidth', null), false)
+      const aw = Number(store.get('artifactWidth', null))
+      if (aw > 0) mainEl.style.setProperty('--artifact-w', `${aw}px`)
       buildLegend()
       setLegendOpen(store.get('legendOpen', true))
       showOrigins = Boolean(store.get('origins', false)) || q.get('origins') === 'on'
@@ -490,6 +497,7 @@
   async function select(id) {
     // the note being edited stays as it is; another one only once its changes are saved or dropped
     if (editing && (editing.id === id || !leaveEditor())) return
+    if (artifactShown) leaveArtifact()
     if (id !== selected) { closeAdder(); closeMover(); closeRetyper() }
     selected = id
     showEditButton()
@@ -499,7 +507,7 @@
     if (n.parent) lastChild.set(n.parent, id)
     const drawer = document.getElementById('drawer')
     drawer.hidden = false
-    renderConceptPath(document.getElementById('drawer-concept'), n.concept, 'Focus on this concept')
+    renderConceptPath(document.getElementById('drawer-concept'), n.concept, "Open this concept's artifact", openArtifact)
     renderOrigin(n)
     renderRefs(n)
     renderCode(document.getElementById('drawer-code'), n.concept)
@@ -1321,9 +1329,10 @@
     const v = Number(w)
     drawerW = w == null || !Number.isFinite(v) ? null
       : Math.round(Math.min(Math.max(DRAWER_MIN, window.innerWidth * 0.92), Math.max(DRAWER_MIN, v)))
-    if (drawerW == null) mainEl.style.removeProperty('--drawer-w')
-    else mainEl.style.setProperty('--drawer-w', `${drawerW}px`)
-    if (save) store.set('drawerWidth', drawerW)
+    const prop = artifactShown ? '--artifact-w' : '--drawer-w'
+    if (drawerW == null) mainEl.style.removeProperty(prop)
+    else mainEl.style.setProperty(prop, `${drawerW}px`)
+    if (save) store.set(artifactShown ? 'artifactWidth' : 'drawerWidth', drawerW)
   }
   let drag = null // while the edge is dragged: where the press started, and the width then
   resizer.addEventListener('pointerdown', ev => {
@@ -1342,7 +1351,7 @@
   })
   const endDrag = () => {
     if (!drag) return
-    if (drag.moved) store.set('drawerWidth', drawerW)
+    if (drag.moved) store.set(artifactShown ? 'artifactWidth' : 'drawerWidth', drawerW)
     drag = null
     document.body.classList.remove('resizing')
   }
@@ -1458,13 +1467,13 @@
     else at = [x, y - 36]
     const left = atEdge && layoutKind !== 'radial'
     const pill = d3.select('#badges').append('g').attr('class', `badge ${className}`).attr('data-x', at[0]).attr('data-y', at[1])
-      .attr('data-concept', c.id).on('click', ev => { ev.stopPropagation(); setFocus(c.id) })
+      .attr('data-concept', c.id).on('click', ev => { ev.stopPropagation(); openArtifact(c.id) })
     const text = pill.append('text').attr('text-anchor', left ? 'start' : 'middle').attr('x', left ? 8 : 0).attr('y', left ? -5 : 4)
       .attr('font-size', 11.5).text(c.name)
     const w = Math.max(40, text.node().getComputedTextLength() + 16)
     pill.insert('rect', 'text').attr('x', left ? 0 : -w / 2).attr('y', left ? -19 : -10).attr('width', w).attr('height', 19).attr('rx', 9.5)
       .attr('fill', C.colourOf(concepts, c.id))
-    pill.append('title').text(`${c.name}${c.summary ? ' — ' + c.summary : ''} (click to focus)`)
+    pill.append('title').text(`${c.name}${c.summary ? ' — ' + c.summary : ''} (click: its artifact)`)
   }
 
   function drawConcepts(pos) {
@@ -1522,17 +1531,18 @@
   }
 
   /** The concept path of `id` as links that focus on each concept. */
-  function renderConceptPath(box, id, title) {
+  /** The concept path of `id`, each concept a link: to `pick` it (a note's header, an artifact's: its artifact), else to focus on it. */
+  function renderConceptPath(box, id, title, pick) {
     box.innerHTML = ''
     const path = C.pathOf(concepts, concepts.has(id) ? id : C.ROOT)
     path.forEach((cid, i) => {
       if (i) box.append(' › ')
       const a = document.createElement('a')
       a.textContent = concepts.get(cid).name
-      a.title = cid === C.ROOT ? 'Show the whole tree' : title
+      a.title = cid === C.ROOT && !pick ? 'Show the whole tree' : title
       const colour = C.colourOf(concepts, cid)
       if (colour) a.style.color = colour
-      a.addEventListener('click', ev => { ev.preventDefault(); setFocus(cid === C.ROOT ? null : cid) })
+      a.addEventListener('click', ev => { ev.preventDefault(); if (pick) pick(cid); else setFocus(cid === C.ROOT ? null : cid) })
       box.appendChild(a)
     })
   }
@@ -1676,7 +1686,7 @@
     cviewport.append('g').selectAll('path').data(top.links()).join('path').attr('class', 'clink').attr('d', clink)
     const node = cviewport.append('g').selectAll('g').data(top.descendants()).join('g')
       .attr('class', 'cnode').attr('transform', n => `translate(${n.p[0]},${n.p[1]})`)
-      .on('click', (ev, n) => { ev.stopPropagation(); openConcept(n.data.id) })
+      .on('click', (ev, n) => { ev.stopPropagation(); openArtifact(n.data.id) })
     const repos = c => c.repos || []
     const baseName = p => p.replace(/\/+$/, '').split('/').pop() || p
     node.append('title').text(n => `${n.data.name}${n.data.summary ? ' — ' + n.data.summary : ''}${repos(n.data).length ? '\nCode: ' + repos(n.data).join(', ') : ''}`)
@@ -1727,6 +1737,160 @@
     centreOn(target)
     setTimeout(() => flashConcept(id), 450)
   }
+
+  // ---------------------------------------------------------------- pages in a frame
+
+  // a page of its own in a frame inside `box`: made once, loaded again only when `version` changes
+  // (a page the frame was not made for: made anew), its messages taken only from that frame
+  const frames = new Map() // box → { frame, version, sandbox, onMessage }
+  function openFrame(box, src, opts = {}) {
+    let f = frames.get(box)
+    if (!f || f.sandbox !== (opts.sandbox ?? null)) {
+      box.replaceChildren()
+      const frame = document.createElement('iframe')
+      if (opts.sandbox != null) frame.setAttribute('sandbox', opts.sandbox)
+      frame.setAttribute('referrerpolicy', 'no-referrer')
+      if (opts.title) frame.title = opts.title
+      box.appendChild(frame)
+      f = { frame, version: null, sandbox: opts.sandbox ?? null, onMessage: null }
+      frames.set(box, f)
+    }
+    f.onMessage = opts.onMessage || null
+    const version = String(opts.version ?? src)
+    if (f.version !== version) {
+      f.version = version
+      if (opts.srcdoc != null) { f.frame.removeAttribute('src'); f.frame.srcdoc = opts.srcdoc } else { f.frame.removeAttribute('srcdoc'); f.frame.src = src }
+    }
+    return f.frame
+  }
+  function closeFrame(box) {
+    frames.delete(box)
+    box.replaceChildren()
+  }
+  window.addEventListener('message', ev => {
+    for (const f of frames.values()) {
+      if (ev.source === f.frame.contentWindow) { if (f.onMessage) f.onMessage(ev.data || {}); return }
+    }
+  })
+
+  // ---------------------------------------------------------------- a concept's artifact (web/artifacts.js)
+
+  // the page of a concept's results Claude writes (vault/artifacts/), shown in the drawer in a note's
+  // place when the concept is clicked: its name on a region or badge, its node in the concept view,
+  // the concept path in a note's header. A note link in it opens the note; the note's concept path
+  // brings the artifact back, where it was scrolled to.
+  const artView = document.getElementById('artifact-view')
+  const artFrame = document.getElementById('art-frame')
+  const artScroll = new Map() // concept → where its artifact was scrolled to
+  const themeNow = () => (document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
+  let imageKey = '' // the key the frame gets for its images, which writes nothing (image_key in server/rft_server.py)
+  async function deriveImageKey() {
+    const key = editKey()
+    if (!key || !window.crypto || !crypto.subtle) return
+    try {
+      const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${key}:images`))
+      imageKey = [...new Uint8Array(hash)].map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 32)
+    } catch (e) { imageKey = '' }
+  }
+
+  async function openArtifact(cid) {
+    if (!tree || !concepts.has(cid)) return
+    if (editing && !leaveEditor()) return
+    closeAdder(); closeMover(); closeRetyper(); closeComposer(); hideSelBar(); setHighlighting(false)
+    fnPop.hidden = true
+    selected = null
+    gNodes.selectAll('g.node').attr('class', n => nodeClass(n.data))
+    markCards()
+    artifactShown = cid
+    drawer.hidden = false
+    drawer.classList.add('artifact-mode')
+    mainEl.classList.add('artifact-open')
+    artView.hidden = false
+    if (!EMBED && !imageKey) await deriveImageKey()
+    if (artifactShown !== cid) return
+    renderArtifact()
+    if (view === 'tree') flashConcept(cid)
+  }
+
+  function leaveArtifact() {
+    artifactShown = null
+    drawer.classList.remove('artifact-mode')
+    mainEl.classList.remove('artifact-open')
+    artView.hidden = true
+  }
+
+  function closeArtifact() {
+    leaveArtifact()
+    drawer.hidden = true
+  }
+
+  /** How each note link in the artifact is marked: from the tree as it is now. */
+  function noteMarks() {
+    const out = {}
+    for (const n of tree.nodes) out[n.id] = A.decoration(byId, n.id)
+    return out
+  }
+
+  function tellFrame(extra = {}) {
+    const f = frames.get(artFrame)
+    if (f && f.frame.contentWindow) f.frame.contentWindow.postMessage({ rft: 'tree', theme: themeNow(), notes: noteMarks(), ...extra }, '*')
+  }
+
+  function renderArtifact() {
+    const cid = artifactShown
+    const e = cid ? A.entry(tree, cid) : null
+    if (!e) { closeArtifact(); return }
+    const c = concepts.get(cid)
+    renderConceptPath(document.getElementById('art-path'), cid, "Open this concept's artifact", openArtifact)
+    document.getElementById('art-title').textContent = c.name
+    const summary = document.getElementById('art-summary')
+    summary.textContent = c.summary || ''
+    summary.hidden = !c.summary
+    const state = document.getElementById('art-state')
+    state.textContent = A.stateText(e, tree)
+    state.className = `art-state ${e.state}`
+    const subs = document.getElementById('art-subs')
+    const list = A.subConcepts(tree, cid)
+    subs.replaceChildren()
+    subs.hidden = !list.length
+    if (list.length) subs.append('Sub-concepts: ')
+    list.forEach((s, i) => {
+      if (i) subs.append(' · ')
+      const a = document.createElement('a')
+      a.className = `art-sub ${s.state}`
+      a.textContent = s.name
+      a.title = `${s.name}: ${A.stateText(A.entry(tree, s.id), tree)}`
+      const colour = C.colourOf(concepts, s.id)
+      if (colour) a.style.color = colour
+      a.addEventListener('click', ev => { ev.preventDefault(); openArtifact(s.id) })
+      subs.appendChild(a)
+    })
+    document.getElementById('art-focus').title = cid === C.ROOT ? 'Show the whole tree' : "Focus: show only this concept's subtree"
+    const html = EMBED ? EMBED.artifacts && EMBED.artifacts[cid] : null
+    if (!e.artifact || (EMBED && html == null)) { closeFrame(artFrame); artFrame.hidden = true; return }
+    artFrame.hidden = false
+    const version = `${cid}:${e.artifact.version}`
+    const kept = frames.get(artFrame)
+    const same = kept && kept.version === version
+    const title = `The artifact of ${c.name}`
+    if (EMBED) openFrame(artFrame, null, { srcdoc: A.wrap(html, EMBED.frame || {}, themeNow()), sandbox: 'allow-scripts allow-popups', version, onMessage: onArtifactMessage, title })
+    else openFrame(artFrame, A.frameSrc(cid, { theme: themeNow(), token: imageKey, y: artScroll.get(cid) || 0 }), { sandbox: 'allow-scripts allow-popups allow-popups-to-escape-sandbox', version, onMessage: onArtifactMessage, title })
+    // the frame kept: its note links marked again, from the tree as it is now
+    if (same) tellFrame()
+  }
+
+  function onArtifactMessage(d) {
+    if (d.rft !== 'artifact' || !artifactShown) return
+    if (d.type === 'ready') tellFrame(EMBED ? { y: artScroll.get(artifactShown) || 0 } : {})
+    else if (d.type === 'scroll' && typeof d.y === 'number') artScroll.set(artifactShown, d.y)
+    else if (d.type === 'go' && typeof d.id === 'string' && byId.has(d.id)) { if (view === 'concepts') select(d.id); else go(d.id) }
+  }
+
+  // the theme switched: the artifact follows, without loading again
+  new MutationObserver(() => { if (artifactShown) tellFrame() }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+  document.getElementById('art-close').addEventListener('click', closeArtifact)
+  document.getElementById('art-tree').addEventListener('click', () => { if (artifactShown) openConcept(artifactShown) })
+  document.getElementById('art-focus').addEventListener('click', () => { if (artifactShown) setFocus(artifactShown === C.ROOT ? null : artifactShown) })
 
   document.getElementById('cmode').addEventListener('click', () => setMode(following(CMODES, conceptMode)))
   document.querySelectorAll('[data-show]').forEach(t => t.addEventListener('click', () => setView(t.dataset.show)))
@@ -3691,6 +3855,8 @@
     requestAnimationFrame(() => initialView())
     setView(view)
     if (selected && byId.has(selected)) select(selected)
+    if (pendingArtifact && concepts.has(pendingArtifact)) openArtifact(pendingArtifact)
+    pendingArtifact = null
   }
 
   const live = document.getElementById('live')
@@ -3708,6 +3874,7 @@
         if (!hasView) first()
         else { render(true); if (view === 'concepts') drawConceptTree(); drawKanban(); drawCalendar() }
         if (selected && byId.has(selected)) select(selected)
+        if (artifactShown) renderArtifact()
       }
     } catch (e) {
       live.className = 'live off'

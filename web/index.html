@@ -186,6 +186,26 @@
     <div id="cal-body" class="cal-body"></div>
   </section>
   <aside id="drawer" hidden>
+    <!-- a concept's artifact, when its concept was clicked: in the drawer's place of a note (web/artifacts.js) -->
+    <section id="artifact-view" hidden aria-label="The concept's artifact">
+      <div class="drawer-head">
+        <div id="art-path" class="drawer-concept"></div>
+        <span class="drawer-actions">
+          <button id="art-tree" class="icon-btn" aria-label="Show in tree" title="Show in tree: the concept's start note, its region highlighted">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7v5M6 17v-5h12v5"/><circle cx="12" cy="5" r="2.6" fill="currentColor" stroke="none"/><circle cx="6" cy="19" r="2.6" fill="currentColor" stroke="none"/><circle cx="18" cy="19" r="2.6" fill="currentColor" stroke="none"/></svg>
+          </button>
+          <button id="art-focus" class="icon-btn" aria-label="Focus" title="Focus: show only this concept's subtree">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+          </button>
+          <button id="art-close" title="Close">✕</button>
+        </span>
+      </div>
+      <h2 id="art-title" class="art-title"></h2>
+      <p id="art-summary" class="art-summary muted" hidden></p>
+      <p id="art-state" class="art-state"></p>
+      <div id="art-subs" class="art-subs" hidden></div>
+      <div id="art-frame" class="art-frame" hidden></div>
+    </section>
     <div id="drawer-concept" class="drawer-concept"></div>
     <div id="drawer-code" class="drawer-code muted" hidden></div>
     <div class="drawer-head">
@@ -313,6 +333,7 @@
 <script src="concepts.js" data-rft-inline></script>
 <script src="markdown.js" data-rft-inline></script>
 <script src="scratchpad.js" data-rft-inline></script>
+<script src="artifacts.js" data-rft-inline></script>
 <script src="app.js" data-rft-inline></script>
 </body>
 </html>
