@@ -37,6 +37,8 @@ import { applyUpdate, behindLine, planText, planUpdate } from './lib/update'
 import type { Feature } from './lib/tools'
 import { SMALL_TREE, mapGaps, mapReport, mapWarnings, projectMap, readDigests, resolveConcept, setDigest, setSummaries } from './lib/map'
 import { ARTIFACTS_DIR, artifactMarks, artifactReport, artifactWarnings, artifactsToWrite, setArtifact } from './lib/artifacts'
+import { QUEUE_CLI, QUEUE_FILE, addedText, cancelledText, jobEvents, jobsNext, jobsReport, queueLine, readQueue, toStart } from './lib/queue'
+import type { Job, QueueView } from './lib/queue'
 import { CONFIG_PATH, LEGEND, MARK, NODE_TYPES, bodyOf, isLiterature, counts, countsLine, isAbsolute, join, locate, readConfig, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
 
 const PANE = 'rft-tree'
@@ -466,6 +468,45 @@ const TOOLS = {
       required: ['id', 'replacement'],
     },
   },
+  rft_queue: {
+    description:
+      'Queue a run of an experiment on this machine\'s GPUs instead of launching it yourself in the background: a runner (a process of its own, it outlives the session) starts it once enough GPUs are free, in the user\'s order (they reorder, pause and cancel it in the tree view), with CUDA_VISIBLE_DEVICES set to its GPUs, and records how it ended. The plugin sets the experiment running when the job starts and tells the user when it ends: do not poll rft_jobs to wait for it. The command runs as `bash -c` in cwd with the session\'s environment only: activate the conda or venv in the command (`source ~/miniconda3/bin/activate env && python train.py ...`) or give the interpreter\'s full path. Create the experiment\'s note first (rft_add_node).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        exp: { type: 'string', description: 'The experiment it runs, e.g. E14.' },
+        cmd: { type: 'string', description: 'The shell command, as you would type it in cwd.' },
+        cwd: { type: 'string', description: 'The folder to run it in (absolute, or relative to the session\'s folder); default: the session\'s folder.' },
+        gpus: { type: 'integer', description: 'How many GPUs it takes (0: none); default: the note\'s gpus:, else 1.' },
+        label: { type: 'string', description: 'A few words that tell this run from the experiment\'s others, e.g. "seed 2" or "lr 3e-4".' },
+        top: { type: 'boolean', description: 'First in line instead of last; only when the user asks.' },
+      },
+      required: ['exp', 'cmd'],
+    },
+  },
+  rft_jobs: {
+    description:
+      'The experiment queue in a few lines: the GPUs, the jobs running and waiting (in order, with why each waits), the last ones that ended, and the experiments whose result is still to record. With id: one job (log: the last lines of its output) or one experiment\'s jobs.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'A job (q7) or an experiment (E14).' },
+        log: { type: 'integer', description: 'With a job id: how many of the last lines of its output to show (at most 200).' },
+      },
+    },
+  },
+  rft_cancel_job: {
+    description:
+      'Cancel a job of the experiment queue, only when the user asks: a waiting job leaves the queue, a running one is stopped (its whole process group). The experiment\'s status is left to you.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'The job, e.g. q7.' },
+        why: { type: 'string', description: 'Why, in a few words.' },
+      },
+      required: ['id'],
+    },
+  },
 } as const
 
 // Module state: reset on a reload, when `session.start` runs again and sets it anew.
@@ -536,7 +577,8 @@ async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> 
     try {
       loaded = await loadActive(h.io)
       const threads = (await h.io.list(join(config.vault, COMMENTS_DIR)).catch(() => [])).some(f => f.name.endsWith('.json'))
-      features = featuresInUse(loaded, threads)
+      const queue = await h.io.exists(join(config.vault, QUEUE_FILE)).catch(() => false)
+      features = featuresInUse(loaded, threads, queue)
     } catch { /* the core tools only */ }
     // a vault an older version made: one toast, nothing changed until /rft-update apply
     const line = behindLine(config)
@@ -555,6 +597,16 @@ async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> 
     try {
       const line = loaded ? deadlinesLine(loaded, today()) : null
       if (line) rules += `\n\n${line}`
+    } catch { /* the rules without it */ }
+    // the queue: what runs, and the jobs that ended with their result not recorded yet; a
+    // planned experiment whose job runs is set running; a queue with work gets its runner back
+    // (the machine restarted, or it stopped)
+    try {
+      queueSeen = null
+      const v = await watchQueue($, true)
+      const line = v && loaded ? queueLine(v, await loadActive(h.io), await nowS($)) : null
+      if (line) rules += `\n\n${line}`
+      if (v?.jobs.some(j => j.state === 'running' || (j.state === 'pending' && !v.paused))) void queueCli($, h, config, ['ensure']).catch(() => undefined)
     } catch { /* the rules without it */ }
     recall = { vault: resolvePath(h.root, vaultOf(h, config)), cwd: h.cwd, used: false }
   }
@@ -612,6 +664,7 @@ async function registerCommands($: EngineInterface): Promise<void> {
   await attempt('rft-literature', () => $.command.register({ name: 'rft-literature', description: 'Ask Claude for a literature search on a topic, a note or a concept, ending in reference notes', argumentHint: '<topic, note id or concept>' }))
   await attempt('rft-rebalance', () => $.command.register({ name: 'rft-rebalance', description: 'Ask Claude to propose moving branches under the line of research they belong to; nothing moves until you confirm', argumentHint: '[concept or note id] [--full]' }))
   await attempt('rft-next', () => $.command.register({ name: 'rft-next', description: 'What is still open, by concept: running and planned experiments, unexplored directions, open questions', argumentHint: '[concept]' }))
+  await attempt('rft-jobs', () => $.command.register({ name: 'rft-jobs', description: 'The experiment queue: GPUs, jobs running and waiting, the ones that ended (no model turn)', argumentHint: '[job or experiment]' }))
   await attempt('rft-summarize', () => $.command.register({ name: 'rft-summarize', description: 'Ask Claude to write the missing one-line note summaries and concept digests (the project map)', argumentHint: '[concept]' }))
   await attempt('rft-artifact', () => $.command.register({ name: 'rft-artifact', description: "Ask Claude to write a concept's artifact, the page of its experiments' results (no concept: every one missing or out of date)", argumentHint: '[concept]' }))
   await attempt('rft-update', () => $.command.register({ name: 'rft-update', description: 'Bring a vault made by an older version up to this one: shows what it adds; apply writes it', argumentHint: '[apply] [--sections]' }))
@@ -622,6 +675,7 @@ async function registerCommands($: EngineInterface): Promise<void> {
 async function poll($: EngineInterface): Promise<void> {
   void submitPending($)
   try { await refresh($) } catch { /* tried again at the next tick */ }
+  try { await watchQueue($) } catch { /* tried again at the next tick */ }
 }
 
 const strings = (v: unknown) => (Array.isArray(v) ? v.filter((t): t is string => typeof t === 'string') : typeof v === 'string' ? v.split(',') : [])
@@ -757,7 +811,31 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
     case 'rft_supersede':
       return unlocking($, unlock => supersede(io, loaded, String(i.id ?? ''), str(i.by) ?? null, str(i.why), today(), unlock))
     case 'rft_next':
-      return nextReport(io, loaded, today(), str(i.concept))
+      return withJobs(await nextReport(io, loaded, today(), str(i.concept)), io, loaded, await nowS($))
+    case 'rft_queue': {
+      const exp = resolveId(loaded.tree, String(i.exp ?? ''))
+      const n = exp ? loaded.tree.nodes[exp] : undefined
+      if (!n || n.type !== 'experiment') throw new Error(`"${String(i.exp ?? '')}" is not an experiment of the tree: a job runs an experiment (E..), whose note comes first (rft_add_node)`)
+      const spec = {
+        exp: n.id, cmd: String(i.cmd ?? ''), cwd: resolvePath(h.cwd, str(i.cwd) ?? '.'),
+        gpus: typeof i.gpus === 'number' ? i.gpus : n.gpus ?? 1, label: str(i.label) ?? '', by: 'claude',
+      }
+      const r = await queueCli($, h, loaded.config, ['add', '--job', JSON.stringify(spec), ...(i.top === true ? ['--top'] : [])])
+      return addedText(r as { job: Job }, loaded, shownVault(h, loaded.config))
+    }
+    case 'rft_jobs': {
+      const ref = str(i.id)?.trim()
+      const v = await queueCli($, h, loaded.config, ['status', '--history', '10']) as unknown as QueueView
+      const lines = typeof i.log === 'number' ? Math.min(200, Math.max(0, Math.floor(i.log))) : 0
+      const log = ref && /^q\d+$/i.test(ref) && lines
+        ? String((await queueCli($, h, loaded.config, ['log', '--id', ref.toLowerCase(), '--lines', String(lines)])).text ?? '')
+        : undefined
+      return jobsReport(v, loaded, await nowS($), { ref, log })
+    }
+    case 'rft_cancel_job': {
+      const r = await queueCli($, h, loaded.config, ['cancel', '--id', String(i.id ?? '').trim().toLowerCase(), '--why', str(i.why) ?? 'cancelled by Claude'])
+      return cancelledText(r.job as Job, loaded, await nowS($))
+    }
     case 'rft_map':
       return mapReport(io, loaded, str(i.concept))
     case 'rft_set_digest':
@@ -1052,6 +1130,91 @@ async function linkPaper(h: Here, job: string, file: string): Promise<void> {
   const text = loaded.texts[id]!
   const next = entry ? withEntryPdf(text, entry, file) : setField(text, 'pdf', `"[[${file}]]"`, 'tags')
   if (next !== text) await h.io.write(join(loaded.config.vault, n.path), next)
+}
+
+// ---------------------------------------------------------------- the experiment queue
+
+/** Seconds since the epoch, on the session's clock. */
+const nowS = async ($: EngineInterface) => (await $.clock.now()) / 1000
+
+/**
+ * Runs the queue's command line (server/rft_queue.py) on the tree's vault: its JSON answer, or
+ * its error as it says it. Each call is one short process; the jobs run in the queue's runner.
+ */
+async function queueCli($: EngineInterface, h: Here, config: Config, args: string[]): Promise<Record<string, unknown>> {
+  const [verb, ...rest] = args
+  const argv = [join($.plugin.root, QUEUE_CLI), verb!, '--vault', vaultOf(h, config), ...rest]
+  const failures: string[] = []
+  for (const python of ['python3', 'python']) {
+    let r: Awaited<ReturnType<EngineInterface['process']['run']>>
+    try {
+      r = await $.process.run([python, ...argv], { timeoutMs: 30000 })
+    } catch (err) {
+      failures.push(`${python}: ${message(err)}`)
+      continue
+    }
+    let out: Record<string, unknown> | null = null
+    try { out = JSON.parse(r.stdout.trim().split('\n').pop() ?? '') as Record<string, unknown> } catch { /* no answer */ }
+    if (out && typeof out.error === 'string') throw new Error(out.error)
+    if (r.exitCode === 0 && out) return out
+    throw new Error(`the experiment queue failed (${r.stderr.trim().split('\n').pop() || `exit ${r.exitCode}`})`)
+  }
+  throw new Error(`the experiment queue needs Python 3 on PATH (${failures.join('; ')})`)
+}
+
+/** rft_next with the queue's part after it. */
+async function withJobs(report: string, io: Io, loaded: Loaded, now: number): Promise<string> {
+  try {
+    const part = jobsNext(await readQueue(io, loaded.config.vault), loaded, now)
+    return part ? `${report}\n\n${part}` : report
+  } catch {
+    return report
+  }
+}
+
+// the queue as last read (its queue.json, and what it said), to tell what changed since
+let queueSeen: { text: string; view: QueueView } | null = null
+
+/**
+ * Follows the queue's files at each tick of the poll, at no model turn: a planned experiment whose
+ * job started is set running, and each job that started or ended is a toast. `first`: the read at
+ * activation, which sets what later reads compare with (and toasts nothing).
+ */
+async function watchQueue($: EngineInterface, first = false): Promise<QueueView | null> {
+  const h = await locateHere($)
+  if (!h || 'problem' in h) return null
+  const config = await readConfig(h.io)
+  if (!config) return null
+  let text: string
+  try {
+    text = await h.io.read(join(config.vault, QUEUE_FILE))
+  } catch {
+    queueSeen = null
+    return null
+  }
+  // a job leaves queue.json when it ends, so the history changes only with it
+  if (!first && queueSeen?.text === text) return queueSeen.view
+  const view = await readQueue(h.io, config.vault, 200, text)
+  if (!view) return null
+  const prev = first ? null : queueSeen?.view ?? null
+  queueSeen = { text, view }
+  const started = new Set<string>()
+  for (const id of toStart(view, await loadActive(h.io))) {
+    try {
+      await setStatus(h.io, await loadActive(h.io), id, 'running', undefined, undefined, today())
+      started.add(id)
+    } catch (err) {
+      $.ui.toast(`rft: ${id}'s job started, but it could not be set running (${message(err)})`)
+    }
+  }
+  const events = jobEvents(prev, view)
+  for (const line of events) {
+    const exp = /^q\d+ \((E\d+)\) started/.exec(line)?.[1]
+    $.ui.toast(`rft: job ${line}${exp && started.delete(exp) ? `; ${exp} is now running` : ''}`)
+  }
+  for (const id of started) $.ui.toast(`rft: ${id} is now running: its job started in the queue`)
+  if (events.length || started.size) await refresh($, true)
+  return view
 }
 
 async function stopServer($: EngineInterface): Promise<boolean> {
@@ -1549,7 +1712,23 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'rft-next' }, async ($, e) => {
     try {
       const io = (await mustHere($)).io
-      return { text: await nextReport(io, await loadActive(io), today(), e.args.trim() || undefined) }
+      const loaded = await loadActive(io)
+      return { text: await withJobs(await nextReport(io, loaded, today(), e.args.trim() || undefined), io, loaded, await nowS($)) }
+    } catch (err) {
+      return { text: message(err) }
+    }
+  })
+
+  // /rft-jobs [job or experiment]: the queue as rft_jobs gives it, printed (no model turn)
+  on('command.run', { command: 'rft-jobs' }, async ($, e) => {
+    try {
+      const h = await mustHere($)
+      const loaded = await loadActive(h.io)
+      const ref = e.args.trim() || undefined
+      const v = await queueCli($, h, loaded.config, ['status', '--history', '10']) as unknown as QueueView
+      const log = ref && /^q\d+$/i.test(ref) ? String((await queueCli($, h, loaded.config, ['log', '--id', ref.toLowerCase(), '--lines', '30'])).text ?? '') : undefined
+      const url = await read($, webUrl)
+      return { text: `${jobsReport(v, loaded, await nowS($), { ref, log })}${url ? `\n\nThe tree view's monitor (the icon at the top left): ${url}` : '\n\n/rft opens the tree view, whose monitor (the icon at the top left) reorders, pauses, cancels and retries jobs.'}` }
     } catch (err) {
       return { text: message(err) }
     }

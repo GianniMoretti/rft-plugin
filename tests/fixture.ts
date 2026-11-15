@@ -7,7 +7,7 @@ import type { Io } from '../hooks/lib/vault'
 
 export const CWD = '/work/demo'
 
-const note = (id: string, type: string, status: string, parent: string, title: string, children: string[] = []) =>
+export const note = (id: string, type: string, status: string, parent: string, title: string, children: string[] = []) =>
   `---
 id: ${id}
 type: ${type}
@@ -138,7 +138,8 @@ export type World = { fs: MemoryFs; tools: string[]; deferred: string[]; opened:
 /** `refuse` names commands the engine refuses to register, as it refuses a skill's name. */
 /** `cwd`: the session's folder, in a world keyed by absolute path (see `MemoryFs`). */
 /** `git`: answers `git -C <dir> <args>` (see `fakeGit`). */
-export function world(on: On, files: Record<string, string>, opts: { refuse?: string[]; surfaces?: string[]; cwd?: string; git?: GitAnswer } = {}): World {
+/** `run`: answers any other command (its argv), or null for the default empty success. */
+export function world(on: On, files: Record<string, string>, opts: { refuse?: string[]; surfaces?: string[]; cwd?: string; git?: GitAnswer; run?: RunAnswer } = {}): World {
   const w: World = { fs: new MemoryFs(files, opts.cwd !== undefined), tools: [], deferred: [], opened: [], commands: [], seen: [], toasts: [] }
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.cwd', () => ({ value: opts.cwd ?? CWD }))
@@ -153,6 +154,8 @@ export function world(on: On, files: Record<string, string>, opts: { refuse?: st
       const r = opts.git(e.argv[2]!, e.argv.slice(3))
       return { value: { exitCode: r.ok ? 0 : 128, stdout: r.out, stderr: r.err } } as never
     }
+    const ran = opts.run?.(e.argv as string[])
+    if (ran) return { value: { stderr: '', ...ran } } as never
     return { value: { exitCode: 0, stdout: '', stderr: '' } } as never
   })
   on('command.register', (_$, e) => {
@@ -167,6 +170,9 @@ export function world(on: On, files: Record<string, string>, opts: { refuse?: st
   on('ui.open', (_$, e) => { w.opened.push(e.id); return { value: { isPlaced: true as const } } })
   return w
 }
+
+/** What a command answers: its exit code and output. */
+export type RunAnswer = (argv: string[]) => { exitCode: number; stdout: string; stderr?: string } | null
 
 /** What `git -C <dir> <args>` answers. */
 export type GitAnswer = (dir: string, args: string[]) => { ok: boolean; out: string; err: string }
