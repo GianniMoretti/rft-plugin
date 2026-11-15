@@ -215,6 +215,40 @@ What keeps the layers useful:
 - **A concept grown past 40 notes of its own** is more than one digest can stand for:
   `rft_validate` says so; propose a split into sub-concepts at the notes that open its sub-lines.
 
+## Concept artifacts
+
+A concept can have an **artifact**: one HTML page of the results of its own experiments
+(`vault/artifacts/<id> <name>.html`), which the tree view shows in the note drawer when the user
+clicks the concept (its name on a region or badge, its node in the concept view, the concept path
+in a note's header). Where the digest is a note for you, the artifact is a page for the user: the
+key results as tables and small charts, what failed, what is still running.
+
+- **`rft_artifact <concept>`** first: where the page is and whether it is up to date, each
+  experiment with a result (in full when it is new or changed since the page was written; `full`
+  for all), the experiments without one, the sub-concepts (whose own artifacts the view links:
+  leave them off this page), and how to write the page.
+- **`rft_set_artifact`** writes it: `html` for the whole page, `edits` (`old_str` → `new_str`,
+  each found on the page once, all or none) to change part of it. It is stamped with a key per
+  experiment with a result (status, title, summary, superseding note, Result), so the plugin
+  says which results changed, are new, or left since: `rft_set_status`, `rft_map`, `rft_next`
+  and `rft_validate` say when it is out of date. An experiment has a result once it is done, or
+  once its Result says something while it runs or after; a planned one has none.
+- **When**: in a vault with artifacts, at the end of a task that recorded results, update the
+  artifact of each concept that got them, once per concept, with edits; a concept with results
+  and no artifact gets one then too. `/rft-artifact [concept]` asks for one, or for every one
+  missing or out of date.
+- **The page**: HTML with its own `<style>` and inline `<script>`; charts as inline SVG. The view
+  loads nothing from elsewhere (no CDN, no fetch); images by path or name, as in notes. Its base
+  style follows the view's light and dark themes: `var(--fg)`, `--muted`, `--bg`, `--panel`,
+  `--line`, `--accent`, `--good`, `--bad`, and `--c1` … `--c6` for series. Link every note id,
+  `<a href="#E05">E05</a>` (or `data-note="E05"` on any element): the view opens the note and
+  marks the link with its status, superseded results struck through.
+- **Only numbers that are in the notes**, with their spread over seeds; a superseded result is
+  cited with the note that replaced it. `rft_set_artifact` names the results left off the page,
+  links to no note, superseded results cited alone, and files the view would block.
+- **Never write the files by hand** (Edit, Write and shell writes there are refused): only
+  `rft_set_artifact` stamps them. Reading them is fine.
+
 ## State of knowledge
 
 The map says what holds now, not only what was done.
@@ -371,6 +405,8 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 | `rft_set_summary` | set the one-line summary of one or more notes |
 | `rft_map` | the project map, or one concept's digest and notes with their summaries |
 | `rft_set_digest` | write a concept's digest (state, key results, dead ends, open questions) |
+| `rft_artifact` | what a concept's artifact is written from: its results, what changed since, how to write the page |
+| `rft_set_artifact` | write a concept's artifact, whole (html) or with edits, stamped with the results it was written from |
 | `rft_supersede` | mark a note whose result a newer one overturns (`superseded_by:`), or clear the mark |
 | `rft_next` | the deadlines (nearest first, what puts them at risk) and GPU clashes, the user's priorities, then what is still open by concept: running, planned, unexplored directions, open questions |
 | `rft_suggest_priority` | suggest a priority for a note, with why; the user accepts or dismisses it (never set `priority:` yourself) |

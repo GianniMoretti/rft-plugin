@@ -20,7 +20,8 @@ interactive tree (pan, zoom, click a node to read it) in a browser.
 - **Concepts**: named lines of research. A note can start one, and its subtree belongs to it
   until a sub-concept starts. Claude proposes them; you confirm. A concept can link the code
   repositories it runs on, and its experiments and directions then say how they relate to that
-  code.
+  code. Each concept can have an **artifact**: a page of its experiments' results that Claude
+  writes and keeps up to date, opened by clicking the concept in the tree view.
 
 The notes are plain, Obsidian-compatible markdown in your repository (`vault/` by default) and
 are the source of truth. You never need Obsidian open.
@@ -116,8 +117,9 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   (`rft_add_node`, `rft_set_status`, `rft_set_summary`, `rft_search`, `rft_map`, `rft_graph`,
   `rft_next`, `rft_move_node`) have their full definition in the prompt from the start. The
   others are listed by name and loaded when Claude needs one, which keeps every turn cheaper. The
-  date, priority and comment tools join the first group in a vault that uses those features
-  (it has deadlines or dated notes, priorities, comment threads or locked notes).
+  date, priority, comment and artifact tools join the first group in a vault that uses those
+  features (it has deadlines or dated notes, priorities, comment threads or locked notes, or a
+  concept artifact).
 
   | tool | does |
   |---|---|
@@ -130,6 +132,8 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_map` | the project map: each concept with its state (from its digest) and the experiments in progress; or one concept, with its digest and its notes one per line with their summaries. Claude reads it before opening note files |
   | `rft_set_summary` | sets the one-line `summary:` of one or more notes (Claude writes one for every note, and updates it when a result arrives) |
   | `rft_set_digest` | writes a concept's digest in the vault's `map/` folder: state, key results, dead ends, open questions; the map says when it is out of date |
+| `rft_artifact` | what a concept's artifact is written from: each experiment with a result (in full when new or changed since the page was written), the ones without, its sub-concepts, and how to write the page |
+| `rft_set_artifact` | writes a concept's artifact in `vault/artifacts/`, whole (`html`) or with `edits` (old → new, all or none), stamped with the results it was written from; names the results left off the page, links to no note, superseded results cited alone, and files the view would block |
   | `rft_supersede` | marks a note whose result a newer one overturns (`superseded_by:` and a History line); the map, search, graph and tree view show it as superseded, so the old number is not built on |
   | `rft_next` | what is still open: the deadlines first (nearest first, with what puts them at risk) and the GPU clashes, your priorities, then by concept the experiments running, planned and never run, directions with nothing tried under them (with their age, the higher priorities first), the digests' open questions, and the priorities Claude suggested that wait for you |
   | `rft_suggest_priority` | suggests a priority for a note, with a one-line reason (`suggested_priority:`); you accept or dismiss it in the tree view. Claude never sets a priority itself (see Priorities) |
@@ -276,6 +280,9 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   pick it from the list (or type its id), **Move** or Enter. As with **Add child**, the plugin
   makes the move with `rft_move_node`'s code. A moved note shows where it came from at the top
   of the drawer, and **Came from** draws a faint dashed link from its previous parent.
+- **A concept's artifact** opens in the drawer when you click the concept: its name on a region
+  or badge, its node in the concept view, or the concept path at the top of a note (see Concept
+  artifacts).
 - **Tree**, **Concepts**, **Kanban** and **Calendar** at the top switch between the reasoning tree,
   the concept tree, the kanban and the calendar (below).
 - Hover a node to highlight its path to the root; **search** (Enter jumps to the next match).
@@ -399,11 +406,11 @@ In the tree view, the concept button switches the overlay from off to **Regions*
   shows while the overlay is on. It lists the top-level concepts, each with an arrow that
   unfolds its sub-concepts, and the whole legend folds to one line (**Legend ▸**).
 - **Concepts** (at the top) shows a tree of the concepts: each sized by its notes, with a bar of their
-  statuses, in the same layout as the reasoning tree (top-down, left-right or radial). Click one to go back to the reasoning tree on its start note, its region briefly
-  highlighted; **focus** shows only that concept's subtree.
-- **Focus** is also reachable from the legend, a badge, and the concept path at the top of the
-  note drawer; a breadcrumb (project › concept › sub-concept, or from the root note's concept when it has
-  one) leads back up.
+  statuses, in the same layout as the reasoning tree (top-down, left-right or radial). Click one to
+  open its artifact beside the tree; the artifact's **Show in tree** goes to its start note on the
+  reasoning tree, its region briefly highlighted; **focus** shows only that concept's subtree.
+- **Focus** is also reachable from the legend and an artifact's **Focus** button; a breadcrumb
+  (project › concept › sub-concept, or from the root note's concept when it has one) leads back up.
 - Concepts are also a filter in **Filters**.
 
 A link can open the view in a given state, e.g. `?layout=lr&concepts=regions`,
@@ -462,13 +469,46 @@ root note, `concept_repos` is the code of the whole project.
 - The tree view shows a note's code under its concept path in the drawer, with inherited repos
   marked as such. The concept tree names each concept's repos.
 
+### Concept artifacts
+
+Each concept can have an **artifact**: one HTML page of the results of its own experiments, like
+an artifact in Claude's chat, kept in `vault/artifacts/<id> <name>.html` and in step with the tree.
+Claude writes it; you read it in the tree view.
+
+- **Open it** by clicking the concept: its name on a region or badge in the tree, its node in the
+  concept view, or the concept path at the top of a note. It opens in the note drawer (wider than
+  a note; drag its edge, it keeps its own width), under its concept path, whether it is up to
+  date, and links to its sub-concepts' artifacts. **Show in tree** goes to the concept's start
+  note, **Focus** shows only its subtree. `?artifact=D04` in the address opens it at once.
+- **Note links** in it (`E05`) open the note in the drawer; the note's concept path brings the
+  artifact back, where you left it. Each link shows its note's status as a dot, and a superseded
+  result struck through, from the tree as it is now.
+- **In step with the tree**: the page is stamped with what each experiment with a result was when
+  it was written (status, title, summary, superseding note, Result). An experiment that finishes,
+  a Result edited by hand, a new result, or one that moved away puts it **out of date**: the drawer
+  says which ("Out of date: E06 new"), and so do `rft_set_status`, `rft_map`, `rft_next` and
+  `rft_validate`. It follows live, and redraws when Claude updates it.
+- **Claude keeps it**: with `rft_artifact <concept>` (the results, and what changed since) then
+  `rft_set_artifact` (the whole page, or edits). In a vault that has artifacts, Claude updates the
+  artifact of each concept a task gave results to at the end of that task, and writes one for a
+  concept with results that has none. `/rft-artifact [concept]` asks for one, or for every one
+  missing or out of date. Only numbers that are in the notes go on it. Claude's own edits of the
+  files are refused, so the stamp stays true.
+- **Safe to show**: the page runs in a sandbox of its own (its own origin, no storage, no network,
+  no way to the page around it or to a write); it loads nothing from elsewhere, so a chart is
+  inline SVG or the page's own script. Its images are found as a note's are; one outside the vault
+  comes with a key that reads images and writes nothing.
+- A vault with no artifact sees none of this: no rule, and the two tools wait behind ToolSearch.
+  `/rft-view` embeds the artifacts read-only, their images as placeholders.
+
 Every note carries 1–3 **topical tags** besides the project, type and status ones (the manual
 asks Claude to reuse the vocabulary `rft_tags` lists); the tree's `api/tree` JSON lists them with
 their counts.
 
 The server listens on `127.0.0.1` only, on a free port (or `webPort` in the config). It serves
 the page, the tree as JSON and the text of one note at a time, read by its id from inside the
-vault, and the image files notes embed: one inside the vault to anyone who can read the notes,
+vault, each concept's artifact read-only (as a page of its own, in a sandbox: its own origin,
+nothing from elsewhere), and the image files notes and artifacts embed: one inside the vault to anyone who can read the notes,
 one outside it (anywhere on disk) only to the page carrying the key below, so another user of
 the machine cannot read your files through it, nor learn whether one exists. An image is sent
 with a policy that runs nothing in it, an SVG's scripts included. A reference's saved PDF is
@@ -514,6 +554,7 @@ needs no network.
 | `/rft-rebalance [concept or id] [--full]` | ask Claude to propose moving branches under the line of research they belong to, as a table of moves; only the ones you confirm are made, each keeping its origin. The plugin first finds the candidates (notes whose words and references sit closer to another concept than to their own) and Claude judges only those; `--full` has Claude review the whole tree instead |
 | `/rft-next [concept]` | print what is still open, by concept: running and planned experiments, unexplored directions, open questions (no model turn) |
 | `/rft-summarize [concept]` | ask Claude to write the missing note summaries and concept digests of an existing tree, concept by concept (a one-off job) |
+| `/rft-artifact [concept]` | ask Claude to write a concept's artifact, or, with no concept, every one missing or out of date |
 | `/rft-update [apply] [--sections]` | bring a vault made by an older version up to this one: list what it lacks (the folders and templates of newer note types, the config's format); `apply` writes it and refreshes the derived files. Notes are never changed, except that `--sections` adds the sections their type has gained, as empty headings, to unlocked notes. A session on an older vault starts with a toast pointing here (no model turn) |
 | `/rft-view` | write `vault/tree.html`: the same tree view as one standalone file, every note inside (images as placeholders), to open anywhere or share |
 
@@ -569,12 +610,15 @@ session with the plugin loaded from this folder.
 - `hooks/lib/vault.ts`: the vault model; `hooks/lib/ops.ts` the operations; `hooks/lib/page.ts`
   the standalone page.
 - `hooks/lib/comments.ts`: comments, suggestions and locked notes, as Claude's tools see them.
+- `hooks/lib/artifacts.ts`: concept artifacts, their stamp, what changed since, and the checks.
 - `hooks/lib/priority.ts`: priorities, their limits and Claude's suggested ones.
 - `hooks/lib/tools.ts`: which tools sit in the prompt from the start; `hooks/lib/shell.ts` the
   files a shell command writes (the guards' input); `hooks/lib/answers.ts` the subagents that
   answer threads; `hooks/lib/update.ts` `/rft-update` and the vault's format.
 - `web/`: the tree view (`index.html`, `app.js`, `app.css`; `filters.js`, `kanban.js`, `layout.js` and
-  `concepts.js` hold the pure filter, kanban, radial layout and concept logic; `markdown.js` the note
+  `concepts.js` hold the pure filter, kanban, radial layout and concept logic; `artifacts.js` a
+  concept artifact's state, links and frame, `frame.js` and `frame.css` the runtime and base style
+  inside the artifact's frame; `markdown.js` the note
   renderer, footnotes and the map from the page back to the note's text; `scratchpad.js` the
   scratchpad's to-dos and lists, and its panel; `theme.js` the light and
   dark themes; vendored d3), one codebase for the live view and `/rft-view`, which shows the
