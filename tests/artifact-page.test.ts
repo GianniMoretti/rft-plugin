@@ -1,16 +1,21 @@
-// The tree view's Artifacts page (web/artifacts.js): the concepts listed with the state of their
-// artifact, what the page says about each, the note links inside an artifact (where they lead,
-// how they are marked from the tree), the frame's address, and the frame of the standalone page.
+// A concept's artifact in the tree view (web/artifacts.js). It opens in the note drawer when a
+// concept is clicked: its name on a region or badge in the tree, its node in the concept view, or
+// the concept path in a note's header (and `?artifact=<id>` in the address). The drawer shows the
+// state of the concept's artifact, the links to its sub-concepts, and the artifact itself in a
+// sandboxed frame, whose note links open the note in the same drawer. Tested here: the state of
+// one concept, what the drawer says about it, its sub-concepts, the note links inside an artifact
+// (where they lead, how they are marked from the tree), the frame's address, and the frame of the
+// standalone page.
 
 import { describe, expect, test } from 'claude-code/testing'
 
 import '../web/artifacts.js'
 
-type Row = { id: string; name: string; depth: number; state: 'fresh' | 'stale' | 'none' | 'empty'; results: string[]; artifact: Record<string, unknown> | null }
+type Entry = { id: string; name: string; state: 'fresh' | 'stale' | 'none' | 'empty'; results: string[]; artifact: Record<string, unknown> | null }
 type Api = {
-  listing: (tree: unknown) => { rows: Row[]; leftover: { concept: string; name: string; path: string }[] }
-  stateText: (row: Row, tree: unknown) => string
-  subConcepts: (tree: unknown, id: string) => { id: string; name: string; state: Row['state'] }[]
+  entry: (tree: unknown, id: string) => Entry | null
+  stateText: (entry: Entry, tree: unknown) => string
+  subConcepts: (tree: unknown, id: string) => { id: string; name: string; state: Entry['state'] }[]
   linkTarget: (href: string | null) => string | null
   decoration: (byId: Map<string, unknown>, id: string) => { cls: string; title: string }
   frameSrc: (concept: string, opts: { theme: string; token?: string; y?: number }) => string
@@ -22,7 +27,7 @@ const A = (globalThis as unknown as { RftArtifacts: Api }).RftArtifacts
 const node = (id: string, concept: string, status: string, extra: Record<string, unknown> = {}) =>
   ({ id, name: `${id} Title of ${id}`, title: `Title of ${id}`, type: id[0] === 'E' ? 'experiment' : 'direction', status, concept, ...extra })
 
-/** The demo's concepts: the project, Strong augmentation (D02) with Mix-based (D04) and Why it fails (D03) below it. */
+/** The demo's concepts: the project, Strong augmentation (D02) with Mix-based (D04) and Why it fails (D03) below it; an artifact of Baselines (D01), a concept no longer there. */
 const TREE = {
   concepts: [
     { id: 'root', name: 'demo', root: null, parent: null, depth: 0, children: ['D02'] },
@@ -45,26 +50,28 @@ const TREE = {
 }
 
 describe('artifacts page', () => {
-  test('the concepts in the order of the concept tree, each with the state of its artifact; artifacts of no concept apart', () => {
-    const { rows, leftover } = A.listing(TREE)
-    expect(rows.map(r => [r.id, r.depth, r.state, r.results])).toEqual([
-      ['root', 0, 'none', ['E01']],
-      ['D02', 1, 'fresh', ['E07']],
-      ['D04', 2, 'stale', ['E05', 'E06']],
-      ['D03', 2, 'empty', []],
-    ])
-    expect(rows[2]!.artifact).toMatchObject({ version: 'v2' })
-    expect(leftover).toEqual([{ concept: 'D01', name: 'Baselines', path: 'artifacts/D01 Baselines.html' }])
+  test("one concept's artifact and its state: up to date, out of date, none yet, or no results to show", () => {
+    const state = (id: string) => { const e = A.entry(TREE, id)!; return [e.id, e.name, e.state, e.results] }
+    expect(state('root')).toEqual(['root', 'demo', 'none', ['E01']])
+    expect(state('D02')).toEqual(['D02', 'Strong augmentation', 'fresh', ['E07']])
+    expect(state('D04')).toEqual(['D04', 'Mix-based augmentation', 'stale', ['E05', 'E06']])
+    expect(state('D03')).toEqual(['D03', 'Why it fails at 1k', 'empty', []])
+    expect(A.entry(TREE, 'D04')!.artifact).toMatchObject({ version: 'v2' })
+    expect(A.entry(TREE, 'D02')!.artifact).toMatchObject({ path: 'artifacts/D02 Strong augmentation.html' })
+    expect(A.entry(TREE, 'D03')!.artifact).toBe(null)
+    // an artifact whose concept is gone opens from nowhere (rft_validate reports it), and an unknown id is none
+    expect(A.entry(TREE, 'D01')).toBe(null)
+    expect(A.entry(TREE, 'E05')).toBe(null)
   })
 
-  test('what the page says about each state', () => {
-    const rows = A.listing(TREE).rows
-    expect(A.stateText(rows[1]!, TREE)).toBe('Up to date · updated 2026-03-01')
-    expect(A.stateText(rows[2]!, TREE)).toBe('Out of date: E06 changed, E10 new, E03 no longer here · updated 2026-03-02')
-    expect(A.stateText(rows[0]!, TREE)).toBe('No artifact yet: 1 experiment with a result (E01). /rft-artifact demo asks Claude to write it.')
-    expect(A.stateText(rows[3]!, TREE)).toBe('No results yet: 1 running (E04), 1 planned (E09).')
+  test('what the drawer says about each state', () => {
+    const say = (tree: typeof TREE, id: string) => A.stateText(A.entry(tree, id)!, tree)
+    expect(say(TREE, 'D02')).toBe('Up to date · updated 2026-03-01')
+    expect(say(TREE, 'D04')).toBe('Out of date: E06 changed, E10 new, E03 no longer here · updated 2026-03-02')
+    expect(say(TREE, 'root')).toBe('No artifact yet: 1 experiment with a result (E01). /rft-artifact demo asks Claude to write it.')
+    expect(say(TREE, 'D03')).toBe('No results yet: 1 running (E04), 1 planned (E09).')
     const bare = { ...TREE, nodes: TREE.nodes.filter(n => n.concept !== 'D03' || n.type !== 'experiment') }
-    expect(A.stateText(A.listing(bare).rows[3]!, bare)).toBe('No results yet: no experiments.')
+    expect(say(bare, 'D03')).toBe('No results yet: no experiments.')
   })
 
   test("a concept's sub-concepts, with the state of their artifacts, for the links beside it", () => {
