@@ -1806,6 +1806,7 @@
     drawer.classList.add('artifact-mode')
     mainEl.classList.add('artifact-open')
     artView.hidden = false
+    if (view === 'concepts') drawConceptTree() // fitted again beside the drawer
     if (!EMBED && !imageKey) await deriveImageKey()
     if (artifactShown !== cid) return
     renderArtifact()
@@ -1813,10 +1814,12 @@
   }
 
   function leaveArtifact() {
+    const was = artifactShown
     artifactShown = null
     drawer.classList.remove('artifact-mode')
     mainEl.classList.remove('artifact-open')
     artView.hidden = true
+    if (was && view === 'concepts') drawConceptTree()
   }
 
   function closeArtifact() {
@@ -1875,8 +1878,9 @@
     const title = `The artifact of ${c.name}`
     if (EMBED) openFrame(artFrame, null, { srcdoc: A.wrap(html, EMBED.frame || {}, themeNow()), sandbox: 'allow-scripts allow-popups', version, onMessage: onArtifactMessage, title })
     else openFrame(artFrame, A.frameSrc(cid, { theme: themeNow(), token: imageKey, y: artScroll.get(cid) || 0 }), { sandbox: 'allow-scripts allow-popups allow-popups-to-escape-sandbox', version, onMessage: onArtifactMessage, title })
-    // the frame kept: its note links marked again, from the tree as it is now
-    if (same) tellFrame()
+    // the frame kept: its note links marked again, from the tree as it is now, and scrolled back to
+    // where it was (hidden while a note was shown, it lost its place)
+    if (same) tellFrame({ y: artScroll.get(cid) || 0 })
   }
 
   function onArtifactMessage(d) {

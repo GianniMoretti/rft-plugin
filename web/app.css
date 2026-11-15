@@ -635,6 +635,8 @@ main { --artifact-w: max(var(--drawer-w), min(calc(820px * var(--font-scale)), 6
 main.artifact-open #drawer { width: min(var(--artifact-w), 92vw); }
 main.artifact-open #drawer-resize { right: min(var(--artifact-w), 92vw); }
 main.artifact-open:has(#drawer:not([hidden])) #kanban, main.artifact-open:has(#drawer:not([hidden])) #calendar { right: min(var(--artifact-w), 92vw); }
+/* the concept view keeps its tree beside an artifact opened from it (app.js draws it again to fit) */
+main.artifact-open:has(#drawer:not([hidden])) #concept-canvas { width: calc(100% - min(var(--artifact-w), 92vw)); }
 #drawer.artifact-mode:not([hidden]) { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; }
 #drawer.artifact-mode > :not(#artifact-view) { display: none !important; }
 #artifact-view:not([hidden]) { display: flex; flex-direction: column; flex: 1; min-height: 0; }

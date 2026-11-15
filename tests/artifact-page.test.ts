@@ -114,6 +114,10 @@ describe('artifacts page', () => {
     expect(part).toContain('document.documentElement.dataset.theme = "dark"')
     expect(part).toContain('<script>/* frame */</script>')
     expect(part.indexOf('/* frame */')).toBeLessThan(part.indexOf('<h1>Mix</h1>'))
+    // no server sends its policy here: a meta tag, first, loads nothing from elsewhere
+    expect(part.indexOf('http-equiv="Content-Security-Policy"')).toBeLessThan(part.indexOf('<script>'))
+    expect(part).toContain("default-src 'none'; script-src 'unsafe-inline'")
+    expect(part).toContain('img-src data:;')
     const whole = A.wrap('<!DOCTYPE html>\n<html lang="en"><head><title>Mix</title><style>h1{}</style></head><body><h1>Mix</h1></body></html>', frame, 'light')
     expect(whole.match(/<head>/gi)).toHaveLength(1)
     expect(whole.indexOf('/* frame css */')).toBeLessThan(whole.indexOf('<title>Mix</title>'))

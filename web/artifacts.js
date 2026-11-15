@@ -80,11 +80,18 @@
       (y > 0 ? `&y=${y}` : '') + (o.token ? `&token=${encodeURIComponent(o.token)}` : '')
   }
 
-  /** The artifact as a document, for the standalone page's frame: its theme, the base style and the runtime first in its head. */
+  /**
+   * The artifact as a document, for the standalone page's frame: its theme, the base style and the
+   * runtime first in its head. With no server to send the frame's policy, it comes as a meta tag:
+   * nothing from elsewhere, as api/artifact's own policy has it (images only inline: the standalone
+   * page shows the others as placeholders).
+   */
   function wrap(html, frame, theme) {
     const js = String(frame.js || '').replace(/<\/(script)/gi, '<\\/$1')
     const css = String(frame.css || '').replace(/<\/(style)/gi, '<\\/$1')
-    const pre = `<meta charset="utf-8"><script>document.documentElement.dataset.theme = "${theme === 'dark' ? 'dark' : 'light'}"</script>` +
+    const pre = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'unsafe-inline\'; style-src \'unsafe-inline\'; ' +
+      'img-src data:; media-src data:; font-src data:; form-action \'none\'; base-uri \'none\'">' +
+      `<meta charset="utf-8"><script>document.documentElement.dataset.theme = "${theme === 'dark' ? 'dark' : 'light'}"</script>` +
       `<style>${css}</style><script>${js}</script>`
     let m = /<head\b[^>]*>/i.exec(html)
     if (m) return html.slice(0, m.index + m[0].length) + pre + html.slice(m.index + m[0].length)
