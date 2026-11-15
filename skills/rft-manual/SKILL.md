@@ -327,6 +327,39 @@ its own. A due date is a day, a local time, or a time in a zone:
 - The vault's `rft.ics` holds the deadlines and the planned runs (never the suggestions), for any
   calendar app to import; `rft_sync` keeps it current.
 
+## The experiment queue
+
+Runs on this machine's GPUs go through the queue, not into the background with Bash: a job is a
+command, the folder it runs in and how many GPUs it takes, for one experiment. A **runner** (a
+process of its own, apart from any session) starts each job once enough GPUs are free and records
+how it ended, so a run outlives the session that queued it. Watching it costs no turn: the user
+follows the GPUs, the queue and the history in the tree view's monitor (the icon at the top left,
+or `/rft-jobs`), where they also reorder, pause, cancel and retry jobs, and keep GPUs out of it.
+
+- **Queue a run** with `rft_queue {exp, cmd, cwd, gpus, label}` once its experiment note exists
+  (`rft_add_node`, status planned). `gpus` defaults to the note's `gpus:`, else 1; 0 runs it with
+  no GPU (it never waits). `label` tells the experiment's runs apart ("seed 2", "lr 3e-4"). The
+  answer says its place in line and why it waits. Put it first in line (`top`) only when the user
+  asks.
+- **The command** runs as `bash -c <cmd>` in `cwd`, in a session of its own, with
+  `CUDA_VISIBLE_DEVICES` set to its GPUs (numbered as nvidia-smi numbers them), `RFT_JOB` and
+  `RFT_EXPERIMENT`. It has the session's environment only, not your shell's: activate its conda
+  or venv in the command (`source ~/miniconda3/bin/activate env && python train.py ...`) or give
+  the interpreter's full path. Check the command once by hand (a dry run, `--help`) before queueing
+  a long run. Its output goes to `<vault>/.queue/logs/<job>.log`.
+- **Order** is strict: the first waiting job that needs GPUs takes them once enough are free, and
+  nothing behind it starts first. A GPU with a process of someone else's on it, or more than
+  1000 MiB of memory taken, counts as busy.
+- **Do not poll.** The plugin sets the experiment running when its job starts and tells the user
+  when one ends. Read `rft_jobs` when the user asks, or when the session starts with "Jobs that
+  ended, their result not recorded yet": `rft_jobs <job> log: 40` gives how it ended and the end
+  of its output. Then record the real result (rft_set_status with the numbers), or the failure and
+  its cause; a failed run may deserve a fix and `rft_queue` again, after the user agrees.
+- `rft_next` lists what runs and waits, and the results to record. `rft_cancel_job` only when the
+  user asks; it leaves the experiment's status to you.
+- The queue lives in `<vault>/.queue/` (`queue.json`, the history in `history.jsonl`); edit
+  neither by hand.
+
 ## Restructuring the tree
 
 A note's parent is where the reasoning came from; a concept is the line of research it belongs
@@ -408,7 +441,7 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 | `rft_artifact` | what a concept's artifact is written from: its results, what changed since, how to write the page |
 | `rft_set_artifact` | write a concept's artifact, whole (html) or with edits, stamped with the results it was written from |
 | `rft_supersede` | mark a note whose result a newer one overturns (`superseded_by:`), or clear the mark |
-| `rft_next` | the deadlines (nearest first, what puts them at risk) and GPU clashes, the user's priorities, then what is still open by concept: running, planned, unexplored directions, open questions |
+| `rft_next` | the deadlines (nearest first, what puts them at risk) and GPU clashes, the user's priorities, then what is still open by concept: running, planned, unexplored directions, open questions; the queue's jobs and the results to record |
 | `rft_suggest_priority` | suggest a priority for a note, with why; the user accepts or dismisses it (never set `priority:` yourself) |
 | `rft_suggest_dates` | suggest an experiment's start and/or estimate, with why; the user accepts or dismisses it (never set `start:`, `est:` or `due:` yourself) |
 | `rft_add_deadline` | add a deadline the user gave you (title, due, needs); they confirm it in a dialog |
@@ -432,6 +465,9 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 | `rft_comments` | a note's comments and suggestions (open ones in full, the history in short), or the notes with open threads |
 | `rft_comment` | reply in a thread (`applied: true` closes a suggestion you made in an unlocked note), or start a comment on a `quote` |
 | `rft_suggest` | propose new text for a `quote`, or the replacement an open suggestion asks for; the user accepts it |
+| `rft_queue` | queue a run of an experiment on this machine's GPUs (exp, cmd, cwd, gpus, label); it starts once its GPUs are free, in the user's order |
+| `rft_jobs` | the queue in a few lines: GPUs, jobs running and waiting, the last ones that ended, results to record; one job with `log` lines of its output |
+| `rft_cancel_job` | cancel a waiting job or stop a running one, only when the user asks |
 
 Before proposing an experiment or an idea, `rft_search` whether the tree already has it; to
 answer "what did we try on X", look at the map and search first, and read only the notes that

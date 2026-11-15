@@ -21,8 +21,11 @@ host name (so a web page elsewhere cannot reach it through DNS rebinding), serve
 allow-list of page files, and reads or writes a note only by its id, in a markdown file that
 resolves inside one of the vault's note folders (experiments/, directions/, references/,
 theory/), a deadline only in milestones/, and the scratchpad only as a plain file at the vault's
-top. A write (PUT api/note, PUT api/scratchpad, POST api/node, api/type, api/comment, api/lock,
-api/priority, api/dates, api/milestone) must also come from the page itself (its
+top. It shows the experiment queue (GET api/queue: the GPUs, the jobs waiting and running, the
+history; rft_queue.py beside it) and takes the user's changes to it (POST api/queue: a job moved,
+cancelled or retried, the queue paused, the GPUs it may use); a job's output (GET api/queue/log)
+goes only to a request carrying the key. A write (PUT api/note, PUT api/scratchpad, POST api/node, api/type, api/comment, api/lock,
+api/priority, api/dates, api/milestone, api/queue) must also come from the page itself (its
 Origin) and carry the vault's key, which is in the address the server prints, so neither
 another web page nor another user of the machine can change a note. The key is kept in the
 user's cache, readable by them alone, so it stays the same across restarts.

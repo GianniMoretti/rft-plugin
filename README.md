@@ -117,9 +117,9 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   (`rft_add_node`, `rft_set_status`, `rft_set_summary`, `rft_search`, `rft_map`, `rft_graph`,
   `rft_next`, `rft_move_node`) have their full definition in the prompt from the start. The
   others are listed by name and loaded when Claude needs one, which keeps every turn cheaper. The
-  date, priority, comment and artifact tools join the first group in a vault that uses those
-  features (it has deadlines or dated notes, priorities, comment threads or locked notes, or a
-  concept artifact).
+  date, priority, comment, artifact and queue tools join the first group in a vault that uses those
+  features (it has deadlines or dated notes, priorities, comment threads or locked notes, a
+  concept artifact, or an experiment queue).
 
   | tool | does |
   |---|---|
@@ -155,6 +155,9 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_comments` | a note's comments and suggestions, or the notes with open threads |
   | `rft_comment` | replies in a thread (or closes a suggestion it made in the note), or starts a comment on a quote |
   | `rft_suggest` | proposes new text for a quote, or the text an open suggestion asks for; you accept or reject it |
+  | `rft_queue` | queues a run of an experiment on this machine's GPUs (command, folder, GPUs, a label); it starts once its GPUs are free, in your order (see The experiment queue) |
+  | `rft_jobs` | the queue in a few lines: the GPUs, the jobs running and waiting (with why each waits), the last ones that ended, the results still to record; one job with the end of its output |
+  | `rft_cancel_job` | cancels a waiting job or stops a running one, when you ask |
 
 - **The outline pane** opens as a sidebar at session start in the terminal and VS Code where the
   surface docks panes (turn this off with the `autoOpen` option), and with `/rft list`: an indented, coloured outline of the tree, the same on
@@ -376,6 +379,50 @@ that change them are refused.
   planned runs (never the suggestions), for any calendar app to import; **.ics** in the Calendar
   downloads the same.
 
+### The experiment queue
+
+Claude runs an experiment on this machine's GPUs by queueing it (`rft_queue`), not by launching it
+in the background: a job is a command, the folder it runs in and how many GPUs it takes, for one
+experiment note. A **runner**, a small process of its own (`server/rft_queue.py`, Python standard
+library), starts each job as soon as enough GPUs are free and records how it ended. It is apart
+from any session: a run goes on after the session that queued it ends, and the runner stops by
+itself once the queue has been empty a minute (queueing a job, opening the tree view or starting a
+session brings it back).
+
+- **The monitor**: the chip icon at the top left of the tree view, its badge counting the jobs
+  running and waiting (`?jobs` in the address opens it, `?jobs=history` on its history). It shows
+  each GPU (memory, use, temperature, and what holds it: a job of the queue, with its experiment,
+  or a process outside the queue), then two tabs:
+  - **Queue**: the jobs running (how long, on which GPUs) and those waiting, in their order, each
+    with why it waits ("1st in line: needs 2 GPUs, 1 free"). Drag a job, or use ↑ ↓ and **Top**,
+    to change the order; **Stop** / **Cancel** (press twice) ends a job; **Pause** starts no new
+    job (the running ones go on). Untick a GPU to keep it out of the queue (for your own work).
+  - **History**: every job that ended, newest first, with its experiment, how it ended (done,
+    failed with its exit code, cancelled), how long it ran, and **Retry** (first in line again).
+  **Log** / **Command** on a job shows its command and the end of its output. The experiment ids
+  open their notes in the drawer. Watching, reordering and retrying cost no model turn and no token.
+- **Order**: strict. The first waiting job that needs GPUs takes them once enough are free; nothing
+  behind it starts first (move it down to let smaller jobs pass). A job that takes no GPU never
+  waits. A GPU with someone else's process on it, or more than 1000 MiB of memory taken, counts
+  as busy, so the queue never starts a job on top of your notebook.
+- **A job runs** as `bash -c <command>` in its folder, in a process group of its own, with
+  `CUDA_VISIBLE_DEVICES` set to its GPUs (numbered as nvidia-smi numbers them), `RFT_JOB` and
+  `RFT_EXPERIMENT`; its output goes to `vault/.queue/logs/<job>.log`. It gets the environment the
+  runner started with, not your interactive shell's, so its command activates its conda or venv
+  itself. A job whose process is gone without an exit code (killed, or the machine restarted) is
+  recorded as lost.
+- **With the notes**: when a job starts, its experiment goes from planned to running (the plugin
+  does it, no model turn) and a toast says so; when one ends, a toast says how. The note is then
+  left to Claude: `rft_next`, `/rft-next` and the start of the next session list the experiments
+  whose job ended and whose result is not recorded yet, and Claude reads the end of the job's
+  output (`rft_jobs <job>`) only then, not by polling.
+- `/rft-jobs` prints the queue in the terminal, at no model turn.
+- **Files**, in the vault's `.queue/` (a dot folder Obsidian leaves alone): `queue.json`, the jobs
+  waiting and running in their order; `history.jsonl`, one line per job that ended. Its
+  `.gitignore` keeps the logs out of git.
+- Only this machine's NVIDIA GPUs for now (nvidia-smi); clusters (SLURM over SSH) would be further
+  tabs beside this machine's.
+
 ### Concepts
 
 A **concept** is a line of research: the note that starts it (usually the direction that opened
@@ -518,7 +565,9 @@ accepted suggestion, its frontmatter kept as it is; the `locked:` line from the 
 `priority:` line from the kanban or the drawer (which also clears Claude's suggested priority), within
 the limits; a note's `due:`, `start:` and `est:` from the Calendar or the drawer (which also clear
 Claude's suggested dates); a deadline in `vault/milestones/` (a new one, its due date, needs and
-status, Claude's suggested one accepted or dismissed); and a note's comments file in `vault/.comments/`. A new note from **Add child**, a note's new type from
+status, Claude's suggested one accepted or dismissed); a note's comments file in `vault/.comments/`;
+and the experiment queue in `vault/.queue/` (a job moved, cancelled or retried, the queue paused,
+the GPUs it may use; a job's output is read only with the key). A new note from **Add child**, a note's new type from
 **Change type**, or a move from **Move**, it asks the session that started it to make, and **Ask
 Claude** to answer (a line on its output, which the plugin reads). It does any of these only for
 the page itself carrying the project's key, which the address `/rft` prints holds (`?token=…`):
@@ -553,6 +602,7 @@ needs no network.
 | `/rft-literature <topic, id or concept>` | ask Claude for a literature search: one literature note with every key paper read, under the note or concept it is about, then a synthesis, the directions it suggests and the papers worth a note of their own (added only once you choose) |
 | `/rft-rebalance [concept or id] [--full]` | ask Claude to propose moving branches under the line of research they belong to, as a table of moves; only the ones you confirm are made, each keeping its origin. The plugin first finds the candidates (notes whose words and references sit closer to another concept than to their own) and Claude judges only those; `--full` has Claude review the whole tree instead |
 | `/rft-next [concept]` | print what is still open, by concept: running and planned experiments, unexplored directions, open questions (no model turn) |
+| `/rft-jobs [job or experiment]` | print the experiment queue: the GPUs, the jobs running and waiting, the last ones that ended (a job: with the end of its output), and the address of the monitor (no model turn) |
 | `/rft-summarize [concept]` | ask Claude to write the missing note summaries and concept digests of an existing tree, concept by concept (a one-off job) |
 | `/rft-artifact [concept]` | ask Claude to write a concept's artifact, or, with no concept, every one missing or out of date |
 | `/rft-update [apply] [--sections]` | bring a vault made by an older version up to this one: list what it lacks (the folders and templates of newer note types, the config's format); `apply` writes it and refreshes the derived files. Notes are never changed, except that `--sections` adds the sections their type has gained, as empty headings, to unlocked notes. A session on an older vault starts with a toast pointing here (no model turn) |
@@ -620,10 +670,13 @@ session with the plugin loaded from this folder.
   concept artifact's state, links and frame, `frame.js` and `frame.css` the runtime and base style
   inside the artifact's frame; `markdown.js` the note
   renderer, footnotes and the map from the page back to the note's text; `scratchpad.js` the
-  scratchpad's to-dos and lists, and its panel; `theme.js` the light and
+  scratchpad's to-dos and lists, and its panel; `queue.js` the experiment queue's monitor;
+  `theme.js` the light and
   dark themes; vendored d3), one codebase for the live view and `/rft-view`, which shows the
   threads read-only.
-- `server/rft_server.py`: the local server (Python standard library).
+- `server/rft_server.py`: the local server (Python standard library); `server/rft_queue.py` the
+  experiment queue: its runner, its command line (what the queue tools call) and what
+  `api/queue` reads and changes. `hooks/lib/queue.ts`: the queue as Claude and the session see it.
 - `skills/rft-manual/SKILL.md`: the manual; `tests/`: the mod's tests on an in-memory vault, the
   outline pane on every surface, and the server's tests.
 - `bench/bench.py`: the token benchmark. It runs tasks headless (`claude -p`) on fresh copies of a
