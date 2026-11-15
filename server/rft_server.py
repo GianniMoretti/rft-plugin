@@ -44,6 +44,7 @@ on a free port instead.
 from __future__ import annotations
 
 import argparse
+import base64
 import datetime
 import errno
 import hashlib
@@ -58,7 +59,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from html import unescape as html_unescape
+from html import escape as html_escape, unescape as html_unescape
 from urllib.parse import parse_qs, quote, urlsplit
 
 # the node types by folder (ID_RE below has their id letters), as TYPES in hooks/lib/vault.ts has them
@@ -83,6 +84,11 @@ PAGE_FILES = {
     "/vendor/katex.v0.16.22.min.js": ("vendor/katex.v0.16.22.min.js", "text/javascript; charset=utf-8"),
     "/vendor/katex.v0.16.22.min.css": ("vendor/katex.v0.16.22.min.css", "text/css; charset=utf-8"),
     "/vendor/LICENSE-katex.txt": ("vendor/LICENSE-katex.txt", "text/plain; charset=utf-8"),
+    # an artifact's SVG figure as a PDF, made in the page (loaded the first time one is asked for)
+    "/vendor/jspdf.v4.2.1.umd.min.js": ("vendor/jspdf.v4.2.1.umd.min.js", "text/javascript; charset=utf-8"),
+    "/vendor/svg2pdf.v2.9.0.umd.min.js": ("vendor/svg2pdf.v2.9.0.umd.min.js", "text/javascript; charset=utf-8"),
+    "/vendor/LICENSE-jspdf.txt": ("vendor/LICENSE-jspdf.txt", "text/plain; charset=utf-8"),
+    "/vendor/LICENSE-svg2pdf.txt": ("vendor/LICENSE-svg2pdf.txt", "text/plain; charset=utf-8"),
 }
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 ID_RE = re.compile(r"^[EDRT]\d+$")
@@ -105,6 +111,13 @@ ARTIFACT_CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsa
                 "media-src {here} data:; font-src data:; form-action 'none'; base-uri 'none'; frame-ancestors {here}; "
                 "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox")
 ARTIFACTS = "artifacts"
+# where an artifact's figures are kept: looked in first after the artifacts' own folder
+FIGURES = "figures"
+# an SVG an artifact shows comes inside its page, as a data: image: the sandboxed frame has no origin
+# of its own, and a browser blocks an SVG answer to it (ORB); up to this size
+MAX_INLINE_SVG = 10_000_000
+# the scripts inside an artifact's frame, in this order: the LaTeX of its tables, then its runtime
+FRAME_SCRIPTS = ("latex.js", "frame.js")
 # its first line, as hooks/lib/vault.ts reads it: JSON in an HTML comment
 ARTIFACT_HEAD = re.compile(r"^<!-- rft-artifact (\{.*\}) -->[ \t]*(?:\r?\n|$)")
 MAX_ARTIFACT_BYTES = 1_000_000
@@ -746,7 +759,7 @@ class Vault:
         """An image a concept's artifact shows, found as a note's are, from the artifacts' folder."""
         if not CONCEPT_ID_RE.match(cid or "") or not any(a["concept"] == cid for a in self.tree()["artifacts"]):
             return None
-        return self._find_image(self.root / ARTIFACTS, src)
+        return self._find_image(self.root / ARTIFACTS, src, [self.root / FIGURES])
 
     def _milestones(self, by_name: dict[str, str], nodes: dict[str, dict]) -> list[dict]:
         """The deadlines in milestones/: due date as written, status, the notes they need by id and
@@ -828,8 +841,9 @@ class Vault:
         note = self.note_path(nid)
         return None if note is None else self._find_image(note.parent, src)
 
-    def _find_image(self, near: Path, src: str) -> Path | None:
-        """The image `src` names, seen from the folder `near`, as `image` finds a note's."""
+    def _find_image(self, near: Path, src: str, also: list[Path] = ()) -> Path | None:
+        """The image `src` names, seen from the folder `near` (then from the folders `also`), as
+        `image` finds a note's."""
         src = (src or "").strip()
         if not src or "\x00" in src or len(src) > 4096:
             return None
@@ -838,7 +852,7 @@ class Vault:
         if not is_image(Path(src)):
             return None
         inner = src.lstrip("/")  # Obsidian reads `/a.png` from its vault's top
-        tries = ([Path(src)] if Path(src).is_absolute() else []) + [near / inner, *(t / inner for t in self.image_tops)]
+        tries = ([Path(src)] if Path(src).is_absolute() else []) + [near / inner, *(a / inner for a in also), *(t / inner for t in self.image_tops)]
         parts = [p for p in Path(inner).parts if p not in (".", "..")]
         try:
             found = next((p for p in tries if p.is_file()), None)
@@ -1459,14 +1473,35 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 src = m.group(3)
                 if re.match(r"^\s*(data:|https?:|//)", src, re.I):
                     return m.group(0)
+                q = m.group(2)
+                svg = inline_svg(html_unescape(src))
+                if svg is not None:  # inside the page: an SVG from the server would be blocked
+                    return f"{m.group(1)}{q}{svg}{q} data-rft-src={q}{html_escape(src, quote=True)}{q}"
                 url = f"api/image?artifact={cid}&amp;src={quote(html_unescape(src), safe='')}" + (f"&amp;token={image_key(token)}" if keyed else "")
-                return f"{m.group(1)}{m.group(2)}{url}{m.group(2)}"
+                return f"{m.group(1)}{q}{url}{q}"
+
+            def inline_svg(src: str) -> str | None:
+                """An SVG the artifact shows as a data: image, when it is one it may show: in the vault,
+                or anywhere with the key, as api/image serves it; None for any other image."""
+                path = vault.artifact_image(cid, src)
+                if path is None or path.suffix.lower() != ".svg" or not (keyed or vault.inside(path)):
+                    return None
+                try:
+                    if path.stat().st_size > MAX_INLINE_SVG:
+                        return None
+                    data = path.read_bytes()
+                except OSError:
+                    return None
+                return "data:image/svg+xml;base64," + base64.b64encode(data).decode("ascii")
 
             theme = "dark" if one("theme") == "dark" else "light"
-            try:
-                js, css = (web / "frame.js").read_text(encoding="utf-8"), (web / "frame.css").read_text(encoding="utf-8")
-            except OSError:
-                js, css = "", ""
+            def text(name: str) -> str:
+                try:
+                    return (web / name).read_text(encoding="utf-8")
+                except OSError:  # a plugin folder without it: the page without it
+                    return ""
+            # each script ends where the next begins: `;` keeps one's opening ( from calling the last
+            js, css = "\n;\n".join(text(f) for f in FRAME_SCRIPTS), text("frame.css")
             doc = wrap_artifact(IMG_SRC_RE.sub(image, page), js, css, theme)
             here = f"http://{(self.headers.get('Host') or '').strip()}"
             self._send(200, doc.encode("utf-8"), "text/html; charset=utf-8", head_only, ARTIFACT_CSP.format(here=here))

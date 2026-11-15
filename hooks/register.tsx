@@ -1616,6 +1616,7 @@ export const register: Register = (on, options) => {
         scratchpad: await $.fs.read(join(root, ASSET_PATHS.scratchpad)),
         theme: await $.fs.read(join(root, ASSET_PATHS.theme)),
         artifacts: await $.fs.read(join(root, ASSET_PATHS.artifacts)),
+        latex: await $.fs.read(join(root, ASSET_PATHS.latex)),
         frame: await $.fs.read(join(root, ASSET_PATHS.frame)),
         frameCss: await $.fs.read(join(root, ASSET_PATHS.frameCss)),
       }

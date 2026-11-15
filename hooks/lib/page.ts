@@ -8,7 +8,7 @@ import type { Milestone } from './dates'
 import type { Tree } from './vault'
 import { bodyOf, conceptOrder, tagCounts } from './vault'
 
-export type PageAssets = { html: string; css: string; js: string; d3: string; katex: string; katexCss: string; filters: string; kanban: string; layout: string; concepts: string; markdown: string; theme: string; schedule: string; scratchpad: string; artifacts: string; frame: string; frameCss: string }
+export type PageAssets = { html: string; css: string; js: string; d3: string; katex: string; katexCss: string; filters: string; kanban: string; layout: string; concepts: string; markdown: string; theme: string; schedule: string; scratchpad: string; artifacts: string; latex: string; frame: string; frameCss: string }
 
 export const ASSET_PATHS = {
   html: 'web/index.html',
@@ -22,6 +22,7 @@ export const ASSET_PATHS = {
   markdown: 'web/markdown.js',
   scratchpad: 'web/scratchpad.js',
   artifacts: 'web/artifacts.js',
+  latex: 'web/latex.js',
   frame: 'web/frame.js',
   frameCss: 'web/frame.css',
   theme: 'web/theme.js',
@@ -46,7 +47,8 @@ export function staticPage(a: PageAssets, tree: Tree, texts: Record<string, stri
   for (const id of Object.keys(tree.nodes)) bodies[id] = bodyOf(texts[id] ?? '')
   const data = JSON.stringify({
     tree: treeJson(tree, project, version, schedule.milestones, schedule.gpus, artifacts.list), bodies, comments,
-    artifacts: artifacts.pages, frame: { js: a.frame, css: a.frameCss },
+    // the frame's scripts as the server puts them in: its tables' LaTeX, then its runtime
+    artifacts: artifacts.pages, frame: { js: `${a.latex ?? ''}\n;\n${a.frame}`, css: a.frameCss },
   }).replace(/</g, '\\u003c')
   // function replacements: the inlined code may hold `$&` and the like
   return a.html

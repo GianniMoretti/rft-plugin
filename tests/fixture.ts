@@ -54,6 +54,7 @@ export const WEB_FILES: Record<string, string> = {
   'web/markdown.js': '/* markdown */',
   'web/scratchpad.js': '/* scratchpad */',
   'web/artifacts.js': '/* artifacts */',
+  'web/latex.js': '/* latex */',
   'web/frame.js': '/* frame */',
   'web/frame.css': '/* frame css */',
   'web/theme.js': '/* theme */',

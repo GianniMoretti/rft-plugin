@@ -494,6 +494,17 @@ Claude writes it; you read it in the tree view.
   concept with results that has none. `/rft-artifact [concept]` asks for one, or for every one
   missing or out of date. Only numbers that are in the notes go on it. Claude's own edits of the
   files are refused, so the stamp stays true.
+- **Figures** are kept in `vault/figures/` and named from the page as `../figures/<file>.svg`
+  (which also works when the file is opened on its own); an image is looked for there first, then
+  as a note's images are. An SVG comes inside the page (a browser refuses one sent to the
+  sandboxed frame), up to 10 MB; `rft_set_artifact` names an image it cannot find.
+- **PDF and LaTeX**: each SVG figure, a file or a chart drawn in the page, has a **PDF** button at
+  its corner that downloads it as a vector PDF of its own size, named after its file (or its
+  caption); each table has a **LaTeX** button that copies it as a `table` float: `\caption` from
+  its `<caption>` (else the heading above it), a `\label`, a booktabs `tabular` with its header rows
+  above `\midrule`, columns of numbers right-aligned, `±` and the like in math, bold and italics
+  kept. The PDF is made in the page by jsPDF and svg2pdf.js (MIT, in `web/vendor/`, loaded the
+  first time one is asked for); the standalone page has the LaTeX button only.
 - **Safe to show**: the page runs in a sandbox of its own (its own origin, no storage, no network,
   no way to the page around it or to a write); it loads nothing from elsewhere, so a chart is
   inline SVG or the page's own script. Its images are found as a note's are; one outside the vault
@@ -535,9 +546,10 @@ node), forward the port and open the address on your own machine:
 ssh -L 41234:127.0.0.1:41234 user@remote
 ```
 
-d3 (ISC licence, `web/vendor/LICENSE-d3.txt`) and KaTeX (MIT licence,
-`web/vendor/LICENSE-katex.txt`; its fonts inlined in its stylesheet) are bundled, so the page
-needs no network.
+d3 (ISC licence, `web/vendor/LICENSE-d3.txt`), KaTeX (MIT licence,
+`web/vendor/LICENSE-katex.txt`; its fonts inlined in its stylesheet), and jsPDF and svg2pdf.js
+(MIT licences, `web/vendor/LICENSE-jspdf.txt`, `web/vendor/LICENSE-svg2pdf.txt`; an artifact's
+figures as PDF) are bundled, so the page needs no network.
 
 ### Commands
 
@@ -618,7 +630,7 @@ session with the plugin loaded from this folder.
 - `web/`: the tree view (`index.html`, `app.js`, `app.css`; `filters.js`, `kanban.js`, `layout.js` and
   `concepts.js` hold the pure filter, kanban, radial layout and concept logic; `artifacts.js` a
   concept artifact's state, links and frame, `frame.js` and `frame.css` the runtime and base style
-  inside the artifact's frame; `markdown.js` the note
+  inside the artifact's frame, `latex.js` its tables as LaTeX; `markdown.js` the note
   renderer, footnotes and the map from the page back to the note's text; `scratchpad.js` the
   scratchpad's to-dos and lists, and its panel; `theme.js` the light and
   dark themes; vendored d3), one codebase for the live view and `/rft-view`, which shows the

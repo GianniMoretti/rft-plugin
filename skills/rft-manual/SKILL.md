@@ -238,7 +238,10 @@ key results as tables and small charts, what failed, what is still running.
   and no artifact gets one then too. `/rft-artifact [concept]` asks for one, or for every one
   missing or out of date.
 - **The page**: HTML with its own `<style>` and inline `<script>`; charts as inline SVG. The view
-  loads nothing from elsewhere (no CDN, no fetch); images by path or name, as in notes. Its base
+  loads nothing from elsewhere (no CDN, no fetch). **Figures** go in the vault's `figures/` folder,
+  saved as SVG and named from the page as `<img src="../figures/<file>.svg" alt="…">`; the view
+  gives each SVG figure (and each inline chart) a button that downloads it as a PDF, and each
+  table one that copies it as a LaTeX `table` float, so give every table a `<caption>`. Its base
   style follows the view's light and dark themes: `var(--fg)`, `--muted`, `--bg`, `--panel`,
   `--line`, `--accent`, `--good`, `--bad`, and `--c1` … `--c6` for series. Link every note id,
   `<a href="#E05">E05</a>` (or `data-note="E05"` on any element): the view opens the note and

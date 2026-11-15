@@ -361,7 +361,7 @@ describe('vault', () => {
 
   test('the static page inlines the web view and embeds the tree with every note', async () => {
     const { tree, texts } = (await loadDemo()).loaded
-    const html = staticPage({ html: WEB_FILES['web/index.html']!, css: 'a{}', js: 'go()', d3: 'd3()', katex: 'kx()', katexCss: '.katex{}', filters: 'filt()', kanban: 'kan()', schedule: 'sch()', layout: 'lay()', concepts: 'con()', markdown: 'mdn()', theme: 'thm()', scratchpad: 'scr()', artifacts: 'art()', frame: 'frm()', frameCss: '.frm{}' }, tree, texts, 'demo', 'v1', { E02: [{ id: 'c1', quote: '<b>', at: [1, 4] }] })
+    const html = staticPage({ html: WEB_FILES['web/index.html']!, css: 'a{}', js: 'go()', d3: 'd3()', katex: 'kx()', katexCss: '.katex{}', filters: 'filt()', kanban: 'kan()', schedule: 'sch()', layout: 'lay()', concepts: 'con()', markdown: 'mdn()', theme: 'thm()', scratchpad: 'scr()', artifacts: 'art()', latex: 'ltx()', frame: 'frm()', frameCss: '.frm{}' }, tree, texts, 'demo', 'v1', { E02: [{ id: 'c1', quote: '<b>', at: [1, 4] }] })
     const data = JSON.parse(/window\.RFT_DATA = (.*?);<\/script>/.exec(html)![1]!)
     expect(data.comments).toEqual({ E02: [{ id: 'c1', quote: '<b>', at: [1, 4] }] })
     expect(html).not.toContain('<b>') // escaped inside the script
