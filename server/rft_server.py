@@ -9,7 +9,10 @@ alone (which also answers Claude's `suggested_priority:`); its dates, the user's
 (a new one, its due date, the notes it needs, its status, and Claude's suggested ones accepted or
 dismissed); its discussion, the comments and suggestions on parts of its text, in
 vault/.comments/<id>.json (as hooks/lib/comments.ts reads it); and the user's scratchpad, quick
-notes and to-dos in vault/Scratchpad.md. A new note, or a note's new type, it never writes itself: it asks the session that runs it,
+notes and to-dos in vault/Scratchpad.md. It serves each concept's artifact (vault/artifacts/<id> <name>.html,
+written by Claude with rft_set_artifact) read-only, as a page of its own in a sandbox (GET api/artifact?concept=<id>):
+no script of it reaches the network, the page that frames it, or a write; the tree lists the artifacts
+with what changed since they were written. A new note, or a note's new type, it never writes itself: it asks the session that runs it,
 with a line `RFT_ADD_NODE {"parent", "type", "title"}` or `RFT_SET_TYPE {"id", "type"}` on stdout,
 and the plugin makes the change as the rft_add_node or rft_set_type tool does (no model turn), then
 answers the note's id once it is on disk. `RFT_ASK {"id", "thread"}` asks the session's Claude to
@@ -55,7 +58,8 @@ import sys
 import threading
 import time
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from html import unescape as html_unescape
+from urllib.parse import parse_qs, quote, urlsplit
 
 # the node types by folder (ID_RE below has their id letters), as TYPES in hooks/lib/vault.ts has them
 SUBDIRS = {"experiments": "experiment", "directions": "direction", "references": "reference", "theory": "theory"}
@@ -73,6 +77,7 @@ PAGE_FILES = {
     "/theme.js": ("theme.js", "text/javascript; charset=utf-8"),
     "/markdown.js": ("markdown.js", "text/javascript; charset=utf-8"),
     "/scratchpad.js": ("scratchpad.js", "text/javascript; charset=utf-8"),
+    "/artifacts.js": ("artifacts.js", "text/javascript; charset=utf-8"),
     "/vendor/d3.v7.9.0.min.js": ("vendor/d3.v7.9.0.min.js", "text/javascript; charset=utf-8"),
     "/vendor/LICENSE-d3.txt": ("vendor/LICENSE-d3.txt", "text/plain; charset=utf-8"),
     "/vendor/katex.v0.16.22.min.js": ("vendor/katex.v0.16.22.min.js", "text/javascript; charset=utf-8"),
@@ -92,7 +97,20 @@ RESCAN_S = 5.0  # a name not found looks through the folders again at most this 
 MAX_SCAN_FILES = 2_000_000  # the most files a search by name looks through
 SKIP_DIRS = {"node_modules", "__pycache__"}  # with every dot folder: never searched by name
 PAGE_CSP = ("default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; "
-            "connect-src 'self'; frame-ancestors 'self'")
+            "connect-src 'self'; frame-src 'self'; frame-ancestors 'self'")
+# a concept's artifact: a page of Claude's, served as a document of its own in a sandbox (an opaque
+# origin: it reads no storage and makes no write as the page), its scripts inline, nothing from
+# elsewhere; `{here}` is the server's own address, for its images and the page that frames it
+ARTIFACT_CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src {here} data:; "
+                "media-src {here} data:; font-src data:; form-action 'none'; base-uri 'none'; frame-ancestors {here}; "
+                "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox")
+ARTIFACTS = "artifacts"
+# its first line, as hooks/lib/vault.ts reads it: JSON in an HTML comment
+ARTIFACT_HEAD = re.compile(r"^<!-- rft-artifact (\{.*\}) -->[ \t]*(?:\r?\n|$)")
+MAX_ARTIFACT_BYTES = 1_000_000
+CONCEPT_ID_RE = re.compile(r"^(root|[EDRT]\d+)$")
+FENCE_RE = re.compile(r"^\s*(```|~~~)")
+IMG_SRC_RE = re.compile(r"(<img\b[^>]*?\bsrc\s*=\s*)([\"'])(.*?)\2", re.I | re.S)
 # an image runs nothing, even an SVG opened on its own
 IMAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
 # the discussion of each note: vault/.comments/<id>.json, a dot folder Obsidian leaves alone, as
@@ -239,6 +257,71 @@ def body_of(text: str) -> str:
 
 def version_of(data: bytes) -> str:
     return hashlib.sha1(data).hexdigest()[:16]
+
+
+def fnv(text: str) -> str:
+    """FNV-1a over the UTF-16 code units of `text`, as 8 hex digits, as hooks/lib/artifacts.ts has it."""
+    h = 0x811C9DC5
+    data = text.encode("utf-16-le", "surrogatepass")
+    for i in range(0, len(data), 2):
+        h ^= data[i] | (data[i + 1] << 8)
+        h = (h * 0x01000193) & 0xFFFFFFFF
+    return f"{h:08x}"
+
+
+def result_of(text: str) -> str:
+    """The text of a note's `## Result` section, trimmed ('' when it has none), as resultOf in
+    hooks/lib/vault.ts: from the heading to the next `## ` heading, neither inside a fenced block."""
+    lines, fenced, heads = body_of(text).split("\n"), False, []
+    for i, line in enumerate(lines):
+        if FENCE_RE.match(line):
+            fenced = not fenced
+        if not fenced and line.startswith("## "):
+            heads.append(i)
+    start = next((i for i in heads if lines[i][3:].strip() == "Result"), None)
+    if start is None:
+        return ""
+    end = next((i for i in heads if i > start), len(lines))
+    return "\n".join(lines[start + 1:end]).strip()
+
+
+def experiment_key(n: dict, text: str) -> str:
+    """What a concept's artifact is written from, for one experiment, as experimentKey in hooks/lib/artifacts.ts."""
+    return fnv(f"{n['id']}|{n['status']}|{n['title']}|{n.get('summary') or ''}|{n.get('supersededBy') or ''}|{result_of(text)}")
+
+
+def artifact_head(text: str) -> dict | None:
+    """The header of an artifact file (its first line), or None when it has none."""
+    m = ARTIFACT_HEAD.match(text)
+    if not m:
+        return None
+    try:
+        head = json.loads(m.group(1))
+    except ValueError:
+        return None
+    return head if isinstance(head, dict) and isinstance(head.get("concept"), str) and head["concept"] else None
+
+
+def artifact_page(text: str) -> str:
+    """An artifact file without its header line."""
+    m = ARTIFACT_HEAD.match(text)
+    return text[m.end():] if m else text
+
+
+def wrap_artifact(html: str, js: str, css: str, theme: str) -> str:
+    """The artifact as a document: its theme, the base style and the frame's runtime first in its
+    head, as wrap in web/artifacts.js builds it for the standalone page."""
+    js = re.sub(r"</(script)", r"<\\/\1", js, flags=re.I)
+    css = re.sub(r"</(style)", r"<\\/\1", css, flags=re.I)
+    pre = (f'<meta charset="utf-8"><script>document.documentElement.dataset.theme = "{theme}"</script>'
+           f"<style>{css}</style><script>{js}</script>")
+    m = re.search(r"<head\b[^>]*>", html, re.I)
+    if m:
+        return html[:m.end()] + pre + html[m.end():]
+    m = re.search(r"<html\b[^>]*>", html, re.I)
+    if m:
+        return html[:m.end()] + f"<head>{pre}</head>" + html[m.end():]
+    return f"<!doctype html><html><head>{pre}</head><body>{html}</body></html>"
 
 
 def id_of(name: str) -> str:
@@ -451,7 +534,7 @@ class Vault:
                 for f in sorted(d.glob("*.md")):
                     st = f.stat()
                     parts.append(f"{sub}/{f.name}:{st.st_mtime_ns}:{st.st_size}")
-        for sub, pattern in ((COMMENTS, "*.json"), (MILESTONES, "*.md")):
+        for sub, pattern in ((COMMENTS, "*.json"), (MILESTONES, "*.md"), (ARTIFACTS, "*.html")):
             d = self.root / sub
             if d.is_dir():
                 for f in sorted(d.glob(pattern)):
@@ -472,6 +555,7 @@ class Vault:
 
     def _load(self, sig: str) -> dict:
         nodes: dict[str, dict] = {}
+        texts: dict[str, str] = {}  # the experiments', for the keys their concept's artifact is written from
         refs: dict[str, str | None] = {}
         origins: dict[str, list[str]] = {}
         refs_of: dict[str, list[str]] = {}
@@ -523,6 +607,10 @@ class Vault:
                 if plan["suggestedStart"] or plan["suggestedEst"]:
                     plan["suggestedDatesWhy"] = unquote_json(fm.get("suggested_dates_why")) or None
                 nodes[nid].update({k: v for k, v in plan.items() if v})
+                if ftype == "experiment":
+                    texts[nid] = text
+                    if nodes[nid]["status"] == "done" or result_of(text):
+                        nodes[nid]["hasResult"] = True
                 after_of[nid] = link_targets(fm.get("after"))
                 cname = unquote(fm.get("concept"))
                 repos = parse_repos(fm.get("concept_repos"))
@@ -575,8 +663,9 @@ class Vault:
         tags = [{"tag": t, "count": c} for t, c in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
         concepts = compute_concepts(nodes, roots, self.project, decl, repos_only)
         milestones = self._milestones(by_name, nodes)
+        artifacts = self._artifacts(nodes, roots, texts)
         return {"project": self.project, "version": sig, "nodes": list(nodes.values()), "roots": roots, "tags": tags,
-                "concepts": concepts, "milestones": milestones, "gpus": self._config().get("gpus") if count_of(str(self._config().get("gpus", ""))) else None}
+                "concepts": concepts, "milestones": milestones, "artifacts": artifacts, "gpus": self._config().get("gpus") if count_of(str(self._config().get("gpus", ""))) else None}
 
     def _config(self) -> dict:
         """The project's .rft/config.json, or {} when there is none to read."""
@@ -585,6 +674,67 @@ class Vault:
         except (OSError, ValueError):
             return {}
         return data if isinstance(data, dict) else {}
+
+    def _artifact_files(self):
+        """The artifact files: each `artifacts/*.html` inside that folder (no link out of it), with its header, by name."""
+        d = (self.root / ARTIFACTS)
+        if not d.is_dir():
+            return
+        top = d.resolve()
+        for f in sorted(d.glob("*.html"), key=lambda p: p.name):
+            try:
+                if f.is_symlink() or f.resolve().parent != top or not f.is_file() or f.stat().st_size > MAX_ARTIFACT_BYTES:
+                    continue
+                data = f.read_bytes()
+            except OSError:
+                continue
+            head = artifact_head(data.decode("utf-8", errors="replace"))
+            if head:
+                yield f, data, head
+
+    def _artifacts(self, nodes: dict[str, dict], roots: list[str], texts: dict[str, str]) -> list[dict]:
+        """Each concept's artifact, with what changed since it was written: the keys of the concept's
+        own experiments with a result now, against those in its header, as artifactState in
+        hooks/lib/artifacts.ts has it (in the order of the tree)."""
+        order: list[str] = []
+        stack = list(reversed(roots))
+        while stack:
+            nid = stack.pop()
+            order.append(nid)
+            stack.extend(reversed(nodes[nid]["children"]))
+        out, seen = [], set()
+        for f, data, head in self._artifact_files():
+            cid = head["concept"]
+            if cid in seen:
+                continue
+            seen.add(cid)
+            now = {i: experiment_key(nodes[i], texts[i]) for i in order
+                   if nodes[i]["concept"] == cid and nodes[i]["type"] == "experiment" and nodes[i].get("hasResult")}
+            basis = head.get("basis") if isinstance(head.get("basis"), dict) else {}
+            changed = [i for i in now if i in basis and basis[i] != now[i]]
+            added = [i for i in now if i not in basis]
+            removed = [i for i in basis if i not in now]
+            out.append({"concept": cid, "name": str(head.get("name") or cid), "path": f"{ARTIFACTS}/{f.name}",
+                        "updated": str(head.get("updated") or ""), "version": version_of(data),
+                        "stale": bool(changed or added or removed), "changed": changed, "added": added, "removed": removed})
+        return out
+
+    def artifact(self, cid: str) -> str | None:
+        """A concept's artifact page, without its header; None when the concept has none."""
+        if not CONCEPT_ID_RE.match(cid or ""):
+            return None
+        if not any(a["concept"] == cid for a in self.tree()["artifacts"]):
+            return None
+        for _f, data, head in self._artifact_files():
+            if head["concept"] == cid:
+                return artifact_page(data.decode("utf-8", errors="replace"))
+        return None
+
+    def artifact_image(self, cid: str, src: str) -> Path | None:
+        """An image a concept's artifact shows, found as a note's are, from the artifacts' folder."""
+        if not CONCEPT_ID_RE.match(cid or "") or not any(a["concept"] == cid for a in self.tree()["artifacts"]):
+            return None
+        return self._find_image(self.root / ARTIFACTS, src)
 
     def _milestones(self, by_name: dict[str, str], nodes: dict[str, dict]) -> list[dict]:
         """The deadlines in milestones/: due date as written, status, the notes they need by id and
@@ -664,20 +814,24 @@ class Vault:
         Obsidian vault's; else by name, the file whose path ends as `src` does that lies nearest
         the note, first in the vault, then in the Obsidian vault. None when there is none."""
         note = self.note_path(nid)
+        return None if note is None else self._find_image(note.parent, src)
+
+    def _find_image(self, near: Path, src: str) -> Path | None:
+        """The image `src` names, seen from the folder `near`, as `image` finds a note's."""
         src = (src or "").strip()
-        if note is None or not src or "\x00" in src or len(src) > 4096:
+        if not src or "\x00" in src or len(src) > 4096:
             return None
         if src.lower().startswith("file://"):
             src = src[len("file://"):]
         if not is_image(Path(src)):
             return None
         inner = src.lstrip("/")  # Obsidian reads `/a.png` from its vault's top
-        tries = ([Path(src)] if Path(src).is_absolute() else []) + [note.parent / inner, *(t / inner for t in self.image_tops)]
+        tries = ([Path(src)] if Path(src).is_absolute() else []) + [near / inner, *(t / inner for t in self.image_tops)]
         parts = [p for p in Path(inner).parts if p not in (".", "..")]
         try:
             found = next((p for p in tries if p.is_file()), None)
             for top in self.image_tops if parts else ():
-                found = found or self._by_name(top, parts, note.parent)
+                found = found or self._by_name(top, parts, near)
             path = found.resolve() if found else None
         except OSError:  # a name too long, a folder it may not read
             return None
@@ -1264,24 +1418,51 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
         def log_message(self, fmt, *args):  # quiet: the plugin reads stdout for the URL only
             pass
 
-        def _send(self, status: int, body: bytes, ctype: str, head_only: bool = False):
+        def _send(self, status: int, body: bytes, ctype: str, head_only: bool = False, csp: str = PAGE_CSP):
             self.send_response(status)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
-            self.send_header("Content-Security-Policy", PAGE_CSP)
+            self.send_header("Content-Security-Policy", csp)
             self.end_headers()
             if not head_only:
                 self.wfile.write(body)
+
+        def _artifact(self, q: dict, head_only: bool):
+            """GET api/artifact?concept=<id>[&theme=dark][&y=<px>][&token=<key>]: the concept's artifact as
+            a document of its own, in a sandbox: its theme, the base style and the frame's runtime first,
+            its images through api/image (with the key, when this request carries it)."""
+            one = lambda k: (q.get(k) or [""])[0]
+            cid = one("concept")
+            page = vault.artifact(cid)
+            if page is None:
+                return self._send(404, b"no artifact for this concept", "text/plain", head_only)
+            keyed = bool(token) and secrets.compare_digest(one("token").encode(), token.encode())
+
+            def image(m):
+                src = m.group(3)
+                if re.match(r"^\s*(data:|https?:|//)", src, re.I):
+                    return m.group(0)
+                url = f"api/image?artifact={cid}&amp;src={quote(html_unescape(src), safe='')}" + (f"&amp;token={token}" if keyed else "")
+                return f"{m.group(1)}{m.group(2)}{url}{m.group(2)}"
+
+            theme = "dark" if one("theme") == "dark" else "light"
+            try:
+                js, css = (web / "frame.js").read_text(encoding="utf-8"), (web / "frame.css").read_text(encoding="utf-8")
+            except OSError:
+                js, css = "", ""
+            doc = wrap_artifact(IMG_SRC_RE.sub(image, page), js, css, theme)
+            here = f"http://{(self.headers.get('Host') or '').strip()}"
+            self._send(200, doc.encode("utf-8"), "text/html; charset=utf-8", head_only, ARTIFACT_CSP.format(here=here))
 
         def _image(self, q: dict, head_only: bool):
             """GET api/image?note=<id>&src=<as the note writes it>[&token=<key>]: the image, when
             it is in the vault or the request carries the key. Without the key, an image that is
             not in the vault is refused whether it exists or not, so nothing outside can be probed."""
             one = lambda k: (q.get(k) or [""])[0]
-            path = vault.image(one("note"), one("src"))
+            path = vault.artifact_image(one("artifact"), one("src")) if one("artifact") else vault.image(one("note"), one("src"))
             keyed = bool(token) and secrets.compare_digest(one("token").encode(), token.encode())
             if path is None or not (keyed or vault.inside(path)):
                 if keyed:
@@ -1341,6 +1522,8 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 return self._json(200, note, head_only) if note else self._json(404, {"error": "no such note"}, head_only)
             if route == "/api/image":
                 return self._image(parse_qs(url.query), head_only)
+            if route == "/api/artifact":
+                return self._artifact(parse_qs(url.query), head_only)
             if route == "/api/scratchpad":
                 return self._json(*vault.scratchpad(), head_only)
             if route == "/api/paper":

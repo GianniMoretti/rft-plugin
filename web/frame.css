@@ -1,0 +1,50 @@
+/* rft artifact frame: the base style of a concept's artifact, in the tree view's light and dark
+   themes (data-theme, set by the page that frames it). A page of plain HTML looks right with
+   nothing of its own; its own <style> comes after and wins. Its colours as variables, for the page's
+   own charts: --fg --muted --bg --panel --line --accent --good --bad, and --c1 … --c6 for series. */
+:root {
+  color-scheme: light dark;
+  --bg: light-dark(#ffffff, #171a21); --panel: light-dark(#f6f7f9, #1e222b);
+  --fg: light-dark(#1f2328, #e6e8ee); --muted: light-dark(#656d76, #8b93a3);
+  --line: light-dark(#d8dde4, #2f3542); --accent: light-dark(#7048e8, #9775fa);
+  --good: light-dark(#2f9e44, #40c057); --bad: light-dark(#e03131, #fa5252); --warn: light-dark(#e8590c, #fd7e14);
+  --c1: light-dark(#7048e8, #9775fa); --c2: light-dark(#0ca678, #20c997); --c3: light-dark(#e8590c, #fd7e14);
+  --c4: light-dark(#1c7ed6, #4dabf7); --c5: light-dark(#d6336c, #f06595); --c6: light-dark(#868e96, #adb5bd);
+  --s-done: light-dark(#2f9e44, #40c057); --s-running: light-dark(#e8590c, #fd7e14); --s-planned: light-dark(#e8a400, #fab005);
+  --s-idea: light-dark(#c9a227, #ffe066); --s-dropped: light-dark(#e03131, #fa5252); --s-other: #868e96;
+}
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+* { box-sizing: border-box; }
+html { background: var(--bg); color: var(--fg); }
+body { margin: 0; padding: 14px 18px 28px; font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; overflow-wrap: anywhere; }
+h1 { font-size: 1.45em; margin: 0.2em 0 0.5em; line-height: 1.25; }
+h2 { font-size: 1.15em; margin: 1.4em 0 0.5em; padding-bottom: 0.2em; border-bottom: 1px solid var(--line); }
+h3 { font-size: 1em; margin: 1.2em 0 0.4em; }
+p, ul, ol { margin: 0.5em 0; }
+a { color: var(--accent); }
+small, .muted { color: var(--muted); }
+code { font: 0.92em ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--panel); padding: 0.1em 0.3em; border-radius: 4px; }
+pre { background: var(--panel); padding: 8px 10px; border-radius: 6px; overflow: auto; }
+pre code { background: none; padding: 0; }
+table { border-collapse: collapse; margin: 0.6em 0; font-variant-numeric: tabular-nums; max-width: 100%; display: block; overflow-x: auto; }
+th, td { border-bottom: 1px solid var(--line); padding: 4px 10px; text-align: left; vertical-align: top; }
+th { font-weight: 600; border-bottom-width: 2px; }
+td.num, th.num { text-align: right; }
+img, svg { max-width: 100%; height: auto; }
+figure { margin: 0.8em 0; }
+figcaption { color: var(--muted); font-size: 0.9em; }
+blockquote { margin: 0.6em 0; padding: 0.1em 0.9em; border-left: 3px solid var(--line); color: var(--muted); }
+hr { border: 0; border-top: 1px solid var(--line); margin: 1.2em 0; }
+/* a note link, marked from the tree: its status a dot before it; a superseded result struck through */
+a.rft-note { text-decoration: none; font-weight: 600; white-space: nowrap; }
+a.rft-note:hover { text-decoration: underline; }
+a.rft-note::before { content: ""; display: inline-block; width: 0.55em; height: 0.55em; border-radius: 50%; margin-right: 0.25em; vertical-align: 0.08em; background: var(--s-other); }
+a.rft-note.s-done::before { background: var(--s-done); }
+a.rft-note.s-running::before { background: var(--s-running); }
+a.rft-note.s-planned::before { background: var(--s-planned); }
+a.rft-note.s-idea::before { background: var(--s-idea); }
+a.rft-note.s-dropped::before { background: var(--s-dropped); }
+a.rft-note.superseded { text-decoration: line-through; color: var(--muted); }
+a.rft-note.missing { color: var(--bad); text-decoration: underline wavy; }
+.rft-image-missing { color: var(--muted); font-style: italic; }
