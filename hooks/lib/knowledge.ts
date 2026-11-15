@@ -8,6 +8,7 @@ import { LockedChange, isLocked } from './comments'
 import type { Digest } from './map'
 import { readDigests, resolveConcept } from './map'
 import { scheduleReport } from './schedule'
+import { artifactMarks, describeState } from './artifacts'
 import type { Io, Loaded, RftNode } from './vault'
 import { MARK, OPEN_STATUSES, PRIORITIES, conceptOrder, conceptPath, join, load, removeField, resolveId, setField, withHistory } from './vault'
 
@@ -120,6 +121,16 @@ export async function nextReport(io: Io, loaded: Loaded, today: string, ref?: st
     : []
   const sched = scheduleReport(loaded, today)
   tail.push(...(sched.tail.length && !tail.length ? [''] : []), ...sched.tail)
+  // in a vault with artifacts: the concepts whose artifact is out of date, or missing while they have results
+  const marks = Object.entries(await artifactMarks(io, loaded)).filter(([id]) => inScope({ concept: id } as RftNode))
+  const stale = marks.filter(([, m]) => m.stale).map(([id, m]) => `${concepts[id]!.name} (${describeState(m.stale!)})`)
+  const none = marks.filter(([, m]) => m.none).map(([id]) => concepts[id]!.name)
+  if (stale.length || none.length) {
+    tail.push(...(tail.length ? [] : ['']), [
+      stale.length ? `Artifacts out of date: ${stale.join('; ')}.` : '',
+      none.length ? `${stale.length ? 'Without one' : 'Concepts with results and no artifact'}: ${none.join(', ')}.` : '',
+    ].filter(Boolean).join(' '))
+  }
   if (!out.length && !focus.length) {
     const none = `Nothing open${scope ? ` in ${scope.name}` : ''}: no unexplored direction, no planned experiment, no open question in the digests.`
     return sched.head.length ? `${sched.head.join('\n')}\n${none}${tail.join('\n')}` : `${none}${tail.join('\n')}`

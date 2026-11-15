@@ -118,6 +118,8 @@ export type RftNode = {
   summary?: string
   /** The note whose result overturns this one's (`superseded_by:`): do not build on this one. */
   supersededBy?: string
+  /** An experiment with a result: its `## Result` says something, or it is done. What a concept's artifact is written from. */
+  hasResult?: true
   /** Its priority (`priority:`), the user's alone; none until they give it one. */
   priority?: Priority
   /** The priority Claude suggests for it (`suggested_priority:`), until the user accepts or dismisses it. */
@@ -221,6 +223,9 @@ export const MILESTONES = 'milestones'
 export const MILESTONE_RE = /^M(\d+)$/
 /** The calendar file of the deadlines and the planned runs, regenerated. */
 export const ICS = 'rft.ics'
+/** The concepts' artifacts: one HTML page each, whose first line is this header. */
+export const ARTIFACTS_DIR = 'artifacts'
+export const ARTIFACT_HEAD = /^<!-- rft-artifact (\{.*\}) -->[ \t]*(?:\r?\n|$)/
 
 export const join = (...parts: string[]) =>
   parts.filter(p => p !== '' && p !== '.').join('/').replace(/\/+/g, '/')
@@ -471,6 +476,8 @@ export type Loaded = {
   signature: string
   /** The deadlines in the vault's `milestones/`, by id. */
   milestones: Milestone[]
+  /** The vault holds at least one concept artifact (`artifacts/*.html` with its header). */
+  hasArtifacts?: boolean
 }
 
 export async function signatureOf(io: Io, vault: string): Promise<string> {
@@ -481,6 +488,10 @@ export async function signatureOf(io: Io, vault: string): Promise<string> {
     for (const f of await io.list(dir)) {
       if (f.kind === 'file' && f.name.endsWith('.md')) parts.push(`${sub}/${f.name}:${f.mtimeMs}:${f.size}`)
     }
+  }
+  const dir = join(vault, ARTIFACTS_DIR)
+  if (await io.exists(dir)) {
+    for (const f of await io.list(dir)) if (f.kind === 'file' && f.name.endsWith('.html')) parts.push(`${ARTIFACTS_DIR}/${f.name}:${f.mtimeMs}:${f.size}`)
   }
   return parts.sort().join('|')
 }
@@ -527,6 +538,7 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
         if (why) nodes[id]!.suggestedWhy = why
       }
       readPlan(nodes[id]!, fm)
+      if (fmType === 'experiment' && (nodes[id]!.status === 'done' || resultOf(text))) nodes[id]!.hasResult = true
       afterRef[id] = linksIn(fm.after)
       texts[id] = text
       parentRef[id] = linkTarget(fm.parent)
@@ -581,7 +593,20 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
   const tree: Tree = { nodes, roots }
   tree.concepts = computeConcepts(tree, config.project, conceptDeclarations(texts))
   const milestones = await loadMilestones(io, config.vault, byName, nodes)
-  return { config, tree, texts, problems, signature: await signatureOf(io, config.vault), milestones }
+  return { config, tree, texts, problems, signature: await signatureOf(io, config.vault), milestones, hasArtifacts: await hasArtifacts(io, config.vault) }
+}
+
+/** Whether the vault holds a concept artifact: an html file in `artifacts/` that starts with the header. */
+async function hasArtifacts(io: Io, vault: string): Promise<boolean> {
+  const dir = join(vault, ARTIFACTS_DIR)
+  if (!(await io.exists(dir))) return false
+  for (const f of await io.list(dir)) {
+    if (f.kind !== 'file' || !f.name.endsWith('.html')) continue
+    try {
+      if (ARTIFACT_HEAD.test(await io.read(join(dir, f.name)))) return true
+    } catch { /* gone meanwhile */ }
+  }
+  return false
 }
 
 /** A whole number above 0, or undefined. */
@@ -710,6 +735,33 @@ export function computeConcepts(tree: Tree, project: string, decl: Record<string
 }
 
 /** The concept a note declares, if any (the root concept too, when the root note declares it). */
+/** A concept by its id (`root`), its start note's id or name, or its name. */
+export function resolveConcept(tree: Tree, ref: string): Concept | null {
+  const concepts = tree.concepts ?? {}
+  const r = ref.trim()
+  if (concepts[r]) return concepts[r]!
+  const id = resolveId(tree, r)
+  if (id) {
+    const c = Object.values(concepts).find(x => x.root === id)
+    if (c) return c
+  }
+  const low = r.toLowerCase()
+  return Object.values(concepts).find(c => c.name.toLowerCase() === low) ?? null
+}
+
+/** The concept's own notes (not its sub-concepts'), in tree order. */
+export function ownNotes(tree: Tree, conceptId: string): RftNode[] {
+  const out: RftNode[] = []
+  const visit = (id: string) => {
+    const n = tree.nodes[id]
+    if (!n) return
+    if (n.concept === conceptId) out.push(n)
+    n.children.forEach(visit)
+  }
+  tree.roots.forEach(visit)
+  return out
+}
+
 export function declaredConcept(concepts: Record<string, Concept> | undefined, id: string): Concept | undefined {
   return Object.values(concepts ?? {}).find(c => c.root === id)
 }
@@ -814,6 +866,13 @@ function sectionAt(lines: { line: string; isHeading: boolean }[], title: string)
   if (start < 0) return null
   const next = lines.findIndex((l, i) => i > start && l.isHeading)
   return { start, end: next < 0 ? lines.length : next }
+}
+
+/** The text of a note's `## Result` section, trimmed; '' when it has none or it is empty. As `result_of` in server/rft_server.py. */
+export function resultOf(text: string): string {
+  const lines = bodyLines(bodyOf(text))
+  const at = sectionAt(lines, 'Result')
+  return at ? lines.slice(at.start + 1, at.end).map(l => l.line).join('\n').trim() : ''
 }
 
 /** A note's `## Code` section, read back; null when it has none. */

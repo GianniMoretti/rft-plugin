@@ -1,5 +1,5 @@
 // rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-concepts, /rft-literature, /rft-rebalance, /rft-update,
-// /rft-summarize, /rft-next, /rft-view), the model's tools (rft_add_node, rft_set_status, rft_set_summary, rft_map, rft_set_digest, rft_move_node, rft_set_refs, rft_search,
+// /rft-summarize, /rft-artifact, /rft-next, /rft-view), the model's tools (rft_add_node, rft_set_status, rft_set_summary, rft_map, rft_set_digest, rft_artifact, rft_set_artifact, rft_move_node, rft_set_refs, rft_search,
 // rft_graph, rft_supersede, rft_next, rft_suggest_priority, rft_suggest_dates, rft_add_deadline, rft_suggest_deadline, rft_collect_papers, rft_set_tags, rft_set_type, rft_set_concept, rft_concepts, rft_set_repos, rft_code,
 // rft_set_code, rft_tags, rft_tree, rft_validate, rft_sync, rft_comments, rft_comment, rft_suggest), the operating rules
 // injected into the system prompt, the outline pane, and the web view: /rft starts a local
@@ -7,7 +7,8 @@
 // page adds, retypes or moves (fromView), and asks Claude to answer the threads the user asks
 // it to (askFromView). Claude's own edits of a locked note are refused (lockedEdit), and so are
 // its writes of a note's priority, the user's alone (priorityEdit), and of the dates, the user's too
-// (datesEdit): a note's due:, start: and est:, and a deadline's due:.
+// (datesEdit): a note's due:, start: and est:, and a deadline's due:; and its writes of a concept's artifact by
+// hand, which only rft_set_artifact writes, stamped with the results it was written from (artifactEdit).
 // Everything is
 // inert without `.rft/config.json` in the session's folder or a folder above it; that config
 // may be a link (`{"tree": "../notes"}`) to a tree kept elsewhere.
@@ -35,6 +36,7 @@ import { Answers, type ThreadJob } from './lib/answers'
 import { applyUpdate, behindLine, planText, planUpdate } from './lib/update'
 import type { Feature } from './lib/tools'
 import { SMALL_TREE, mapGaps, mapReport, mapWarnings, projectMap, readDigests, resolveConcept, setDigest, setSummaries } from './lib/map'
+import { ARTIFACTS_DIR, artifactMarks, artifactReport, artifactWarnings, artifactsToWrite, setArtifact } from './lib/artifacts'
 import { CONFIG_PATH, LEGEND, MARK, NODE_TYPES, bodyOf, isLiterature, counts, countsLine, isAbsolute, join, locate, readConfig, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
 
 const PANE = 'rft-tree'
@@ -266,6 +268,34 @@ const TOOLS = {
         text: { type: 'string', description: 'Markdown sections: ## Key results (numbers, with the note ids), ## Dead ends (what was ruled out and why, with ids), ## Open questions (and the notes that hold them). Short: a page at most.' },
       },
       required: ['concept', 'state', 'text'],
+    },
+  },
+  rft_artifact: {
+    description:
+      "What a concept's artifact (vault artifacts/: one HTML page of the results of its own experiments, shown in the tree view) is written from: where it is and whether it is up to date, each experiment with a result (in full when new or changed since the page was written), the experiments without one, its sub-concepts, and how to write the page. Call it before rft_set_artifact.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        concept: { type: 'string', description: 'The concept, by name or the id of the note that starts it.' },
+        full: { type: 'boolean', description: 'Every result in full, not only the new and changed ones.' },
+      },
+      required: ['concept'],
+    },
+  },
+  rft_set_artifact: {
+    description:
+      "Write a concept's artifact: the whole page (html) or changes to it (edits, applied in order, all or none, each old_str found on the page exactly once). Stamped with the results it was written from, so the plugin says when they change. Only numbers that are in the notes; link every note id as <a href=\"#E05\">E05</a>. The answer names results left off the page, links to no note, superseded results cited alone, and files the view would block.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        concept: { type: 'string', description: 'The concept, by name or the id of the note that starts it.' },
+        html: { type: 'string', description: 'The whole page: an HTML fragment or document, with its own <style> and inline <script>; charts as inline SVG; nothing loaded from elsewhere.' },
+        edits: {
+          type: 'array', description: 'Changes to the page as it is: old_str exactly as on the page (once), new_str its replacement (empty deletes it).',
+          items: { type: 'object', properties: { old_str: { type: 'string' }, new_str: { type: 'string' } }, required: ['old_str', 'new_str'] },
+        },
+      },
+      required: ['concept'],
     },
   },
   rft_move_node: {
@@ -517,7 +547,7 @@ async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> 
     let map: string | undefined
     if (loaded && Object.keys(s.nodes).length > SMALL_TREE) {
       try {
-        map = projectMap(loaded, await readDigests(h.io, loaded))
+        map = projectMap(loaded, await readDigests(h.io, loaded), { artifacts: await artifactMarks(h.io, loaded) })
       } catch { /* the list of notes instead */ }
     }
     rules = rulesText(treeOf(s), config, shownVault(h, config), { cwd: h.cwd, root: h.root, home: await homeOf($) }, map, features)
@@ -583,6 +613,7 @@ async function registerCommands($: EngineInterface): Promise<void> {
   await attempt('rft-rebalance', () => $.command.register({ name: 'rft-rebalance', description: 'Ask Claude to propose moving branches under the line of research they belong to; nothing moves until you confirm', argumentHint: '[concept or note id] [--full]' }))
   await attempt('rft-next', () => $.command.register({ name: 'rft-next', description: 'What is still open, by concept: running and planned experiments, unexplored directions, open questions', argumentHint: '[concept]' }))
   await attempt('rft-summarize', () => $.command.register({ name: 'rft-summarize', description: 'Ask Claude to write the missing one-line note summaries and concept digests (the project map)', argumentHint: '[concept]' }))
+  await attempt('rft-artifact', () => $.command.register({ name: 'rft-artifact', description: "Ask Claude to write a concept's artifact, the page of its experiments' results (no concept: every one missing or out of date)", argumentHint: '[concept]' }))
   await attempt('rft-update', () => $.command.register({ name: 'rft-update', description: 'Bring a vault made by an older version up to this one: shows what it adds; apply writes it', argumentHint: '[apply] [--sections]' }))
   await attempt('rft-view', () => $.command.register({ name: 'rft-view', description: 'Write a standalone HTML view of the tree to <vault>/tree.html' }))
   if (failed.length) reportFailures($, failed)
@@ -731,11 +762,15 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       return mapReport(io, loaded, str(i.concept))
     case 'rft_set_digest':
       return setDigest(io, loaded, String(i.concept ?? ''), String(i.state ?? ''), String(i.text ?? ''), today())
+    case 'rft_artifact':
+      return artifactReport(io, loaded, String(i.concept ?? ''), { full: i.full === true })
+    case 'rft_set_artifact':
+      return setArtifact(io, loaded, String(i.concept ?? ''), { html: i.html, edits: i.edits }, today())
     case 'rft_tree':
       return treeReport(loaded, { root: str(i.root), depth: typeof i.depth === 'number' ? i.depth : undefined, vault: shownVault(h, loaded.config) })
     case 'rft_validate': {
       const v = await validate(io, loaded, { root: h.root, home: await homeOf($) })
-      v.warnings.push(...(await mapWarnings(io, loaded)))
+      v.warnings.push(...(await mapWarnings(io, loaded)), ...(await artifactWarnings(io, loaded)))
       const lines = [v.errors.length
         ? `FAILED: ${v.errors.length} error(s), ${v.warnings.length} warning(s).`
         : `OK: no errors, ${v.warnings.length} warning(s).`]
@@ -1131,6 +1166,29 @@ async function shellTouches($: EngineInterface, cmd: string, vault: string, node
 /** For a script, whose writes are not known: the note the command names, by name or id. */
 const namedIn = (cmd: string, nodes: SnapNode[]) => nodes.find(n => cmd.includes(n.name) || new RegExp(`\\b${n.id}\\b`).test(cmd)) ?? null
 const COMMENTS_BY_HAND = `The tree view and the rft tools write the comments files (${COMMENTS_DIR}/): use rft_comment and rft_suggest.`
+const ARTIFACT_BY_HAND = `Only rft_set_artifact writes a concept's artifact (${ARTIFACTS_DIR}/), stamped with the results it was written from: call rft_artifact <concept>, then rft_set_artifact with edits (old_str → new_str, as with Edit) or html for the whole page. Reading the file is fine.`
+
+/**
+ * Why Claude may not make this tool call, or null: it would write a concept's artifact by hand (an
+ * Edit or Write in the vault's artifacts/, a shell command that writes there, or a script whose
+ * command names that folder).
+ */
+async function artifactEdit($: EngineInterface, e: Record<string, unknown>): Promise<string | null> {
+  const tool = String(e.tool)
+  if (!EDIT_TOOLS.has(tool) && tool !== 'Bash') return null
+  const s = await read($, snapshot)
+  if (!s?.isActive || !s.vault) return null
+  const dir = `${resolvePath(s.vault, '.')}/${ARTIFACTS_DIR}/`
+  if (tool === 'Bash') {
+    const cmd = String(e.command ?? '')
+    const w = shellWrites(cmd, resolvePath(await $.session.cwd(), '.'))
+    const named = cmd.includes(`${s.vault.replace(/\/+$/, '').split('/').pop()}/${ARTIFACTS_DIR}/`) || cmd.includes(dir)
+    return w.files.some(f => f.startsWith(dir)) || (w.script && named) ? ARTIFACT_BY_HAND : null
+  }
+  const raw = e.file_path ?? e.notebook_path
+  if (typeof raw !== 'string') return null
+  return resolvePath(resolvePath(await $.session.cwd(), '.'), raw).startsWith(dir) ? ARTIFACT_BY_HAND : null
+}
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /**
@@ -1273,6 +1331,8 @@ const rebalancePrompt = (scope: string) => `Propose a rebalancing of the reasoni
 const candidatesPrompt = (scope: string, list: string) => `Propose a rebalancing of the reasoning tree (rft-manual skill, "Restructuring the tree")${scope ? `, limited to ${JSON.stringify(scope)}` : ''}. The plugin compared every note with the concepts (its title, summary, tags and references against each concept's notes) and found these candidates, notes that sit closer to another concept than to their own:\n\n${list}\n\nJudge only these; do not survey the rest of the tree. The weak candidates, if any, are listed one line each: most of them stay where they are, so look further only at those whose line suggests a real misplacement (a note about one line of research hung under another). For each candidate you look at, check it against the two concepts (rft_map <concept> if their state is not clear to you, rft_graph <id> for its neighbours) and open a note's file only when that leaves the move in doubt. The fit is a hint from shared words, not a verdict: a note that came out of a result stays where the reasoning produced it unless it really is part of another line; when in doubt, leave it. For each move you keep: the note to move (its subtree goes with it), its parent now, the new parent (the nearest note named is a start, pick the right one), and why in one line. Moves only: if a new concept would help, say so separately (rft_set_concept, after the user agrees). Present the moves as a short numbered table, say which candidates you would leave and why in a few words, and ask me which moves to apply. Do not call rft_move_node until I say yes; then apply only the moves I confirm, each with its why, and finish with rft_validate.`
 
 /** The back-fill of the map: summaries of the notes without one, then the digests, concept by concept. */
+const artifactPrompt = (names: string[]) => `Write the artifact${names.length > 1 ? 's' : ''} of ${names.map(n => `the concept ${JSON.stringify(n)}`).join(', ')} of the reasoning tree: for each, call rft_artifact ${names.map(n => JSON.stringify(n)).join(' / ')} to see its experiments' results and what changed since the page was written, read the notes you need, then rft_set_artifact: html for a new page, edits for one that exists. A page says where the line of research stands, the key results (tables with the spread over seeds, a small inline-SVG chart where it helps), what failed and what is still running or planned; every note id a link (<a href="#E05">E05</a>), never a number that is not in a note. Go on to the next concept without asking me, and at the end tell me which artifacts you wrote.`
+
 const summarizePrompt = (scope: string) => `Fill in the project map of the reasoning tree${scope ? ` for the concept ${JSON.stringify(scope)} and its sub-concepts` : ''} (rft-manual skill, "The project map"). Work concept by concept, the smallest sub-concepts first: call rft_map <concept> to see its notes and which have no summary; read those notes (their Idea, What, Why, Result, Summary, Relevance, Statement: the parts that say what the note is and what it found, not the boilerplate) and set a one-line summary for each with rft_set_summary, many per call (at most 20). A summary says what the note is about and, if it has one, its result with the key number; for a dropped or discussed direction, why. Never invent a result: when the note has none, say what it tests. Then, with all its summaries set, write the concept's digest with rft_set_digest: its state in one or two sentences, then ## Key results, ## Dead ends and ## Open questions, each point with the note ids. Go on to the next concept without asking me, and at the end run rft_validate and tell me how many summaries and digests you wrote.`
 
 const SUGGEST_CONCEPTS = `Propose a split of the reasoning tree into concepts (rft-manual skill, "Concepts"). Read the current tree with rft_tree and rft_concepts. Suggest 2 to 6 concepts, nested at most two levels: for each, the note that starts it (usually the direction that opened that line of research), a short readable name for the line of research, in words as in a heading (e.g. "Strong augmentation", not a tag like strong-augmentation; never a single experiment), and a one-line summary; say which notes stay in the project root and why. Present the proposal as a short table and ask me to confirm or change it, and for each concept whether code for it already exists on this machine and where. Do not call rft_set_concept until I say yes, nor rft_set_repos before I give a path.`
@@ -1514,6 +1574,26 @@ export const register: Register = (on, options) => {
     }
   })
 
+  on('command.run', { command: 'rft-artifact' }, async ($, e) => {
+    try {
+      const io = (await mustHere($)).io
+      const loaded = await loadActive(io)
+      const scope = e.args.trim()
+      if (scope) {
+        const c = resolveConcept(loaded.tree, scope)
+        if (!c) return { text: `"${scope}" is not a concept: /rft-concepts lists them.` }
+        pendingPrompts.push(artifactPrompt([c.name]))
+        return { text: `Asked Claude to write the artifact of "${c.name}": the tree view shows it when you click the concept.` }
+      }
+      const todo = await artifactsToWrite(io, loaded)
+      if (!todo.length) return { text: 'Every concept with results has an artifact, and every artifact is up to date.' }
+      pendingPrompts.push(artifactPrompt(todo.map(t => t.concept.name)))
+      return { text: `Asked Claude to write ${todo.length} artifact(s): ${todo.map(t => `${t.concept.name} (${t.why})`).join(', ')}.` }
+    } catch (err) {
+      return { text: message(err) }
+    }
+  })
+
   on('command.run', { command: 'rft-view' }, async $ => {
     try {
       const h = await mustHere($)
@@ -1535,6 +1615,9 @@ export const register: Register = (on, options) => {
         markdown: await $.fs.read(join(root, ASSET_PATHS.markdown)),
         scratchpad: await $.fs.read(join(root, ASSET_PATHS.scratchpad)),
         theme: await $.fs.read(join(root, ASSET_PATHS.theme)),
+        artifacts: await $.fs.read(join(root, ASSET_PATHS.artifacts)),
+        frame: await $.fs.read(join(root, ASSET_PATHS.frame)),
+        frameCss: await $.fs.read(join(root, ASSET_PATHS.frameCss)),
       }
       const path = await exportHtml(io, loaded, assets)
 
@@ -1562,7 +1645,7 @@ export const register: Register = (on, options) => {
     }
     if (rules) {
       const call = e as unknown as Record<string, unknown>
-      const why = (await lockedEdit($, call)) ?? (await priorityEdit($, call)) ?? (await datesEdit($, call))
+      const why = (await artifactEdit($, call)) ?? (await lockedEdit($, call)) ?? (await priorityEdit($, call)) ?? (await datesEdit($, call))
       if (why) return { deny: why }
     }
     const ran = await next(e)

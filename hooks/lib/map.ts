@@ -4,7 +4,8 @@
 // with a fingerprint of the concept's notes so the plugin can say when it is out of date.
 
 import type { Concept, Io, Loaded, RftNode, Tree } from './vault'
-import { LEGEND, MARK, ROOT_CONCEPT, bodyOf, conceptOrder, conceptPath, counts, countsLine, front, join, load, resolveId, setField, statusSummary, unquote, unquoteJson } from './vault'
+import { artifactLine, artifactMarks } from './artifacts'
+import { LEGEND, MARK, ROOT_CONCEPT, bodyOf, conceptOrder, conceptPath, counts, countsLine, front, join, load, ownNotes, resolveConcept, resolveId, setField, statusSummary, unquote, unquoteJson } from './vault'
 
 export const MAP_DIR = 'map'
 /** Above this many notes the session starts from the project map instead of the list of titles. */
@@ -55,32 +56,7 @@ export async function setSummaries(io: Io, loaded: Loaded, given: Record<string,
 
 // ---------------------------------------------------------------- concepts and fingerprints
 
-/** A concept by its id (`root`), its start note's id or name, or its name. */
-export function resolveConcept(tree: Tree, ref: string): Concept | null {
-  const concepts = tree.concepts ?? {}
-  const r = ref.trim()
-  if (concepts[r]) return concepts[r]!
-  const id = resolveId(tree, r)
-  if (id) {
-    const c = Object.values(concepts).find(x => x.root === id)
-    if (c) return c
-  }
-  const low = r.toLowerCase()
-  return Object.values(concepts).find(c => c.name.toLowerCase() === low) ?? null
-}
-
-/** The concept's own notes (not its sub-concepts'), in tree order. */
-export function ownNotes(tree: Tree, conceptId: string): RftNode[] {
-  const out: RftNode[] = []
-  const visit = (id: string) => {
-    const n = tree.nodes[id]
-    if (!n) return
-    if (n.concept === conceptId) out.push(n)
-    n.children.forEach(visit)
-  }
-  tree.roots.forEach(visit)
-  return out
-}
+export { ownNotes, resolveConcept } from './vault'
 
 /** FNV-1a over what a digest is written from: each own note's id, status, title and summary. */
 export function fingerprint(tree: Tree, conceptId: string): string {
@@ -151,13 +127,19 @@ const noteLine = (n: RftNode, prev: string | null) =>
 
 const pathName = (tree: Tree, c: Concept) => conceptPath(tree.concepts ?? {}, c.id).map(id => tree.concepts![id]!.name).join(' › ')
 
+type Marks = Awaited<ReturnType<typeof artifactMarks>>
+
+/** In a vault with artifacts: a concept's artifact out of date, or missing while it has results. */
+const artifactMark = (marks: Marks | undefined, c: Concept) =>
+  marks?.[c.id]?.stale ? ' [artifact out of date]' : marks?.[c.id]?.none ? ' [no artifact]' : ''
+
 function digestMark(tree: Tree, c: Concept, d: Digest | undefined): string {
   if (!d) return c.count >= 3 ? ' [no digest]' : ''
   return isStale(tree, d) ? ` [digest out of date, ${d.updated}]` : ''
 }
 
 /** The project map: each concept with its state, nested as the concepts are, then what is in progress. */
-export function projectMap(loaded: Loaded, digests: Record<string, Digest>, opts: { maxActive?: number } = {}): string {
+export function projectMap(loaded: Loaded, digests: Record<string, Digest>, opts: { maxActive?: number; artifacts?: Marks } = {}): string {
   const { tree } = loaded
   const concepts = tree.concepts ?? {}
   const out: string[] = []
@@ -167,7 +149,7 @@ export function projectMap(loaded: Loaded, digests: Record<string, Digest>, opts
     const stats = statusSummary(c.statuses)
     // one line per concept, indented under its parent concept
     const said = d?.state || c.summary
-    out.push(`${'  '.repeat(c.depth)}- ${c.name}${c.root ? ` (${c.root})` : ''} · ${c.count} note(s)${stats ? ` ${stats}` : ''}${digestMark(tree, c, d)}${said ? `: ${said}` : ''}`)
+    out.push(`${'  '.repeat(c.depth)}- ${c.name}${c.root ? ` (${c.root})` : ''} · ${c.count} note(s)${stats ? ` ${stats}` : ''}${digestMark(tree, c, d)}${artifactMark(opts.artifacts, c)}${said ? `: ${said}` : ''}`)
   }
   const active = Object.values(tree.nodes).filter(n => n.status === 'running' || (n.status === 'planned' && n.type === 'experiment'))
     .sort((a, b) => b.date.localeCompare(a.date))
@@ -181,13 +163,16 @@ export function projectMap(loaded: Loaded, digests: Record<string, Digest>, opts
 }
 
 /** One concept: its digest, its sub-concepts, its notes with their summaries. */
-export function conceptMap(loaded: Loaded, digests: Record<string, Digest>, c: Concept): string {
+export function conceptMap(loaded: Loaded, digests: Record<string, Digest>, c: Concept, marks?: Marks): string {
   const { tree } = loaded
   const d = digests[c.id]
   const notes = ownNotes(tree, c.id)
   const out = [`# ${pathName(tree, c)}${c.root ? ` (from ${c.root})` : ''} · ${c.count} note(s)${c.total > c.count ? `, ${c.total} with sub-concepts` : ''}${digestMark(tree, c, d)}`]
   if (c.summary) out.push(c.summary)
   if (d) out.push('', `State: ${d.state}`, ...(d.body ? [d.body] : []))
+  const m = marks?.[c.id]
+  if (m?.artifact) out.push('', `Artifact: ${artifactLine(loaded, m.artifact)}`)
+  else if (m?.none) out.push('', 'No artifact yet: rft_artifact, then rft_set_artifact.')
   if (c.children.length) {
     out.push('', 'Sub-concepts:')
     for (const k of c.children) {
@@ -207,12 +192,13 @@ export function conceptMap(loaded: Loaded, digests: Record<string, Digest>, c: C
 
 export async function mapReport(io: Io, loaded: Loaded, ref?: string): Promise<string> {
   const digests = await readDigests(io, loaded)
+  const artifacts = await artifactMarks(io, loaded)
   if (ref?.trim()) {
     const c = resolveConcept(loaded.tree, ref)
     if (!c) throw new MapError(`"${ref}" is not a concept (rft_concepts lists them)`)
-    return conceptMap(loaded, digests, c)
+    return conceptMap(loaded, digests, c, artifacts)
   }
-  return `${loaded.config.project}: ${countsLine(counts(loaded.tree))}. Marks: ${LEGEND}.\n${projectMap(loaded, digests)}\n\nrft_map <concept> gives a concept's digest and its notes with their summaries; open a note's file only for its detail.`
+  return `${loaded.config.project}: ${countsLine(counts(loaded.tree))}. Marks: ${LEGEND}.\n${projectMap(loaded, digests, { artifacts })}\n\nrft_map <concept> gives a concept's digest and its notes with their summaries; open a note's file only for its detail.`
 }
 
 // ---------------------------------------------------------------- checks

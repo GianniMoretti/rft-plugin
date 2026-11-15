@@ -16,6 +16,7 @@ import {
   withTopicalTags, writeConfig,
 } from './vault'
 import { cleanSummary, withSummary } from './map'
+import { artifactNotice, embeddedArtifacts } from './artifacts'
 import type { Feature } from './tools'
 import { featuresInUse } from './tools'
 import { checkSuggestion, fullText } from './priority'
@@ -382,7 +383,7 @@ export async function setStatus(io: Io, loaded: Loaded, ref: string, status: str
   Object.assign(loaded, fresh)
   const nudge = !summary?.trim() && note?.trim() && (status === 'done' || status === 'dropped')
     ? ' Update its one-line summary with what it found (rft_set_summary).' : ''
-  return `${n.name}: ${n.status} → ${status}${note ? ' (note added)' : ''}${summary?.trim() ? ', summary updated' : ''}. Updated ${report.changed.length} derived file(s).${nudge}`
+  return `${n.name}: ${n.status} → ${status}${note ? ' (note added)' : ''}${summary?.trim() ? ', summary updated' : ''}. Updated ${report.changed.length} derived file(s).${nudge}${await artifactNotice(io, loaded, id)}`
 }
 
 /**
@@ -749,9 +750,10 @@ function featureRules(vault: string, features: ReadonlySet<Feature>): string {
     priorities: `- Priorities (\`priority:\` urgent, high, medium or low; at most 1 urgent, 5 high and 10 medium among the open notes) are the user's alone: never write \`priority:\` (Edit, Write and shell writes that change it are refused), and a new note gets none. When you have a clear reason (it unblocks other work, the user said it matters, it is cheap and decisive), suggest one: rft_suggest_priority {id, priority, why}, or rft_add_node's suggested_priority and priority_why; the user accepts or dismisses it in the tree view. Work on what the user made urgent or high first.`,
     dates: `- Dates are the user's too: deadlines (milestones in \`${vault}/milestones/\`, outside the tree: \`due:\` and the notes they \`needs:\`), a note's own \`due:\`, an experiment's \`start:\` and \`est:\` (3d, 2w). Never write them (edits that change them are refused). Suggest a start or an estimate with rft_suggest_dates {id, start, est, why}; add a deadline the user gives you with rft_add_deadline (they confirm it); suggest a paper submission only when the user names a venue or asks, with rft_suggest_deadline and the venue's official dates page read now, not from memory. Write \`gpus:\` on an experiment that takes more than one GPU and \`after:\` on one that waits for another run; rft_set_status records the days a run started and finished. rft_next lists the deadlines first, with what puts them at risk.`,
     locks: `- A note with \`locked: true\` in its frontmatter is the user's: never change its text (Edit, Write and shell writes to it are refused, and so are rft_set_status notes and rft_set_code on it). Propose each change with rft_suggest {id, quote, replacement}; the user accepts or rejects it in the tree view. Its status, tags and derived fields still change through the rft tools. Moving it (rft_move_node) or marking it superseded (rft_supersede) writes a line in its History, so the plugin first asks the user whether to unlock it; if they keep it locked the call fails: do not retry it.`,
+    artifacts: `- Each concept has an artifact (\`${vault}/artifacts/\`): one HTML page of the results of its own experiments, which the tree view opens when the concept is clicked. At the end of a task that recorded results (a Result written, an experiment done, a result superseded), update the artifact of each concept that got them, once per concept: rft_artifact <concept> says what changed, then rft_set_artifact with edits (html for a new page); a concept with results and no artifact gets one then too. Only numbers that are in the notes; link every note id (<a href="#E05">E05</a>). Write the files only with rft_set_artifact, which stamps them with the results they were written from.`,
     comments: `- The user discusses notes in the tree view: comments and suggestions on a part of a note's text (rft_comments lists them). Answer a thread only when the user asks you to: the tree view's Ask Claude sends it to you, and you answer in the thread with rft_comment or rft_suggest, not in the chat.`,
   }
-  const out = (['priorities', 'dates', 'locks', 'comments'] as const).filter(f => features.has(f)).map(f => full[f])
+  const out = (['priorities', 'dates', 'locks', 'comments', 'artifacts'] as const).filter(f => features.has(f)).map(f => full[f])
   const absent = [
     features.has('priorities') ? '' : 'priorities (\`priority:\`)',
     features.has('dates') ? '' : `dates (\`due:\`, \`start:\`, \`est:\`, deadlines in \`${vault}/milestones/\`)`,
@@ -810,6 +812,6 @@ export async function exportHtml(io: Io, loaded: Loaded, assets: PageAssets): Pr
       return { ...t, at: at ? [at.start, at.end] : null, exact: Boolean(at?.exact) }
     })
   }
-  await io.write(path, staticPage(assets, tree, texts, config.project, signature.length.toString(36), comments, { milestones: loaded.milestones, gpus: config.gpus }))
+  await io.write(path, staticPage(assets, tree, texts, config.project, signature.length.toString(36), comments, { milestones: loaded.milestones, gpus: config.gpus }, await embeddedArtifacts(io, loaded)))
   return path
 }
