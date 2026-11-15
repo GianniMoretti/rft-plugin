@@ -1728,7 +1728,7 @@ export const register: Register = (on, options) => {
       const v = await queueCli($, h, loaded.config, ['status', '--history', '10']) as unknown as QueueView
       const log = ref && /^q\d+$/i.test(ref) ? String((await queueCli($, h, loaded.config, ['log', '--id', ref.toLowerCase(), '--lines', '30'])).text ?? '') : undefined
       const url = await read($, webUrl)
-      return { text: `${jobsReport(v, loaded, await nowS($), { ref, log })}${url ? `\n\nThe tree view's monitor (the icon at the top left): ${url}` : '\n\n/rft opens the tree view, whose monitor (the icon at the top left) reorders, pauses, cancels and retries jobs.'}` }
+      return { text: `${jobsReport(v, loaded, await nowS($), { ref, log })}${url ? `\n\nThe monitor, to reorder, pause, cancel and retry: ${url}${url.includes('?') ? '&' : '?'}jobs` : '\n\n/rft opens the tree view, whose monitor (the icon at the top left) reorders, pauses, cancels and retries jobs.'}` }
     } catch (err) {
       return { text: message(err) }
     }
