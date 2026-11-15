@@ -47,4 +47,18 @@ a.rft-note.s-idea::before { background: var(--s-idea); }
 a.rft-note.s-dropped::before { background: var(--s-dropped); }
 a.rft-note.superseded { text-decoration: line-through; color: var(--muted); }
 a.rft-note.missing { color: var(--bad); text-decoration: underline wavy; }
+/* an experiment's notebook run: a mark after the link, a tick when it reproduced the note's Result */
+a.rft-note.r-ok::after { content: " \2713"; color: var(--good); font-weight: 400; }
+a.rft-note.r-differs::after { content: " \2260"; color: var(--bad); font-weight: 400; }
+a.rft-note.r-failed::after { content: " \2717"; color: var(--bad); font-weight: 400; }
 .rft-image-missing { color: var(--muted); font-style: italic; }
+/* the PDF and LaTeX buttons, at the top-right corner of each figure and table, in a layer of their
+   own above the page (its layout stays as it is); quiet until pointed at */
+.rft-tools-layer { position: absolute; top: 0; left: 0; width: 0; height: 0; z-index: 2147483000; }
+.rft-tools { position: absolute; display: flex; gap: 4px; width: max-content; white-space: nowrap; }
+.rft-tools[hidden] { display: none; }
+.rft-tools button { font: 600 11px/1 ui-sans-serif, system-ui, sans-serif; padding: 4px 8px; border-radius: 5px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--bg); color: var(--muted); opacity: 0.8; box-shadow: 0 1px 2px rgb(0 0 0 / 0.08); }
+.rft-tools button:hover, .rft-tools button:focus-visible { opacity: 1; color: var(--fg); border-color: var(--accent); }
+.rft-tools button:disabled { cursor: progress; opacity: 0.5; }
+@media print { .rft-tools-layer { display: none; } }

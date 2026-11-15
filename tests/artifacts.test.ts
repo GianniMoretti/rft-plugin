@@ -185,6 +185,23 @@ describe('artifacts: rft_artifact and rft_set_artifact', () => {
     expect(said).not.toContain('elsewhere')
   })
 
+  test("its figures are looked for in the vault's figures/ folder; one not found is named", async () => {
+    const files = demoFiles()
+    files['vault/figures/radar.svg'] = '<svg xmlns="http://www.w3.org/2000/svg"/>'
+    files['vault/artifacts/local.png'] = 'png'
+    const { io, l } = await setup(files)
+    const figs = '<img src="../figures/radar.svg" alt="a"><img src="radar.svg" alt="b"><img src="local.png"><img src="figures/radar.svg"><img src="data:image/png;base64,AA=="><img src="https://x.org/a.png">'
+    let said = await setArtifact(io, l, 'D01', { html: PAGE + figs }, '2026-03-01')
+    expect(said).not.toContain('Images not found')
+    said = await setArtifact(io, l, 'D01', { html: PAGE + '<img src="../figures/gone.svg"><img src="lost&amp;found.svg">' }, '2026-03-01')
+    expect(said).toContain("Images not found in figures/, artifacts/ or the vault's top: ../figures/gone.svg, lost&found.svg.")
+    // the rules Claude reads before writing say where figures go, and what the view offers for them
+    const out = await artifactReport(io, l, 'D01')
+    expect(out).toContain('<img src="../figures/<file>.svg"')
+    expect(out).toContain('PDF download')
+    expect(out).toContain('LaTeX table float')
+  })
+
   test('a renamed concept keeps one artifact file, found by the concept id it carries; any name survives the header', async () => {
     const { fs, io, l } = await setup()
     await setArtifact(io, l, 'D01', { html: PAGE }, '2026-03-01')
@@ -350,6 +367,6 @@ describe('artifacts: in a session', () => {
     expect(data.artifacts.D01).toContain('+2 points')
     expect(data.artifacts.D01).not.toContain('<img')
     expect(data.artifacts.D01).toContain('[image: fig.png]')
-    expect(data.frame).toEqual({ js: '/* frame */', css: '/* frame css */' })
+    expect(data.frame).toEqual({ js: '/* latex */\n;\n/* frame */', css: '/* frame css */' })
   })
 })

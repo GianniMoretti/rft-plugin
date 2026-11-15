@@ -1,14 +1,15 @@
 // rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-concepts, /rft-literature, /rft-rebalance, /rft-update,
 // /rft-summarize, /rft-artifact, /rft-next, /rft-view), the model's tools (rft_add_node, rft_set_status, rft_set_summary, rft_map, rft_set_digest, rft_artifact, rft_set_artifact, rft_move_node, rft_set_refs, rft_search,
 // rft_graph, rft_supersede, rft_next, rft_suggest_priority, rft_suggest_dates, rft_add_deadline, rft_suggest_deadline, rft_collect_papers, rft_set_tags, rft_set_type, rft_set_concept, rft_concepts, rft_set_repos, rft_code,
-// rft_set_code, rft_tags, rft_tree, rft_validate, rft_sync, rft_comments, rft_comment, rft_suggest), the operating rules
+// rft_set_code, rft_set_notebook, rft_run_notebook, rft_tags, rft_tree, rft_validate, rft_sync, rft_comments, rft_comment, rft_suggest), the operating rules
 // injected into the system prompt, the outline pane, and the web view: /rft starts a local
 // server (server/rft_server.py) for the interactive tree page (web/), makes the notes that
 // page adds, retypes or moves (fromView), and asks Claude to answer the threads the user asks
 // it to (askFromView). Claude's own edits of a locked note are refused (lockedEdit), and so are
 // its writes of a note's priority, the user's alone (priorityEdit), and of the dates, the user's too
-// (datesEdit): a note's due:, start: and est:, and a deadline's due:; and its writes of a concept's artifact by
-// hand, which only rft_set_artifact writes, stamped with the results it was written from (artifactEdit).
+// (datesEdit): a note's due:, start: and est:, and a deadline's due:; its writes of a concept's artifact by
+// hand, which only rft_set_artifact writes, stamped with the results it was written from (artifactEdit); and of
+// a note's reproduced:, which only rft_run_notebook writes, so it says what a notebook's run did (reproducedEdit).
 // Everything is
 // inert without `.rft/config.json` in the session's folder or a folder above it; that config
 // may be a link (`{"tree": "../notes"}`) to a tree kept elsewhere.
@@ -37,6 +38,8 @@ import { applyUpdate, behindLine, planText, planUpdate } from './lib/update'
 import type { Feature } from './lib/tools'
 import { SMALL_TREE, mapGaps, mapReport, mapWarnings, projectMap, readDigests, resolveConcept, setDigest, setSummaries } from './lib/map'
 import { ARTIFACTS_DIR, artifactMarks, artifactReport, artifactWarnings, artifactsToWrite, setArtifact } from './lib/artifacts'
+import type { NotebookEnv, RunOutcome } from './lib/notebooks'
+import { MAX_TIMEOUT_S, REPRODUCED_LINE, changesReproduced, reproducedEditText, runNotebook, setNotebook } from './lib/notebooks'
 import { QUEUE_CLI, QUEUE_FILE, addedText, cancelledText, jobEvents, jobsNext, jobsReport, queueLine, readQueue, toStart } from './lib/queue'
 import type { Job, QueueView } from './lib/queue'
 import { CONFIG_PATH, LEGEND, MARK, NODE_TYPES, bodyOf, isLiterature, counts, countsLine, isAbsolute, join, locate, readConfig, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
@@ -146,6 +149,32 @@ const TOOLS = {
         id: { type: 'string', description: 'Id (e.g. E12) or full name of the note.' },
         text: { type: 'string', description: 'How the note relates to the code (markdown).' },
         reproduce: { type: 'string', description: 'How to reproduce the note\'s results from the code (markdown).' },
+      },
+      required: ['id'],
+    },
+  },
+  rft_set_notebook: {
+    description:
+      'Give an experiment with a result its marimo notebook, which rebuilds the numbers of its Result: from the run\'s saved raw outputs after an expensive run, from scratch for a short one. Pass cells (plain Python, one string per cell; the tool writes marimo\'s format, with mo imported) and it is written in the concept\'s first repo as notebooks/<id>_<title>.py; or file, a notebook already in the repo. Either way it is linked from the vault (notebooks/<id>.py) and the note (notebook:). It runs in the repo\'s uv environment with the repo\'s root as working folder and the notebook\'s folder first on sys.path; put the numbers the note reports in a dict RESULTS, in the units the Result uses. Change it later with Edit (plain Python), not with this tool.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id (e.g. E12) or full name of the experiment.' },
+        cells: { type: 'array', items: { type: 'string' }, description: 'The notebook\'s cells, in order: plain Python, a markdown cell as mo.md("..."); one cell sets RESULTS = {...}.' },
+        file: { type: 'string', description: 'A notebook already in the repo instead: its path in the repo, or absolute.' },
+        replace: { type: 'boolean', description: 'Write the notebook anew from cells over the one there.' },
+      },
+      required: ['id'],
+    },
+  },
+  rft_run_notebook: {
+    description:
+      `Run an experiment's notebook (in its repo's uv environment, without the browser) and check its RESULTS against the note's Result. Answers in a few lines: ok (every number of RESULTS is in the Result), differs (the numbers that are not), failed (the end of the traceback), or nothing to check; never the cells' outputs. Stamps the note with the run (reproduced:). A run longer than the timeout is stopped: a notebook that retrains for longer is a launch, not a check.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id (e.g. E12) or full name of the experiment.' },
+        timeout: { type: 'number', description: `Seconds the run may take (${MAX_TIMEOUT_S} at most, the default).` },
       },
       required: ['id'],
     },
@@ -706,6 +735,38 @@ async function homeOf($: EngineInterface): Promise<string | undefined> {
 /** How the tools reach the code of the tree's concepts. */
 const codeEnv = async ($: EngineInterface, h: Here): Promise<CodeEnv> => ({ root: h.root, git: gitOf($), home: await homeOf($), date: today() })
 
+/** server/rft_notebook.py with the first Python on PATH; its last line of output is its answer, as JSON. */
+async function notebookHelper($: EngineInterface, args: string[], timeoutMs: number): Promise<Record<string, unknown>> {
+  const script = join($.plugin.root, 'server/rft_notebook.py')
+  const failures: string[] = []
+  for (const python of ['python3', 'python']) {
+    let r: Awaited<ReturnType<EngineInterface['process']['run']>>
+    try {
+      r = await $.process.run([python, script, ...args], { timeoutMs })
+    } catch (err) {
+      failures.push(`${python}: ${message(err)}`)
+      continue
+    }
+    const last = r.stdout.trim().split('\n').pop() ?? ''
+    try {
+      const got: unknown = JSON.parse(last)
+      if (got && typeof got === 'object') return got as Record<string, unknown>
+    } catch { /* not its answer */ }
+    return { ok: false, error: (r.stderr.trim() || r.stdout.trim() || `${python} exited with ${r.exitCode}`).split('\n').slice(-15).join('\n') }
+  }
+  throw new Error(`the notebooks need Python 3 on PATH (${failures.join('; ')})`)
+}
+
+/** How the notebook tools link and run notebooks: through server/rft_notebook.py. */
+const notebookEnv = async ($: EngineInterface, h: Here): Promise<NotebookEnv> => ({
+  root: h.root, home: await homeOf($), date: today(),
+  link: async (target, at) => {
+    const r = await notebookHelper($, ['link', target, at], 20000)
+    if (r.ok !== true) throw new Error(`the vault's link to the notebook was not made: ${String(r.error ?? 'no answer')}`)
+  },
+  run: async (link, timeoutS) => (await notebookHelper($, ['run', link, '--timeout', String(timeoutS)], (timeoutS + 50) * 1000)) as RunOutcome,
+})
+
 const UNLOCK_ASK = {
   move: { doing: 'Moving it', yes: 'Move and unlock', anyway: 'Move it anyway?', kept: 'it was not moved' },
   supersede: { doing: 'Marking it as superseded', yes: 'Mark and unlock', anyway: 'Mark it anyway?', kept: 'it was not marked' },
@@ -764,6 +825,10 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       return codeReport(io, loaded, await codeEnv($, h), String(i.id ?? ''))
     case 'rft_set_code':
       return setCode(io, loaded, await codeEnv($, h), String(i.id ?? ''), typeof i.text === 'string' ? i.text : undefined, typeof i.reproduce === 'string' ? i.reproduce : undefined)
+    case 'rft_set_notebook':
+      return setNotebook(io, loaded, await notebookEnv($, h), String(i.id ?? ''), { cells: i.cells, file: i.file, replace: i.replace })
+    case 'rft_run_notebook':
+      return runNotebook(io, loaded, await notebookEnv($, h), String(i.id ?? ''), { timeout: i.timeout })
     case 'rft_move_node':
       return unlocking($, unlock => moveNode(io, loaded, String(i.id ?? ''), String(i.parent ?? ''), today(), str(i.why), unlock), view.unlock)
     case 'rft_set_refs':
@@ -1482,6 +1547,38 @@ async function datesEdit($: EngineInterface, e: Record<string, unknown>): Promis
 }
 
 /**
+ * Why Claude may not make this tool call, or null: it would change a note's `reproduced:`, which
+ * only rft_run_notebook writes (an Edit or Write of a note in the vault that adds, changes or
+ * removes the field; a shell command that writes, holds a `reproduced:` line and names the vault or a note).
+ */
+async function reproducedEdit($: EngineInterface, e: Record<string, unknown>): Promise<string | null> {
+  const tool = String(e.tool)
+  if (!EDIT_TOOLS.has(tool) && tool !== 'Bash') return null
+  const s = await read($, snapshot)
+  if (!s?.isActive || !s.vault) return null
+  const vault = resolvePath(s.vault, '.')
+  if (tool === 'Bash') {
+    const cmd = String(e.command ?? '')
+    if (!REPRODUCED_LINE.test(cmd)) return null
+    const t = await shellTouches($, cmd, vault, Object.values(s.nodes))
+    if (t.notes.length || t.inVault) return reproducedEditText(t.notes[0] ?? null)
+    if (!t.script) return null
+    const named = namedIn(cmd, Object.values(s.nodes))
+    const folder = vault.split('/').pop()
+    return named || cmd.includes(vault) || (folder && cmd.includes(`${folder}/`)) ? reproducedEditText(named) : null
+  }
+  const raw = e.file_path
+  if (typeof raw !== 'string' || !raw.endsWith('.md')) return null
+  const abs = resolvePath(resolvePath(await $.session.cwd(), '.'), raw)
+  if (!abs.startsWith(`${vault}/`)) return null
+  let before = ''
+  try { before = await $.fs.read(abs) } catch { /* a new file */ }
+  const after = afterCall(tool, e, before)
+  if (after === null || !changesReproduced(before, after)) return null
+  return reproducedEditText(Object.values(s.nodes).find(x => join(vault, x.path) === abs) ?? null)
+}
+
+/**
  * The literature search: `subject` is a topic in words, a note id or a concept name; the
  * references go under that note, the concept's start note, or the note the topic belongs to.
  */
@@ -1795,6 +1892,7 @@ export const register: Register = (on, options) => {
         scratchpad: await $.fs.read(join(root, ASSET_PATHS.scratchpad)),
         theme: await $.fs.read(join(root, ASSET_PATHS.theme)),
         artifacts: await $.fs.read(join(root, ASSET_PATHS.artifacts)),
+        latex: await $.fs.read(join(root, ASSET_PATHS.latex)),
         frame: await $.fs.read(join(root, ASSET_PATHS.frame)),
         frameCss: await $.fs.read(join(root, ASSET_PATHS.frameCss)),
       }
@@ -1824,7 +1922,7 @@ export const register: Register = (on, options) => {
     }
     if (rules) {
       const call = e as unknown as Record<string, unknown>
-      const why = (await artifactEdit($, call)) ?? (await lockedEdit($, call)) ?? (await priorityEdit($, call)) ?? (await datesEdit($, call))
+      const why = (await artifactEdit($, call)) ?? (await lockedEdit($, call)) ?? (await priorityEdit($, call)) ?? (await datesEdit($, call)) ?? (await reproducedEdit($, call))
       if (why) return { deny: why }
     }
     const ran = await next(e)

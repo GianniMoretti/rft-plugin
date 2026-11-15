@@ -146,14 +146,14 @@ describe('queue: in a session', () => {
     mock.clock(on)
     const calls: string[][] = []
     const w = world(on, files({ 'vault/.queue/queue.json': JSON.stringify({ version: 1, seq: 0, paused: false, jobs: [] }) }), {
-      run: argv => {
-        if (!PY.test(argv[1] ?? '')) return null
-        calls.push(argv)
+      process: argv => {
+        if (!PY.test(argv[1] ?? '')) return undefined
+        calls.push([...argv])
         if (argv[2] === 'add') {
           const spec = JSON.parse(argv[argv.indexOf('--job') + 1]!)
-          return { exitCode: 0, stdout: JSON.stringify({ job: { ...job('q7', spec.exp, 'pending', spec), place: 2 }, outlook: '2nd in line, after q6: needs 2 GPUs, 1 is free' }) }
+          return { exitCode: 0, stderr: '', stdout: JSON.stringify({ job: { ...job('q7', spec.exp, 'pending', spec), place: 2 }, outlook: '2nd in line, after q6: needs 2 GPUs, 1 is free' }) }
         }
-        return { exitCode: 0, stdout: '{}' }
+        return { exitCode: 0, stderr: '', stdout: '{}' }
       },
     })
     await $.session.start({ cwd: CWD, source: 'startup' } as never)

@@ -47,6 +47,7 @@ on a free port instead.
 from __future__ import annotations
 
 import argparse
+import base64
 import datetime
 import errno
 import hashlib
@@ -56,14 +57,16 @@ import json
 import os
 import re
 import secrets
+import signal
 import stat
 import sys
 import threading
 import time
 from pathlib import Path
-from html import unescape as html_unescape
+from html import escape as html_escape, unescape as html_unescape
 from urllib.parse import parse_qs, quote, urlsplit
 
+import rft_notebook
 import rft_queue  # the experiment queue, beside this file
 
 # the node types by folder (ID_RE below has their id letters), as TYPES in hooks/lib/vault.ts has them
@@ -89,6 +92,11 @@ PAGE_FILES = {
     "/vendor/katex.v0.16.22.min.js": ("vendor/katex.v0.16.22.min.js", "text/javascript; charset=utf-8"),
     "/vendor/katex.v0.16.22.min.css": ("vendor/katex.v0.16.22.min.css", "text/css; charset=utf-8"),
     "/vendor/LICENSE-katex.txt": ("vendor/LICENSE-katex.txt", "text/plain; charset=utf-8"),
+    # an artifact's SVG figure as a PDF, made in the page (loaded the first time one is asked for)
+    "/vendor/jspdf.v4.2.1.umd.min.js": ("vendor/jspdf.v4.2.1.umd.min.js", "text/javascript; charset=utf-8"),
+    "/vendor/svg2pdf.v2.9.0.umd.min.js": ("vendor/svg2pdf.v2.9.0.umd.min.js", "text/javascript; charset=utf-8"),
+    "/vendor/LICENSE-jspdf.txt": ("vendor/LICENSE-jspdf.txt", "text/plain; charset=utf-8"),
+    "/vendor/LICENSE-svg2pdf.txt": ("vendor/LICENSE-svg2pdf.txt", "text/plain; charset=utf-8"),
 }
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 ID_RE = re.compile(r"^[EDRT]\d+$")
@@ -103,7 +111,9 @@ RESCAN_S = 5.0  # a name not found looks through the folders again at most this 
 MAX_SCAN_FILES = 2_000_000  # the most files a search by name looks through
 SKIP_DIRS = {"node_modules", "__pycache__"}  # with every dot folder: never searched by name
 PAGE_CSP = ("default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; "
-            "connect-src 'self'; frame-src 'self'; frame-ancestors 'self'")
+            "connect-src 'self'; frame-src 'self' http://127.0.0.1:*; frame-ancestors 'self'")
+# frame-src: the page's own frames (the artifacts), and the marimo editors of the experiments'
+# notebooks, each on a port of its own on this machine (rft_notebook.Editors)
 # a concept's artifact: a page of Claude's, served as a document of its own in a sandbox (an opaque
 # origin: it reads no storage and makes no write as the page), its scripts inline, nothing from
 # elsewhere; `{here}` is the server's own address, for its images and the page that frames it
@@ -111,6 +121,13 @@ ARTIFACT_CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsa
                 "media-src {here} data:; font-src data:; form-action 'none'; base-uri 'none'; frame-ancestors {here}; "
                 "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox")
 ARTIFACTS = "artifacts"
+# where an artifact's figures are kept: looked in first after the artifacts' own folder
+FIGURES = "figures"
+# an SVG an artifact shows comes inside its page, as a data: image: the sandboxed frame has no origin
+# of its own, and a browser blocks an SVG answer to it (ORB); up to this size
+MAX_INLINE_SVG = 10_000_000
+# the scripts inside an artifact's frame, in this order: the LaTeX of its tables, then its runtime
+FRAME_SCRIPTS = ("latex.js", "frame.js")
 # its first line, as hooks/lib/vault.ts reads it: JSON in an HTML comment
 ARTIFACT_HEAD = re.compile(r"^<!-- rft-artifact (\{.*\}) -->[ \t]*(?:\r?\n|$)")
 MAX_ARTIFACT_BYTES = 1_000_000
@@ -381,6 +398,23 @@ def unquote(value: str | None) -> str:
     return v.strip()
 
 
+REPRODUCED_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}) (ok|differs|failed|unchecked)(?: @([0-9a-f]{4,40}(?:\+dirty)?))?(?: in (\d+(?:\.\d+)?) s)?$")
+
+
+def parse_reproduced(value: str | None) -> dict | None:
+    """An experiment notebook's last run (`reproduced:`, written by rft_run_notebook), as parseReproduced
+    in hooks/lib/vault.ts reads it: {date, state, commit?, seconds?}; None when it is not one."""
+    m = REPRODUCED_RE.match(unquote(value))
+    if not m:
+        return None
+    out = {"date": m.group(1), "state": m.group(2)}
+    if m.group(3):
+        out["commit"] = m.group(3)
+    if m.group(4):
+        out["seconds"] = float(m.group(4)) if "." in m.group(4) else int(m.group(4))
+    return out
+
+
 def unquote_json(value: str | None) -> str:
     """A value written with JSON.stringify (escapes and all), or any other quoted or bare one."""
     v = (value or "").strip()
@@ -619,6 +653,12 @@ class Vault:
                 pdf = link_target(fm.get("pdf"))
                 if pdf:
                     nodes[nid]["pdf"] = pdf
+                notebook = unquote(fm.get("notebook"))
+                if notebook:
+                    nodes[nid]["notebook"] = notebook
+                reproduced = parse_reproduced(fm.get("reproduced"))
+                if reproduced:
+                    nodes[nid]["reproduced"] = reproduced
                 # the dates, as hooks/lib/vault.ts reads them: values that are none are left out
                 plan = {"due": unquote(fm.get("due")) if due_ok(fm.get("due")) else None,
                         "start": day_of(fm.get("start")), "est": est_of(fm.get("est")),
@@ -755,7 +795,7 @@ class Vault:
         """An image a concept's artifact shows, found as a note's are, from the artifacts' folder."""
         if not CONCEPT_ID_RE.match(cid or "") or not any(a["concept"] == cid for a in self.tree()["artifacts"]):
             return None
-        return self._find_image(self.root / ARTIFACTS, src)
+        return self._find_image(self.root / ARTIFACTS, src, [self.root / FIGURES])
 
     def _milestones(self, by_name: dict[str, str], nodes: dict[str, dict]) -> list[dict]:
         """The deadlines in milestones/: due date as written, status, the notes they need by id and
@@ -829,6 +869,16 @@ class Vault:
     def inside(self, path: Path) -> bool:
         return self.root in path.parents
 
+    def notebook_link(self, nid: str) -> Path | None:
+        """The vault's link to an experiment's notebook (its `notebook:`), when the note has one and it
+        names a place in the vault; where the link leads is rft_notebook's to check."""
+        n = next((x for x in self.tree()["nodes"] if x["id"] == nid), None)
+        rel = (n or {}).get("notebook")
+        if not rel:
+            return None
+        path = Path(os.path.normpath(self.root / rel))
+        return path if self.inside(path) and (path.is_symlink() or path.is_file()) else None
+
     def image(self, nid: str, src: str) -> Path | None:
         """The image file note `nid` embeds as `src` (`![[src]]` or `![](src)`), resolved, as
         Obsidian finds it: a path on disk; else from the note's folder, the vault's top or the
@@ -837,8 +887,9 @@ class Vault:
         note = self.note_path(nid)
         return None if note is None else self._find_image(note.parent, src)
 
-    def _find_image(self, near: Path, src: str) -> Path | None:
-        """The image `src` names, seen from the folder `near`, as `image` finds a note's."""
+    def _find_image(self, near: Path, src: str, also: list[Path] = ()) -> Path | None:
+        """The image `src` names, seen from the folder `near` (then from the folders `also`), as
+        `image` finds a note's."""
         src = (src or "").strip()
         if not src or "\x00" in src or len(src) > 4096:
             return None
@@ -847,7 +898,7 @@ class Vault:
         if not is_image(Path(src)):
             return None
         inner = src.lstrip("/")  # Obsidian reads `/a.png` from its vault's top
-        tries = ([Path(src)] if Path(src).is_absolute() else []) + [near / inner, *(t / inner for t in self.image_tops)]
+        tries = ([Path(src)] if Path(src).is_absolute() else []) + [near / inner, *(a / inner for a in also), *(t / inner for t in self.image_tops)]
         parts = [p for p in Path(inner).parts if p not in (".", "..")]
         try:
             found = next((p for p in tries if p.is_file()), None)
@@ -1428,9 +1479,11 @@ def ask_session(verb: str, request: dict) -> None:
 
 # ------------------------------------------------------------------ http
 
-def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_session):
-    """The request handler; without a `token` it never writes. `ask` hands a new note to the session."""
+def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_session, editors=None):
+    """The request handler; without a `token` it never writes. `ask` hands a new note to the session;
+    `editors` serves the experiments' notebooks (rft_notebook.Editors)."""
     web = web.resolve()
+    editors = editors if editors is not None else rft_notebook.Editors()
 
     class Handler(http.server.BaseHTTPRequestHandler):
         server_version = "rft"
@@ -1468,14 +1521,35 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 src = m.group(3)
                 if re.match(r"^\s*(data:|https?:|//)", src, re.I):
                     return m.group(0)
+                q = m.group(2)
+                svg = inline_svg(html_unescape(src))
+                if svg is not None:  # inside the page: an SVG from the server would be blocked
+                    return f"{m.group(1)}{q}{svg}{q} data-rft-src={q}{html_escape(src, quote=True)}{q}"
                 url = f"api/image?artifact={cid}&amp;src={quote(html_unescape(src), safe='')}" + (f"&amp;token={image_key(token)}" if keyed else "")
-                return f"{m.group(1)}{m.group(2)}{url}{m.group(2)}"
+                return f"{m.group(1)}{q}{url}{q}"
+
+            def inline_svg(src: str) -> str | None:
+                """An SVG the artifact shows as a data: image, when it is one it may show: in the vault,
+                or anywhere with the key, as api/image serves it; None for any other image."""
+                path = vault.artifact_image(cid, src)
+                if path is None or path.suffix.lower() != ".svg" or not (keyed or vault.inside(path)):
+                    return None
+                try:
+                    if path.stat().st_size > MAX_INLINE_SVG:
+                        return None
+                    data = path.read_bytes()
+                except OSError:
+                    return None
+                return "data:image/svg+xml;base64," + base64.b64encode(data).decode("ascii")
 
             theme = "dark" if one("theme") == "dark" else "light"
-            try:
-                js, css = (web / "frame.js").read_text(encoding="utf-8"), (web / "frame.css").read_text(encoding="utf-8")
-            except OSError:
-                js, css = "", ""
+            def text(name: str) -> str:
+                try:
+                    return (web / name).read_text(encoding="utf-8")
+                except OSError:  # a plugin folder without it: the page without it
+                    return ""
+            # each script ends where the next begins: `;` keeps one's opening ( from calling the last
+            js, css = "\n;\n".join(text(f) for f in FRAME_SCRIPTS), text("frame.css")
             doc = wrap_artifact(IMG_SRC_RE.sub(image, page), js, css, theme)
             here = f"http://{(self.headers.get('Host') or '').strip()}"
             self._send(200, doc.encode("utf-8"), "text/html; charset=utf-8", head_only, ARTIFACT_CSP.format(here=here))
@@ -1650,13 +1724,29 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             PRIORITIES or null} or {"id": "<id>", "dismiss": true} (Claude's suggestion only); POST
             api/dates {"id": "<id>", "due"?, "start"?, "est"?: a value or null} or {"id", "dismiss": true}
             (Claude's suggested dates only); POST api/milestone {"title", "due", "needs"?: [ids]} (a new
-            deadline), {"id": "M..", "due"?, "needs"?, "status"?} or {"id", "accept" | "dismiss": true}."""
+            deadline), {"id": "M..", "due"?, "needs"?, "status"?} or {"id", "accept" | "dismiss": true}.
+            POST api/notebook {"id": "<id>"}: the address of the experiment's notebook in its repo's
+            marimo editor ({"url"}), the editor started first if need be."""
             route = urlsplit(self.path).path
             if route == "/api/queue":
                 got = self._write_request("/api/queue", MAX_NODE_BYTES)
                 if got is None:
                     return
                 return self._json(*queue_change(vault.queue, got[1]))
+            if route == "/api/notebook":
+                got = self._write_request("/api/notebook", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                nid = got[1].get("id")
+                if not isinstance(nid, str):
+                    return self._json(400, {"error": 'expected {"id": "<id>"}'})
+                path = vault.notebook_link(nid)
+                if path is None:
+                    return self._json(404, {"error": f"{nid} has no notebook in the vault"})
+                try:
+                    return self._json(200, {"url": editors.open(path)})
+                except rft_notebook.NotebookError as e:
+                    return self._json(502, {"error": str(e)})
             if route == "/api/dates":
                 got = self._write_request("/api/dates", MAX_NODE_BYTES)
                 if got is None:
@@ -1833,15 +1923,24 @@ def take_over(port: int, handler, every: float = 1.0):
             pass
 
 
-def watch_parent(server, watch_stdin: bool):
-    """Exit when the parent dies (we are re-parented), and with --watch-stdin when it closes our stdin."""
+def watch_parent(server, watch_stdin: bool, on_exit=None):
+    """Exit when the parent dies (we are re-parented), and with --watch-stdin when it closes our stdin;
+    `on_exit` runs first (the notebook editors are stopped)."""
     parent = os.getppid()
+
+    def leave():
+        if on_exit:
+            try:
+                on_exit()
+            except Exception:
+                pass
+        os._exit(0)
 
     def by_pid():
         while True:
             time.sleep(2)
             if os.getppid() != parent:
-                os._exit(0)
+                leave()
 
     def by_stdin():
         try:
@@ -1849,7 +1948,7 @@ def watch_parent(server, watch_stdin: bool):
                 pass
         except Exception:
             pass
-        os._exit(0)
+        leave()
 
     threading.Thread(target=by_pid, daemon=True).start()
     if watch_stdin and not sys.stdin.isatty():
@@ -1868,9 +1967,12 @@ def main(argv=None):
     a = ap.parse_args(argv)
     vault = Vault(Path(a.vault), a.project, Path(a.config) if a.config else None)
     token = vault_key(Path(a.vault))
-    handler = make_handler(vault, Path(a.web), token)
+    editors = rft_notebook.Editors()
+    handler = make_handler(vault, Path(a.web), token, editors=editors)
     if not a.no_watch:
-        watch_parent(None, a.watch_stdin)
+        watch_parent(None, a.watch_stdin, on_exit=editors.stop_all)
+    # stopped from outside: the editors run in process groups of their own, so stop them too
+    signal.signal(signal.SIGTERM, lambda *_: (editors.stop_all(), os._exit(0)))
 
     def announce(port: int):
         print(f"RFT_SERVER_URL http://127.0.0.1:{port}/?token={token}", flush=True)
@@ -1895,6 +1997,8 @@ def main(argv=None):
         server.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        editors.stop_all()
 
 
 if __name__ == "__main__":

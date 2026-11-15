@@ -143,7 +143,17 @@ export type RftNode = {
   suggestedStart?: string
   suggestedEst?: number
   suggestedDatesWhy?: string
+  /** An experiment's marimo notebook (`notebook:`): a link in the vault's notebooks/ to the file in its concept's repo. */
+  notebook?: string
+  /** The notebook's last run (`reproduced:`, written by rft_run_notebook). */
+  reproduced?: Reproduced
 }
+
+/** How an experiment notebook's last run went: its RESULTS all in the note's Result, one not, an error, or nothing to check. */
+export type ReproState = 'ok' | 'differs' | 'failed' | 'unchecked'
+
+/** An experiment notebook's last run, as `reproduced:` holds it: `2026-11-15 ok @a1b2c3d4e5+dirty in 6.1 s`. */
+export type Reproduced = { date: string; state: ReproState; commit?: string; seconds?: number }
 
 export type Tree = {
   nodes: Record<string, RftNode>
@@ -538,6 +548,10 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
         if (why) nodes[id]!.suggestedWhy = why
       }
       readPlan(nodes[id]!, fm)
+      const notebook = unquote(fm.notebook)
+      if (notebook) nodes[id]!.notebook = notebook
+      const reproduced = parseReproduced(fm.reproduced)
+      if (reproduced) nodes[id]!.reproduced = reproduced
       if (fmType === 'experiment' && hasResultIn(nodes[id]!.status, text)) nodes[id]!.hasResult = true
       afterRef[id] = linksIn(fm.after)
       texts[id] = text
@@ -664,6 +678,22 @@ export async function loadMilestones(io: Io, vault: string, byName: Record<strin
 // ---------------------------------------------------------------- concepts
 
 /** A frontmatter value without the quotes YAML allows around it. */
+const REPRODUCED_RE = /^(\d{4}-\d{2}-\d{2}) (ok|differs|failed|unchecked)(?: @([0-9a-f]{4,40}(?:\+dirty)?))?(?: in (\d+(?:\.\d+)?) s)?$/
+
+/** A `reproduced:` value read back; null when it is not one. As parse_reproduced in server/rft_server.py. */
+export function parseReproduced(value: string | undefined): Reproduced | null {
+  const m = REPRODUCED_RE.exec(unquote(value))
+  if (!m) return null
+  const out: Reproduced = { date: m[1]!, state: m[2] as ReproState }
+  if (m[3]) out.commit = m[3]
+  if (m[4]) out.seconds = Number(m[4])
+  return out
+}
+
+/** The `reproduced:` value of a run, unquoted. */
+export const reproducedLine = (r: Reproduced) =>
+  `${r.date} ${r.state}${r.commit ? ` @${r.commit}` : ''}${r.seconds != null ? ` in ${r.seconds} s` : ''}`
+
 export const unquote = (v: string | undefined) => (v ?? '').trim().replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1').trim()
 
 /** A value written with JSON.stringify (escapes and all), or any other quoted or bare one. */

@@ -3,6 +3,7 @@ adding a note through the session, and their safety.
 
     python3 -m unittest discover -s tests -p "test_*.py"
 """
+import base64
 import contextlib
 import http.client
 import io
@@ -301,6 +302,8 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.get("/theme.js")[0], 200)
         self.assertEqual(self.get("/markdown.js")[0], 200)
         self.assertEqual(self.get("/scratchpad.js")[0], 200)
+        self.assertEqual(self.get("/vendor/jspdf.v4.2.1.umd.min.js")[0], 200)
+        self.assertEqual(self.get("/vendor/svg2pdf.v2.9.0.umd.min.js")[0], 200)
         self.assertEqual(self.get("/vendor/d3.v7.9.0.min.js")[0], 200)
         self.assertEqual(self.get("/vendor/katex.v0.16.22.min.js")[0], 200)
         self.assertEqual(self.get("/vendor/katex.v0.16.22.min.css")[0], 200)
@@ -1214,6 +1217,12 @@ class ArtifactTest(unittest.TestCase):
         head = {"concept": "D04", "name": "Mix-based augmentation", "updated": "2026-03-01",
                 "basis": {"E05": "33efe36b", "E06": "00000000", "E03": "12345678"}}
         cls.page = '<h1>Mix</h1>\n<p><a href="#E05">E05</a> <img src="fig.png"> <img src="data:image/png;base64,AA=="> <img src="https://x.org/a.png"> <img src="/abs/out.png"></p>\n'
+        # SVG figures: kept in vault/figures/, named bare or by a path from the artifacts' folder, or outside the vault
+        cls.svg = b'<svg xmlns="http://www.w3.org/2000/svg" width="10pt" height="10pt"><rect width="10" height="10"/></svg>'
+        (vault / "figures").mkdir()
+        (vault / "figures" / "chart.svg").write_bytes(cls.svg)
+        (root / "out.svg").write_bytes(cls.svg)
+        cls.page += f'<figure><img src="chart.svg" alt="a"><img src="../figures/chart.svg" alt="b"><img src="{root / "out.svg"}" alt="c"></figure>\n'
         cls.file = vault / "artifacts" / "D04 Mix-based augmentation.html"
         cls.file.write_text(f"<!-- rft-artifact {json.dumps(head)} -->\n{cls.page}")
         (vault / "artifacts" / "fig.png").write_bytes(b"\x89PNG fig")
@@ -1291,6 +1300,9 @@ class ArtifactTest(unittest.TestCase):
         self.assertIn('document.documentElement.dataset.theme = "dark"', html)
         self.assertIn((WEB / "frame.css").read_text().strip().splitlines()[0], html)
         self.assertIn((WEB / "frame.js").read_text().strip().splitlines()[0], html)
+        self.assertIn((WEB / "latex.js").read_text().strip().splitlines()[0], html)
+        # the scripts one after the other, a `;` between: the next one's opening ( calls nothing
+        self.assertIn((WEB / "latex.js").read_text() + "\n;\n" + (WEB / "frame.js").read_text(), html)
         self.assertLess(html.index("dataset.theme"), html.index("<h1>Mix</h1>"))
         # a theme that is not one of the two is the light one
         self.assertIn('dataset.theme = "light"', self.get("/api/artifact?concept=D04&theme=%22%3E")[2].decode())
@@ -1315,6 +1327,23 @@ class ArtifactTest(unittest.TestCase):
         self.assertEqual(self.get(f"/api/image?artifact=D04&src={out}&token={KEY}")[2], b"\x89PNG out")
         self.assertEqual(self.get(f"/api/image?artifact=D04&src={out}&token={ikey}")[2], b"\x89PNG out")
         self.assertEqual(self.get("/api/image?artifact=D99&src=fig.png")[0], 403)
+
+    def test_an_svg_comes_inside_the_page(self):
+        """The frame has no origin of its own, so a browser blocks an SVG the server sends it (ORB):
+        an SVG figure comes inside the page as a data: image, its name kept for its PDF."""
+        html = self.get("/api/artifact?concept=D04")[2].decode()
+        data = "data:image/svg+xml;base64," + base64.b64encode(self.svg).decode()
+        self.assertIn(f'src="{data}" data-rft-src="chart.svg"', html)  # found in figures/
+        self.assertIn(f'src="{data}" data-rft-src="../figures/chart.svg"', html)
+        # one outside the vault: inside the page only with the key, as api/image serves it
+        out = str(self.root / "out.svg")
+        self.assertIn(f'src="api/image?artifact=D04&amp;src={quote(out, safe="")}"', html)
+        self.assertNotIn(f'data-rft-src="{out}"', html)
+        for given in (KEY, rft_server.image_key(KEY)):
+            self.assertIn(f'src="{data}" data-rft-src="{out}"', self.get(f"/api/artifact?concept=D04&token={given}")[2].decode())
+        # a PNG still comes through api/image, which a browser lets through
+        self.assertIn('src="api/image?artifact=D04&amp;src=fig.png"', html)
+        self.assertEqual(self.get("/api/image?artifact=D04&src=chart.svg")[0], 200)
 
     def test_only_an_artifact_of_the_vault_by_its_concept(self):
         for q in ("concept=D99", "concept=root", "concept=..%2Fx", "concept=", "", "concept=D00"):

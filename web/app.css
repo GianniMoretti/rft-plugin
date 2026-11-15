@@ -723,3 +723,28 @@ main.artifact-open:has(#drawer:not([hidden])) #concept-canvas { width: calc(100%
 .jobs-foot { display: flex; align-items: center; gap: 6px; padding: 4px 10px 5px 12px; border-top: 1px solid var(--line); font-size: 0.88em; color: var(--muted); }
 #jobs-msg { flex: 1; min-width: 0; }
 #jobs-msg.error { color: var(--dropped); }
+
+/* an experiment's notebook, on the left while its note is open on the right (app.js, "an experiment's
+   notebook"); --nb-w: the default width, or the one dragged on its right edge */
+main { --nb-w: min(calc(640px * var(--font-scale)), 46vw); }
+#nbpane { position: absolute; top: 0; left: 0; bottom: 0; width: min(var(--nb-w), 92vw); z-index: 3;
+  display: flex; flex-direction: column; background: var(--panel); border-right: 1px solid var(--line);
+  font-size: calc(13px * var(--font-scale)); }
+#nbpane[hidden] { display: none; }
+.nb-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px 2px; }
+.nb-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#nb-tab { display: inline-flex; align-items: center; color: inherit; }
+.nb-run { padding: 0 12px 6px; color: var(--muted); }
+.nb-run.r-ok { color: var(--done); }
+.nb-run.r-differs, .nb-run.r-failed { color: var(--dropped); }
+.nb-msg { margin: 0; padding: 8px 12px; }
+.nb-frame { flex: 1; min-height: 0; border-top: 1px solid var(--line); }
+.nb-frame iframe { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
+#nbpane-resize { position: absolute; top: 0; bottom: 0; left: min(var(--nb-w), 92vw); width: 9px;
+  transform: translateX(-50%); cursor: col-resize; z-index: 4; touch-action: none; }
+#nbpane[hidden] + #nbpane-resize { display: none; }
+#nbpane-resize::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 3px; border-radius: 2px; }
+#nbpane-resize:hover::after, #nbpane-resize:focus-visible::after, body.resizing #nbpane-resize::after { background: var(--accent); }
+#nbpane-resize:focus-visible { outline: none; }
+#drawer-notebook[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+main:has(#nbpane:not([hidden])) #kanban, main:has(#nbpane:not([hidden])) #calendar { left: min(var(--nb-w), 92vw); }

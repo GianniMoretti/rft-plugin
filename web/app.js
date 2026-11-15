@@ -515,6 +515,7 @@
     renderDrawerPriority(n)
     renderDrawerDates(n)
     markRows()
+    syncNotebook(n)
     const summary = document.getElementById('drawer-summary')
     summary.textContent = n.summary || ''
     summary.hidden = !n.summary
@@ -1315,6 +1316,7 @@
     hideSelBar()
     fnPop.hidden = true
     document.getElementById('drawer').hidden = true
+    hideNotebook()
     selected = null
     gNodes.selectAll('g.node').attr('class', n => nodeClass(n.data))
     markCards()
@@ -1749,6 +1751,7 @@
       box.replaceChildren()
       const frame = document.createElement('iframe')
       if (opts.sandbox != null) frame.setAttribute('sandbox', opts.sandbox)
+      if (opts.allow) frame.setAttribute('allow', opts.allow)
       frame.setAttribute('referrerpolicy', 'no-referrer')
       if (opts.title) frame.title = opts.title
       box.appendChild(frame)
@@ -1771,6 +1774,127 @@
     for (const f of frames.values()) {
       if (ev.source === f.frame.contentWindow) { if (f.onMessage) f.onMessage(ev.data || {}); return }
     }
+  })
+
+  // ---------------------------------------------------------------- an experiment's notebook (server/rft_notebook.py)
+
+  // the marimo notebook that rebuilds an experiment's Result, on the left while its note is open on
+  // the right: the server starts the editor of the experiment's repo (POST api/notebook, with the
+  // key: the editor runs code) and the page frames it, one frame for every notebook. Closed by
+  // hand, it stays closed for the notes opened after, until the drawer's notebook button opens it.
+  const nbPane = document.getElementById('nbpane')
+  const nbFrame = document.getElementById('nb-frame')
+  const nbMsg = document.getElementById('nb-msg')
+  const nbRun = document.getElementById('nb-run')
+  const nbTab = document.getElementById('nb-tab')
+  const nbBtn = document.getElementById('drawer-notebook')
+  const nbUrls = new Map() // note id → its editor's address, once the server gave it
+  let nbShown = null // the note whose notebook the pane shows
+  let nbClosed = Boolean(store.get('notebookClosed', false))
+
+  /** Shows or hides the notebook pane for the note just opened. */
+  function syncNotebook(n) {
+    const has = Boolean(n && n.notebook) && !EMBED
+    nbBtn.hidden = !has
+    if (!has || nbClosed) { hideNotebook(); return }
+    openNotebook(n)
+  }
+
+  async function openNotebook(n) {
+    nbShown = n.id
+    nbPane.hidden = false
+    nbBtn.setAttribute('aria-pressed', 'true')
+    document.getElementById('nb-title').textContent = `${n.id} · notebook`
+    nbRun.textContent = A.reproducedText(n.reproduced)
+    nbRun.className = `nb-run${n.reproduced && n.reproduced.state ? ` r-${n.reproduced.state}` : ''}`
+    nbRun.title = n.reproduced ? 'The last run by rft_run_notebook, which checks RESULTS against the note\'s Result' : 'Claude runs it with rft_run_notebook'
+    let url = nbUrls.get(n.id)
+    if (!url) {
+      if (!editKey()) { showNbMsg('Open the address /rft printed: the notebook runs code, so it needs the key.'); return }
+      showNbMsg('Starting the notebook in its repo\'s environment… (the first time can take a minute)')
+      try {
+        const res = await fetch('api/notebook', {
+          method: 'POST',
+          cache: 'no-store',
+          headers: { 'Content-Type': 'application/json', 'X-RFT-Token': editKey() },
+          body: JSON.stringify({ id: n.id }),
+        })
+        const reply = await res.json().catch(() => ({}))
+        if (!res.ok || typeof reply.url !== 'string') throw new Error(reply.error || `the server answered ${res.status}`)
+        url = reply.url
+        nbUrls.set(n.id, url)
+      } catch (e) {
+        if (nbShown === n.id) showNbMsg(`The notebook did not open: ${e.message}`)
+        return
+      }
+      if (nbShown !== n.id) return
+    }
+    nbMsg.hidden = true
+    nbFrame.hidden = false
+    nbTab.href = url
+    openFrame(nbFrame, url, { title: `The notebook of ${n.id}`, allow: 'clipboard-read; clipboard-write' })
+  }
+
+  function showNbMsg(text) {
+    nbMsg.textContent = text
+    nbMsg.hidden = false
+    nbFrame.hidden = true
+  }
+
+  /** The pane hidden; its frame kept, so the same notebook comes back as it was. */
+  function hideNotebook() {
+    nbShown = null
+    nbPane.hidden = true
+    nbBtn.setAttribute('aria-pressed', 'false')
+  }
+
+  nbBtn.addEventListener('click', () => {
+    nbClosed = !nbPane.hidden
+    store.set('notebookClosed', nbClosed)
+    const n = selected && byId.get(selected)
+    if (nbClosed || !n) hideNotebook()
+    else openNotebook(n)
+  })
+  document.getElementById('nb-close').addEventListener('click', () => {
+    nbClosed = true
+    store.set('notebookClosed', true)
+    hideNotebook()
+  })
+
+  // its right edge drags (arrow keys once focused), a double-click restores the default
+  const nbResizer = document.getElementById('nbpane-resize')
+  const NB_MIN = 320
+  function setNotebookWidth(w, save = true) {
+    const v = Number(w)
+    const width = w == null || !Number.isFinite(v) ? null : Math.round(Math.min(window.innerWidth * 0.92, Math.max(NB_MIN, v)))
+    if (width == null) mainEl.style.removeProperty('--nb-w')
+    else mainEl.style.setProperty('--nb-w', `${width}px`)
+    if (save) store.set('notebookWidth', width)
+  }
+  setNotebookWidth(store.get('notebookWidth', null), false)
+  let nbDrag = null
+  nbResizer.addEventListener('pointerdown', ev => {
+    if (ev.button !== 0) return
+    ev.preventDefault()
+    nbResizer.setPointerCapture(ev.pointerId)
+    nbDrag = { x: ev.clientX, w: nbPane.offsetWidth }
+    document.body.classList.add('resizing')
+  })
+  nbResizer.addEventListener('pointermove', ev => { if (nbDrag) setNotebookWidth(nbDrag.w + ev.clientX - nbDrag.x, false) })
+  const nbEnd = () => {
+    if (!nbDrag) return
+    nbDrag = null
+    document.body.classList.remove('resizing')
+    store.set('notebookWidth', nbPane.offsetWidth)
+  }
+  nbResizer.addEventListener('pointerup', nbEnd)
+  nbResizer.addEventListener('lostpointercapture', nbEnd)
+  nbResizer.addEventListener('dblclick', () => setNotebookWidth(null))
+  nbResizer.addEventListener('keydown', ev => {
+    const d = { ArrowLeft: -1, ArrowRight: 1 }[ev.key]
+    if (!d) return
+    ev.preventDefault()
+    setNotebookWidth(nbPane.offsetWidth + d * (ev.shiftKey ? 120 : 30))
   })
 
   // ---------------------------------------------------------------- a concept's artifact (web/artifacts.js)
@@ -1799,6 +1923,7 @@
     closeAdder(); closeMover(); closeRetyper(); closeComposer(); hideSelBar(); setHighlighting(false)
     fnPop.hidden = true
     selected = null
+    hideNotebook()
     gNodes.selectAll('g.node').attr('class', n => nodeClass(n.data))
     markCards()
     artifactShown = cid
@@ -1836,7 +1961,82 @@
 
   function tellFrame(extra = {}) {
     const f = frames.get(artFrame)
-    if (f && f.frame.contentWindow) f.frame.contentWindow.postMessage({ rft: 'tree', theme: themeNow(), notes: noteMarks(), ...extra }, '*')
+    // caps: what this page offers the frame's buttons (a PDF needs the libraries the server serves)
+    if (f && f.frame.contentWindow) f.frame.contentWindow.postMessage({ rft: 'tree', theme: themeNow(), notes: noteMarks(), caps: { pdf: !EMBED }, ...extra }, '*')
+  }
+
+  function answerFrame(msg) {
+    const f = frames.get(artFrame)
+    if (f && f.frame.contentWindow) f.frame.contentWindow.postMessage({ rft: 'tree', ...msg }, '*')
+  }
+
+  /** Copies text, for the frame's Copy LaTeX when the frame itself may not. */
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch (e) {
+      const area = document.createElement('textarea')
+      area.value = text
+      area.style.cssText = 'position:fixed;left:-10000px;top:0'
+      document.body.appendChild(area)
+      area.select()
+      let ok = false
+      try { ok = document.execCommand('copy') } catch (e2) { ok = false }
+      area.remove()
+      return ok
+    }
+  }
+
+  // an SVG figure as a vector PDF: jsPDF and svg2pdf.js (web/vendor, MIT), loaded the first time
+  const PDF_LIBS = ['vendor/jspdf.v4.2.1.umd.min.js', 'vendor/svg2pdf.v2.9.0.umd.min.js']
+  let pdfLibs = null
+  function loadPdfLibs() {
+    if (!pdfLibs) {
+      pdfLibs = PDF_LIBS.reduce((done, src) => done.then(() => new Promise((ok, fail) => {
+        const s = document.createElement('script')
+        s.src = src
+        s.onload = ok
+        s.onerror = () => fail(new Error(`could not load ${src}`))
+        document.head.appendChild(s)
+      })), Promise.resolve()).catch(err => { pdfLibs = null; throw err })
+    }
+    return pdfLibs
+  }
+
+  /** A length of an SVG's width or height in points (px, pt, in, cm, mm; a bare number is px), or null. */
+  function points(value) {
+    const m = /^\s*([\d.]+)\s*(px|pt|in|cm|mm)?\s*$/i.exec(value || '')
+    if (!m) return null
+    const k = { px: 0.75, pt: 1, in: 72, cm: 72 / 2.54, mm: 72 / 25.4 }[(m[2] || 'px').toLowerCase()]
+    return Number(m[1]) * k || null
+  }
+
+  /** Downloads an SVG (its source from the artifact's frame) as a PDF of its own size, named `name`.pdf. */
+  async function svgToPdf(text, name) {
+    await loadPdfLibs()
+    const parsed = new DOMParser().parseFromString(text, 'image/svg+xml')
+    const svg = parsed.documentElement
+    if (!svg || svg.nodeName.toLowerCase() !== 'svg' || parsed.querySelector('parsererror')) throw new Error('not an SVG')
+    // nothing of it runs here: no scripts, no foreign content, no handlers
+    for (const el of svg.querySelectorAll('script, foreignObject')) el.remove()
+    for (const el of [svg, ...svg.querySelectorAll('*')]) for (const a of [...el.attributes]) if (/^on/i.test(a.name)) el.removeAttribute(a.name)
+    const vb = (svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number)
+    const w = points(svg.getAttribute('width')) || (vb.length === 4 && vb[2] * 0.75) || 400
+    const h = points(svg.getAttribute('height')) || (vb.length === 4 && vb[3] * 0.75) || 300
+    const host = document.createElement('div')
+    host.style.cssText = 'position:fixed;left:-100000px;top:0;visibility:hidden'
+    const node = document.importNode(svg, true)
+    host.appendChild(node)
+    document.body.appendChild(host)
+    try {
+      const pdf = new window.jspdf.jsPDF({ unit: 'pt', format: [w, h], orientation: w > h ? 'landscape' : 'portrait' })
+      if (typeof pdf.svg === 'function') await pdf.svg(node, { x: 0, y: 0, width: w, height: h })
+      else await window.svg2pdf.svg2pdf(node, pdf, { x: 0, y: 0, width: w, height: h })
+      pdf.save(`${String(name || 'figure').replace(/[^\w.-]+/g, '-') || 'figure'}.pdf`)
+    } finally {
+      host.remove()
+    }
   }
 
   function renderArtifact() {
@@ -1876,8 +2076,8 @@
     const kept = frames.get(artFrame)
     const same = kept && kept.version === version
     const title = `The artifact of ${c.name}`
-    if (EMBED) openFrame(artFrame, null, { srcdoc: A.wrap(html, EMBED.frame || {}, themeNow()), sandbox: 'allow-scripts allow-popups', version, onMessage: onArtifactMessage, title })
-    else openFrame(artFrame, A.frameSrc(cid, { theme: themeNow(), token: imageKey, y: artScroll.get(cid) || 0 }), { sandbox: 'allow-scripts allow-popups allow-popups-to-escape-sandbox', version, onMessage: onArtifactMessage, title })
+    if (EMBED) openFrame(artFrame, null, { srcdoc: A.wrap(html, EMBED.frame || {}, themeNow()), sandbox: 'allow-scripts allow-popups', allow: 'clipboard-write', version, onMessage: onArtifactMessage, title })
+    else openFrame(artFrame, A.frameSrc(cid, { theme: themeNow(), token: imageKey, y: artScroll.get(cid) || 0 }), { sandbox: 'allow-scripts allow-popups allow-popups-to-escape-sandbox', allow: 'clipboard-write', version, onMessage: onArtifactMessage, title })
     // the frame kept: its note links marked again, from the tree as it is now, and scrolled back to
     // where it was (hidden while a note was shown, it lost its place)
     if (same) tellFrame({ y: artScroll.get(cid) || 0 })
@@ -1888,6 +2088,10 @@
     if (d.type === 'ready') tellFrame(EMBED ? { y: artScroll.get(artifactShown) || 0 } : {})
     else if (d.type === 'scroll' && typeof d.y === 'number') artScroll.set(artifactShown, d.y)
     else if (d.type === 'go' && typeof d.id === 'string' && byId.has(d.id)) { if (view === 'concepts') select(d.id); else go(d.id) }
+    else if (d.type === 'copy' && typeof d.text === 'string') copyText(d.text).then(ok => answerFrame({ ticket: d.ticket, ok }))
+    else if (d.type === 'pdf' && typeof d.svg === 'string' && !EMBED) {
+      svgToPdf(d.svg, d.name).then(() => answerFrame({ ticket: d.ticket, ok: true }), err => { console.warn('rft: PDF', err); answerFrame({ ticket: d.ticket, ok: false }) })
+    }
   }
 
   // the theme switched: the artifact follows, without loading again

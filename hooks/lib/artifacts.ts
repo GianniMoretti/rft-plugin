@@ -6,9 +6,13 @@
 // HTML comment holding JSON: `<!-- rft-artifact {"concept","name","updated","basis"} -->`.
 
 import type { Concept, Io, Loaded, RftNode, Tree } from './vault'
-import { ARTIFACTS_DIR, ARTIFACT_HEAD, ID_RE, MARK, ROOT_CONCEPT, conceptOrder, conceptPath, join, load, ownNotes, resolveConcept, resultOf } from './vault'
+import { ARTIFACTS_DIR, ARTIFACT_HEAD, ID_RE, MARK, ROOT_CONCEPT, codeRepos, conceptOrder, conceptPath, isAbsolute, join, load, ownNotes, resolveConcept, resolvePath, resultOf } from './vault'
+import { notebookMark } from './notebooks'
 
 export { ARTIFACTS_DIR, resultOf } from './vault'
+
+/** Where an artifact's figures are kept, in the vault: the page names them `../figures/<file>`. */
+export const FIGURES_DIR = 'figures'
 
 /** The largest page the plugin writes, and the server serves. */
 export const MAX_ARTIFACT_BYTES = 1_000_000
@@ -150,6 +154,29 @@ function descendants(tree: Tree, id: string): string[] {
   return out
 }
 
+const IMG_RE = /<img\b[^>]*?\bsrc\s*=\s*["']([^"']*)["']/gi
+const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'", apos: "'" }
+const unescapeHtml = (s: string) => s.replace(/&(amp|lt|gt|quot|#39|apos);/g, (_, e: string) => ENTITIES[e]!)
+const normal = (p: string) => (isAbsolute(p) ? resolvePath('/', p) : resolvePath('/', p).slice(1))
+
+/** The images the page names that are not in artifacts/, figures/ or the vault's top (nor at their path on disk). */
+async function missingImages(io: Io, vault: string, html: string): Promise<string[]> {
+  const out: string[] = []
+  for (const m of html.matchAll(IMG_RE)) {
+    const src = unescapeHtml(m[1]!).trim()
+    if (!src || /^(data:|https?:|\/\/)/i.test(src) || out.includes(src)) continue
+    const path = src.replace(/^file:\/\//i, '')
+    const inner = path.replace(/^\/+/, '')
+    const tries = [...(isAbsolute(path) ? [path] : []), join(vault, ARTIFACTS_DIR, inner), join(vault, FIGURES_DIR, inner), join(vault, inner)]
+    let found = false
+    for (const t of tries) {
+      try { if (await io.exists(normal(t))) { found = true; break } } catch { /* not readable: not found */ }
+    }
+    if (!found) out.push(src)
+  }
+  return out
+}
+
 // ---------------------------------------------------------------- rft_set_artifact
 
 const quoteShort = (s: string) => JSON.stringify(s.length > 60 ? `${s.slice(0, 57)}…` : s)
@@ -209,6 +236,8 @@ export async function setArtifact(io: Io, loaded: Loaded, ref: string, input: { 
   Object.assign(loaded, await load(io, config))
   const k = withResults(tree, c.id).length
   const { warnings, info, missing } = checks(loaded.tree, c, html)
+  const lost = await missingImages(io, config.vault, html)
+  if (lost.length) warnings.push(`Images not found in ${FIGURES_DIR}/, ${ARTIFACTS_DIR}/ or the vault's top: ${lost.join(', ')}. Keep an artifact's figures in the vault's ${FIGURES_DIR}/ and name them ../${FIGURES_DIR}/<file> (the view finds one by name elsewhere in the vault too).`)
   const how = hasHtml ? 'written to' : `updated with ${edits!.length} edit(s) in`
   const coverage = k ? `, ${missing ? `${missing} not on the page` : 'all on the page'}` : ''
   return [
@@ -222,7 +251,7 @@ export async function setArtifact(io: Io, loaded: Loaded, ref: string, input: { 
 
 /** How to write the page: in rft_artifact's answer, where it is read before each write. */
 export const PAGE_RULES = 'The page: HTML (a fragment or a whole document) with its own <style> and inline <script>; charts as inline SVG. ' +
-  'Nothing from elsewhere (no CDN, no fetch): the tree view blocks it. Images by path or name, as in notes. ' +
+  'Nothing from elsewhere (no CDN, no fetch): the tree view blocks it. Figures go in the vault\'s figures/ folder, named from the page as <img src="../figures/<file>.svg" alt="…">; save them as SVG (the view offers each SVG figure as a PDF download, and each table as a LaTeX table float to copy: give a table a <caption>). ' +
   'Link every note id, e.g. <a href="#E05">E05</a>: the tree view opens the note and marks the link with its status. ' +
   'Its base style follows the view\'s light and dark themes: use var(--fg), var(--muted), var(--bg), var(--panel), var(--line), var(--accent), var(--good), var(--bad), and var(--c1) … var(--c6) for series. ' +
   'Only numbers that are in the notes, with their spread; say which results are superseded. The view links the sub-concepts\' artifacts itself. ' +
@@ -245,14 +274,18 @@ export async function artifactReport(io: Io, loaded: Loaded, ref: string, opts: 
   if (c.summary) out.push(c.summary)
   const results = withResults(tree, c.id)
   const fresh = new Set([...(state?.changed ?? []), ...(state?.added ?? [])])
+  // in a concept with code, each result says whether its notebook reproduced it
+  const coded = codeRepos(tree.concepts, c.id).length > 0
   out.push('', `Experiments with a result (${results.length}):`)
   for (const n of results) {
-    const head = `${MARK[n.status] ?? '-'} ${n.name}${n.supersededBy ? ` [superseded by ${n.supersededBy}]` : ''}${n.summary ? ` — ${n.summary}` : ''}`
+    const head = `${MARK[n.status] ?? '-'} ${n.name}${n.supersededBy ? ` [superseded by ${n.supersededBy}]` : ''}${n.summary ? ` — ${n.summary}` : ''}${coded ? ` · ${notebookMark(n)}` : ''}`
     const mark = state?.changed.includes(n.id) ? ' [changed]' : state?.added.includes(n.id) ? ' [new]' : ''
     if (!a || opts.full || fresh.has(n.id)) out.push(`## ${head}${mark}`, resultOf(loaded.texts[n.id] ?? '') || '(no Result written: it is done)', '')
     else out.push(`- ${head}`)
   }
   if (!results.length) out.push('(none yet: nothing to put on the page)')
+  const unproven = coded ? results.filter(n => !n.supersededBy && n.reproduced?.state !== 'ok') : []
+  if (unproven.length) out.push('', `Not reproduced by a notebook (${unproven.length}): ${unproven.map(n => `${n.id} (${notebookMark(n)})`).join(', ')}. Run them with rft_run_notebook (rft_set_notebook writes one) before their numbers go on the page, or say on the page that they are not reproduced. The view marks each linked experiment with its notebook's last run.`)
   if (state?.removed.length) out.push('', `No longer here (moved or deleted): ${state.removed.join(', ')}: take them off the page.`)
   const without = ownNotes(tree, c.id).filter(n => n.type === 'experiment' && !n.hasResult)
   if (without.length) out.push('', `Without a result yet (${without.length}): ${without.map(n => `${MARK[n.status] ?? '-'} ${n.name}`).join(', ')}`)
