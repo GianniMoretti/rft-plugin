@@ -138,8 +138,8 @@ export type World = { fs: MemoryFs; tools: string[]; deferred: string[]; opened:
 /** Answers everything the plugin asks of the session from memory. */
 /** `refuse` names commands the engine refuses to register, as it refuses a skill's name. */
 /** `cwd`: the session's folder, in a world keyed by absolute path (see `MemoryFs`). */
-/** `git`: answers `git -C <dir> <args>` (see `fakeGit`). */
-export function world(on: On, files: Record<string, string>, opts: { refuse?: string[]; surfaces?: string[]; cwd?: string; git?: GitAnswer } = {}): World {
+/** `git`: answers `git -C <dir> <args>` (see `fakeGit`); `process`: answers any other command it knows (undefined: the default). */
+export function world(on: On, files: Record<string, string>, opts: { refuse?: string[]; surfaces?: string[]; cwd?: string; git?: GitAnswer; process?: ProcessAnswer } = {}): World {
   const w: World = { fs: new MemoryFs(files, opts.cwd !== undefined), tools: [], deferred: [], opened: [], commands: [], seen: [], toasts: [] }
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.cwd', () => ({ value: opts.cwd ?? CWD }))
@@ -154,6 +154,8 @@ export function world(on: On, files: Record<string, string>, opts: { refuse?: st
       const r = opts.git(e.argv[2]!, e.argv.slice(3))
       return { value: { exitCode: r.ok ? 0 : 128, stdout: r.out, stderr: r.err } } as never
     }
+    const r = opts.process?.(e.argv)
+    if (r) return { value: r } as never
     return { value: { exitCode: 0, stdout: '', stderr: '' } } as never
   })
   on('command.register', (_$, e) => {
@@ -168,6 +170,9 @@ export function world(on: On, files: Record<string, string>, opts: { refuse?: st
   on('ui.open', (_$, e) => { w.opened.push(e.id); return { value: { isPlaced: true as const } } })
   return w
 }
+
+/** What a command answers through `$.process.run`, or undefined to leave it to the default. */
+export type ProcessAnswer = (argv: readonly string[]) => { exitCode: number; stdout: string; stderr: string } | undefined
 
 /** What `git -C <dir> <args>` answers. */
 export type GitAnswer = (dir: string, args: string[]) => { ok: boolean; out: string; err: string }

@@ -6,7 +6,8 @@
 // HTML comment holding JSON: `<!-- rft-artifact {"concept","name","updated","basis"} -->`.
 
 import type { Concept, Io, Loaded, RftNode, Tree } from './vault'
-import { ARTIFACTS_DIR, ARTIFACT_HEAD, ID_RE, MARK, ROOT_CONCEPT, conceptOrder, conceptPath, isAbsolute, join, load, ownNotes, resolveConcept, resolvePath, resultOf } from './vault'
+import { ARTIFACTS_DIR, ARTIFACT_HEAD, ID_RE, MARK, ROOT_CONCEPT, codeRepos, conceptOrder, conceptPath, isAbsolute, join, load, ownNotes, resolveConcept, resolvePath, resultOf } from './vault'
+import { notebookMark } from './notebooks'
 
 export { ARTIFACTS_DIR, resultOf } from './vault'
 
@@ -273,14 +274,18 @@ export async function artifactReport(io: Io, loaded: Loaded, ref: string, opts: 
   if (c.summary) out.push(c.summary)
   const results = withResults(tree, c.id)
   const fresh = new Set([...(state?.changed ?? []), ...(state?.added ?? [])])
+  // in a concept with code, each result says whether its notebook reproduced it
+  const coded = codeRepos(tree.concepts, c.id).length > 0
   out.push('', `Experiments with a result (${results.length}):`)
   for (const n of results) {
-    const head = `${MARK[n.status] ?? '-'} ${n.name}${n.supersededBy ? ` [superseded by ${n.supersededBy}]` : ''}${n.summary ? ` — ${n.summary}` : ''}`
+    const head = `${MARK[n.status] ?? '-'} ${n.name}${n.supersededBy ? ` [superseded by ${n.supersededBy}]` : ''}${n.summary ? ` — ${n.summary}` : ''}${coded ? ` · ${notebookMark(n)}` : ''}`
     const mark = state?.changed.includes(n.id) ? ' [changed]' : state?.added.includes(n.id) ? ' [new]' : ''
     if (!a || opts.full || fresh.has(n.id)) out.push(`## ${head}${mark}`, resultOf(loaded.texts[n.id] ?? '') || '(no Result written: it is done)', '')
     else out.push(`- ${head}`)
   }
   if (!results.length) out.push('(none yet: nothing to put on the page)')
+  const unproven = coded ? results.filter(n => !n.supersededBy && n.reproduced?.state !== 'ok') : []
+  if (unproven.length) out.push('', `Not reproduced by a notebook (${unproven.length}): ${unproven.map(n => `${n.id} (${notebookMark(n)})`).join(', ')}. Run them with rft_run_notebook (rft_set_notebook writes one) before their numbers go on the page, or say on the page that they are not reproduced. The view marks each linked experiment with its notebook's last run.`)
   if (state?.removed.length) out.push('', `No longer here (moved or deleted): ${state.removed.join(', ')}: take them off the page.`)
   const without = ownNotes(tree, c.id).filter(n => n.type === 'experiment' && !n.hasResult)
   if (without.length) out.push('', `Without a result yet (${without.length}): ${without.map(n => `${MARK[n.status] ?? '-'} ${n.name}`).join(', ')}`)

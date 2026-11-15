@@ -149,6 +149,8 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_set_repos` | links code repositories to a concept (or, on the root note, to the whole project), once you give the path |
   | `rft_code` | a note's code context: its repos by priority, the commit it was last checked against, and the commits and files changed since |
   | `rft_set_code` | writes or updates a note's `## Code` section (how it relates to the code, how to reproduce its results), recording each repo's current commit |
+  | `rft_set_notebook` | gives an experiment its marimo notebook, written from plain cells in its concept's repo (`notebooks/<id>_<title>.py`) or one already there, linked from `vault/notebooks/<id>.py` and the note (`notebook:`) |
+  | `rft_run_notebook` | runs the notebook in its repo's uv environment and checks its `RESULTS` against the note's Result, in a few lines (ok, differs, failed); stamps the note (`reproduced:`) |
   | `rft_tree` | prints the tree or a subtree |
   | `rft_validate` | checks ids, types, statuses, titles, parents, broken wikilinks, derived fields |
   | `rft_sync` | regenerates children / up / down, the index tree and the canvas after hand edits |
@@ -551,6 +553,44 @@ d3 (ISC licence, `web/vendor/LICENSE-d3.txt`), KaTeX (MIT licence,
 (MIT licences, `web/vendor/LICENSE-jspdf.txt`, `web/vendor/LICENSE-svg2pdf.txt`; an artifact's
 figures as PDF) are bundled, so the page needs no network.
 
+### Experiment notebooks
+
+An experiment with a result can have a **notebook** that rebuilds its numbers: a
+[marimo](https://marimo.io) notebook in its concept's code repository, which runs in that repo's
+own [uv](https://docs.astral.sh/uv/) environment. It reads the run's saved raw outputs after an
+expensive training run, or reruns a short experiment from scratch. It opens on the **left** of
+the tree view while the note is open on the right, so you can run it and read the note side by
+side.
+
+- **Where it is**: `<repo>/notebooks/E02_<title>.py`, in the first repo the concept links (see Code
+  repos), versioned with the code it imports. The vault links it as `vault/notebooks/E02.py` (a
+  relative symbolic link) and the note says so in `notebook:`. It is plain Python, so it diffs
+  and reviews like code.
+- **Claude writes it** with `rft_set_notebook`, as plain cells (the tool writes marimo's format),
+  or links one already in the repo; later changes are ordinary edits of the `.py` file. It puts
+  the numbers the note reports in a dict `RESULTS`.
+- **Claude runs it** with `rft_run_notebook`, without the browser: in the repo's environment
+  (`uv run --project <repo> --with marimo`, so the repo need not list marimo), with the repo's
+  root as working folder and the notebook's folder first on `sys.path`, as the editor runs it. The
+  answer is a few lines, never the cells' outputs: **ok** when every number of `RESULTS` is in the
+  note's Result (at the precision the Result gives), **differs** with the numbers that are not,
+  **failed** with the end of the traceback. A run stops after 9 minutes; longer is a launch, not a
+  check. The run is stamped on the note: `reproduced: "2026-11-15 ok @3f2a1c9d0e in 6.1 s"` (the
+  repo's commit, `+dirty` with uncommitted changes). Only `rft_run_notebook` writes that line:
+  Claude's own edits of it are refused, so it says what a run really did.
+- **In the tree view**: opening an experiment with a notebook opens it on the left, in marimo's
+  editor, with its last run above it. Nothing runs until you press run. The server starts one
+  editor per repo the first time one of its notebooks is opened (that can take a minute the
+  first time uv builds the environment), on `127.0.0.1` with a key of its own, and stops it with
+  itself. Opening one runs code, so it needs the page's key, as an edit does. ✕ closes the pane
+  and the note's notebook button opens it again; drag its right edge to resize it; ↗ opens it in a
+  tab of its own.
+- **In the artifacts**: in a concept with code, `rft_artifact` says for each result whether a
+  notebook reproduced it, and lists those that are not; each experiment's link in the page carries
+  its last run (✓ reproduced, ≠ differs, ✗ failed).
+- It needs `uv` on `PATH`. A vault where no experiment has a notebook sees none of this: the two
+  tools wait behind ToolSearch, and their rules are left out.
+
 ### Commands
 
 | command | does |
@@ -623,6 +663,8 @@ session with the plugin loaded from this folder.
   the standalone page.
 - `hooks/lib/comments.ts`: comments, suggestions and locked notes, as Claude's tools see them.
 - `hooks/lib/artifacts.ts`: concept artifacts, their stamp, what changed since, and the checks.
+- `hooks/lib/notebooks.ts`: experiment notebooks: the marimo file from plain cells, the link, the
+  run's RESULTS checked against the Result, and its stamp.
 - `hooks/lib/priority.ts`: priorities, their limits and Claude's suggested ones.
 - `hooks/lib/tools.ts`: which tools sit in the prompt from the start; `hooks/lib/shell.ts` the
   files a shell command writes (the guards' input); `hooks/lib/answers.ts` the subagents that
@@ -635,7 +677,9 @@ session with the plugin loaded from this folder.
   scratchpad's to-dos and lists, and its panel; `theme.js` the light and
   dark themes; vendored d3), one codebase for the live view and `/rft-view`, which shows the
   threads read-only.
-- `server/rft_server.py`: the local server (Python standard library).
+- `server/rft_server.py`: the local server (Python standard library); `server/rft_notebook.py` an
+  experiment's notebook: the vault's link followed, the run in its repo's uv environment, the
+  marimo editors the tree view frames.
 - `skills/rft-manual/SKILL.md`: the manual; `tests/`: the mod's tests on an in-memory vault, the
   outline pane on every surface, and the server's tests.
 - `bench/bench.py`: the token benchmark. It runs tasks headless (`claude -p`) on fresh copies of a

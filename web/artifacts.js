@@ -62,13 +62,21 @@
     return m ? m[1] : null
   }
 
-  /** How a link to a note is marked, from the tree as it is now: its status, superseded, or missing. */
+  /** An experiment notebook's last run (`reproduced:`, as the tree JSON gives it), in words. */
+  function reproducedText(r) {
+    if (!r || !r.date) return 'Not run yet'
+    const parts = [r.date, r.state, r.commit, r.seconds != null ? `${r.seconds} s` : ''].filter(Boolean)
+    return `${r.state === 'ok' ? 'Reproduced' : 'Last run'} ${parts.join(' · ')}`
+  }
+
+  /** How a link to a note is marked, from the tree as it is now: its status, superseded, or missing; an experiment's notebook run. */
   function decoration(byId, id) {
     const n = byId.get(id)
     if (!n) return { cls: 'rft-note missing', title: `No note ${id} in the tree` }
+    const r = n.reproduced && n.reproduced.state ? n.reproduced : null
     return {
-      cls: `rft-note s-${n.status}${n.supersededBy ? ' superseded' : ''}`,
-      title: `${n.name} · ${n.status}${n.supersededBy ? ` · superseded by ${n.supersededBy}` : ''}`,
+      cls: `rft-note s-${n.status}${n.supersededBy ? ' superseded' : ''}${r ? ` r-${r.state}` : ''}`,
+      title: `${n.name} · ${n.status}${n.supersededBy ? ` · superseded by ${n.supersededBy}` : ''}${r ? ` · ${r.state === 'ok' ? 'reproduced' : `notebook ${r.state}`} ${r.date}` : ''}`,
     }
   }
 
@@ -100,5 +108,5 @@
     return `<!doctype html><html><head>${pre}</head><body>${html}</body></html>`
   }
 
-  root.RftArtifacts = { entry, describe, stateText, subConcepts, linkTarget, decoration, frameSrc, wrap }
+  root.RftArtifacts = { entry, describe, stateText, subConcepts, linkTarget, decoration, reproducedText, frameSrc, wrap }
 })(typeof globalThis !== 'undefined' ? globalThis : window)

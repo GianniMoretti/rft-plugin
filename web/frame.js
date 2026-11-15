@@ -41,7 +41,7 @@
     for (const el of links()) {
       const id = noteOf(el)
       const m = marks[id] || { cls: 'rft-note missing', title: `No note ${id} in the tree` }
-      el.classList.forEach(c => { if (c === 'rft-note' || c === 'missing' || c === 'superseded' || c.startsWith('s-')) el.classList.remove(c) })
+      el.classList.forEach(c => { if (c === 'rft-note' || c === 'missing' || c === 'superseded' || c.startsWith('s-') || c.startsWith('r-')) el.classList.remove(c) })
       for (const c of m.cls.split(' ')) if (c) el.classList.add(c)
       el.title = m.title
     }

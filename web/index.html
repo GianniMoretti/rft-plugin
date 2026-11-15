@@ -230,6 +230,9 @@
         <button id="drawer-move" class="icon-btn" hidden aria-label="Move" title="Move this note and the notes below it under another note">
           <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.6" fill="currentColor" stroke="none"/><path d="M6 9v4a3 3 0 0 0 3 3h9"/><path d="M15 13l3 3-3 3"/></svg>
         </button>
+        <button id="drawer-notebook" class="icon-btn" hidden aria-pressed="false" aria-label="Notebook" title="The experiment's notebook, beside the note: the code that rebuilds its Result">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M10 8.5v7l5.5-3.5z" fill="currentColor" stroke="none"/></svg>
+        </button>
         <button id="drawer-close" title="Close">✕</button>
       </span>
     </div>
@@ -319,6 +322,25 @@
       <div class="muted editor-hint">The text below the frontmatter: status, parent and tags change through Claude.</div>
     </div>
   </aside>
+  <!-- an experiment's notebook, on the left while its note is open on the right: the marimo editor of
+       the experiment's repo, which the server starts (POST api/notebook; server/rft_notebook.py) -->
+  <aside id="nbpane" hidden aria-label="The experiment's notebook">
+    <div class="nb-head">
+      <span id="nb-title" class="nb-title"></span>
+      <span class="drawer-actions">
+        <a id="nb-tab" class="icon-btn" target="_blank" rel="noopener noreferrer" aria-label="Open in a tab" title="Open the notebook in a tab of its own">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
+        </a>
+        <button id="nb-close" title="Close the notebook (the note's notebook button opens it again)">✕</button>
+      </span>
+    </div>
+    <div id="nb-run" class="nb-run"></div>
+    <p id="nb-msg" class="nb-msg muted" hidden></p>
+    <div id="nb-frame" class="nb-frame"></div>
+  </aside>
+  <!-- the notebook's right edge: drag it to widen or narrow it -->
+  <div id="nbpane-resize" role="separator" aria-orientation="vertical" aria-controls="nbpane" tabindex="0"
+    aria-label="Width of the notebook" title="Drag to resize the notebook (double-click: back to the default width)"></div>
   <!-- the drawer's left edge: drag it to widen or narrow the note; shown with the drawer -->
   <div id="drawer-resize" role="separator" aria-orientation="vertical" aria-controls="drawer" tabindex="0"
     aria-label="Width of the note" title="Drag to resize the note (double-click: back to the default width)"></div>
