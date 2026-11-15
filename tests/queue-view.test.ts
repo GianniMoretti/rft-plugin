@@ -1,0 +1,60 @@
+// The tree view's experiment queue monitor (web/queue.js): the moves its ↑ ↓, Top and drag send,
+// what each GPU is said to do, how a job ended, and the button's count.
+
+import { describe, expect, test } from 'claude-code/testing'
+
+import '../web/queue.js'
+
+type Job = { id: string; exp: string; state: string; exit?: number | null; reason?: string; started?: number; ended?: number }
+type Api = {
+  duration: (s: number) => string
+  moveOp: (order: string[], id: string, to: number) => { id: string; before: string | null }
+  gpuState: (g: Record<string, unknown>, jobs: Job[]) => { kind: string; text: string; exp: string | null }
+  endWord: (j: Job) => string
+  badge: (v: { jobs: Job[]; paused?: boolean }) => { count: number; running: number; waiting: number; label: string }
+}
+
+const Q = (globalThis as unknown as { RftQueue: Api }).RftQueue
+
+describe('queue monitor', () => {
+  test('durations as the plugin says them', () => {
+    expect(Q.duration(45)).toBe('45s')
+    expect(Q.duration(3720)).toBe('1h 2m')
+    expect(Q.duration(3600 * 26)).toBe('1d 2h')
+  })
+
+  test('example 1: moving E17 (q4) above E16 (q3), by button or by drag', () => {
+    const order = ['q3', 'q4', 'q5']
+    // ↑ on q4 (index 1): before q3
+    expect(Q.moveOp(order, 'q4', 0)).toEqual({ id: 'q4', before: 'q3' })
+    // ↓ on q3 (index 0): before q5
+    expect(Q.moveOp(order, 'q3', 1)).toEqual({ id: 'q3', before: 'q5' })
+    // ↓ on the one before last: to the end
+    expect(Q.moveOp(order, 'q4', 2)).toEqual({ id: 'q4', before: null })
+    // past either end stays at that end
+    expect(Q.moveOp(order, 'q5', -3)).toEqual({ id: 'q5', before: 'q3' })
+    expect(Q.moveOp(order, 'q3', 9)).toEqual({ id: 'q3', before: null })
+  })
+
+  test('what each GPU does: a job, kept out, used elsewhere, or free', () => {
+    const jobs = [{ id: 'q1', exp: 'E14', state: 'running' }]
+    expect(Q.gpuState({ index: 0, job: 'q1' }, jobs)).toEqual({ kind: 'job', text: 'q1 E14', exp: 'E14' })
+    expect(Q.gpuState({ index: 1, job: null, allowed: false, busy: false }, jobs).kind).toBe('kept')
+    const used = Q.gpuState({ index: 1, job: null, busy: true, procs: [{ pid: 4242, name: '/usr/bin/python3' }, { pid: 4243, name: 'python3' }] }, jobs)
+    expect(used).toEqual({ kind: 'elsewhere', text: 'in use outside the queue (python3)', exp: null })
+    expect(Q.gpuState({ index: 1, job: null, busy: false }, jobs).kind).toBe('free')
+  })
+
+  test('example 2: how a job ended', () => {
+    expect(Q.endWord({ id: 'q2', exp: 'E15', state: 'failed', exit: 1 })).toBe('failed (exit 1)')
+    expect(Q.endWord({ id: 'q2', exp: 'E15', state: 'failed', exit: null, reason: 'lost: the process ended without an exit code' })).toBe('failed (lost)')
+    expect(Q.endWord({ id: 'q1', exp: 'E14', state: 'done', exit: 0 })).toBe('done')
+    expect(Q.endWord({ id: 'q5', exp: 'E14', state: 'cancelled' })).toBe('cancelled')
+  })
+
+  test('the button counts what runs and waits', () => {
+    const b = Q.badge({ jobs: [{ id: 'q1', exp: 'E14', state: 'running' }, { id: 'q3', exp: 'E16', state: 'pending' }, { id: 'q4', exp: 'E17', state: 'pending' }], paused: true })
+    expect([b.count, b.running, b.waiting]).toEqual([3, 1, 2])
+    expect(b.label).toBe('Experiment queue: 1 running, 2 waiting (paused)')
+  })
+})

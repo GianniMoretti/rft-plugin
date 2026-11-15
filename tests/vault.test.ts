@@ -377,6 +377,7 @@ describe('vault', () => {
     expect(html).toContain('<script>lay()</script>')
     expect(html).toContain('<script>mdn()</script>')
     expect(html).toContain('<script>scr()</script>')
+    expect(html).not.toContain('queue.js') // the queue's monitor reads the live server only
     expect(html).toContain('<style>.katex{}</style>')
     expect(html).toContain('<script>kx()</script>')
     expect(html).toMatch(/<head><script>thm\(\)<\/script><style>/) // the theme before the first paint

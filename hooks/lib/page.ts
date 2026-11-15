@@ -62,6 +62,8 @@ export function staticPage(a: PageAssets, tree: Tree, texts: Record<string, stri
     .replace(/<script src="concepts\.js" data-rft-inline><\/script>/, () => script(a.concepts))
     .replace(/<script src="markdown\.js" data-rft-inline><\/script>/, () => script(a.markdown))
     .replace(/<script src="scratchpad\.js" data-rft-inline><\/script>/, () => script(a.scratchpad))
+    // the experiment queue's monitor reads the live server: a standalone page has none
+    .replace(/<script src="queue\.js"><\/script>\n?/, '')
     .replace(/<script src="artifacts\.js" data-rft-inline><\/script>/, () => script(a.artifacts))
     .replace(/<script src="app\.js" data-rft-inline><\/script>/, () => script(`window.RFT_DATA = ${data};`) + script(a.js))
 }

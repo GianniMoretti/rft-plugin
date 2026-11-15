@@ -655,3 +655,71 @@ main.artifact-open:has(#drawer:not([hidden])) #concept-canvas { width: calc(100%
 .art-frame iframe { display: block; width: 100%; height: 100%; border: 0; background: var(--panel); }
 /* a concept's name on its region or badge opens its artifact */
 #badges .badge { cursor: pointer; }
+
+/* the experiment queue's monitor (web/queue.js): its button at the top left of the bar, with the
+   number of jobs running and waiting; its panel over the top left of the page */
+#jobs-toggle { position: relative; color: var(--muted); }
+#jobs-toggle:hover, #jobs-toggle[aria-expanded="true"] { color: var(--accent); border-color: var(--accent); }
+#jobs-toggle[hidden] { display: none; }
+#jobs-badge.idle { background: var(--muted); }
+#jobs { position: absolute; top: 8px; left: 8px; z-index: 6; display: flex; flex-direction: column;
+  width: min(calc(560px * var(--font-scale)), calc(100vw - 16px)); max-height: calc(100% - 16px);
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 6px 24px light-dark(#1f232822, #00000066); font-size: calc(13px * var(--font-scale)); }
+#jobs[hidden] { display: none; }
+.jobs-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--line); }
+.jobs-head #jobs-sum { flex: 1; font-size: 0.9em; }
+.jobs-head button { padding: 1px 8px; }
+.jobs-tabs { display: flex; gap: 2px; padding: 6px 10px 0; border-bottom: 1px solid var(--line); }
+.jobs-tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 4px 10px; color: var(--muted); }
+.jobs-tabs button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
+.jobs-hosts button { cursor: default; }
+.jobs-gpus { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px; padding: 8px 10px;
+  border-bottom: 1px solid var(--line); }
+.jobs-gpu { border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; min-width: 0; }
+.jobs-gpu.job { border-color: color-mix(in oklab, var(--running) 55%, var(--line)); }
+.jobs-gpu.elsewhere { border-style: dashed; }
+.jobs-gpu.kept { opacity: 0.6; }
+.jobs-gpu-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.jobs-gpu-head input { margin: 0; }
+.jobs-gpu-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.9em; }
+.jobs-gpu-owner { font-size: 0.9em; white-space: nowrap; }
+.jobs-gpu.free .jobs-gpu-owner { color: var(--done); }
+.jobs-gpu.elsewhere .jobs-gpu-owner { color: var(--running); }
+.jobs-meter { height: 5px; margin: 5px 0 3px; border-radius: 3px; background: color-mix(in oklab, var(--line) 70%, transparent); overflow: hidden; }
+.jobs-meter > span { display: block; height: 100%; background: var(--accent); }
+.jobs-gpu.elsewhere .jobs-meter > span { background: var(--running); }
+.jobs-gpu-nums { font-size: 0.85em; }
+.jobs-gpu-error { color: var(--dropped); font-size: 0.9em; }
+.jobs-list { flex: 1; min-height: 60px; overflow: auto; padding: 4px 0; }
+.jobs-empty { margin: 10px 12px; }
+.jobs-sep { font-size: 0.85em; padding: 6px 12px 2px; }
+.jobs-row { display: flex; align-items: flex-start; gap: 8px; padding: 6px 10px; border-top: 2px solid transparent; border-bottom: 2px solid transparent; }
+.jobs-row:hover { background: color-mix(in oklab, var(--line) 30%, transparent); }
+.jobs-row.dragging { opacity: 0.4; }
+.jobs-row.drop-before { border-top-color: var(--accent); }
+.jobs-row.drop-after { border-bottom-color: var(--accent); }
+.jobs-grip { cursor: grab; color: var(--muted); user-select: none; padding-top: 1px; }
+.jobs-dot { flex: none; width: 9px; height: 9px; margin-top: 5px; border-radius: 50%; background: var(--discussed); }
+.jobs-row.s-running .jobs-dot { --pc: var(--running); background: var(--running); animation: rft-glow 1.5s ease-in-out infinite alternate; }
+.jobs-row.s-done .jobs-dot { background: var(--done); }
+.jobs-row.s-failed .jobs-dot { background: var(--dropped); }
+.jobs-row.s-failed .jobs-meta { color: var(--dropped); }
+.jobs-main { flex: 1; min-width: 0; }
+.jobs-line { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.jobs-id { font-weight: 600; font-variant-numeric: tabular-nums; }
+.jobs-exp { color: var(--experiment); font-weight: 600; text-decoration: none; }
+.jobs-exp:hover { text-decoration: underline; }
+.jobs-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jobs-label { flex: none; font-size: 0.85em; padding: 0 6px; border-radius: 8px; background: color-mix(in oklab, var(--accent) 14%, transparent); }
+.jobs-meta { font-size: 0.88em; overflow-wrap: anywhere; }
+.jobs-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 3px; flex: none; max-width: 45%; }
+.jobs-actions button { padding: 1px 7px; }
+.jobs-actions button.danger { border-color: var(--dropped); color: var(--dropped); }
+.jobs-details { margin-top: 4px; font-size: 0.9em; }
+.jobs-cmd { display: block; white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.jobs-log { margin: 4px 0 0; max-height: 220px; overflow: auto; padding: 6px 8px; border-radius: 6px; background: var(--bg);
+  border: 1px solid var(--line); font: calc(11.5px * var(--font-scale))/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.jobs-foot { display: flex; align-items: center; gap: 6px; padding: 4px 10px 5px 12px; border-top: 1px solid var(--line); font-size: 0.88em; color: var(--muted); }
+#jobs-msg { flex: 1; min-width: 0; }
+#jobs-msg.error { color: var(--dropped); }

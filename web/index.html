@@ -10,6 +10,11 @@
 </head>
 <body>
 <header id="bar">
+  <!-- the experiment queue's monitor (web/queue.js): the GPUs, the jobs running and waiting, their history -->
+  <button id="jobs-toggle" class="icon-btn" hidden aria-expanded="false" aria-controls="jobs" title="Experiment queue: GPUs, jobs and their history" aria-label="Experiment queue: GPUs, jobs and their history">
+    <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/><path d="M8.5 10h7M8.5 14h4.5"/></svg>
+    <span id="jobs-badge" class="pad-badge" hidden></span>
+  </button>
   <h1 id="title">Reasoning tree</h1>
   <span id="counts" class="muted"></span>
   <span id="live" class="live" title="Live: follows the vault"></span>
@@ -63,6 +68,25 @@
 <main>
   <svg id="canvas" aria-label="The reasoning tree"><defs><marker id="arrow" viewBox="0 -4 8 8" refX="8" refY="0" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,-4L8,0L0,4Z"></path></marker></defs><g id="viewport"><g id="regions"></g><g id="origins"></g><g id="links"></g><g id="nodes"></g><g id="badges"></g></g></svg>
   <svg id="concept-canvas" hidden aria-label="The concept tree"><g id="cviewport"></g></svg>
+  <section id="jobs" hidden aria-label="Experiment queue">
+    <div class="jobs-head">
+      <strong>Experiment queue</strong>
+      <span id="jobs-sum" class="muted"></span>
+      <button id="jobs-pause" type="button" hidden>Pause</button>
+      <button id="jobs-close" type="button" title="Close (Esc)" aria-label="Close the experiment queue">✕</button>
+    </div>
+    <div id="jobs-hosts" class="jobs-tabs jobs-hosts" role="tablist" aria-label="Machines"></div>
+    <div id="jobs-gpus" class="jobs-gpus" aria-label="GPUs"></div>
+    <div class="jobs-tabs" role="tablist" aria-label="Jobs">
+      <button type="button" role="tab" data-jtab="queue" aria-selected="true">Queue <span id="jobs-nq" class="muted"></span></button>
+      <button type="button" role="tab" data-jtab="history" aria-selected="false">History <span id="jobs-nh" class="muted"></span></button>
+    </div>
+    <div id="jobs-list" class="jobs-list"></div>
+    <div class="jobs-foot">
+      <span id="jobs-msg" role="status"></span>
+      <span class="muted jobs-file" title="The queue and its history live in the vault's .queue/ folder; each job's output in .queue/logs/">.queue/</span>
+    </div>
+  </section>
   <!-- the bottom-left corner: the scratchpad's button just above the legend; the open scratchpad takes the legend's place -->
   <div id="corner">
   <button id="pad-toggle" class="icon-btn" hidden aria-expanded="false" aria-controls="pad" title="Scratchpad: quick notes and to-dos" aria-label="Scratchpad: quick notes and to-dos">
@@ -333,6 +357,7 @@
 <script src="concepts.js" data-rft-inline></script>
 <script src="markdown.js" data-rft-inline></script>
 <script src="scratchpad.js" data-rft-inline></script>
+<script src="queue.js"></script>
 <script src="artifacts.js" data-rft-inline></script>
 <script src="app.js" data-rft-inline></script>
 </body>

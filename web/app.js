@@ -3854,6 +3854,14 @@
     // the scratchpad lives on the server: the standalone page has none, and a server started
     // before it existed serves neither its script nor api/scratchpad
     if (!EMBED && window.RftScratchpad) window.RftScratchpad.mount({ key: editKey, store, every: POLL_MS })
+    // the experiment queue's monitor: only on the server too (the standalone page leaves its script out)
+    if (!EMBED && window.RftQueue) {
+      window.RftQueue.mount({
+        key: editKey, store,
+        open: id => { if (byId.has(id)) select(id) },
+        title: id => (byId.get(id) || {}).title || '',
+      })
+    }
     render(false)
     hasView = true
     requestAnimationFrame(() => initialView())
