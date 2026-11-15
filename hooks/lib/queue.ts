@@ -278,6 +278,13 @@ export function jobsReport(v: QueueView, loaded: Loaded, now: number, opts: { re
   return out.join('\n')
 }
 
+/** rft_move_job's answer: the job moved and the waiting order it leaves, in one line. */
+export function movedText(r: { job: Job; waiting?: { id: string; exp: string; gpus: number }[] }): string {
+  const w = r.waiting ?? []
+  const order = w.slice(0, 10).map((j, i) => `${i + 1}. ${j.id} ${j.exp}${j.gpus !== 1 ? ` (${gpuWord(j.gpus)})` : ''}`)
+  return `Moved ${r.job.id} (${r.job.exp}). Waiting: ${order.join(' · ')}${w.length > 10 ? ` · … ${w.length - 10} more` : ''}`
+}
+
 /** rft_cancel_job's answer. */
 export function cancelledText(j: Job, loaded: Loaded, now: number): string {
   const what = j.started ? `it ran on ${gpuList(j.gpu_ids)} for ${duration((j.ended ?? now) - j.started)}; its output stays in ${QUEUE_DIR}/logs/${j.id}.log` : 'it had not started'

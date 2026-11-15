@@ -177,6 +177,38 @@ describe('queue: in a session', () => {
     expect(String(bad.text)).toContain('experiment')
   })
 
+  test('rft_move_job moves one job and answers the new order in one line', async ($, on) => {
+    mock.clock(on)
+    const calls: string[][] = []
+    const waiting = [{ id: 'q4', exp: 'E05', gpus: 1 }, { id: 'q3', exp: 'E03', gpus: 2 }, { id: 'q5', exp: 'E04', gpus: 1 }]
+    const w = world(on, files({ 'vault/.queue/queue.json': JSON.stringify({ version: 1, seq: 5, paused: false, jobs: [] }) }), {
+      process: argv => {
+        if (!PY.test(argv[1] ?? '')) return undefined
+        calls.push([...argv])
+        if (argv[2] !== 'move') return { exitCode: 0, stderr: '', stdout: '{}' }
+        if (argv[argv.indexOf('--id') + 1] === 'q9') return { exitCode: 2, stderr: '', stdout: JSON.stringify({ error: 'no job q9' }) }
+        return { exitCode: 0, stderr: '', stdout: JSON.stringify({ job: job('q4', 'E05', 'pending'), waiting }) }
+      },
+    })
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    expect(w.tools).toContain('rft_move_job')
+    expect(w.deferred).not.toContain('rft_move_job')
+    // example 1: E17's job (here q4) before E16's (q3)
+    const r = await $.tool.call({ tool: 'mcp__rft__rft_move_job', id: 'Q4', before: 'q3' } as never)
+    expect(r.isError).toBeFalsy()
+    const move = calls.find(c => c[2] === 'move')!
+    expect(move.slice(move.indexOf('--id'))).toEqual(['--id', 'q4', '--before', 'q3'])
+    expect(String(r.text)).toBe('Moved q4 (E05). Waiting: 1. q4 E05 · 2. q3 E03 (2 GPUs) · 3. q5 E04')
+    // the top and the end are words; no before means the end
+    await $.tool.call({ tool: 'mcp__rft__rft_move_job', id: 'q5', before: 'top' } as never)
+    expect(calls.at(-1)!.slice(-4)).toEqual(['--id', 'q5', '--before', 'top'])
+    await $.tool.call({ tool: 'mcp__rft__rft_move_job', id: 'q5' } as never)
+    expect(calls.at(-1)!.slice(-4)).toEqual(['--id', 'q5', '--before', 'end'])
+    const bad = await $.tool.call({ tool: 'mcp__rft__rft_move_job', id: 'q9', before: 'top' } as never)
+    expect(bad.isError).toBe(true)
+    expect(String(bad.text)).toBe('no job q9')
+  })
+
   test('without a queue the tools wait behind ToolSearch', async ($, on) => {
     mock.clock(on)
     const w = world(on, files())

@@ -26,7 +26,8 @@ has been empty a while; queueing a job, opening the tree view or a new session s
     python3 rft_queue.py add --vault V --job '{"exp": "E14", "cmd": "...", "cwd": "/abs", "gpus": 1}' [--top]
     python3 rft_queue.py status|ensure --vault V
     python3 rft_queue.py cancel|retry --vault V --id q7
-    python3 rft_queue.py move --vault V --id q7 [--before top|q3]   (no --before: to the end)
+    python3 rft_queue.py move --vault V --id q7 [--before top|end|q3]   (no --before: to the end;
+        answers the job and the waiting order it leaves)
     python3 rft_queue.py pause|resume --vault V
     python3 rft_queue.py log --vault V --id q7 [--lines 40]
 
@@ -716,7 +717,9 @@ def main(argv=None) -> int:
             j = q.retry(a.id)
             out = {"job": j, "outlook": q.outlook(q.find(j["id"]) or j)}
         elif a.cmd == "move":
-            out = {"job": q.move(a.id, a.before)}
+            # the job, and the waiting order it leaves, so one call says all (rft_move_job)
+            out = {"job": q.move(a.id, a.before),
+                   "waiting": [{"id": j["id"], "exp": j["exp"], "gpus": j["gpus"]} for j in q.read()["jobs"] if j["state"] == WAITING]}
         elif a.cmd in ("pause", "resume"):
             out = q.pause(a.cmd == "pause")
         elif a.cmd == "ensure":

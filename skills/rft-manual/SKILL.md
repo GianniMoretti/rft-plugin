@@ -383,6 +383,10 @@ or `/rft-jobs`), where they also reorder, pause, cancel and retry jobs, and keep
   ended, their result not recorded yet": `rft_jobs <job> log: 40` gives how it ended and the end
   of its output. Then record the real result (rft_set_status with the numbers), or the failure and
   its cause; a failed run may deserve a fix and `rft_queue` again, after the user agrees.
+- **Reorder** only when the user asks (the order is theirs): `rft_move_job {id, before}` moves one
+  waiting job to `"top"`, to `"end"`, or before another waiting job (`"q3"`), and answers the new
+  waiting order in one line: no `rft_jobs` after it. "Run E17 before E16": find their jobs (the
+  session's list, or `rft_jobs` once), then one call, `{id: "q4", before: "q3"}`.
 - `rft_next` lists what runs and waits, and the results to record. `rft_cancel_job` only when the
   user asks; it leaves the experiment's status to you.
 - The queue lives in `<vault>/.queue/` (`queue.json`, the history in `history.jsonl`); edit
@@ -501,6 +505,7 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 | `rft_suggest` | propose new text for a `quote`, or the replacement an open suggestion asks for; the user accepts it |
 | `rft_queue` | queue a run of an experiment on this machine's GPUs (exp, cmd, cwd, gpus, label); it starts once its GPUs are free, in the user's order |
 | `rft_jobs` | the queue in a few lines: GPUs, jobs running and waiting, the last ones that ended, results to record; one job with `log` lines of its output |
+| `rft_move_job` | move one waiting job to the top, the end, or before another waiting job, when the user asks; answers the new order in one line |
 | `rft_cancel_job` | cancel a waiting job or stop a running one, only when the user asks |
 
 Before proposing an experiment or an idea, `rft_search` whether the tree already has it; to

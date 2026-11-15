@@ -343,6 +343,27 @@ class RunnerTest(unittest.TestCase):
             gone = json.loads(run("cancel", "--id", "q1").stdout)
             self.assertEqual(gone["job"]["state"], "cancelled")
 
+    def test_the_command_line_moves_one_job_and_answers_the_new_order(self):
+        """rft_move_job: example 1 (E17 before E16), to the top, to the end; the order comes back."""
+        with tempfile.TemporaryDirectory() as tmp:
+            run = lambda *a: subprocess.run([sys.executable, str(QUEUE), *a, "--vault", tmp, "--no-runner"],
+                                            capture_output=True, text=True, timeout=30)
+            self.assertEqual(run("pause").returncode, 0)
+            for exp, gpus in (("E16", 2), ("E04", 1), ("E17", 1)):
+                run("add", "--job", json.dumps({"exp": exp, "cmd": "true", "cwd": tmp, "gpus": gpus}))
+            order = lambda out: [(w["id"], w["exp"]) for w in json.loads(out.stdout)["waiting"]]
+            moved = run("move", "--id", "q3", "--before", "q1")
+            self.assertEqual(moved.returncode, 0, moved.stdout + moved.stderr)
+            self.assertEqual(json.loads(moved.stdout)["job"]["id"], "q3")
+            self.assertEqual(order(moved), [("q3", "E17"), ("q1", "E16"), ("q2", "E04")])
+            self.assertEqual(json.loads(moved.stdout)["waiting"][1]["gpus"], 2)
+            self.assertEqual(order(run("move", "--id", "q2", "--before", "top")), [("q2", "E04"), ("q3", "E17"), ("q1", "E16")])
+            self.assertEqual(order(run("move", "--id", "q2", "--before", "end")), [("q3", "E17"), ("q1", "E16"), ("q2", "E04")])
+            self.assertEqual(order(run("move", "--id", "q1")), [("q3", "E17"), ("q2", "E04"), ("q1", "E16")])
+            bad = run("move", "--id", "q3", "--before", "q9")
+            self.assertEqual(bad.returncode, 2)
+            self.assertIn("q9 is not a waiting job", json.loads(bad.stdout)["error"])
+
 
 class ServerQueueTest(unittest.TestCase):
     """api/queue: what the monitor shows, and the user's changes to the queue (with the key)."""

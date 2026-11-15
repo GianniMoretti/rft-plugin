@@ -40,7 +40,7 @@ import { SMALL_TREE, mapGaps, mapReport, mapWarnings, projectMap, readDigests, r
 import { ARTIFACTS_DIR, artifactMarks, artifactReport, artifactWarnings, artifactsToWrite, setArtifact } from './lib/artifacts'
 import type { NotebookEnv, RunOutcome } from './lib/notebooks'
 import { MAX_TIMEOUT_S, REPRODUCED_LINE, changesReproduced, reproducedEditText, runNotebook, setNotebook } from './lib/notebooks'
-import { QUEUE_CLI, QUEUE_FILE, addedText, cancelledText, jobEvents, jobsNext, jobsReport, queueLine, readQueue, toStart } from './lib/queue'
+import { QUEUE_CLI, QUEUE_FILE, addedText, cancelledText, jobEvents, jobsNext, jobsReport, movedText, queueLine, readQueue, toStart } from './lib/queue'
 import type { Job, QueueView } from './lib/queue'
 import { CONFIG_PATH, LEGEND, MARK, NODE_TYPES, bodyOf, isLiterature, counts, countsLine, isAbsolute, join, locate, readConfig, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
 
@@ -524,6 +524,18 @@ const TOOLS = {
       },
     },
   },
+  rft_move_job: {
+    description:
+      'Move a waiting job of the experiment queue, when the user asks (the order is theirs): to the top, to the end, or before another waiting job. Answers the new waiting order in one line, so no rft_jobs is needed after it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'The waiting job, e.g. q7.' },
+        before: { type: 'string', description: '"top", "end" (the default), or the waiting job it goes before, e.g. q3.' },
+      },
+      required: ['id'],
+    },
+  },
   rft_cancel_job: {
     description:
       'Cancel a job of the experiment queue, only when the user asks: a waiting job leaves the queue, a running one is stopped (its whole process group). The experiment\'s status is left to you.',
@@ -896,6 +908,11 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
         ? String((await queueCli($, h, loaded.config, ['log', '--id', ref.toLowerCase(), '--lines', String(lines)])).text ?? '')
         : undefined
       return jobsReport(v, loaded, await nowS($), { ref, log })
+    }
+    case 'rft_move_job': {
+      const before = str(i.before)?.trim().toLowerCase() || 'end'
+      const r = await queueCli($, h, loaded.config, ['move', '--id', String(i.id ?? '').trim().toLowerCase(), '--before', before])
+      return movedText(r as unknown as Parameters<typeof movedText>[0])
     }
     case 'rft_cancel_job': {
       const r = await queueCli($, h, loaded.config, ['cancel', '--id', String(i.id ?? '').trim().toLowerCase(), '--why', str(i.why) ?? 'cancelled by Claude'])

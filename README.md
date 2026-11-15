@@ -159,6 +159,7 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_suggest` | proposes new text for a quote, or the text an open suggestion asks for; you accept or reject it |
   | `rft_queue` | queues a run of an experiment on this machine's GPUs (command, folder, GPUs, a label); it starts once its GPUs are free, in your order (see The experiment queue) |
   | `rft_jobs` | the queue in a few lines: the GPUs, the jobs running and waiting (with why each waits), the last ones that ended, the results still to record; one job with the end of its output |
+  | `rft_move_job` | moves one waiting job to the top, the end, or before another waiting job, when you ask; answers the new order in one line |
   | `rft_cancel_job` | cancels a waiting job or stops a running one, when you ask |
 
 - **The outline pane** opens as a sidebar at session start in the terminal and VS Code where the
@@ -397,7 +398,8 @@ session brings it back).
   or a process outside the queue), then two tabs:
   - **Queue**: the jobs running (how long, on which GPUs) and those waiting, in their order, each
     with why it waits ("1st in line: needs 2 GPUs, 1 free"). Drag a job, or use ↑ ↓ and **Top**,
-    to change the order; **Stop** / **Cancel** (press twice) ends a job; **Pause** starts no new
+    to change the order, or ask Claude ("run E17 before E16": one `rft_move_job` call, answered
+    with the new order in one line); **Stop** / **Cancel** (press twice) ends a job; **Pause** starts no new
     job (the running ones go on). Untick a GPU to keep it out of the queue (for your own work).
   - **History**: every job that ended, newest first, with its experiment, how it ended (done,
     failed with its exit code, cancelled), how long it ran, and **Retry** (first in line again).
