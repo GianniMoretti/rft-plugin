@@ -21,7 +21,7 @@ describe('tool list', () => {
     mock.clock(on)
     const w = world(on, demoFiles())
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.tools).toHaveLength(30)
+    expect(w.tools).toHaveLength(32)
     expect(inPrompt(w)).toEqual([...CORE_TOOLS].sort())
     for (const t of Object.values(FEATURE_TOOLS).flat()) expect(w.deferred).toContain(t)
   })
@@ -56,6 +56,16 @@ describe('tool list', () => {
     const w = world(on, files)
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
     expect(inPrompt(w)).toEqual([...CORE_TOOLS, ...FEATURE_TOOLS.comments].sort())
+  })
+
+  test('an artifact brings the artifact tools', async ($, on) => {
+    mock.clock(on)
+    const files = demoFiles()
+    files['vault/artifacts/00 demo.html'] = '<!-- rft-artifact {"concept":"root","name":"demo","updated":"2026-03-01","basis":{}} -->\n<h1>demo</h1>\n'
+    const w = world(on, files)
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    expect(FEATURE_TOOLS.artifacts).toEqual(['rft_artifact', 'rft_set_artifact'])
+    expect(inPrompt(w)).toEqual([...CORE_TOOLS, ...FEATURE_TOOLS.artifacts].sort())
   })
 
   test('a deferred tool still answers when called', async ($, on) => {

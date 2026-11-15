@@ -1186,6 +1186,150 @@ class ImageTest(unittest.TestCase):
             self.assertEqual(rft_server.Vault(Path(t), "demo").image_tops, [Path(t).resolve()])
 
 
+class ArtifactTest(unittest.TestCase):
+    """Concept artifacts: listed in the tree with their state, each served in a sandbox of its own,
+    read-only, its images as a note's are found."""
+
+    RESULT = "CutMix closes the gap at 1k (0.3 ± 0.5 points); Mixup does not."
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        root = Path(cls.tmp.name)
+        vault = root / "vault"
+        for d in ("directions", "experiments", "artifacts"):
+            (vault / d).mkdir(parents=True)
+        (vault / "directions" / "D00 Root question.md").write_text(note("D00", "direction", "done", "", "Root question"))
+        (vault / "directions" / "D04 Mixup.md").write_text(note("D04", "direction", "done", "D00 Root question", "Mixup", concept="Mix-based augmentation"))
+        # the same note as the key's vector in tests/artifacts.test.ts
+        (vault / "experiments" / "E05 Mixup and CutMix at 1k images.md").write_text(
+            '---\nid: E05\ntype: experiment\nstatus: done\ndate: 2026-03-20\nsummary: "CutMix closes the gap at 1k, Mixup does not"\n'
+            'parent: "[[D04 Mixup]]"\nsuperseded_by: "[[E06 Cosine]]"\ntags: [demo, experiment, done]\n---\n\n'
+            f"# E05 · Mixup and CutMix at 1k images\n\n## What\nMixup and CutMix.\n\n## Result\n\n{cls.RESULT}\n\n## Directions found\n")
+        (vault / "experiments" / "E06 Cosine.md").write_text(note("E06", "experiment", "done", "D04 Mixup", "Cosine").replace("Text of E06.", "## Result\n+1 point."))
+        (vault / "experiments" / "E07 Third.md").write_text(note("E07", "experiment", "running", "D04 Mixup", "Third").replace("Text of E07.", "## Result\nPartial: +0.5."))
+        (vault / "experiments" / "E08 Planned.md").write_text(note("E08", "experiment", "planned", "D04 Mixup", "Planned").replace("Text of E08.", "## Result\n"))
+        head = {"concept": "D04", "name": "Mix-based augmentation", "updated": "2026-03-01",
+                "basis": {"E05": "33efe36b", "E06": "00000000", "E03": "12345678"}}
+        cls.page = '<h1>Mix</h1>\n<p><a href="#E05">E05</a> <img src="fig.png"> <img src="data:image/png;base64,AA=="> <img src="https://x.org/a.png"> <img src="/abs/out.png"></p>\n'
+        cls.file = vault / "artifacts" / "D04 Mix-based augmentation.html"
+        cls.file.write_text(f"<!-- rft-artifact {json.dumps(head)} -->\n{cls.page}")
+        (vault / "artifacts" / "fig.png").write_bytes(b"\x89PNG fig")
+        (root / "out.png").write_bytes(b"\x89PNG out")
+        # an artifact that is a link out of the vault, and an html file with no header
+        (root / "outside.html").write_text('<!-- rft-artifact {"concept":"D00","name":"x","updated":"","basis":{}} -->\n<p>secret</p>')
+        os.symlink(root / "outside.html", vault / "artifacts" / "00 Linked out.html")
+        (vault / "artifacts" / "by hand.html").write_text("<p>by hand</p>")
+        cls.vault, cls.root = vault, root
+        handler = rft_server.make_handler(rft_server.Vault(vault, "demo"), WEB, KEY)
+        cls.server = rft_server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        cls.port = cls.server.server_address[1]
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.tmp.cleanup()
+
+    get = ServerTest.get
+
+    def tree(self):
+        return json.loads(self.get("/api/tree")[2])
+
+    def test_the_tree_lists_the_artifacts_with_what_changed_since(self):
+        t = self.tree()
+        [a] = t["artifacts"]
+        self.assertEqual({k: v for k, v in a.items() if k != "version"}, {
+            "concept": "D04", "name": "Mix-based augmentation", "path": "artifacts/D04 Mix-based augmentation.html",
+            "updated": "2026-03-01", "stale": True, "changed": ["E06"], "added": ["E07"], "removed": ["E03"]})
+        self.assertRegex(a["version"], r"^[0-9a-f]{16}$")
+        nodes = {n["id"]: n for n in t["nodes"]}
+        self.assertTrue(nodes["E05"]["hasResult"])
+        self.assertTrue(nodes["E07"]["hasResult"])
+        self.assertNotIn("hasResult", nodes["E08"])
+        self.assertNotIn("hasResult", nodes["D04"])
+
+    def test_the_key_of_an_experiment_is_the_plugins(self):
+        text = (self.vault / "experiments" / "E05 Mixup and CutMix at 1k images.md").read_text()
+        self.assertEqual(rft_server.result_of(text), self.RESULT)
+        n = {"id": "E05", "status": "done", "title": "Mixup and CutMix at 1k images",
+             "summary": "CutMix closes the gap at 1k, Mixup does not", "supersededBy": "E06"}
+        self.assertEqual(rft_server.experiment_key(n, text), "33efe36b")
+        self.assertEqual(rft_server.result_of("# E09 · X\n\n```\n## Result\nfake\n```\n\n## Result\nreal\n"), "real")
+
+    def test_a_changed_artifact_changes_the_tree_and_its_version(self):
+        before = self.tree()
+        self.file.write_text(self.file.read_text().replace("<h1>Mix</h1>", "<h1>Mix, again</h1>"))
+        self.addCleanup(self.file.write_text, self.file.read_text().replace("<h1>Mix, again</h1>", "<h1>Mix</h1>"))
+        after = self.tree()
+        self.assertNotEqual(before["version"], after["version"])
+        self.assertNotEqual(before["artifacts"][0]["version"], after["artifacts"][0]["version"])
+
+    def test_the_page_is_served_in_a_sandbox_of_its_own(self):
+        status, ctype, body = self.get("/api/artifact?concept=D04&theme=dark")
+        self.assertEqual(status, 200)
+        self.assertEqual(ctype, "text/html; charset=utf-8")
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.request("GET", "/api/artifact?concept=D04", headers={"Host": f"127.0.0.1:{self.port}"})
+        r = c.getresponse()
+        csp = r.getheader("Content-Security-Policy")
+        r.read()
+        c.close()
+        here = f"http://127.0.0.1:{self.port}"
+        for part in ("default-src 'none'", "script-src 'unsafe-inline'", "style-src 'unsafe-inline'", f"img-src {here} data:",
+                     "font-src data:", "form-action 'none'", "base-uri 'none'", f"frame-ancestors {here}", "sandbox allow-scripts allow-popups"):
+            self.assertIn(part, csp)
+        self.assertNotIn("allow-same-origin", csp)
+        html = body.decode()
+        self.assertIn("<h1>Mix</h1>", html)
+        self.assertNotIn("rft-artifact", html)  # the header stays in the file
+        self.assertIn('document.documentElement.dataset.theme = "dark"', html)
+        self.assertIn((WEB / "frame.css").read_text().strip().splitlines()[0], html)
+        self.assertIn((WEB / "frame.js").read_text().strip().splitlines()[0], html)
+        self.assertLess(html.index("dataset.theme"), html.index("<h1>Mix</h1>"))
+        # a theme that is not one of the two is the light one
+        self.assertIn('dataset.theme = "light"', self.get("/api/artifact?concept=D04&theme=%22%3E")[2].decode())
+
+    def test_its_images_are_found_as_a_notes_are_and_from_elsewhere_only_with_the_key(self):
+        html = self.get("/api/artifact?concept=D04")[2].decode()
+        self.assertIn('src="api/image?artifact=D04&amp;src=fig.png"', html)
+        self.assertIn('src="data:image/png;base64,AA=="', html)
+        self.assertIn('src="https://x.org/a.png"', html)  # left to the policy, which blocks it
+        self.assertIn('src="api/image?artifact=D04&amp;src=%2Fabs%2Fout.png"', html)
+        keyed = self.get(f"/api/artifact?concept=D04&token={KEY}")[2].decode()
+        self.assertIn(f'src="api/image?artifact=D04&amp;src=fig.png&amp;token={KEY}"', keyed)
+        self.assertNotIn("token=", self.get("/api/artifact?concept=D04&token=wrong")[2].decode())
+        status, ctype, data = self.get("/api/image?artifact=D04&src=fig.png")
+        self.assertEqual((status, ctype, data), (200, "image/png", b"\x89PNG fig"))
+        out = quote(str(self.root / "out.png"), safe="")
+        self.assertEqual(self.get(f"/api/image?artifact=D04&src={out}")[0], 403)
+        self.assertEqual(self.get(f"/api/image?artifact=D04&src={out}&token={KEY}")[2], b"\x89PNG out")
+        self.assertEqual(self.get("/api/image?artifact=D99&src=fig.png")[0], 403)
+
+    def test_only_an_artifact_of_the_vault_by_its_concept(self):
+        for q in ("concept=D99", "concept=root", "concept=..%2Fx", "concept=", "", "concept=D00"):
+            self.assertEqual(self.get(f"/api/artifact?{q}")[0], 404, q)
+        self.assertEqual(self.get("/api/artifact?concept=D04", host="evil.example")[0], 403)
+        listed = [a["path"] for a in self.tree()["artifacts"]]
+        self.assertNotIn("artifacts/00 Linked out.html", listed)
+        self.assertNotIn("artifacts/by hand.html", listed)
+
+    def test_read_only(self):
+        before = self.file.read_bytes()
+        for m in ("PUT", "POST", "DELETE", "PATCH"):
+            status = self.get("/api/artifact?concept=D04", method=m, headers=[("Origin", f"http://127.0.0.1:{self.port}"), ("X-RFT-Token", KEY)], data=b"{}")[0]
+            self.assertIn(status, (403, 404, 405), m)
+        self.assertEqual(self.file.read_bytes(), before)
+
+    def test_a_name_with_an_arrow_is_read_back(self):
+        head = '<!-- rft-artifact {"concept":"D04","name":"Gap -\\u002d\\u003e zero","updated":"2026-03-01","basis":{}} -->\n<p>x</p>\n'
+        self.assertEqual(rft_server.artifact_head(head)["name"], "Gap --> zero")
+        self.assertIsNone(rft_server.artifact_head("<p>no header</p>"))
+
+    def test_the_page_script_is_served(self):
+        self.assertEqual(self.get("/artifacts.js")[0], 200)
+
+
 class SharedPortTest(unittest.TestCase):
     """Two sessions with the same fixed port: the second shares the first's server, then takes it over."""
 

@@ -1,0 +1,118 @@
+// The tree view's Artifacts page (web/artifacts.js): the concepts listed with the state of their
+// artifact, what the page says about each, the note links inside an artifact (where they lead,
+// how they are marked from the tree), the frame's address, and the frame of the standalone page.
+
+import { describe, expect, test } from 'claude-code/testing'
+
+import '../web/artifacts.js'
+
+type Row = { id: string; name: string; depth: number; state: 'fresh' | 'stale' | 'none' | 'empty'; results: string[]; artifact: Record<string, unknown> | null }
+type Api = {
+  listing: (tree: unknown) => { rows: Row[]; leftover: { concept: string; name: string; path: string }[] }
+  stateText: (row: Row, tree: unknown) => string
+  subConcepts: (tree: unknown, id: string) => { id: string; name: string; state: Row['state'] }[]
+  linkTarget: (href: string | null) => string | null
+  decoration: (byId: Map<string, unknown>, id: string) => { cls: string; title: string }
+  frameSrc: (concept: string, opts: { theme: string; token?: string; y?: number }) => string
+  wrap: (html: string, frame: { js: string; css: string }, theme: string) => string
+}
+
+const A = (globalThis as unknown as { RftArtifacts: Api }).RftArtifacts
+
+const node = (id: string, concept: string, status: string, extra: Record<string, unknown> = {}) =>
+  ({ id, name: `${id} Title of ${id}`, title: `Title of ${id}`, type: id[0] === 'E' ? 'experiment' : 'direction', status, concept, ...extra })
+
+/** The demo's concepts: the project, Strong augmentation (D02) with Mix-based (D04) and Why it fails (D03) below it. */
+const TREE = {
+  concepts: [
+    { id: 'root', name: 'demo', root: null, parent: null, depth: 0, children: ['D02'] },
+    { id: 'D02', name: 'Strong augmentation', root: 'D02', parent: 'root', depth: 1, children: ['D04', 'D03'] },
+    { id: 'D04', name: 'Mix-based augmentation', root: 'D04', parent: 'D02', depth: 2, children: [] },
+    { id: 'D03', name: 'Why it fails at 1k', root: 'D03', parent: 'D02', depth: 2, children: [] },
+  ],
+  nodes: [
+    node('D00', 'root', 'done'), node('E01', 'root', 'done', { hasResult: true }),
+    node('D02', 'D02', 'done'), node('E07', 'D02', 'done', { hasResult: true }),
+    node('D04', 'D04', 'done'), node('E05', 'D04', 'done', { hasResult: true, supersededBy: 'E06' }),
+    node('E06', 'D04', 'done', { hasResult: true }), node('E08', 'D04', 'planned'),
+    node('D03', 'D03', 'running'), node('E04', 'D03', 'running'), node('E09', 'D03', 'planned'),
+  ],
+  artifacts: [
+    { concept: 'D02', name: 'Strong augmentation', path: 'artifacts/D02 Strong augmentation.html', updated: '2026-03-01', version: 'v1', stale: false, changed: [], added: [], removed: [] },
+    { concept: 'D04', name: 'Mix-based augmentation', path: 'artifacts/D04 Mix-based augmentation.html', updated: '2026-03-02', version: 'v2', stale: true, changed: ['E06'], added: ['E10'], removed: ['E03'] },
+    { concept: 'D01', name: 'Baselines', path: 'artifacts/D01 Baselines.html', updated: '2026-02-01', version: 'v3', stale: true, changed: [], added: [], removed: ['E02'] },
+  ],
+}
+
+describe('artifacts page', () => {
+  test('the concepts in the order of the concept tree, each with the state of its artifact; artifacts of no concept apart', () => {
+    const { rows, leftover } = A.listing(TREE)
+    expect(rows.map(r => [r.id, r.depth, r.state, r.results])).toEqual([
+      ['root', 0, 'none', ['E01']],
+      ['D02', 1, 'fresh', ['E07']],
+      ['D04', 2, 'stale', ['E05', 'E06']],
+      ['D03', 2, 'empty', []],
+    ])
+    expect(rows[2]!.artifact).toMatchObject({ version: 'v2' })
+    expect(leftover).toEqual([{ concept: 'D01', name: 'Baselines', path: 'artifacts/D01 Baselines.html' }])
+  })
+
+  test('what the page says about each state', () => {
+    const rows = A.listing(TREE).rows
+    expect(A.stateText(rows[1]!, TREE)).toBe('Up to date · updated 2026-03-01')
+    expect(A.stateText(rows[2]!, TREE)).toBe('Out of date: E06 changed, E10 new, E03 no longer here · updated 2026-03-02')
+    expect(A.stateText(rows[0]!, TREE)).toBe('No artifact yet: 1 experiment with a result (E01). /rft-artifact demo asks Claude to write it.')
+    expect(A.stateText(rows[3]!, TREE)).toBe('No results yet: 1 running (E04), 1 planned (E09).')
+    const bare = { ...TREE, nodes: TREE.nodes.filter(n => n.concept !== 'D03' || n.type !== 'experiment') }
+    expect(A.stateText(A.listing(bare).rows[3]!, bare)).toBe('No results yet: no experiments.')
+  })
+
+  test("a concept's sub-concepts, with the state of their artifacts, for the links beside it", () => {
+    expect(A.subConcepts(TREE, 'D02')).toEqual([
+      { id: 'D04', name: 'Mix-based augmentation', state: 'stale' },
+      { id: 'D03', name: 'Why it fails at 1k', state: 'empty' },
+    ])
+    expect(A.subConcepts(TREE, 'D04')).toEqual([])
+  })
+
+  test('a link to a note is #<id>; anything else is no note', () => {
+    expect(A.linkTarget('#E05')).toBe('E05')
+    expect(A.linkTarget('#D00')).toBe('D00')
+    expect(A.linkTarget('#R12')).toBe('R12')
+    expect(A.linkTarget('#e05')).toBe(null)
+    expect(A.linkTarget('#results')).toBe(null)
+    expect(A.linkTarget('https://arxiv.org/abs/1905.04899#E05')).toBe(null)
+    expect(A.linkTarget(null)).toBe(null)
+  })
+
+  test('a note link is marked as the tree has the note now: its status, superseded, or missing', () => {
+    const byId = new Map(TREE.nodes.map(n => [n.id, n]))
+    expect(A.decoration(byId, 'E06')).toEqual({ cls: 'rft-note s-done', title: 'E06 Title of E06 · done' })
+    expect(A.decoration(byId, 'E05')).toEqual({ cls: 'rft-note s-done superseded', title: 'E05 Title of E05 · done · superseded by E06' })
+    expect(A.decoration(byId, 'E04')).toEqual({ cls: 'rft-note s-running', title: 'E04 Title of E04 · running' })
+    expect(A.decoration(byId, 'E99')).toEqual({ cls: 'rft-note missing', title: 'No note E99 in the tree' })
+  })
+
+  test("the frame's address: the concept, the theme, where it was scrolled to, and the key when the page has it", () => {
+    expect(A.frameSrc('D04', { theme: 'dark' })).toBe('api/artifact?concept=D04&theme=dark')
+    expect(A.frameSrc('root', { theme: 'light', y: 0, token: '' })).toBe('api/artifact?concept=root&theme=light')
+    expect(A.frameSrc('D04', { theme: 'light', y: 420.6, token: 'k3y' })).toBe('api/artifact?concept=D04&theme=light&y=421&token=k3y')
+  })
+
+  test('the standalone frame: the base style, the theme and the runtime before the page, a full document keeping its own head', () => {
+    const frame = { js: '/* frame */', css: '/* frame css */' }
+    const part = A.wrap('<h1>Mix</h1>', frame, 'dark')
+    expect(part.startsWith('<!doctype html>')).toBe(true)
+    expect(part).toContain('<style>/* frame css */</style>')
+    expect(part).toContain('document.documentElement.dataset.theme = "dark"')
+    expect(part).toContain('<script>/* frame */</script>')
+    expect(part.indexOf('/* frame */')).toBeLessThan(part.indexOf('<h1>Mix</h1>'))
+    const whole = A.wrap('<!DOCTYPE html>\n<html lang="en"><head><title>Mix</title><style>h1{}</style></head><body><h1>Mix</h1></body></html>', frame, 'light')
+    expect(whole.match(/<head>/gi)).toHaveLength(1)
+    expect(whole.indexOf('/* frame css */')).toBeLessThan(whole.indexOf('<title>Mix</title>'))
+    expect(whole.indexOf('<title>Mix</title>')).toBeLessThan(whole.indexOf('h1{}'))
+    expect(whole).toContain('<html lang="en">')
+    // a page that writes </script> in its own text cannot end the runtime early
+    expect(A.wrap('<p>x</p>', { js: 'a("</script>")', css: '' }, 'light')).not.toContain('a("</script>")')
+  })
+})
