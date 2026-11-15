@@ -1,6 +1,6 @@
 ---
 name: rft-manual
-description: Operating manual of the Reasoning Flow Tree, the tree of experiment (E..), direction (D..), reference (R..) and theory (T..) notes that records a research project's reasoning, grouped into concepts (lines of research) that can link the code repositories they run on. Use in a project with .rft/config.json whenever an experiment is planned, launched or finished, an idea or question comes up (even a rejected one), a paper or literature review is read, a new field comes up (offer a literature search first), a definition, method or taxonomy is written down, an idea is dropped or moved, a branch belongs under another note (move it), a new line of research opens (propose a concept, ask for its code), work starts on an experiment whose concept links code, the user asks Claude to answer a comment or suggestion from the tree view, a note is locked, a note's priority comes up (suggest one, never set it), or the user asks about the tree, the vault, its concepts, its code or what was tried (start from rft_map).
+description: Operating manual of the Reasoning Flow Tree: experiment (E..), direction (D..), reference (R..) and theory (T..) notes recording a research project's reasoning, grouped into concepts (lines of research) with their code repositories. Use in a project with .rft/config.json whenever an experiment is planned, launched (GPU runs: rft_queue) or finished (a queued job ended), a result needs a notebook (rft_set_notebook), an idea or question comes up (even a rejected one), a paper or review is read, a new field comes up (offer a literature search first), a definition or method is written down, an idea is dropped or moved, a branch belongs under another note (move it), a new line of research opens (propose a concept, ask for its code), work starts on an experiment whose concept links code, Claude is asked to answer a tree-view comment or suggestion, a note is locked, a note's priority comes up (suggest one, never set it), or the user asks about the tree, its concepts, its code or what was tried (start from rft_map).
 ---
 
 # Reasoning Flow Tree (rft)
@@ -417,8 +417,12 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
    `what` / `why` filled, its topical `tags`, and `refs`: the reference(s) whose setup it starts
    from (baseline, data, protocol). Do this *before* starting the run, not after.
    In a concept with code, call `rft_code` first and plan from the code as it is now; the note's
-   `## Code` section says how the run uses the code.
-2. **When it finishes or gives a partial result**: edit its note to fill **Result** (numbers with
+   `## Code` section says how the run uses the code. A run on this machine's GPUs is then queued
+   with `rft_queue` (see The experiment queue), not started in the background: the plugin sets
+   the note running when its job starts.
+2. **When it finishes or gives a partial result** (for a queued run: the user is told when its
+   job ends, and the session start lists the jobs whose result is not recorded yet; `rft_jobs
+   <job>` with `log` gives how it ended and the end of its output): edit its note to fill **Result** (numbers with
    spread over seeds, what failed and why, caveats, processed from the run's outputs),
    **Directions found**, and **Code / data** (commit, script, results folder, machine); in a
    concept with code, record how to reproduce the results with `rft_set_code`'s `reproduce`;
@@ -583,4 +587,8 @@ kanban, which shows the notes in one column per status), add footnotes and highl
 comment on and suggest changes to a note's text in the tree view, so re-read a note before
 changing it, and the tree (`rft_tree`) before relying on the copy you were given. The tree view's
 scratchpad, `<vault>/Scratchpad.md`, holds the user's quick notes and to-dos: it is not a note of
-the tree; read it when they point you to it, and change it only when they ask.
+the tree; read it when they point you to it, and change it only when they ask. The tree view's
+monitor (the icon at the top left; `?jobs` in the address opens it) shows this machine's GPUs, the
+experiment queue and the jobs that ended; there the user reorders, pauses, cancels and retries
+jobs and keeps GPUs out of the queue, so read `rft_jobs` before saying what runs or waits.
+`/rft-jobs` prints the same in the terminal.
