@@ -252,6 +252,31 @@ key results as tables and small charts, what failed, what is still running.
 - **Never write the files by hand** (Edit, Write and shell writes there are refused): only
   `rft_set_artifact` stamps them. Reading them is fine.
 
+## Experiment notebooks
+
+An experiment with a result gets a **notebook** that rebuilds the numbers of its Result, so a
+reader can rerun them and the concept's artifact rests on numbers that were reproduced. It is a
+marimo notebook in the concept's first repo (`notebooks/<id>_<title>.py`), linked from the vault
+(`vault/notebooks/<id>.py`) and the note (`notebook:`); it runs in the repo's own uv environment.
+
+- **Write it** with `rft_set_notebook(id, cells)`: plain Python, one string per cell (a markdown
+  cell as `mo.md("...")`; `mo` is imported for you); or `file`, a notebook already in the repo.
+  Read the run's outputs where the repo keeps them (paths from the repo's root, the working
+  folder); after an expensive run, rebuild from its saved raw outputs, never retrain; a short
+  experiment may run from scratch. Put the numbers the note reports in a dict `RESULTS`, in the
+  units and rounding the Result uses (`{"gap_1k": 4.1, "gap_1k_sd": 0.6}`).
+- **Check it** with `rft_run_notebook(id)`: ok, differs or failed, in a few lines. On differs,
+  find out which side is wrong: fix the notebook, or, if its numbers are right, the Result and
+  the summary (`rft_set_status` with results), which puts the artifact out of date. On failed,
+  read the end of the traceback and fix the notebook or what it reads.
+- **Change it** with Edit: it is plain Python. Never read a notebook's outputs into the chat;
+  `RESULTS` is what you need.
+- **Never write `reproduced:`**: only `rft_run_notebook` stamps a run (your edits of it are
+  refused).
+- **When**: once an experiment in a concept with code has a result (done, or a partial Result
+  worth keeping), give it a notebook and run it before its numbers go on the concept's artifact.
+  `rft_artifact` lists the results no notebook reproduced.
+
 ## State of knowledge
 
 The map says what holds now, not only what was done.
@@ -429,6 +454,8 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 | `rft_set_repos` | link code repos to a concept (or, on the root note, to the project); an empty list removes them |
 | `rft_code` | a note's code context: its repos by priority, the commit it was checked against, what changed since |
 | `rft_set_code` | write or update a note's `## Code` section (description, Reproduce), recording each repo's current commit |
+| `rft_set_notebook` | give an experiment its marimo notebook: plain cells written to its concept's repo, or a file already there; linked from the vault and the note |
+| `rft_run_notebook` | run the notebook in its repo's uv environment and check its `RESULTS` against the Result (ok, differs, failed); stamps `reproduced:` |
 | `rft_tree` | the current tree, or the subtree of one node (`root`, `depth`) |
 | `rft_validate` | errors (bad ids, statuses, titles, missing parents, broken links) and warnings |
 | `rft_sync` | regenerate children / up / down, the tree in `00 Index.md`, the canvas |
