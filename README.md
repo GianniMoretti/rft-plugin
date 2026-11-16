@@ -414,9 +414,10 @@ session brings it back).
   runner started with, not your interactive shell's, so its command activates its conda or venv
   itself. A job whose process is gone without an exit code (killed, or the machine restarted) is
   recorded as lost.
-- **Its outputs** go to `$RFT_OUT`, a folder of its own: `<runs>/<experiment>/<job>`, `<runs>`
-  being the config's `runsDir`, else `runs/` at the top of the job's git repo (the runner gives a
-  `runs/` it makes a `.gitignore`, so the outputs stay out of git).
+- **Its outputs** go to `$RFT_OUT`, a folder of its own: `<runsDir>/<repo>/<experiment>/<job>`
+  with the config's `runsDir` (`<repo>` the name of the job's repo folder, or of its own folder
+  outside git), else `<repo>/runs/<experiment>/<job>`, at the top of the job's git repo (the runner
+  gives a `runs/` it makes a `.gitignore`, so the outputs stay out of git).
 - **The run record**: each job is the record of its run. When it starts, the runner records the
   code it runs: the repo, its commit and branch, and its uncommitted changes to tracked files,
   saved whole as `code.patch` in its output folder (untracked files are counted, not kept); so a
@@ -725,9 +726,9 @@ tree view's port (0: a free one), handy for a standing `ssh -L` forward. `requir
 (set by `/rft-init` on a new vault, off on an adopted one) makes `rft_validate` warn about
 experiments and directions in work that name no reference. `gpus` is how many GPUs the
 experiments share: the Calendar and `rft_next` report the days the planned and running ones need
-more. `runsDir` is where the queue's runs keep their outputs
-(`<runsDir>/<experiment>/<job>`; absolute, `~/…`, or from the tree's folder), e.g. a data drive;
-without it, `runs/` at the top of each job's repo. A config that holds
+more. `runsDir` is where the queue's runs keep their outputs, by repo
+(`<runsDir>/<repo>/<experiment>/<job>`; absolute, `~/…`, or from the tree's folder), e.g. a data
+drive; without it, `runs/` at the top of each job's repo (`<repo>/runs/<experiment>/<job>`). A config that holds
 only `tree` is a link to a tree in another folder (see above). The code a concept runs on is
 linked in its note, not in the config (see Code repos).
 

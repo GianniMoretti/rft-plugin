@@ -392,8 +392,9 @@ or `/rft-jobs`), where they also reorder, pause, cancel and retry jobs, and keep
   or venv in the command (`source ~/miniconda3/bin/activate env && python train.py ...`) or give
   the interpreter's full path. Check the command once by hand (a dry run, `--help`) before queueing
   a long run. Its log goes to `<vault>/.queue/logs/<job>.log`.
-- **Its outputs** go to `$RFT_OUT`, a folder of its own: `<runs>/<exp>/<job>`, `<runs>` being
-  the config's `runsDir`, else `runs/` at the top of the job's repo (kept out of git). Have the
+- **Its outputs** go to `$RFT_OUT`, a folder of its own: `<runsDir>/<repo>/<exp>/<job>` with
+  the config's `runsDir` (`<repo>` the name of the job's repo folder), else
+  `<repo>/runs/<exp>/<job>` (kept out of git). Have the
   command write there (`--out "$RFT_OUT"`); the notebook finds it as `out` in `RUNS`.
 - **The run record**: when a job starts, the runner records the code it runs (repo, commit,
   branch; uncommitted changes saved whole as `code.patch` in its output folder); when it ends,

@@ -80,7 +80,7 @@ const cellBlock = (code: string, head = '@app.cell') => `${head}\ndef _():\n${in
 /**
  * The cell that reads RUNS: the queue's runs of experiment `exp` that ended well, oldest first,
  * each its record (rft-run.json in its output folder: `out`, `label`, `commit`…), from `runsRoot`
- * (the repo's `runs`, or the config's runsDir). Its own names are private (a leading _), so the
+ * (the repo's `runs`, or <runsDir>/<repo's folder name>, as the queue's runner keeps them). Its own names are private (a leading _), so the
  * notebook's cells may import json and pathlib themselves.
  */
 export const runsCell = (exp: string, runsRoot: string) =>
@@ -170,7 +170,8 @@ export async function setNotebook(io: Io, loaded: Loaded, env: NotebookEnv, ref:
   } else {
     target = join(repo, NOTEBOOKS_DIR, notebookFile(n))
     if ((await io.exists(target)) && input.replace !== true) throw new NotebookError(`${target} exists: change it with Edit (it is plain Python), or pass replace: true to write it anew from cells`)
-    const root = config.runsDir ? repoAbs(env.root, config.runsDir, env.home) : 'runs'
+    // where the queue's runner keeps the runs of this repo (server/rft_queue.py): <runsDir>/<repo>, else the repo's own runs/
+    const root = config.runsDir ? join(repoAbs(env.root, config.runsDir, env.home), repo.split('/').filter(Boolean).pop() ?? '') : 'runs'
     code = notebookSource(`${n.id} · ${n.title}`, cells, { exp: n.id, root })
     await io.write(target, code)
   }

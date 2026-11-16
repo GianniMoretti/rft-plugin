@@ -22,8 +22,9 @@ has been empty a while; queueing a job, opening the tree view or a new session s
   is lost.
 - **The run record**: a job is the record of its run. When it starts, the runner adds the code it
   runs (its git repo, commit and branch; uncommitted changes to tracked files saved whole as
-  code.patch in its output folder) and its output folder (RFT_OUT: <runs>/<exp>/<id>, <runs> the
-  folder the job names, else `runs/` at the top of its repo, else of its folder). When it ends:
+  code.patch in its output folder) and its output folder (RFT_OUT: <runs>/<repo>/<exp>/<id>, <runs>
+  the folder the job names and <repo> the name of its repo's folder, or of its own outside git;
+  else <repo>/runs/<exp>/<id>, `runs/` at the top of its repo, or of its folder). When it ends:
   the end of the traceback of a failed one (`error`), and `changed` when its repo's code moved
   while it ran. Each output folder holds a copy of its record (rft-run.json), so the outputs say
   what made them; history.jsonl keeps them all.
@@ -398,8 +399,9 @@ class Queue:
 
     def add(self, exp, cmd, cwd, gpus=1, label="", by="claude", top=False, retry_of=None, runs=None, kind="run") -> dict:
         """Queues a job for experiment `exp`, last (or first, `top`); the job, with its place in line.
-        `runs`: the root of its output folder (absolute), else `runs/` at the top of its repo or
-        folder. `kind`: "run", or "notebook" for the run of an experiment's notebook (no output
+        `runs`: the root of its output folders (absolute), which keeps them by repo
+        (<runs>/<repo>/<exp>/<id>, <repo> the name of its repo's folder, or of its own outside
+        git); else `runs/` at the top of its repo or folder (<repo>/runs/<exp>/<id>). `kind`: "run", or "notebook" for the run of an experiment's notebook (no output
         folder of its own)."""
         exp, cmd, label = str(exp or "").strip(), str(cmd or ""), str(label or "").strip()
         if not EXP_RE.match(exp):
@@ -422,7 +424,8 @@ class Queue:
             raise QueueError(f'the folder "{runs}" for its outputs is not an absolute path')
         if kind not in ("run", "notebook"):
             raise QueueError(f'a job is a run or a notebook, not "{kind}"')
-        root = Path(runs) if runs else Path(repo_of(cwd) or cwd) / RUNS
+        home = Path(repo_of(cwd) or cwd)  # its repo's top, or its own folder outside git
+        root = Path(runs) / home.name if runs else home / RUNS
         with self.change() as st:
             st["seq"] += 1
             j = {"id": f"q{st['seq']}", "exp": exp, "label": label[:MAX_LABEL], "cmd": cmd, "cwd": cwd, "gpus": gpus,
@@ -431,6 +434,8 @@ class Queue:
                 j["kind"] = "notebook"
             else:
                 j["out"] = str(root / exp / j["id"])
+                if runs:
+                    j["runs"] = runs
             if retry_of:
                 j["retry_of"] = retry_of
             at = next((i for i, x in enumerate(st["jobs"]) if x["state"] == WAITING), len(st["jobs"])) if top else len(st["jobs"])
@@ -480,9 +485,8 @@ class Queue:
             raise NotFound(f"no job {jid}")
         if not os.path.isdir(j["cwd"]):
             raise QueueError(f'the folder "{j["cwd"]}" it ran in is gone')
-        runs = str(Path(j["out"]).parent.parent) if j.get("out") else None
         return self.add(j["exp"], j["cmd"], j["cwd"], j["gpus"], j.get("label", ""), by, top=True, retry_of=jid,
-                        runs=runs, kind=j.get("kind", "run"))
+                        runs=j.get("runs"), kind=j.get("kind", "run"))
 
     def pause(self, paused: bool) -> dict:
         with self.change() as st:
@@ -642,7 +646,7 @@ class Queue:
         branch, and its uncommitted changes saved whole in the folder (code.patch). A root the
         runner makes inside a repo gets a .gitignore, so the outputs stay out of git."""
         out = Path(j["out"])
-        root = out.parent.parent
+        root = Path(j["runs"]) if j.get("runs") else out.parent.parent
         made = not root.exists()
         out.mkdir(parents=True, exist_ok=True)
         code = code_state(j["cwd"])

@@ -116,6 +116,15 @@ describe('rft_set_notebook', () => {
     expect(out).not.toContain('RESULTS')
   })
 
+  test("with the config's runsDir, RUNS reads the runs where the runner keeps this repo's: <runsDir>/<repo>", async () => {
+    const files = project()
+    const cfg = `${ROOT}/.rft/config.json`
+    files[cfg] = JSON.stringify({ ...JSON.parse(files[cfg]!), runsDir: '/data/rft-runs' })
+    const { fs, io, loaded } = await open(files)
+    await setNotebook(io, loaded, envOf().env, 'E02', { cells: CELLS })
+    expect(fs.read(NOTEBOOK)).toContain('_pathlib.Path("/data/rft-runs/sfree").glob("E02/*/rft-run.json")')
+  })
+
   test('says so when no cell sets RESULTS', async () => {
     const { io, loaded } = await open(project())
     const out = await setNotebook(io, loaded, envOf().env, 'E02', { cells: [CELLS[0]!] })

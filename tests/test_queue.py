@@ -365,13 +365,18 @@ class RunRecordTest(unittest.TestCase):
         self.assertFalse(any(k in b for k in ("repo", "commit", "patch")))
         self.assertFalse((plain / "runs" / ".gitignore").exists())
 
-    def test_the_outputs_root_can_be_given_and_a_retry_keeps_it(self):
+    def test_a_given_outputs_root_keeps_them_by_repo_and_a_retry_keeps_it(self):
         root = Path(self.tmp.name) / "data" / "rft-runs"
-        j = self.q.add("E14", "exit 1", str(self.repo), gpus=0, runs=str(root))
-        self.assertEqual(j["out"], str(root / "E14" / "q1"))
+        j = self.q.add("E14", "exit 1", str(self.repo / "src"), gpus=0, runs=str(root))
+        self.assertEqual(j["out"], str(root / "code" / "E14" / "q1"))  # the repo's folder name, from a folder inside it too
         self.assertTrue(self.ended("q1"))
+        self.assertTrue((root / "code" / "E14" / "q1").is_dir())
+        self.assertFalse((root / ".gitignore").exists())  # outside the repo: nothing to keep out of git
         again = self.q.retry("q1")
-        self.assertEqual(again["out"], str(root / "E14" / "q2"))
+        self.assertEqual(again["out"], str(root / "code" / "E14" / "q2"))
+        plain = Path(self.tmp.name) / "scratch"
+        plain.mkdir()
+        self.assertEqual(self.q.add("E15", "true", str(plain), runs=str(root))["out"], str(root / "scratch" / "E15" / "q3"))
         with self.assertRaises(rft_queue.QueueError):
             self.q.add("E14", "true", str(self.repo), runs="relative/runs")
 
