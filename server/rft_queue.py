@@ -28,6 +28,11 @@ has been empty a while; queueing a job, opening the tree view or a new session s
   the end of the traceback of a failed one (`error`), and `changed` when its repo's code moved
   while it ran. Each output folder holds a copy of its record (rft-run.json), so the outputs say
   what made them; history.jsonl keeps them all.
+- **Progress**: a running job's row says how far it is, from what it writes anyway: the last state
+  of each tqdm bar still going in the end of its log (its label, n/total, %, time left; a bar
+  redraws every TQDM_MININTERVAL s, 10 unless the job sets it, so logs stay small), its last line
+  of text, and the last stage it appended to $RFT_PROGRESS (progress.jsonl in its output folder: a
+  JSON line {"stage", "i", "n"}, or plain text), for a job of several steps.
 - **The notebook, after the runs**: when an experiment's last run waiting or running ends well
   and the experiment has a notebook (the vault's link notebooks/<exp>.py), the runner queues the
   notebook's run (kind "notebook", no GPU): rft_notebook.py apply --record runs it and writes its
@@ -90,6 +95,14 @@ TAIL_BYTES = 65_536  # the end of a log the monitor first gets, from a line's st
 CHUNK_BYTES = 262_144  # the most of a log the monitor gets in one read as it follows; further behind, it starts again from the end
 MAX_TAIL_READ = 4_000_000  # the most of a log read to find its last lines (a progress bar redrawn without a newline is one long line)
 MAX_ROW = 400  # a line of a log as Claude reads it, cut to its end (where a redrawn bar's last state is)
+PROGRESS = "progress.jsonl"  # a job's stages ($RFT_PROGRESS), in its output folder
+TQDM_MININTERVAL = "10"  # seconds between a tqdm bar's redraws in a job, unless it sets its own
+PROGRESS_BYTES = 65_536  # the end of a log its progress is read from
+# a tqdm bar as it draws itself: "<desc>: 45%|####      | 450/1000 [01:23<01:40, 5.40it/s, loss=0.3]",
+# and one with no total: "<desc>: 450it [01:23, 5.40it/s]"
+TQDM_BAR = re.compile(r"^(?:(?P<desc>.*?): ?)?\s*(?P<pct>\d{1,3})%\|[^|]*\|\s*(?P<n>[\d.]+[kMGTPEZY]?)/(?P<total>[\d.]+[kMGTPEZY]?)\s*"
+                      r"\[(?P<elapsed>[\d:]+)<(?P<left>[\d:]+|\?)(?:,\s*(?P<rate>[^,\]]+))?[^\]]*\]")
+TQDM_COUNT = re.compile(r"^(?:(?P<desc>.*?): ?)?(?P<n>\d[\d.]*[kMGTPEZY]?)[A-Za-z]*\s*\[(?P<elapsed>[\d:]+),\s*(?P<rate>[^,\]]+)[^\]]*\]")
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
 RUNS = "runs"  # the output folders' root when a job names none, at the top of its repo (or folder)
 RUN_RECORD = "rft-run.json"  # each output folder's copy of its job's record
@@ -292,6 +305,58 @@ def _tail_lines(path: Path, lines: int, row_max: int | None = None) -> list[str]
     if row_max:
         rows = [r if len(r) <= row_max else "…" + r[-row_max:] for r in rows]
     return rows[-lines:]
+
+
+def _last_bytes(path: Path, n: int) -> bytes:
+    try:
+        with open(path, "rb") as f:
+            size = os.fstat(f.fileno()).st_size
+            f.seek(max(0, size - n))
+            return f.read()
+    except OSError:
+        return b""
+
+
+def progress_of(log: Path, stages: Path | None = None) -> dict:
+    """How far a running job is, from what it writes anyway: the bars of tqdm still going in the end
+    of its log (the three last drawn, in the order they started: an outer loop, then inner ones),
+    its last line of text, and its last stage in $RFT_PROGRESS. {} when it says nothing yet."""
+    out: dict = {}
+    seen: dict[str, tuple[int, int, dict]] = {}  # a bar's label: (where it was last drawn, where first, its state)
+    line, line_at = "", -1
+    tail = _last_bytes(log, PROGRESS_BYTES).decode("utf-8", "replace")
+    for i, seg in enumerate(re.split(r"[\r\n]", tail)):
+        seg = ANSI.sub("", seg).strip()
+        if not seg:
+            continue
+        m = TQDM_BAR.match(seg) or TQDM_COUNT.match(seg)
+        if m:
+            g = m.groupdict()
+            bar = {"desc": (g.get("desc") or "").strip()[:80], "n": g["n"], "elapsed": g["elapsed"], "rate": (g.get("rate") or "").strip()}
+            if g.get("total"):
+                bar.update(total=g["total"], pct=min(100, int(g["pct"])), left=g["left"])
+            seen[bar["desc"]] = (i, seen[bar["desc"]][1] if bar["desc"] in seen else i, bar)
+        elif not seg.startswith(("# rft job ", "# $ ")):
+            line, line_at = seg, i
+    going = sorted((v for v in seen.values() if v[2].get("pct") != 100), key=lambda v: -v[0])[:3]
+    if going:
+        out["bars"] = [v[2] for v in sorted(going, key=lambda v: v[1])]
+    if line:
+        out["line"] = line if len(line) <= 200 else "…" + line[-200:]
+    if stages is not None:
+        last = next((r for r in reversed(_last_bytes(stages, 4096).decode("utf-8", "replace").splitlines()) if r.strip()), "")
+        if last:
+            try:
+                st = json.loads(last)
+            except ValueError:
+                st = None
+            if isinstance(st, dict):
+                stage = {k: st[k] for k in ("stage", "i", "n") if k in st and isinstance(st[k], (str, int, float)) and not isinstance(st[k], bool)}
+                if stage:
+                    out["stage"] = stage
+            else:
+                out["stage"] = {"stage": last.strip()[:200]}
+    return out
 
 
 def _utf8_end(data: bytes) -> int:
@@ -671,6 +736,8 @@ class Queue:
                          reason=f"could not start: its output folder {j['out']}: {err.strerror or err}")
                 return
             env["RFT_OUT"] = j["out"]
+            env["RFT_PROGRESS"] = str(Path(j["out"]) / PROGRESS)
+        env.setdefault("TQDM_MININTERVAL", TQDM_MININTERVAL)
         try:
             with open(log, "ab") as out:
                 out.write(f"# rft job {j['id']} ({j['exp']}) on {_gpu_list(ids) if ids else 'no GPU'}, {when}, in {j['cwd']}\n"
@@ -812,7 +879,8 @@ class Queue:
             g["job"] = held.get(g["index"])
             g["busy"] = g["job"] is None and in_use_elsewhere(g, st["free_mib"])
             g["allowed"] = st["allowed"] is None or g["index"] in st["allowed"]
-        jobs = [{**j, "outlook": self.outlook(j, st, gpus, err)} if j["state"] == WAITING else j for j in st["jobs"]]
+        jobs = [{**j, "outlook": self.outlook(j, st, gpus, err)} if j["state"] == WAITING
+                else {**j, "progress": self.progress(j)} if j["state"] == RUNNING else j for j in st["jobs"]]
         return {"host": socket.gethostname(), "paused": st["paused"], "allowed": st["allowed"], "free_mib": st["free_mib"],
                 "gpus": gpus, "gpu_error": err, "jobs": jobs, "history": self.history(history),
                 "runner": runner_alive(self.root), "now": self.clock()}
@@ -825,6 +893,12 @@ class Queue:
         if not j.get("log"):
             return ""
         return "\n".join(_tail_lines(self.dir / j["log"], max(1, min(int(lines), MAX_LOG_LINES)), MAX_ROW))
+
+    def progress(self, j: dict) -> dict:
+        """How far a running job is (progress_of), from its log and its stages."""
+        if not j.get("log"):
+            return {}
+        return progress_of(self.dir / j["log"], Path(j["out"]) / PROGRESS if j.get("out") else None)
 
     def log_path(self, jid: str) -> Path | None:
         """Where a job's output is kept; None before it started."""

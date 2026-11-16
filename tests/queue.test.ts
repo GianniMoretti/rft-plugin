@@ -7,7 +7,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { loadActive } from '../hooks/lib/ops'
 import type { Job, QueueView } from '../hooks/lib/queue'
-import { duration, jobEvents, jobsReport, queueLine, readQueue, toRecord, toStart } from '../hooks/lib/queue'
+import { duration, jobEvents, jobsReport, progressText, queueLine, readQueue, toRecord, toStart } from '../hooks/lib/queue'
 import { CWD, D01, E02, MemoryFs, demoFiles, note, world } from './fixture'
 
 const NOW = 1_763_200_000 // seconds
@@ -119,6 +119,16 @@ describe('queue: what Claude reads', () => {
     const failed = { ...nb, outcome: { state: 'failed' }, error: "Traceback (most recent call last):\nKeyError: 'acc'" }
     expect(jobEvents(v, { ...v, history: [failed, ...v.history] })).toEqual(["q3 (E02): its notebook failed: KeyError: 'acc'"])
     expect(queueLine({ ...v, history: [nb] }, loaded, NOW)).not.toContain('Otherwise')
+  })
+
+  test('how far a running job is, in a line: its stage, its bars outer first, else its last line', async () => {
+    const p = { stage: { stage: 'probe patchpos', i: 2, n: 5 }, bars: [{ desc: 'mlp', n: '12', total: '50', pct: 24, left: '06:20' }, { desc: '', n: '300', total: '800', pct: 37, left: '?' }, { desc: 'rows', n: '1200', rate: '40.0it/s' }], line: 'loss 0.31' }
+    expect(progressText(p)).toBe('stage 2/5: probe patchpos · mlp 12/50 (24%, 06:20 left) · 300/800 (37%) · rows 1200 done, 40.0it/s')
+    expect(progressText({ line: '2026-11-16 12:00:01 waiting for GPU 1' })).toBe('"2026-11-16 12:00:01 waiting for GPU 1"')
+    expect(progressText(undefined)).toBe('')
+    const v = example1()
+    v.jobs[0]!.progress = p
+    expect(jobsReport(v, await loadedOf(), NOW)).toContain('q1 E02 Variant run · GPU 0 · 1h 2m · stage 2/5: probe patchpos · mlp 12/50 (24%, 06:20 left)')
   })
 
   test('a finished job whose experiment still says running is a result to record', async () => {

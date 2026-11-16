@@ -53,9 +53,31 @@ export type Job = {
   changed?: boolean
   /** A failed run: the end of its traceback, or its last lines. */
   error?: string
+  /** A running job: how far it is (server/rft_queue.py's progress_of), from its tqdm bars, last line and stages. */
+  progress?: Progress
   /** A notebook's run: the run it followed, and how it went (server/rft_results.py's answer, in short). */
   after?: string
   outcome?: { state?: string; recorded?: boolean; why?: string; reproduced?: string }
+}
+
+/** A tqdm bar as the job last drew it. */
+export type Bar = { desc: string; n: string; total?: string; pct?: number; left?: string; elapsed?: string; rate?: string }
+
+/** How far a running job is: its bars still going, its last line of text, its last stage ($RFT_PROGRESS). */
+export type Progress = { bars?: Bar[]; line?: string; stage?: { stage?: string; i?: number; n?: number } }
+
+/** A running job's progress in a few words: its stage, then each bar (outer first), else its last line. */
+export function progressText(p: Progress | undefined): string {
+  if (!p) return ''
+  const parts: string[] = []
+  const st = p.stage
+  if (st && (st.stage || st.n)) parts.push(`${st.i != null && st.n != null ? `stage ${st.i}/${st.n}` : 'stage'}${st.stage ? `: ${st.stage}` : ''}`)
+  for (const b of p.bars ?? []) {
+    const left = b.left && b.left !== '?' ? `, ${b.left} left` : ''
+    parts.push(`${b.desc ? `${b.desc} ` : ''}${b.total ? `${b.n}/${b.total} (${b.pct}%${left})` : `${b.n} done${b.rate ? `, ${b.rate}` : ''}`}`)
+  }
+  if (!p.bars?.length && p.line) parts.push(`"${p.line.length > 120 ? `${p.line.slice(0, 117)}…` : p.line}"`)
+  return parts.join(' · ')
 }
 
 export type Gpu = {
@@ -292,7 +314,7 @@ export function jobsReport(v: QueueView, loaded: Loaded, now: number, opts: { re
   if (ref && /^q\d+$/i.test(ref)) {
     const j = [...v.jobs, ...v.history].find(x => x.id === ref.toLowerCase())
     if (!j) return `There is no job ${ref}: rft_jobs lists them.`
-    const how = j.state === 'running' ? `running on ${gpuList(j.gpu_ids)} for ${duration(now - (j.started ?? now))}`
+    const how = j.state === 'running' ? `running on ${gpuList(j.gpu_ids)} for ${duration(now - (j.started ?? now))}${progressText(j.progress) ? ` · ${progressText(j.progress)}` : ''}`
       : j.state === 'pending' ? `waiting: ${j.outlook || 'in line'}`
         : `${endWord(j)}${ranFor(j)}, ${ago(j.ended, now)}${j.reason && j.state !== 'failed' ? ` (${j.reason})` : j.reason?.startsWith('lost') ? ` (${j.reason})` : ''}`
     const lines = [`${named(loaded, j)} · ${gpuWord(j.gpus)} · ${how}${j.kind === 'notebook' && j.state !== 'pending' && j.state !== 'running' ? ` · ${notebookWord(j)}` : ''}`, `$ ${j.cmd}`, `in ${j.cwd}${j.retry_of ? ` · retry of ${j.retry_of}` : ''}`]
@@ -316,7 +338,7 @@ export function jobsReport(v: QueueView, loaded: Loaded, now: number, opts: { re
   if (head.length && !exp) out.push(head.join(' · '))
   const gl = exp ? null : gpuLine(v)
   if (gl) out.push(gl)
-  if (running.length) out.push(`Running (${running.length}):`, ...running.map(j => `- ${named(loaded, j)} · ${gpuList(j.gpu_ids)} · ${duration(now - (j.started ?? now))}`))
+  if (running.length) out.push(`Running (${running.length}):`, ...running.map(j => `- ${named(loaded, j)} · ${gpuList(j.gpu_ids)} · ${duration(now - (j.started ?? now))}${j.progress && progressText(j.progress) ? ` · ${progressText(j.progress)}` : ''}`))
   const shown = waiting.map((j, i) => [i + 1, j] as const).filter(([, j]) => mine(j))
   if (shown.length) {
     out.push(`Waiting (${waiting.length}, in order):`, ...shown.slice(0, 12).map(([i, j]) => `${i}. ${named(loaded, j)} · ${gpuWord(j.gpus)}${j.outlook ? ` · ${j.outlook}` : ''}`))

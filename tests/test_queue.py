@@ -682,6 +682,61 @@ class ServerQueueTest(unittest.TestCase):
         self.assertIn("ValueError: odd bytes", r["error"])
 
 
+class ProgressTest(unittest.TestCase):
+    """How far a running job is, from what it writes anyway: tqdm's bars, its last line, its stages."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.log = Path(self.tmp.name) / "q1.log"
+        self.stages = Path(self.tmp.name) / "progress.jsonl"
+
+    def test_the_bars_still_going_outer_first_a_finished_one_left_out(self):
+        self.log.write_text(
+            "# rft job q1 (E24) on GPU 1, 2026-11-16T12:00:00+01:00, in /code\n# $ scripts/local/pose_probes_job.sh mae base\n"
+            "2026-11-16 12:00:01 cache whole: output/pose_cache/x\n"
+            "mlp:   2%|▏         | 1/50 [00:10<08:10, 10.0s/it]\rmlp:   4%|▍         | 2/50 [00:20<08:00, 10.0s/it]\n"
+            "\x1b[A\rtrain shard 3/12:  44%|████▍     | 440/1000 [01:22<01:45, 5.33it/s]"
+            "\rtrain shard 3/12:  45%|████▌     | 450/1000 [01:23<01:40, 5.40it/s, loss=0.31]"
+            "\rtest shard 1/4: 100%|██████████| 10/10 [00:01<00:00, 9.9it/s]\nrows: 1200it [00:30, 40.0it/s]")
+        got = rft_queue.progress_of(self.log)
+        self.assertEqual([(b["desc"], b.get("pct"), b["n"], b.get("total"), b.get("left")) for b in got["bars"]],
+                         [("mlp", 4, "2", "50", "08:00"), ("train shard 3/12", 45, "450", "1000", "01:40"), ("rows", None, "1200", None, None)])
+        self.assertEqual(got["bars"][2]["rate"], "40.0it/s")
+        self.assertEqual(got["line"], "2026-11-16 12:00:01 cache whole: output/pose_cache/x")
+        self.assertNotIn("stage", got)
+
+    def test_no_bar_its_last_line_and_its_stage_as_json_or_text(self):
+        self.log.write_text("# rft job q1 (E24)\n2026-11-16 12:00:01 waiting for GPU 1: 2048 MiB free, need 14336\n")
+        self.stages.write_text('{"stage": "cache", "i": 1, "n": 5}\n{"stage": "probe patchpos", "i": 2, "n": 5, "extra": [1]}\n')
+        got = rft_queue.progress_of(self.log, self.stages)
+        self.assertEqual(got, {"line": "2026-11-16 12:00:01 waiting for GPU 1: 2048 MiB free, need 14336",
+                               "stage": {"stage": "probe patchpos", "i": 2, "n": 5}})
+        self.stages.write_text("probe 3/5: mlp\n\n")
+        self.assertEqual(rft_queue.progress_of(self.log, self.stages)["stage"], {"stage": "probe 3/5: mlp"})
+        self.assertEqual(rft_queue.progress_of(Path(self.tmp.name) / "none.log"), {})
+
+    def test_a_job_gets_its_stages_file_and_slower_bars_and_its_row_says_how_far_it_is(self):
+        vault, work = Path(self.tmp.name) / "vault", Path(self.tmp.name) / "work"
+        vault.mkdir()
+        work.mkdir()
+        q = rft_queue.Queue(vault, probe=FakeGpus(1), wake=lambda: None)
+        go = work / "go"
+        j = q.add("E24", f'echo "$TQDM_MININTERVAL" > seen; echo \'{{"stage": "probe", "i": 2, "n": 5}}\' >> "$RFT_PROGRESS"; '
+                         f'printf "mlp:  40%%|####      | 20/50 [00:10<00:15, 2.00it/s]"; while [ ! -e {go} ]; do sleep 0.05; done', str(work), gpus=0)
+        q.tick()
+        try:
+            self.assertTrue(wait_until(lambda: (q.snapshot()["jobs"] or [{}])[0].get("progress", {}).get("bars"), q.tick))
+            row = q.snapshot()["jobs"][0]
+            self.assertEqual(row["progress"]["stage"], {"stage": "probe", "i": 2, "n": 5})
+            self.assertEqual(row["progress"]["bars"][0]["pct"], 40)
+            self.assertEqual((work / "seen").read_text().strip(), rft_queue.TQDM_MININTERVAL)
+            self.assertTrue((Path(j["out"]) / rft_queue.PROGRESS).is_file())
+        finally:
+            go.touch()
+            wait_until(lambda: q.find(j["id"])["state"] != "running", q.tick)
+
+
 class ReadLogTest(unittest.TestCase):
     """rft_queue.read_log: a log in bounded pieces, by byte."""
 

@@ -718,6 +718,18 @@ main.artifact-open:has(#drawer:not([hidden])) #concept-canvas { width: calc(100%
 .jobs-actions button.danger { border-color: var(--dropped); color: var(--dropped); }
 .jobs-details { margin-top: 4px; font-size: 0.9em; }
 .jobs-cmd { display: block; white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.jobs-progress { display: grid; gap: 2px; margin-top: 3px; font-size: 0.88em; }
+.jobs-stage { font-weight: 600; overflow-wrap: anywhere; }
+.jobs-bar { display: grid; grid-template-columns: minmax(0, max-content) minmax(50px, 1fr) max-content; align-items: center; gap: 6px; }
+.jobs-bar-label { min-width: 0; max-width: 16em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jobs-bar-meter { height: 6px; border-radius: 3px; background: color-mix(in oklab, var(--line) 70%, transparent); overflow: hidden; }
+.jobs-bar-meter > span { display: block; height: 100%; background: var(--running); }
+.jobs-bar-meter.none { visibility: hidden; }
+.jobs-bar-nums { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.jobs-lastline { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+#jobs.compact { width: min(calc(400px * var(--font-scale)), calc(100vw - 16px)); }
+#jobs.compact .jobs-hosts, #jobs.compact .jobs-gpus, #jobs.compact .jobs-tabs, #jobs.compact .jobs-foot { display: none; }
+.jobs-mini { cursor: pointer; padding: 4px 10px; }
 .jobs-log-bar { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 4px; }
 .jobs-log-bar button { padding: 1px 7px; }
 .jobs-log-err { margin-top: 3px; color: var(--dropped); overflow-wrap: anywhere; }

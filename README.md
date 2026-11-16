@@ -423,6 +423,15 @@ session brings it back).
   with the config's `runsDir` (`<repo>` the name of the job's repo folder, or of its own folder
   outside git), else `<repo>/runs/<experiment>/<job>`, at the top of the job's git repo (the runner
   gives a `runs/` it makes a `.gitignore`, so the outputs stay out of git).
+- **How far it is**: each running job's row shows its stage, each tqdm bar still going (its
+  label, a meter, n/total, % and time left) and its last line of text, read from what the job
+  writes anyway: the end of its log, and `$RFT_PROGRESS` (`progress.jsonl` in its output folder),
+  where a job of several steps appends each (`echo '{"stage": "probe patchpos", "i": 2, "n": 5}'
+  >> "$RFT_PROGRESS"`, or a plain line of text). The runner sets `TQDM_MININTERVAL=10` (unless
+  the job's environment has it), so a bar redraws every 10 s and logs stay small; a bar's own
+  `mininterval=` still wins. `rft_jobs` gives Claude the same in a line. **▴** at the top folds the
+  panel to just the running jobs and how far they are (and a line for those waiting); a click on
+  one unfolds it with its log, **▾** unfolds it.
 - **The run record**: each job is the record of its run. When it starts, the runner records the
   code it runs: the repo, its commit and branch, and its uncommitted changes to tracked files,
   saved whole as `code.patch` in its output folder (untracked files are counted, not kept); so a

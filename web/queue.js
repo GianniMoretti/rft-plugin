@@ -68,6 +68,24 @@
     return `ran (${o.why || 'nothing checked'})`
   }
 
+  /**
+   * How far a running job is, as its row shows it (server/rft_queue.py's progress_of): its stage
+   * ($RFT_PROGRESS), each tqdm bar still going (label, fraction, numbers and time left), its last
+   * line of text; null when it says nothing yet.
+   */
+  function progressParts(p) {
+    if (!p || (!(p.bars && p.bars.length) && !p.line && !p.stage)) return null
+    const st = p.stage
+    const stage = st && (st.stage || st.n != null) ? `${st.i != null && st.n != null ? `Stage ${st.i}/${st.n}` : 'Stage'}${st.stage ? `: ${st.stage}` : ''}` : ''
+    const bars = (p.bars || []).map(b => ({
+      label: b.desc || 'progress',
+      pct: b.total ? b.pct : null,
+      nums: b.total ? `${b.n}/${b.total} · ${b.pct}%${b.left && b.left !== '?' ? ` · ${b.left} left` : ''}` : `${b.n}${b.rate ? ` · ${b.rate}` : ''}`,
+      title: [b.elapsed ? `${b.elapsed} so far` : '', b.rate || ''].filter(Boolean).join(', '),
+    }))
+    return { stage, bars, line: p.line || '' }
+  }
+
   // ---------------------------------------------------------------- a log, followed piece by piece
 
   const LOG_LINES = 3000 // the lines a log keeps in the page; earlier ones are in the whole log
@@ -124,7 +142,7 @@
   function mount({ key, store, open, title, every = 3000, idle = 15000 }) {
     const $ = id => document.getElementById(id)
     const btn = $('jobs-toggle'), badgeEl = $('jobs-badge'), panel = $('jobs'), sum = $('jobs-sum')
-    const pauseBtn = $('jobs-pause'), hosts = $('jobs-hosts'), gpusEl = $('jobs-gpus'), list = $('jobs-list'), msg = $('jobs-msg')
+    const foldBtn = $('jobs-fold'), pauseBtn = $('jobs-pause'), hosts = $('jobs-hosts'), gpusEl = $('jobs-gpus'), list = $('jobs-list'), msg = $('jobs-msg')
     const tabs = [...panel.querySelectorAll('[data-jtab]')]
     let view = null
     let tab = store.get('jobsTab', 'queue') === 'history' ? 'history' : 'queue'
@@ -134,6 +152,7 @@
     let armed = null // a cancel waiting for its second press: { id, until }
     let dragging = null
     let timer = 0
+    let compact = store.get('jobsCompact', false) === true // folded: the running jobs and how far they are, nothing else
     let answered = 0 // when the server last answered the queue: a log it does not answer is then refused on the way
     // where a job's output is read: api/queue/output, or api/queue/log on a server started before it
     let outputAt = 'api/queue/output'
@@ -408,6 +427,40 @@
       onclick: () => toggle(j),
     }, j.state === 'pending' ? 'Command' : 'Log')
 
+    /** A running job's stage, bars and last line (the line only when there is no bar, folded). */
+    function progressEl(p, folded = false) {
+      const parts = progressParts(p)
+      if (!parts) return null
+      return el('div', { class: 'jobs-progress' },
+        parts.stage ? el('div', { class: 'jobs-stage', text: parts.stage }) : null,
+        ...parts.bars.map(b => {
+          const fill = el('span')
+          if (b.pct != null) fill.style.width = `${b.pct}%`
+          return el('div', { class: 'jobs-bar', title: b.title || null },
+            el('span', { class: 'jobs-bar-label', text: b.label, title: b.label }),
+            el('span', { class: `jobs-bar-meter${b.pct == null ? ' none' : ''}` }, fill),
+            el('span', { class: 'jobs-bar-nums muted', text: b.nums }))
+        }),
+        parts.line && !(folded && parts.bars.length) ? el('div', { class: 'jobs-lastline muted', text: parts.line, title: parts.line }) : null)
+    }
+
+    /** Folded: one short row per running job with how far it is, and a line for those waiting; a click unfolds it. */
+    function compactRows() {
+      const running = view.jobs.filter(j => j.state === 'running')
+      const waiting = view.jobs.filter(j => j.state === 'pending')
+      const open = id => { compact = false; store.set('jobsCompact', false); if (!shown.has(id)) { shown.add(id); readLog(id) } draw() }
+      const out = running.map(j => el('div', { class: 'jobs-row jobs-mini s-running', 'data-id': j.id, title: 'Unfold, with its log', onclick: ev => { if (!ev.target.closest('a')) open(j.id) } },
+        el('span', { class: 'jobs-dot', 'aria-hidden': 'true' }),
+        el('div', { class: 'jobs-main' },
+          el('div', { class: 'jobs-line' },
+            el('span', { class: 'jobs-id', text: j.id }), link(j.exp),
+            j.label ? el('span', { class: 'jobs-label', text: j.label }) : el('span', { class: 'jobs-title muted', text: duration(now() - (j.started || now())) })),
+          progressEl(j.progress, true))))
+      if (waiting.length) out.push(el('div', { class: 'jobs-sep muted', text: `${waiting.length} waiting: ${waiting.slice(0, 6).map(j => `${j.id} ${j.exp}`).join(', ')}${waiting.length > 6 ? ', …' : ''}` }))
+      if (!out.length) out.push(el('p', { class: 'muted jobs-empty', text: 'Nothing runs or waits.' }))
+      return out
+    }
+
     function row(j, o) {
       const t = title(j.exp)
       const r = el('div', { class: `jobs-row s-${j.state}`, 'data-id': j.id, draggable: o.drag ? 'true' : null },
@@ -420,6 +473,7 @@
             t ? el('span', { class: 'jobs-title', text: t, title: t }) : null,
             j.label ? el('span', { class: 'jobs-label', text: j.label }) : null),
           el('div', { class: 'jobs-meta muted', text: o.meta }),
+          j.state === 'running' ? progressEl(j.progress) : null,
           details(j)),
         el('div', { class: 'jobs-actions' }, ...o.actions))
       if (o.drag) wireDrag(r, j, o.order)
@@ -502,8 +556,13 @@
       for (const t of tabs) t.setAttribute('aria-selected', String(t.dataset.jtab === tab))
       $('jobs-nq').textContent = view.jobs.length ? String(view.jobs.length) : ''
       $('jobs-nh').textContent = view.history.length ? `${view.history.length}${failed ? ` · ${failed} failed` : ''}` : ''
+      panel.classList.toggle('compact', compact)
+      foldBtn.textContent = compact ? '▾' : '▴'
+      foldBtn.setAttribute('aria-expanded', String(!compact))
+      foldBtn.title = compact ? 'Unfold: the GPUs, the queue in its order, the history, the logs' : 'Fold to the running jobs and how far they are'
+      foldBtn.setAttribute('aria-label', compact ? 'Unfold the experiment queue' : 'Fold the experiment queue')
       const top = list.scrollTop
-      list.replaceChildren(...(tab === 'queue' ? queueRows() : historyRows()))
+      list.replaceChildren(...(compact ? compactRows() : tab === 'queue' ? queueRows() : historyRows()))
       list.scrollTop = top
       // a log's box moved into the new rows: back at its end, or where the user left it
       for (const l of logs.values()) if (l.box.isConnected) l.box.scrollTop = l.stick ? l.box.scrollHeight : l.top
@@ -529,6 +588,11 @@
 
     btn.addEventListener('click', () => setOpen(panel.hidden))
     $('jobs-close').addEventListener('click', () => setOpen(false))
+    foldBtn.addEventListener('click', () => {
+      compact = !compact
+      store.set('jobsCompact', compact)
+      draw()
+    })
     pauseBtn.addEventListener('click', () => view && change({ op: 'pause', paused: !view.paused }, view.paused ? 'Resumed' : 'Paused: no new job starts'))
     for (const t of tabs) {
       t.addEventListener('click', () => {
@@ -556,5 +620,5 @@
     })
   }
 
-  root.RftQueue = { duration, moveOp, gpuState, endWord, notebookWord, cleanLine, newLog, feedLog, logText, badge, when, mount }
+  root.RftQueue = { duration, moveOp, gpuState, endWord, notebookWord, progressParts, cleanLine, newLog, feedLog, logText, badge, when, mount }
 })(typeof globalThis !== 'undefined' ? globalThis : window)

@@ -9,6 +9,7 @@ type Job = { id: string; exp: string; state: string; exit?: number | null; reaso
 type Log = { lines: string[]; partial: string; cut: boolean; next: number }
 type Api = {
   notebookWord: (j: Job & { kind?: string; outcome?: Record<string, unknown>; error?: string }) => string
+  progressParts: (p: unknown) => { stage: string; bars: { label: string; pct: number | null; nums: string; title: string }[]; line: string } | null
   cleanLine: (line: string) => string
   newLog: () => Log
   feedLog: (log: Log, piece: { text: string; start: number; end: number; reset?: boolean }) => Log
@@ -91,5 +92,18 @@ describe('queue monitor', () => {
     expect(Q.notebookWord({ ...nb, outcome: { state: 'ok' } })).toBe('reproduced its Result')
     expect(Q.notebookWord({ ...nb, outcome: { state: 'differs' } })).toBe('differs from its Result')
     expect(Q.notebookWord({ ...nb, outcome: { state: 'failed' }, error: "Traceback (most recent call last):\nKeyError: 'acc'" })).toBe("failed: KeyError: 'acc'")
+  })
+
+  test("a running job's row: its stage, a meter per bar with its numbers and time left, its last line", () => {
+    const got = Q.progressParts({ stage: { stage: 'probe patchpos', i: 2, n: 5 }, bars: [{ desc: 'train shard 3/12', n: '450', total: '1000', pct: 45, left: '01:40', elapsed: '01:23', rate: '5.40it/s' }, { desc: '', n: '1200', rate: '40.0it/s' }], line: 'loss 0.31' })!
+    expect(got.stage).toBe('Stage 2/5: probe patchpos')
+    expect(got.bars).toEqual([
+      { label: 'train shard 3/12', pct: 45, nums: '450/1000 · 45% · 01:40 left', title: '01:23 so far, 5.40it/s' },
+      { label: 'progress', pct: null, nums: '1200 · 40.0it/s', title: '40.0it/s' },
+    ])
+    expect(got.line).toBe('loss 0.31')
+    expect(Q.progressParts({ stage: { stage: 'cache' } })!.stage).toBe('Stage: cache')
+    expect(Q.progressParts({})).toBeNull()
+    expect(Q.progressParts(undefined)).toBeNull()
   })
 })
