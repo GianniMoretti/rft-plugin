@@ -152,7 +152,7 @@
     let armed = null // a cancel waiting for its second press: { id, until }
     let dragging = null
     let timer = 0
-    let compact = store.get('jobsCompact', false) === true // folded: the GPUs only, the queue and its history hidden
+    let compact = store.get('jobsCompact', false) === true // folded: the waiting jobs in one line; the GPUs, the running jobs and the history as they are
     let pauseArmed = 0 // a pause waiting for its second press, until then (ms)
     // the pause and resume symbols, drawn (a font may lack ⏸, or draw it as a coloured emoji)
     const PAUSE_ICON = '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><rect x="2" y="1.5" width="3" height="9" rx="0.6" fill="currentColor"/><rect x="7" y="1.5" width="3" height="9" rx="0.6" fill="currentColor"/></svg>'
@@ -503,6 +503,13 @@
       const order = waiting.map(j => j.id)
       const w = canWrite()
       const out = running.map(j => row(j, { meta: `running on ${gpuList(j.gpu_ids)} · ${duration(now() - (j.started || now()))}`, actions: [moreBtn(j), cancelBtn(j)] }))
+      if (compact && waiting.length) {
+        // folded: the waiting jobs in one line, which unfolds them
+        const unfold = () => { compact = false; store.set('jobsCompact', false); draw() }
+        out.push(el('button', { type: 'button', class: 'jobs-sep jobs-waiting-fold muted', title: 'Unfold the waiting jobs', 'aria-expanded': 'false', onclick: unfold },
+          `▸ ${waiting.length} waiting: ${waiting.slice(0, 6).map(j => `${j.id} ${j.exp}`).join(', ')}${waiting.length > 6 ? ', …' : ''}`))
+        return out
+      }
       if (running.length && waiting.length) out.push(el('div', { class: 'jobs-sep muted', text: `Waiting, in order${w ? ' (drag to reorder)' : ''}` }))
       waiting.forEach((j, i) => out.push(row(j, {
         place: i + 1, drag: w, order,
@@ -551,10 +558,10 @@
       panel.classList.toggle('compact', compact)
       foldBtn.textContent = compact ? '▾' : '▴'
       foldBtn.setAttribute('aria-expanded', String(!compact))
-      foldBtn.title = compact ? 'Unfold the queue: its jobs, history and logs' : 'Fold the queue: keep the GPUs'
-      foldBtn.setAttribute('aria-label', compact ? 'Unfold the queue' : 'Fold the queue')
+      foldBtn.title = compact ? 'Unfold the waiting jobs' : 'Fold the waiting jobs into one line (the running ones stay)'
+      foldBtn.setAttribute('aria-label', compact ? 'Unfold the waiting jobs' : 'Fold the waiting jobs')
       const top = list.scrollTop
-      list.replaceChildren(...(compact ? [] : tab === 'queue' ? queueRows() : historyRows()))
+      list.replaceChildren(...(tab === 'queue' ? queueRows() : historyRows()))
       list.scrollTop = top
       // a log's box moved into the new rows: back at its end, or where the user left it
       for (const l of logs.values()) if (l.box.isConnected) l.box.scrollTop = l.stick ? l.box.scrollHeight : l.top

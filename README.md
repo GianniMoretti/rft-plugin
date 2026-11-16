@@ -430,8 +430,9 @@ session brings it back).
   >> "$RFT_PROGRESS"`, or a plain line of text). The runner sets `TQDM_MININTERVAL=10` (unless
   the job's environment has it), so a bar redraws every 10 s and logs stay small; a bar's own
   `mininterval=` still wins. `rft_jobs` gives Claude the same in a line.
-- **▴** at the panel's top left folds the queue away and keeps the GPUs (the panel remembers it);
-  **▾** unfolds it.
+- **▴** at the panel's top left folds the waiting jobs into one line ("▸ 3 waiting: q11 E25, …");
+  the GPUs, the running jobs with their progress and the history stay. The panel remembers it;
+  **▾**, or a click on that line, unfolds them.
 - **The run record**: each job is the record of its run. When it starts, the runner records the
   code it runs: the repo, its commit and branch, and its uncommitted changes to tracked files,
   saved whole as `code.patch` in its output folder (untracked files are counted, not kept); so a

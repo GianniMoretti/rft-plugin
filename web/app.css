@@ -730,8 +730,9 @@ main.artifact-open:has(#drawer:not([hidden])) #concept-canvas { width: calc(100%
 .jobs-bar-meter.none { visibility: hidden; }
 .jobs-bar-nums { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .jobs-lastline { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-#jobs.compact .jobs-tabs:not(.jobs-hosts), #jobs.compact .jobs-list, #jobs.compact .jobs-foot { display: none; }
-#jobs.compact .jobs-gpus { border-bottom: 0; }
+.jobs-waiting-fold { display: block; width: 100%; text-align: left; border: 0; border-radius: 0; background: none; padding: 6px 12px; cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jobs-waiting-fold:hover { color: var(--fg); }
 .jobs-log-bar { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 4px; }
 .jobs-log-bar button { padding: 1px 7px; }
 .jobs-log-err { margin-top: 3px; color: var(--dropped); overflow-wrap: anywhere; }
