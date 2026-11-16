@@ -7,7 +7,7 @@
 
 import type { Concept, Io, Loaded, RftNode, Tree } from './vault'
 import { ARTIFACTS_DIR, ARTIFACT_HEAD, ID_RE, MARK, ROOT_CONCEPT, codeRepos, conceptOrder, conceptPath, isAbsolute, join, load, ownNotes, resolveConcept, resolvePath, resultOf } from './vault'
-import { notebookMark } from './notebooks'
+import { notebookMark, resultsBlockOf } from './notebooks'
 
 export { ARTIFACTS_DIR, resultOf } from './vault'
 
@@ -285,9 +285,11 @@ export async function setArtifact(io: Io, loaded: Loaded, ref: string, input: { 
 
 // ---------------------------------------------------------------- rft_artifact
 
-/** How to write the page: in rft_artifact's answer, where it is read before each write. */
-export const PAGE_RULES = 'The page: HTML (a fragment or a whole document) with its own <style> and inline <script>; charts as inline SVG. ' +
-  'Nothing from elsewhere (no CDN, no fetch): the tree view blocks it. Figures go in the vault\'s figures/ folder, named from the page as <img src="../figures/<file>.svg" alt="…">; save them as SVG (the view offers each SVG figure as a PDF download, and each table as a LaTeX table float to copy: give a table a <caption>). ' +
+/** How to write the page, in rft_artifact's answer, where it is read before each write; `coded`: the concept has code, so notebooks make its charts and tables. */
+export const pageRules = (coded: boolean) => (coded
+  ? 'The page: HTML (a fragment or a whole document) with its own <style>: prose and layout. Its charts and tables come from notebooks, placed by name: an experiment\'s notebook, or the concept\'s for comparisons across its experiments, saves FIGURES and TABLES, which go on as <img src="../figures/<file>.svg" alt="…"> and <rft-table src="<name>"></rft-table> (filled in for you). Never draw a chart or type a table of results by hand: one the page needs and no notebook makes is a figure or table to add to a notebook (rft_set_notebook on the concept\'s start note for comparisons). Only in a concept without code, a short table typed from the notes\' numbers. '
+  : 'The page: HTML (a fragment or a whole document) with its own <style>: prose and layout, with short tables typed from the notes\' numbers (this concept links no code). A figure is an SVG file in the vault\'s figures/ folder, named from the page as <img src="../figures/<file>.svg" alt="…">. ') +
+  'Nothing from elsewhere (no CDN, no fetch): the tree view blocks it. The view offers each SVG figure as a PDF download and each table as a LaTeX table float to copy. ' +
   'Link every note id, e.g. <a href="#E05">E05</a>: the tree view opens the note and marks the link with its status. ' +
   'Its base style follows the view\'s light and dark themes: use var(--fg), var(--muted), var(--bg), var(--panel), var(--line), var(--accent), var(--good), var(--bad), and var(--c1) … var(--c6) for series. ' +
   'Only numbers that are in the notes, with their spread; say which results are superseded. The view links the sub-concepts\' artifacts itself. ' +
@@ -297,6 +299,17 @@ export const PAGE_RULES = 'The page: HTML (a fragment or a whole document) with 
 export function artifactLine(loaded: Loaded, a: Artifact): string {
   const s = artifactState(loaded, a)
   return `${a.path}, updated ${a.updated || '?'}, ${s.stale ? `out of date: ${describeState(s)}` : 'up to date'}`
+}
+
+/** A Result as rft_artifact shows it: its table of RESULTS (written by the notebook) as one line, the rest as written. */
+export function compactResult(text: string): string {
+  const result = resultOf(text)
+  const block = resultsBlockOf(result)
+  if (!block) return result
+  const rows = block.split('\n').map(l => /^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|$/.exec(l)).filter((m): m is RegExpExecArray => !!m && m[1] !== 'RESULTS' && !/^-+$/.test(m[1]!))
+  const source = /^\*(From .*)\*$/m.exec(block)?.[1]
+  const line = `RESULTS, written by its notebook: ${rows.map(m => `${m[1]} ${m[2]}`).join(' · ')}${source ? ` (${source.replace(/\.$/, '')})` : ''}`
+  return result.replace(block, line).trim()
 }
 
 /** What a concept's artifact is written from: each result (in full when new, changed, or asked for), the experiments without one, the sub-concepts. */
@@ -322,7 +335,7 @@ export async function artifactReport(io: Io, loaded: Loaded, ref: string, opts: 
     const parts = kept ? [...kept.figures.map(f => `<img src="../${f}">`), ...kept.tables.map(t => `<rft-table src="${t}"></rft-table>`)] : []
     if (parts.length) saved++
     const keptLine = parts.length ? `Saved by its notebook: ${parts.join(' · ')}` : ''
-    if (!a || opts.full || fresh.has(n.id)) out.push(`## ${head}${mark}`, resultOf(loaded.texts[n.id] ?? '') || '(no Result written: it is done)', ...(keptLine ? [keptLine] : []), '')
+    if (!a || opts.full || fresh.has(n.id)) out.push(`## ${head}${mark}`, compactResult(loaded.texts[n.id] ?? '') || '(no Result written: it is done)', ...(keptLine ? [keptLine] : []), '')
     else out.push(`- ${head}${keptLine ? ` · ${keptLine}` : ''}`)
   }
   if (!results.length) out.push('(none yet: nothing to put on the page)')
@@ -334,7 +347,7 @@ export async function artifactReport(io: Io, loaded: Loaded, ref: string, opts: 
   if (c.children.length) out.push('', `Sub-concepts (the view links their artifacts; leave them off this page): ${c.children.map(k => `${tree.concepts![k]!.name} (${k})`).join(', ')}`)
   if (a && !opts.full && results.length > fresh.size) out.push('', 'The unchanged results are one line each: rft_artifact with full: true gives them in full.')
   if (saved) out.push('', 'Put a notebook\'s figures and tables on the page as named above: an <rft-table> is filled with the table when the page is written, and again whenever the notebook\'s run writes it anew. Write their numbers nowhere else on the page; say what they show.')
-  out.push('', PAGE_RULES)
+  out.push('', pageRules(coded))
   return out.join('\n').replace(/\n{3,}/g, '\n\n')
 }
 

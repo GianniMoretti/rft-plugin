@@ -843,6 +843,14 @@ export const reposLine = (repos: string[]) => `[${repos.map(p => JSON.stringify(
  * The repos the notes of a concept work with, by priority: the concept's own, then those of each
  * concept above it, nearest first; a path once, at its highest place.
  */
+/**
+ * Whether an experiment should have a notebook and has none: its concept links code, and it is in
+ * work or has a result (not an idea, nor dropped, discussed or moved). The notebook makes its
+ * numbers, figures and tables; rft_add_node, rft_next and rft_validate say so.
+ */
+export const lacksNotebook = (tree: Tree, n: RftNode) =>
+  n.type === 'experiment' && !n.notebook && !n.supersededBy && ['planned', 'running', 'done'].includes(n.status) && codeRepos(tree.concepts, n.concept).length > 0
+
 export function codeRepos(concepts: Record<string, Concept> | undefined, id: string): CodeRepo[] {
   const out: CodeRepo[] = []
   const seen = new Set<string>()
@@ -1290,6 +1298,8 @@ export async function validate(io: Io, loaded: Loaded, opts: { root?: string; ho
     const missing = n.children.filter(k => !listed.has(tree.nodes[k]!.name))
     if (missing.length) warnings.push(`${n.id}: "Children in the tree" does not list ${missing.join(', ')} (rft_sync adds them)`)
   }
+  const noNotebook = Object.values(tree.nodes).filter(n => lacksNotebook(tree, n)).map(n => n.id).sort(compareNames)
+  if (noNotebook.length) warnings.push(`Experiments in a concept with code and no notebook (${noNotebook.length}): ${noNotebook.slice(0, 20).join(', ')}${noNotebook.length > 20 ? ', …' : ''} — rft_set_notebook writes one, which makes their numbers, figures and tables`)
   for (const p of PRIORITIES) {
     const limit = PRIORITY_LIMITS[p]
     const held = Object.values(tree.nodes).filter(n => n.priority === p && OPEN_STATUSES.includes(n.status)).map(n => n.id).sort(compareNames)

@@ -237,11 +237,14 @@ key results as tables and small charts, what failed, what is still running.
   artifact of each concept that got them, once per concept, with edits; a concept with results
   and no artifact gets one then too. `/rft-artifact [concept]` asks for one, or for every one
   missing or out of date.
-- **The page**: HTML with its own `<style>` and inline `<script>`; charts as inline SVG. The view
-  loads nothing from elsewhere (no CDN, no fetch). **Figures** go in the vault's `figures/` folder,
-  saved as SVG and named from the page as `<img src="../figures/<file>.svg" alt="…">`; the view
-  gives each SVG figure (and each inline chart) a button that downloads it as a PDF, and each
-  table one that copies it as a LaTeX `table` float, so give every table a `<caption>`. Its base
+- **The page** is prose and layout, HTML with its own `<style>`. **Its charts and tables come from
+  notebooks**: an experiment's notebook, or the concept's for comparisons across its experiments
+  (see Experiment notebooks), saves `FIGURES` and `TABLES`, placed by name (below). Never draw a
+  chart or type a table of results by hand: one the page needs and no notebook makes is a figure
+  or table to add to a notebook. Only in a concept without code, a short table typed from the
+  notes' numbers. The view loads nothing from elsewhere (no CDN, no fetch); it gives each SVG
+  figure a button that downloads it as a PDF, and each table one that copies it as a LaTeX
+  `table` float. Its base
   style follows the view's light and dark themes: `var(--fg)`, `--muted`, `--bg`, `--panel`,
   `--line`, `--accent`, `--good`, `--bad`, and `--c1` … `--c6` for series. Link every note id,
   `<a href="#E05">E05</a>` (or `data-note="E05"` on any element): the view opens the note and

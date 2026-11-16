@@ -42,7 +42,7 @@ import type { ApplyOutcome, NotebookEnv } from './lib/notebooks'
 import { MAX_TIMEOUT_S, REPRODUCED_LINE, changesReproduced, changesResultsBlock, reproducedEditText, resultsBlockEditText, runNotebook, setNotebook } from './lib/notebooks'
 import { QUEUE_CLI, QUEUE_FILE, addedText, cancelledText, jobEvents, jobsNext, jobsReport, movedText, queueLine, readQueue, retriedText, toStart } from './lib/queue'
 import type { Job, QueueView } from './lib/queue'
-import { CONFIG_PATH, LEGEND, MARK, NODE_TYPES, bodyOf, isLiterature, counts, countsLine, isAbsolute, join, locate, readConfig, repoAbs, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
+import { CONFIG_PATH, LEGEND, MARK, NODE_TYPES, bodyOf, isLiterature, counts, countsLine, isAbsolute, join, locate, readConfig, lacksNotebook, repoAbs, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
 
 const PANE = 'rft-tree'
 const TITLE = 'Reasoning tree'
@@ -316,12 +316,12 @@ const TOOLS = {
   },
   rft_set_artifact: {
     description:
-      "Write a concept's artifact: the whole page (html) or changes to it (edits, applied in order, all or none, each old_str found on the page exactly once). Stamped with the results it was written from, so the plugin says when they change. Only numbers that are in the notes; link every note id as <a href=\"#E05\">E05</a>. The answer names results left off the page, links to no note, superseded results cited alone, and files the view would block.",
+      "Write a concept's artifact: the whole page (html) or changes to it (edits, applied in order, all or none, each old_str found on the page exactly once). Stamped with the results it was written from, so the plugin says when they change. Prose and layout: its charts and tables are the notebooks' FIGURES and TABLES, placed by the names rft_artifact lists, never drawn or typed by hand. Only numbers that are in the notes; link every note id as <a href=\"#E05\">E05</a>. The answer names results left off the page, links to no note, superseded results cited alone, and files the view would block.",
     inputSchema: {
       type: 'object',
       properties: {
         concept: { type: 'string', description: 'The concept, by name or the id of the note that starts it.' },
-        html: { type: 'string', description: 'The whole page: an HTML fragment or document, with its own <style> and inline <script>; charts as inline SVG; nothing loaded from elsewhere.' },
+        html: { type: 'string', description: 'The whole page: an HTML fragment or document with its own <style>; the notebooks\' figures as <img src="../figures/<file>.svg"> and tables as <rft-table src="<name>"></rft-table>; nothing loaded from elsewhere.' },
         edits: {
           type: 'array', description: 'Changes to the page as it is: old_str exactly as on the page (once), new_str its replacement (empty deletes it).',
           items: { type: 'object', properties: { old_str: { type: 'string' }, new_str: { type: 'string' } }, required: ['old_str', 'new_str'] },
@@ -821,7 +821,10 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
         suggestedPriority: str(i.suggested_priority), priorityWhy: str(i.priority_why),
       }, await codeEnv($, h))
       const similar = similarNotes(loaded, node.id)
-      return `${node.report}\nId: ${node.id}\nNote: ${join(shownVault(h, loaded.config), node.path)}${similar ? `\n${similar}` : ''}`
+      const added = loaded.tree.nodes[node.id]
+      const nb = added && lacksNotebook(loaded.tree, added)
+        ? `\nIts concept links code: write its notebook now (rft_set_notebook ${node.id}), so its run writes the numbers, figures and tables when its jobs end.` : ''
+      return `${node.report}\nId: ${node.id}\nNote: ${join(shownVault(h, loaded.config), node.path)}${nb}${similar ? `\n${similar}` : ''}`
     }
     case 'rft_set_repos':
       return setRepos(io, loaded, await codeEnv($, h), String(i.id ?? ''), strings(i.repos))
@@ -1617,7 +1620,7 @@ const rebalancePrompt = (scope: string) => `Propose a rebalancing of the reasoni
 const candidatesPrompt = (scope: string, list: string) => `Propose a rebalancing of the reasoning tree (rft-manual skill, "Restructuring the tree")${scope ? `, limited to ${JSON.stringify(scope)}` : ''}. The plugin compared every note with the concepts (its title, summary, tags and references against each concept's notes) and found these candidates, notes that sit closer to another concept than to their own:\n\n${list}\n\nJudge only these; do not survey the rest of the tree. The weak candidates, if any, are listed one line each: most of them stay where they are, so look further only at those whose line suggests a real misplacement (a note about one line of research hung under another). For each candidate you look at, check it against the two concepts (rft_map <concept> if their state is not clear to you, rft_graph <id> for its neighbours) and open a note's file only when that leaves the move in doubt. The fit is a hint from shared words, not a verdict: a note that came out of a result stays where the reasoning produced it unless it really is part of another line; when in doubt, leave it. For each move you keep: the note to move (its subtree goes with it), its parent now, the new parent (the nearest note named is a start, pick the right one), and why in one line. Moves only: if a new concept would help, say so separately (rft_set_concept, after the user agrees). Present the moves as a short numbered table, say which candidates you would leave and why in a few words, and ask me which moves to apply. Do not call rft_move_node until I say yes; then apply only the moves I confirm, each with its why, and finish with rft_validate.`
 
 /** The back-fill of the map: summaries of the notes without one, then the digests, concept by concept. */
-const artifactPrompt = (names: string[]) => `Write the artifact${names.length > 1 ? 's' : ''} of ${names.map(n => `the concept ${JSON.stringify(n)}`).join(', ')} of the reasoning tree: for each, call rft_artifact ${names.map(n => JSON.stringify(n)).join(' / ')} to see its experiments' results and what changed since the page was written, read the notes you need, then rft_set_artifact: html for a new page, edits for one that exists. A page says where the line of research stands, the key results (tables with the spread over seeds, a small inline-SVG chart where it helps), what failed and what is still running or planned; every note id a link (<a href="#E05">E05</a>), never a number that is not in a note. Go on to the next concept without asking me, and at the end tell me which artifacts you wrote.`
+const artifactPrompt = (names: string[]) => `Write the artifact${names.length > 1 ? 's' : ''} of ${names.map(n => `the concept ${JSON.stringify(n)}`).join(', ')} of the reasoning tree: for each, call rft_artifact ${names.map(n => JSON.stringify(n)).join(' / ')} to see its experiments' results and what changed since the page was written, read the notes you need, then rft_set_artifact: html for a new page, edits for one that exists. A page says where the line of research stands, the key results, what failed and what is still running or planned: prose and layout, with the figures and tables the notebooks saved placed by the names rft_artifact gives, never drawn or typed by hand; a comparison the page needs that no notebook makes goes into the concept's notebook (rft_set_notebook on its start note, from EXPERIMENTS). Every note id a link (<a href="#E05">E05</a>), never a number that is not in a note. Go on to the next concept without asking me, and at the end tell me which artifacts you wrote.`
 
 const summarizePrompt = (scope: string) => `Fill in the project map of the reasoning tree${scope ? ` for the concept ${JSON.stringify(scope)} and its sub-concepts` : ''} (rft-manual skill, "The project map"). Work concept by concept, the smallest sub-concepts first: call rft_map <concept> to see its notes and which have no summary; read those notes (their Idea, What, Why, Result, Summary, Relevance, Statement: the parts that say what the note is and what it found, not the boilerplate) and set a one-line summary for each with rft_set_summary, many per call (at most 20). A summary says what the note is about and, if it has one, its result with the key number; for a dropped or discussed direction, why. Never invent a result: when the note has none, say what it tests. Then, with all its summaries set, write the concept's digest with rft_set_digest: its state in one or two sentences, then ## Key results, ## Dead ends and ## Open questions, each point with the note ids. Go on to the next concept without asking me, and at the end run rft_validate and tell me how many summaries and digests you wrote.`
 

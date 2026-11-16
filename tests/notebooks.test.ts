@@ -11,13 +11,14 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 
 import '../web/artifacts.js'
 
-import { artifactReport } from '../hooks/lib/artifacts'
+import { artifactReport, compactResult } from '../hooks/lib/artifacts'
+import { nextReport } from '../hooks/lib/knowledge'
 import type { ApplyOutcome, NotebookEnv } from '../hooks/lib/notebooks'
 import { MAX_TIMEOUT_S, notebookFile, notebookSource, parseReproduced, relativePath, reproducedLine, runNotebook, runsCell, setNotebook } from '../hooks/lib/notebooks'
 import { rulesText } from '../hooks/lib/ops'
 import { treeJson } from '../hooks/lib/page'
 import { CORE_TOOLS, FEATURE_TOOLS } from '../hooks/lib/tools'
-import { front, load, readConfig, reposLine, rooted } from '../hooks/lib/vault'
+import { front, load, readConfig, reposLine, rooted, validate } from '../hooks/lib/vault'
 import { D01, E01, E02, MemoryFs, demoAt, world } from './fixture'
 
 const ROOT = '/work/demo'
@@ -240,6 +241,27 @@ describe('the run stamp', () => {
   })
 })
 
+describe('every experiment of a concept with code gets a notebook', () => {
+  test('rft_validate names those without one, and rft_next those in work', async () => {
+    const files = project()
+    files[PATH.E02] = files[PATH.E02]!.replace('status: done', 'status: running')
+    const { io, loaded } = await open(files)
+    const v = await validate(io, loaded, { root: ROOT })
+    expect(v.warnings.find(w => w.startsWith('Experiments in a concept with code and no notebook'))).toContain('(1): E02')
+    expect(await nextReport(io, loaded, '2026-11-16')).toContain('No notebook yet (rft_set_notebook): E02 (running)')
+    // with its notebook, or outside a concept with code, nothing is said
+    const linked = await open(project({ e02: 'notebook: "notebooks/E02.py"' }))
+    expect((await validate(linked.io, linked.loaded, { root: ROOT })).warnings.join('\n')).not.toContain('no notebook')
+    expect(v.warnings.find(w => w.startsWith('Experiments in a concept with code and no notebook'))).not.toContain('E01') // its concept links no code
+  })
+
+  test("rft_artifact gives a Result's table of RESULTS in one line", () => {
+    const text = '---\nid: E08\n---\n\n## Result\n<!-- rft-results: the notebook\'s RESULTS, written by its run; rft_run_notebook rewrites it -->\n| RESULTS | value |\n|---|---|\n| acc_mean | 0.8833 |\n| seeds | 3 |\n\n*From `notebooks/E08.py` at a1b2c3d4e5, 2026-11-16; runs q1, q2.*\n<!-- /rft-results -->\n\nIt settles.\n\n## Directions found\n'
+    expect(compactResult(text)).toBe('RESULTS, written by its notebook: acc_mean 0.8833 · seeds 3 (From `notebooks/E08.py` at a1b2c3d4e5, 2026-11-16; runs q1, q2)\n\nIt settles.')
+    expect(compactResult('---\nid: E01\n---\n\n## Result\nGap 4.1.\n')).toBe('Gap 4.1.')
+  })
+})
+
 describe('where the notebooks show', () => {
   test('the tree JSON carries the notebook and its last run', async () => {
     const { loaded } = await open(project({ e02: 'notebook: "notebooks/E02.py"\nreproduced: "2026-11-15 ok @a1b2c3d4e5 in 6.1 s"' }))
@@ -351,6 +373,16 @@ describe('the notebook tools in a session', () => {
     expect(ran).toEqual([])
     await $.tool.call({ tool: 'Edit', file_path: PATH.E02, old_string: RESULT, new_string: 'The gap closes at 10k.' } as never)
     expect(ran).toEqual(['Edit'])
+  })
+
+  test("rft_add_node asks for an experiment's notebook when its concept links code", async ($, on) => {
+    mock.clock(on)
+    world(on, project(), { cwd: ROOT })
+    await $.session.start({ cwd: ROOT, source: 'startup' } as never)
+    const r = await $.tool.call({ tool: 'mcp__rft__rft_add_node', type: 'experiment', title: 'Seed sweep', parent: 'D01', status: 'planned', what: 'Three seeds.', summary: 'Seeds' } as never)
+    expect(String(r.text)).toContain('write its notebook now (rft_set_notebook E03)')
+    const d = await $.tool.call({ tool: 'mcp__rft__rft_add_node', type: 'direction', title: 'Another idea', parent: 'D01', status: 'idea', idea: 'x', summary: 'x' } as never)
+    expect(String(d.text)).not.toContain('notebook')
   })
 
   test('rft_set_notebook writes the file and asks the helper for the link', async ($, on) => {
