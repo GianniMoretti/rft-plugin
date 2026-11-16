@@ -212,6 +212,8 @@ export type Config = {
   requireSummaries?: boolean
   /** How many GPUs the experiments share: days on which planned and running ones need more are reported. */
   gpus?: number
+  /** Where the queue's runs keep their outputs (<runsDir>/<exp>/<job>; absolute, ~/…, or from the tree's folder); absent: `runs/` at the top of each job's repo. */
+  runsDir?: string
 }
 
 export type Io = {

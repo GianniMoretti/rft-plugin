@@ -37,6 +37,22 @@ export type Job = {
   /** A waiting job: why it waits, or that it starts now (from the runner's status). */
   outlook?: string
   log?: string
+  /** "notebook": the run of an experiment's notebook the runner queues when its jobs end; else a run. */
+  kind?: 'run' | 'notebook'
+  /** A run's output folder ($RFT_OUT), known from the start; it holds rft-run.json, its record. */
+  out?: string
+  /** The code it ran, recorded when it started: the repo, its commit and branch. */
+  repo?: string
+  commit?: string
+  branch?: string | null
+  /** Uncommitted changes to tracked files when it started, saved whole as `patch`. */
+  dirty?: boolean
+  patch?: string
+  untracked?: number
+  /** The repo's code moved while it ran. */
+  changed?: boolean
+  /** A failed run: the end of its traceback, or its last lines. */
+  error?: string
 }
 
 export type Gpu = {
@@ -164,10 +180,25 @@ export function toRecord(v: QueueView, loaded: Loaded): { exp: string; job: Job 
   return out
 }
 
+/** A failed run's error in one line: its last line (the exception, for a traceback), cut short. */
+export const errorLine = (j: Job) => {
+  const last = j.error?.trim().split('\n').pop()?.trim()
+  return last ? (last.length > 120 ? `${last.slice(0, 117)}…` : last) : ''
+}
+
 const recordText = (r: { exp: string; job: Job }, now: number) => {
   const j = r.job
   const how = j.state === 'failed' ? `failed, ${j.exit != null ? `exit ${j.exit}` : 'lost'}` : j.state
-  return `${r.exp} (${j.id} ${how}, ${ago(j.ended, now)})`
+  const err = j.state === 'failed' ? errorLine(j) : ''
+  return `${r.exp} (${j.id} ${how}, ${ago(j.ended, now)}${err ? `: ${err}` : ''})`
+}
+
+/** Where a run's code came from, in one line: the repo at its commit, and its uncommitted changes. */
+export function codeLine(j: Job): string | null {
+  if (!j.repo) return null
+  if (!j.commit) return `code: ${j.repo} (no commit yet)`
+  return `code: ${j.repo} @ ${j.commit}${j.branch ? ` (${j.branch})` : ''}${j.patch ? `, with its uncommitted changes in ${j.patch}` : ''}` +
+    `${j.untracked ? `; ${j.untracked} untracked file${j.untracked === 1 ? '' : 's'} not kept` : ''}${j.changed ? '; the code moved while it ran' : ''}`
 }
 
 /** The session's start: what the queue holds, and the results to record; null when there is nothing. */
@@ -179,7 +210,7 @@ export function queueLine(v: QueueView, loaded: Loaded, now: number): string | n
   const parts = [`Experiment queue: ${running} running, ${waiting} waiting${v.paused ? ' (paused)' : ''}.`]
   if (rec.length) {
     parts.push(`Jobs that ended, their result not recorded yet: ${rec.slice(0, 6).map(r => recordText(r, now)).join(', ')}${rec.length > 6 ? `, and ${rec.length - 6} more` : ''}. ` +
-      'rft_jobs <id> (log: 40 for the end of its output) says how it ended; then record the result or the failure in the note.')
+      'rft_jobs <id> says how it ended (a failed one with the end of its traceback); then record the result or the failure in the note.')
   }
   return parts.join(' ')
 }
@@ -220,7 +251,7 @@ export function jobEvents(prev: QueueView | null, next: QueueView): string[] {
 export function addedText(r: { job: Job & { place?: number }; outlook?: string }, loaded: Loaded, vault: string): string {
   const j = r.job
   return `Queued ${j.id} for ${j.exp}${titleOf(loaded, j.exp) ? ` ${titleOf(loaded, j.exp)}` : ''}: ${gpuWord(j.gpus)}, ${r.outlook || `${j.place ?? '?'} in line`}. ` +
-    `Its output goes to ${vault}/${QUEUE_DIR}/logs/${j.id}.log. The plugin sets ${j.exp} running when it starts and tells the user when it ends: do not poll rft_jobs to wait for it.`
+    `${j.out ? `Its folder for outputs is ${j.out} ($RFT_OUT in its environment). ` : ''}Its log goes to ${vault}/${QUEUE_DIR}/logs/${j.id}.log. The plugin sets ${j.exp} running when it starts and tells the user when it ends: do not poll rft_jobs to wait for it.`
 }
 
 const gpuLine = (v: QueueView) => {
@@ -246,6 +277,10 @@ export function jobsReport(v: QueueView, loaded: Loaded, now: number, opts: { re
       : j.state === 'pending' ? `waiting: ${j.outlook || 'in line'}`
         : `${endWord(j)}${ranFor(j)}, ${ago(j.ended, now)}${j.reason && j.state !== 'failed' ? ` (${j.reason})` : j.reason?.startsWith('lost') ? ` (${j.reason})` : ''}`
     const lines = [`${named(loaded, j)} · ${gpuWord(j.gpus)} · ${how}`, `$ ${j.cmd}`, `in ${j.cwd}${j.retry_of ? ` · retry of ${j.retry_of}` : ''}`]
+    const code = codeLine(j)
+    if (code) lines.push(code)
+    if (j.out) lines.push(`outputs: ${j.out}`)
+    if (j.error && j.state === 'failed') lines.push(`Error:\n${j.error}`)
     if (opts.log !== undefined) lines.push(opts.log.trim() ? `Output (last lines):\n${opts.log.replace(/\s+$/, '')}` : 'No output yet.')
     return lines.join('\n')
   }
@@ -271,10 +306,10 @@ export function jobsReport(v: QueueView, loaded: Loaded, now: number, opts: { re
   const keep = opts.history ?? 5
   if (ended.length && keep > 0) {
     out.push(`Ended (last ${Math.min(keep, ended.length)}${ended.length > keep ? ` of ${ended.length}` : ''}):`,
-      ...ended.slice(0, keep).map(j => `- ${named(loaded, j)} · ${endWord(j)}${ranFor(j)}, ${ago(j.ended, now)}`))
+      ...ended.slice(0, keep).map(j => `- ${named(loaded, j)} · ${endWord(j)}${ranFor(j)}, ${ago(j.ended, now)}${j.state === 'failed' && errorLine(j) ? `: ${errorLine(j)}` : ''}`))
   }
   const rec = toRecord(v, loaded).filter(r => !exp || r.exp === exp)
-  if (rec.length) out.push(`Results to record: ${rec.map(r => recordText(r, now)).join(', ')} (rft_jobs <id> log: 40 for a job's output).`)
+  if (rec.length) out.push(`Results to record: ${rec.map(r => recordText(r, now)).join(', ')} (rft_jobs <id>: how one ended).`)
   return out.join('\n')
 }
 

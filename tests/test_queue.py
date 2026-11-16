@@ -291,6 +291,120 @@ class QueueTest(unittest.TestCase):
         self.assertIn("nvidia-smi not found", q.outlook(q.find("q1")))
 
 
+def git(repo, *args):
+    return subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+                          check=True, capture_output=True, text=True).stdout.strip()
+
+
+class RunRecordTest(unittest.TestCase):
+    """A job is the record of its run: the code it ran (commit, branch, uncommitted changes as a
+    patch), its output folder ($RFT_OUT), and how it ended (the end of a traceback), kept in the
+    history and as rft-run.json beside its outputs."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name).resolve()
+        self.vault = base / "vault"
+        self.vault.mkdir()
+        self.repo = base / "code"
+        (self.repo / "src").mkdir(parents=True)
+        (self.repo / "train.py").write_text("print('v1')\n")
+        git(self.repo, "init", "-q", "-b", "main")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "one")
+        self.q = rft_queue.Queue(self.vault, probe=FakeGpus(1), wake=lambda: None)
+
+    def tearDown(self):
+        for j in self.q.read()["jobs"]:
+            if j["state"] == "running":
+                self.q.cancel(j["id"], "test over")
+
+    def ended(self, jid):
+        return wait_until(lambda: self.q.find(jid)["state"] not in ("pending", "running"), self.q.tick)
+
+    def test_a_run_records_the_code_it_ran_and_its_output_folder(self):
+        (self.repo / "train.py").write_text("print('v2')\n")  # an uncommitted change
+        (self.repo / "notes.txt").write_text("untracked\n")
+        j = self.q.add("E14", 'echo "$RFT_OUT" > "$RFT_OUT/seen"; python3 ../train.py', str(self.repo / "src"), gpus=0, label="seed 0")
+        out = self.repo / "runs" / "E14" / "q1"
+        self.assertEqual(j["out"], str(out))  # known when queued, made when it starts
+        self.assertTrue(self.ended("q1"))
+        r = self.q.find("q1")
+        self.assertEqual(r["state"], "done")
+        self.assertEqual((out / "seen").read_text().strip(), str(out))
+        self.assertEqual((r["repo"], r["commit"], r["branch"]), (str(self.repo), git(self.repo, "rev-parse", "--short=10", "HEAD"), "main"))
+        self.assertTrue(r["dirty"])
+        self.assertEqual(r["untracked"], 1)
+        self.assertIn("+print('v2')", Path(r["patch"]).read_text())
+        self.assertEqual(Path(r["patch"]).parent, out)
+        self.assertNotIn("changed", r)
+        # the outputs say what made them; the root the runner made keeps them out of git
+        rec = json.loads((out / "rft-run.json").read_text())
+        self.assertEqual((rec["id"], rec["state"], rec["commit"], rec["label"]), ("q1", "done", r["commit"], "seed 0"))
+        self.assertNotIn("pid", rec)
+        self.assertEqual((self.repo / "runs" / ".gitignore").read_text(), "*\n")
+        self.assertNotIn("runs", git(self.repo, "status", "--porcelain"))
+        # the patch applies on the commit: the run can be made again exactly
+        clone = Path(self.tmp.name) / "clone"
+        subprocess.run(["git", "clone", "-q", str(self.repo), str(clone)], check=True)
+        git(clone, "checkout", "-q", r["commit"])
+        git(clone, "apply", r["patch"])
+        self.assertEqual((clone / "train.py").read_text(), "print('v2')\n")
+
+    def test_a_clean_repo_has_no_patch_and_a_folder_outside_git_no_code(self):
+        self.q.add("E14", "true", str(self.repo), gpus=0)
+        plain = Path(self.tmp.name) / "plain"
+        plain.mkdir()
+        self.q.add("E15", "true", str(plain), gpus=0)
+        self.assertTrue(self.ended("q1") and self.ended("q2"))
+        a, b = self.q.find("q1"), self.q.find("q2")
+        self.assertEqual((a["dirty"], "patch" in a), (False, False))
+        self.assertEqual(b["out"], str(plain / "runs" / "E15" / "q2"))
+        self.assertFalse(any(k in b for k in ("repo", "commit", "patch")))
+        self.assertFalse((plain / "runs" / ".gitignore").exists())
+
+    def test_the_outputs_root_can_be_given_and_a_retry_keeps_it(self):
+        root = Path(self.tmp.name) / "data" / "rft-runs"
+        j = self.q.add("E14", "exit 1", str(self.repo), gpus=0, runs=str(root))
+        self.assertEqual(j["out"], str(root / "E14" / "q1"))
+        self.assertTrue(self.ended("q1"))
+        again = self.q.retry("q1")
+        self.assertEqual(again["out"], str(root / "E14" / "q2"))
+        with self.assertRaises(rft_queue.QueueError):
+            self.q.add("E14", "true", str(self.repo), runs="relative/runs")
+
+    def test_a_failed_run_keeps_the_end_of_its_traceback(self):
+        self.q.add("E14", "python3 -c 'import sys; print(\"loading\"); raise ValueError(\"bad shape (3, 4)\")'", str(self.repo), gpus=0)
+        self.q.add("E15", "echo 'warming up'; echo 'CUDA out of memory' >&2; exit 3", str(self.repo), gpus=0)
+        self.assertTrue(self.ended("q1") and self.ended("q2"))
+        e1, e2 = self.q.find("q1")["error"], self.q.find("q2")["error"]
+        self.assertTrue(e1.startswith("Traceback (most recent call last)"))
+        self.assertTrue(e1.endswith("ValueError: bad shape (3, 4)"))
+        self.assertNotIn("loading", e1)
+        self.assertEqual(e2.splitlines()[-1], "CUDA out of memory")
+        self.assertNotIn("# rft job", e2)
+        rec = json.loads((self.repo / "runs" / "E14" / "q1" / "rft-run.json").read_text())
+        self.assertEqual(rec["error"], e1)
+
+    def test_a_long_traceback_keeps_its_first_line_and_its_end(self):
+        rows = ["# rft job q1 (E1) on no GPU", "noise", "Traceback (most recent call last):", *[f'  File "f{i}.py", line {i}' for i in range(40)], "KeyError: 'lr'"]
+        err = rft_queue.error_of(rows).splitlines()
+        self.assertEqual(len(err), rft_queue.ERROR_LINES)
+        self.assertEqual((err[0], err[1], err[-1]), ("Traceback (most recent call last):", "  …", "KeyError: 'lr'"))
+
+    def test_a_run_whose_code_moved_while_it_ran_says_so(self):
+        go = Path(self.tmp.name) / "go"
+        self.q.add("E14", f"while [ ! -e {go} ]; do sleep 0.05; done", str(self.repo), gpus=0)
+        self.q.tick()
+        self.assertTrue(wait_until(lambda: self.q.find("q1")["state"] == "running"))
+        (self.repo / "train.py").write_text("print('v3')\n")
+        git(self.repo, "commit", "-q", "-am", "two")
+        go.touch()
+        self.assertTrue(self.ended("q1"))
+        self.assertTrue(self.q.find("q1")["changed"])
+
+
 class ProbeTest(unittest.TestCase):
     def test_reads_nvidia_smi(self):
         answers = {

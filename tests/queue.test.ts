@@ -90,6 +90,20 @@ describe('queue: what Claude reads', () => {
     expect(jobsReport({ ...example2(), history: [] }, loaded, NOW)).toContain('No jobs')
   })
 
+  test('a run record: the code it ran, its outputs and, when it failed, the end of its traceback instead of its log', async () => {
+    const loaded = await loadedOf()
+    const tb = 'Traceback (most recent call last):\n  File "train.py", line 9, in <module>\nRuntimeError: CUDA out of memory. Tried to allocate 2.00 GiB'
+    const v = example2()
+    Object.assign(v.history[1]!, { repo: '/work/code', commit: 'a1b2c3d4e5', branch: 'main', dirty: true, patch: '/work/code/runs/E04/q1/code.patch', out: '/work/code/runs/E04/q1', error: tb, changed: true })
+    const one = jobsReport(v, loaded, NOW, { ref: 'q1' })
+    expect(one).toContain('code: /work/code @ a1b2c3d4e5 (main), with its uncommitted changes in /work/code/runs/E04/q1/code.patch; the code moved while it ran')
+    expect(one).toContain('outputs: /work/code/runs/E04/q1')
+    expect(one).toContain(`Error:\n${tb}`)
+    // in the list and at the session's start, the exception's line is enough
+    expect(jobsReport(v, loaded, NOW)).toContain('failed (exit 1) after 4m, 3h ago: RuntimeError: CUDA out of memory. Tried to allocate 2.00 GiB')
+    expect(queueLine(v, loaded, NOW)).toContain('E04 (q1 failed, exit 1, 3h ago: RuntimeError: CUDA out of memory')
+  })
+
   test('a finished job whose experiment still says running is a result to record', async () => {
     const loaded = await loadedOf()
     // E02 and E04 are both running in the tree; their jobs ended

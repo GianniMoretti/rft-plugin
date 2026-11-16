@@ -42,7 +42,7 @@ import type { NotebookEnv, RunOutcome } from './lib/notebooks'
 import { MAX_TIMEOUT_S, REPRODUCED_LINE, changesReproduced, reproducedEditText, runNotebook, setNotebook } from './lib/notebooks'
 import { QUEUE_CLI, QUEUE_FILE, addedText, cancelledText, jobEvents, jobsNext, jobsReport, movedText, queueLine, readQueue, toStart } from './lib/queue'
 import type { Job, QueueView } from './lib/queue'
-import { CONFIG_PATH, LEGEND, MARK, NODE_TYPES, bodyOf, isLiterature, counts, countsLine, isAbsolute, join, locate, readConfig, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
+import { CONFIG_PATH, LEGEND, MARK, NODE_TYPES, bodyOf, isLiterature, counts, countsLine, isAbsolute, join, locate, readConfig, repoAbs, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
 
 const PANE = 'rft-tree'
 const TITLE = 'Reasoning tree'
@@ -893,9 +893,11 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       const exp = resolveId(loaded.tree, String(i.exp ?? ''))
       const n = exp ? loaded.tree.nodes[exp] : undefined
       if (!n || n.type !== 'experiment') throw new Error(`"${String(i.exp ?? '')}" is not an experiment of the tree: a job runs an experiment (E..), whose note comes first (rft_add_node)`)
+      const runsDir = str(loaded.config.runsDir)
       const spec = {
         exp: n.id, cmd: String(i.cmd ?? ''), cwd: resolvePath(h.cwd, str(i.cwd) ?? '.'),
         gpus: typeof i.gpus === 'number' ? i.gpus : n.gpus ?? 1, label: str(i.label) ?? '', by: 'claude',
+        ...(runsDir ? { runs: repoAbs(h.root, runsDir, await homeOf($)) } : {}),
       }
       const r = await queueCli($, h, loaded.config, ['add', '--job', JSON.stringify(spec), ...(i.top === true ? ['--top'] : [])])
       return addedText(r as { job: Job }, loaded, shownVault(h, loaded.config))

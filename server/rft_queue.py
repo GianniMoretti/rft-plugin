@@ -16,9 +16,17 @@ has been empty a while; queueing a job, opening the tree view or a new session s
   on it, no compute process of anyone else's on it, and less than FREE_MIB of memory taken.
 - **A job runs** as `bash -c <cmd>` in its folder, in a session of its own, with
   CUDA_VISIBLE_DEVICES set to its GPUs (numbered as nvidia-smi numbers them: CUDA_DEVICE_ORDER is
-  PCI_BUS_ID), RFT_JOB and RFT_EXPERIMENT; its output goes to .queue/logs/<id>.log. A wrapper
-  writes its exit code to .queue/run/<id>.exit, so how it ended is known even if the runner was
-  not there to see it. A job gone with no exit code (killed, or the machine restarted) is lost.
+  PCI_BUS_ID), RFT_JOB, RFT_EXPERIMENT and RFT_OUT; its output goes to .queue/logs/<id>.log. A
+  wrapper writes its exit code to .queue/run/<id>.exit, so how it ended is known even if the
+  runner was not there to see it. A job gone with no exit code (killed, or the machine restarted)
+  is lost.
+- **The run record**: a job is the record of its run. When it starts, the runner adds the code it
+  runs (its git repo, commit and branch; uncommitted changes to tracked files saved whole as
+  code.patch in its output folder) and its output folder (RFT_OUT: <runs>/<exp>/<id>, <runs> the
+  folder the job names, else `runs/` at the top of its repo, else of its folder). When it ends:
+  the end of the traceback of a failed one (`error`), and `changed` when its repo's code moved
+  while it ran. Each output folder holds a copy of its record (rft-run.json), so the outputs say
+  what made them; history.jsonl keeps them all.
 - **Files**, in the vault's .queue/ (a dot folder Obsidian leaves alone): queue.json, the jobs
   waiting and running in their order (rewritten whole, under `lock`); history.jsonl, one line per
   job that ended (appended); logs/ and run/, which its .gitignore keeps out of git.
@@ -40,6 +48,7 @@ import argparse
 import contextlib
 import datetime
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -70,6 +79,10 @@ MAX_CMD = 10_000
 MAX_LABEL = 120
 MAX_GPUS = 64
 MAX_LOG_LINES = 500
+RUNS = "runs"  # the output folders' root when a job names none, at the top of its repo (or folder)
+RUN_RECORD = "rft-run.json"  # each output folder's copy of its job's record
+PATCH = "code.patch"
+ERROR_LINES = 14  # a failed job's error: the traceback's first line and its end
 # the job's command in a shell of its own; its exit code (128 + n when a signal n ended it) lands
 # in a file, written whole
 WRAP = 'bash -c "$1"; c=$?; printf "%s\\n" "$c" > "$2.tmp" && mv -f "$2.tmp" "$2"'
@@ -200,6 +213,84 @@ def _gpu_list(ids: list[int]) -> str:
     return f"GPU{'s' if len(ids) != 1 else ''} {', '.join(map(str, ids))}"
 
 
+# ---------------------------------------------------------------- the code a job runs
+
+def _git(cwd, *args: str, binary: bool = False):
+    """git's output in `cwd` (bytes when `binary`), or None when it fails or is not there."""
+    try:
+        r = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode != 0:
+        return None
+    return r.stdout if binary else r.stdout.decode("utf-8", "replace").strip()
+
+
+def repo_of(cwd) -> str | None:
+    """The top of the git repo `cwd` is in, or None."""
+    return _git(cwd, "rev-parse", "--show-toplevel") or None
+
+
+def code_state(cwd) -> dict:
+    """The code a job in `cwd` runs: its repo, commit (short, as the notebooks' stamps have it) and
+    branch, and `diff`, its uncommitted changes to tracked files (binary ones too); untracked files
+    are counted, not kept. {} outside git."""
+    top = repo_of(cwd)
+    if not top:
+        return {}
+    commit = _git(top, "rev-parse", "--short=10", "HEAD")
+    if not commit:
+        return {"repo": top}
+    branch = _git(top, "rev-parse", "--abbrev-ref", "HEAD")
+    diff = _git(top, "diff", "--binary", "HEAD", binary=True) or b""
+    untracked = _git(top, "ls-files", "--others", "--exclude-standard") or ""
+    return {"repo": top, "commit": commit, "branch": branch if branch and branch != "HEAD" else None,
+            "dirty": bool(diff), "untracked": len(untracked.splitlines()), "diff": diff}
+
+
+def code_sig(state: dict) -> str | None:
+    """What the code was, in a few characters: changes when a commit or an uncommitted change does."""
+    if not state.get("commit"):
+        return None
+    return hashlib.sha1(state["commit"].encode() + b"\0" + state.get("diff", b"")).hexdigest()[:12]
+
+
+def _tail_lines(path: Path, lines: int) -> list[str]:
+    """The last `lines` lines of a file; a progress bar's redraws (\\r) count as its last state."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            take = min(size, 4096)
+            while True:
+                f.seek(size - take)
+                data = f.read(take)
+                if take >= size or data.count(b"\n") > lines:
+                    break
+                take = min(size, take * 4)
+    except FileNotFoundError:
+        return []
+    rows = [r.split("\r")[-1] for r in data.decode("utf-8", "replace").rstrip("\n").split("\n")]
+    return rows[-lines:]
+
+
+def error_of(rows: list[str]) -> str:
+    """A failed job's error from the end of its output: the last Python traceback (its first line
+    and its end), else its last lines that say something; the runner's own header lines left out."""
+    rows = [r for r in rows if not r.startswith(("# rft job ", "# $ "))]
+    at = max((i for i, r in enumerate(rows) if r.startswith("Traceback (most recent call last)")), default=None)
+    if at is not None:
+        # to its exception, the first line after it not indented as its frames are (a buffered
+        # print can land after it)
+        end = next((i for i in range(at + 1, len(rows)) if rows[i].strip() and not rows[i][:1].isspace()), len(rows) - 1)
+        tb = rows[at:end + 1]
+        if len(tb) > ERROR_LINES:
+            tb = [tb[0], "  …", *tb[-(ERROR_LINES - 2):]]
+    else:
+        tb = [r for r in rows if r.strip()][-6:]
+    return "\n".join(tb)[-2000:]
+
+
 # ---------------------------------------------------------------- the queue
 
 class Queue:
@@ -294,8 +385,11 @@ class Queue:
 
     # ------------------------------------------------------------ what Claude and the user change
 
-    def add(self, exp, cmd, cwd, gpus=1, label="", by="claude", top=False, retry_of=None) -> dict:
-        """Queues a job for experiment `exp`, last (or first, `top`); the job, with its place in line."""
+    def add(self, exp, cmd, cwd, gpus=1, label="", by="claude", top=False, retry_of=None, runs=None, kind="run") -> dict:
+        """Queues a job for experiment `exp`, last (or first, `top`); the job, with its place in line.
+        `runs`: the root of its output folder (absolute), else `runs/` at the top of its repo or
+        folder. `kind`: "run", or "notebook" for the run of an experiment's notebook (no output
+        folder of its own)."""
         exp, cmd, label = str(exp or "").strip(), str(cmd or ""), str(label or "").strip()
         if not EXP_RE.match(exp):
             raise QueueError(f'a job runs an experiment: "{exp}" is not an experiment id like E14')
@@ -312,10 +406,20 @@ class Queue:
             raise QueueError("gpus is a whole number") from None
         if not 0 <= gpus <= MAX_GPUS:
             raise QueueError(f"gpus is between 0 and {MAX_GPUS}")
+        runs = str(runs or "")
+        if runs and not os.path.isabs(runs):
+            raise QueueError(f'the folder "{runs}" for its outputs is not an absolute path')
+        if kind not in ("run", "notebook"):
+            raise QueueError(f'a job is a run or a notebook, not "{kind}"')
+        root = Path(runs) if runs else Path(repo_of(cwd) or cwd) / RUNS
         with self.change() as st:
             st["seq"] += 1
             j = {"id": f"q{st['seq']}", "exp": exp, "label": label[:MAX_LABEL], "cmd": cmd, "cwd": cwd, "gpus": gpus,
-                 "by": by if by in ("claude", "user") else "claude", "state": WAITING, "added": self.clock()}
+                 "by": by if by in ("claude", "user", "runner") else "claude", "state": WAITING, "added": self.clock()}
+            if kind == "notebook":
+                j["kind"] = "notebook"
+            else:
+                j["out"] = str(root / exp / j["id"])
             if retry_of:
                 j["retry_of"] = retry_of
             at = next((i for i, x in enumerate(st["jobs"]) if x["state"] == WAITING), len(st["jobs"])) if top else len(st["jobs"])
@@ -353,6 +457,7 @@ class Queue:
             ended = dict(j)
         if was == RUNNING:
             self._stop(ended)
+            self._write_record(ended)
         return ended
 
     def retry(self, jid: str, by: str = "claude") -> dict:
@@ -364,7 +469,9 @@ class Queue:
             raise NotFound(f"no job {jid}")
         if not os.path.isdir(j["cwd"]):
             raise QueueError(f'the folder "{j["cwd"]}" it ran in is gone')
-        return self.add(j["exp"], j["cmd"], j["cwd"], j["gpus"], j.get("label", ""), by, top=True, retry_of=jid)
+        runs = str(Path(j["out"]).parent.parent) if j.get("out") else None
+        return self.add(j["exp"], j["cmd"], j["cwd"], j["gpus"], j.get("label", ""), by, top=True, retry_of=jid,
+                        runs=runs, kind=j.get("kind", "run"))
 
     def pause(self, paused: bool) -> dict:
         with self.change() as st:
@@ -463,6 +570,7 @@ class Queue:
                 else:
                     j.update(state="done" if code == 0 else "failed", exit=code, ended=self._ended_at(j, now))
                 self._release(j["id"])
+                self._finish(j)
                 events.append({"event": "ended", "job": dict(j)})
             if not st["paused"]:
                 for j, ids in plan(st["jobs"], free_gpus(gpus, st["jobs"], st["allowed"], st["free_mib"])):
@@ -493,6 +601,14 @@ class Queue:
         env = dict(os.environ, CUDA_DEVICE_ORDER="PCI_BUS_ID", CUDA_VISIBLE_DEVICES=",".join(map(str, ids)),
                    RFT_JOB=j["id"], RFT_EXPERIMENT=j["exp"])
         when = datetime.datetime.fromtimestamp(now).astimezone().isoformat(timespec="seconds")
+        if j.get("out"):
+            try:
+                self._prepare_run(j)
+            except OSError as err:
+                j.update(state="failed", started=now, ended=now, exit=None, gpu_ids=ids,
+                         reason=f"could not start: its output folder {j['out']}: {err.strerror or err}")
+                return
+            env["RFT_OUT"] = j["out"]
         try:
             with open(log, "ab") as out:
                 out.write(f"# rft job {j['id']} ({j['exp']}) on {_gpu_list(ids) if ids else 'no GPU'}, {when}, in {j['cwd']}\n"
@@ -507,6 +623,51 @@ class Queue:
         self.children[j["id"]] = p
         j.update(state=RUNNING, started=now, gpu_ids=ids, pid=p.pid, ticks=start_ticks(p.pid), host=socket.gethostname(),
                  log=f"{LOGS}/{log.name}")
+        self._write_record(j)
+
+    def _prepare_run(self, j: dict):
+        """A run's output folder, made, and the code it runs, recorded on the job: repo, commit,
+        branch, and its uncommitted changes saved whole in the folder (code.patch). A root the
+        runner makes inside a repo gets a .gitignore, so the outputs stay out of git."""
+        out = Path(j["out"])
+        root = out.parent.parent
+        made = not root.exists()
+        out.mkdir(parents=True, exist_ok=True)
+        code = code_state(j["cwd"])
+        if made and code.get("repo") and str(root.resolve()).startswith(str(Path(code["repo"]).resolve()) + os.sep):
+            (root / ".gitignore").write_text("*\n")
+        for k in ("repo", "commit", "branch", "dirty", "untracked"):
+            if code.get(k) is not None:
+                j[k] = code[k]
+        if code.get("diff"):
+            (out / PATCH).write_bytes(code["diff"])
+            j["patch"] = str(out / PATCH)
+        sig = code_sig(code)
+        if sig:
+            j["code_sig"] = sig
+
+    def _finish(self, j: dict):
+        """A run that ended: the end of its traceback when it failed, whether its repo's code moved
+        while it ran, and its record written in its output folder."""
+        if j["state"] == "failed" and j.get("log"):
+            err = error_of(_tail_lines(self.dir / j["log"], 200))
+            if err:
+                j["error"] = err
+        if j.get("code_sig") and j.get("started"):
+            now = code_sig(code_state(j["cwd"]))
+            if now and now != j["code_sig"]:
+                j["changed"] = True
+        self._write_record(j)
+
+    def _write_record(self, j: dict):
+        """The job's record, in its output folder (rft-run.json), so the outputs say what made them."""
+        if not j.get("out") or not os.path.isdir(j["out"]):
+            return
+        rec = {k: v for k, v in j.items() if k not in ("pid", "ticks", "code_sig", "outlook")}
+        tmp = Path(j["out"]) / f".{RUN_RECORD}.{os.getpid()}.tmp"
+        with contextlib.suppress(OSError):
+            tmp.write_text(json.dumps(rec, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+            os.replace(tmp, Path(j["out"]) / RUN_RECORD)
 
     # ------------------------------------------------------------ what the view and Claude read
 
@@ -570,22 +731,7 @@ class Queue:
             raise NotFound(f"no job {jid}")
         if not j.get("log"):
             return ""
-        lines = max(1, min(int(lines), MAX_LOG_LINES))
-        try:
-            with open(self.dir / j["log"], "rb") as f:
-                f.seek(0, os.SEEK_END)
-                size = f.tell()
-                take = min(size, 4096)
-                while True:
-                    f.seek(size - take)
-                    data = f.read(take)
-                    if take >= size or data.count(b"\n") > lines:
-                        break
-                    take = min(size, take * 4)
-        except FileNotFoundError:
-            return ""
-        rows = [r.split("\r")[-1] for r in data.decode("utf-8", "replace").rstrip("\n").split("\n")]
-        return "\n".join(rows[-lines:])
+        return "\n".join(_tail_lines(self.dir / j["log"], max(1, min(int(lines), MAX_LOG_LINES))))
 
 
 # ---------------------------------------------------------------- the runner
@@ -672,7 +818,7 @@ def main(argv=None) -> int:
     common.add_argument("--vault", required=True)
     common.add_argument("--no-runner", action="store_true", help="never start a runner")
     p = sub.add_parser("add", parents=[common])
-    p.add_argument("--job", required=True, help='{"exp", "cmd", "cwd", "gpus"?, "label"?, "by"?}')
+    p.add_argument("--job", required=True, help='{"exp", "cmd", "cwd", "gpus"?, "label"?, "by"?, "runs"?}')
     p.add_argument("--top", action="store_true")
     p = sub.add_parser("status", parents=[common])
     p.add_argument("--history", type=int, default=20)
@@ -707,7 +853,7 @@ def main(argv=None) -> int:
             if not isinstance(spec, dict):
                 raise QueueError("--job is a JSON object")
             j = q.add(spec.get("exp"), spec.get("cmd"), spec.get("cwd"), spec.get("gpus", 1), spec.get("label", ""),
-                      spec.get("by", "claude"), top=a.top or spec.get("top") is True)
+                      spec.get("by", "claude"), top=a.top or spec.get("top") is True, runs=spec.get("runs"))
             out = {"job": j, "outlook": q.outlook(q.find(j["id"]) or j)}
         elif a.cmd == "status":
             out = q.snapshot(a.history)
