@@ -503,14 +503,17 @@
       const order = waiting.map(j => j.id)
       const w = canWrite()
       const out = running.map(j => row(j, { meta: `running on ${gpuList(j.gpu_ids)} · ${duration(now() - (j.started || now()))}`, actions: [moreBtn(j), cancelBtn(j)] }))
-      if (compact && waiting.length) {
-        // folded: the waiting jobs in one line, which unfolds them
-        const unfold = () => { compact = false; store.set('jobsCompact', false); draw() }
-        out.push(el('button', { type: 'button', class: 'jobs-sep jobs-waiting-fold muted', title: 'Unfold the waiting jobs', 'aria-expanded': 'false', onclick: unfold },
-          `▸ ${waiting.length} waiting: ${waiting.slice(0, 6).map(j => `${j.id} ${j.exp}`).join(', ')}${waiting.length > 6 ? ', …' : ''}`))
-        return out
+      if (waiting.length) {
+        // the waiting jobs' heading folds them into one line, and unfolds them
+        const flip = () => { compact = !compact; store.set('jobsCompact', compact); draw() }
+        out.push(el('button', {
+          type: 'button', class: 'jobs-sep jobs-waiting-fold muted', 'aria-expanded': String(!compact), onclick: flip,
+          title: compact ? 'Unfold the waiting jobs' : 'Fold the waiting jobs into one line (the running ones stay)',
+        }, compact
+          ? `▸ ${waiting.length} waiting: ${waiting.slice(0, 6).map(j => `${j.id} ${j.exp}`).join(', ')}${waiting.length > 6 ? ', …' : ''}`
+          : `▾ ${waiting.length} waiting, in order${w ? ' (drag to reorder)' : ''}`))
+        if (compact) return out
       }
-      if (running.length && waiting.length) out.push(el('div', { class: 'jobs-sep muted', text: `Waiting, in order${w ? ' (drag to reorder)' : ''}` }))
       waiting.forEach((j, i) => out.push(row(j, {
         place: i + 1, drag: w, order,
         meta: `${gpuWord(j.gpus)}${j.outlook ? ` · ${j.outlook}` : ''}`,
