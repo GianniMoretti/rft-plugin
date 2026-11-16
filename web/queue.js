@@ -152,7 +152,11 @@
     let armed = null // a cancel waiting for its second press: { id, until }
     let dragging = null
     let timer = 0
-    let compact = store.get('jobsCompact', false) === true // folded: the running jobs and how far they are, nothing else
+    let compact = store.get('jobsCompact', false) === true // folded: the GPUs only, the queue and its history hidden
+    let pauseArmed = 0 // a pause waiting for its second press, until then (ms)
+    // the pause and resume symbols, drawn (a font may lack ⏸, or draw it as a coloured emoji)
+    const PAUSE_ICON = '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><rect x="2" y="1.5" width="3" height="9" rx="0.6" fill="currentColor"/><rect x="7" y="1.5" width="3" height="9" rx="0.6" fill="currentColor"/></svg>'
+    const RESUME_ICON = '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M3 1.5v9l7.5-4.5z" fill="currentColor"/></svg>'
     let answered = 0 // when the server last answered the queue: a log it does not answer is then refused on the way
     // where a job's output is read: api/queue/output, or api/queue/log on a server started before it
     let outputAt = 'api/queue/output'
@@ -427,8 +431,8 @@
       onclick: () => toggle(j),
     }, j.state === 'pending' ? 'Command' : 'Log')
 
-    /** A running job's stage, bars and last line (the line only when there is no bar, folded). */
-    function progressEl(p, folded = false) {
+    /** A running job's stage, bars and last line. */
+    function progressEl(p) {
       const parts = progressParts(p)
       if (!parts) return null
       return el('div', { class: 'jobs-progress' },
@@ -441,24 +445,7 @@
             el('span', { class: `jobs-bar-meter${b.pct == null ? ' none' : ''}` }, fill),
             el('span', { class: 'jobs-bar-nums muted', text: b.nums }))
         }),
-        parts.line && !(folded && parts.bars.length) ? el('div', { class: 'jobs-lastline muted', text: parts.line, title: parts.line }) : null)
-    }
-
-    /** Folded: one short row per running job with how far it is, and a line for those waiting; a click unfolds it. */
-    function compactRows() {
-      const running = view.jobs.filter(j => j.state === 'running')
-      const waiting = view.jobs.filter(j => j.state === 'pending')
-      const open = id => { compact = false; store.set('jobsCompact', false); if (!shown.has(id)) { shown.add(id); readLog(id) } draw() }
-      const out = running.map(j => el('div', { class: 'jobs-row jobs-mini s-running', 'data-id': j.id, title: 'Unfold, with its log', onclick: ev => { if (!ev.target.closest('a')) open(j.id) } },
-        el('span', { class: 'jobs-dot', 'aria-hidden': 'true' }),
-        el('div', { class: 'jobs-main' },
-          el('div', { class: 'jobs-line' },
-            el('span', { class: 'jobs-id', text: j.id }), link(j.exp),
-            j.label ? el('span', { class: 'jobs-label', text: j.label }) : el('span', { class: 'jobs-title muted', text: duration(now() - (j.started || now())) })),
-          progressEl(j.progress, true))))
-      if (waiting.length) out.push(el('div', { class: 'jobs-sep muted', text: `${waiting.length} waiting: ${waiting.slice(0, 6).map(j => `${j.id} ${j.exp}`).join(', ')}${waiting.length > 6 ? ', …' : ''}` }))
-      if (!out.length) out.push(el('p', { class: 'muted jobs-empty', text: 'Nothing runs or waits.' }))
-      return out
+        parts.line ? el('div', { class: 'jobs-lastline muted', text: parts.line, title: parts.line }) : null)
     }
 
     function row(j, o) {
@@ -546,9 +533,14 @@
       const failed = view.history.filter(j => j.state === 'failed').length
       sum.textContent = `${b.running} running · ${b.waiting} waiting${view.paused ? ' · paused' : ''}`
       pauseBtn.hidden = !canWrite()
-      pauseBtn.textContent = view.paused ? 'Resume' : 'Pause'
+      const armed = !view.paused && pauseArmed > Date.now()
+      const icon = view.paused ? RESUME_ICON : PAUSE_ICON
+      if (pauseBtn.innerHTML !== icon) pauseBtn.innerHTML = icon
       pauseBtn.classList.toggle('primary', !!view.paused)
-      pauseBtn.title = view.paused ? 'Start waiting jobs again as their GPUs free up' : 'Start no new job (the running ones go on)'
+      pauseBtn.classList.toggle('danger', armed)
+      pauseBtn.title = view.paused ? 'Resume: start waiting jobs again as their GPUs free up'
+        : armed ? 'Press again to pause' : 'Pause: start no new job (the running ones go on); press twice'
+      pauseBtn.setAttribute('aria-label', view.paused ? 'Resume the queue' : armed ? 'Press again to pause the queue' : 'Pause the queue (press twice)')
       const n = (view.gpus || []).length
       hosts.replaceChildren(el('button', { type: 'button', role: 'tab', 'aria-selected': 'true', class: 'jobs-host', title: 'The jobs run on this machine' },
         el('strong', { text: view.host || 'this machine' }), el('span', { class: 'muted', text: ` · ${n ? gpuWord(n) : 'no GPU'}${view.runner ? '' : (b.count ? ' · runner starting' : '')}` })))
@@ -559,10 +551,10 @@
       panel.classList.toggle('compact', compact)
       foldBtn.textContent = compact ? '▾' : '▴'
       foldBtn.setAttribute('aria-expanded', String(!compact))
-      foldBtn.title = compact ? 'Unfold: the GPUs, the queue in its order, the history, the logs' : 'Fold to the running jobs and how far they are'
-      foldBtn.setAttribute('aria-label', compact ? 'Unfold the experiment queue' : 'Fold the experiment queue')
+      foldBtn.title = compact ? 'Unfold the queue: its jobs, history and logs' : 'Fold the queue: keep the GPUs'
+      foldBtn.setAttribute('aria-label', compact ? 'Unfold the queue' : 'Fold the queue')
       const top = list.scrollTop
-      list.replaceChildren(...(compact ? compactRows() : tab === 'queue' ? queueRows() : historyRows()))
+      list.replaceChildren(...(compact ? [] : tab === 'queue' ? queueRows() : historyRows()))
       list.scrollTop = top
       // a log's box moved into the new rows: back at its end, or where the user left it
       for (const l of logs.values()) if (l.box.isConnected) l.box.scrollTop = l.stick ? l.box.scrollHeight : l.top
@@ -593,7 +585,19 @@
       store.set('jobsCompact', compact)
       draw()
     })
-    pauseBtn.addEventListener('click', () => view && change({ op: 'pause', paused: !view.paused }, view.paused ? 'Resumed' : 'Paused: no new job starts'))
+    // resuming is one press; pausing asks for a second within 4 s, as stopping a job does
+    pauseBtn.addEventListener('click', () => {
+      if (!view) return
+      if (view.paused) return change({ op: 'pause', paused: false }, 'Resumed')
+      if (pauseArmed > Date.now()) {
+        pauseArmed = 0
+        return change({ op: 'pause', paused: true }, 'Paused: no new job starts; the running ones go on')
+      }
+      pauseArmed = Date.now() + 4000
+      setMsg('Press pause again to stop starting new jobs (the running ones go on).')
+      draw()
+      setTimeout(() => { if (pauseArmed && pauseArmed <= Date.now()) { pauseArmed = 0; setMsg(''); draw() } }, 4100)
+    })
     for (const t of tabs) {
       t.addEventListener('click', () => {
         tab = t.dataset.jtab

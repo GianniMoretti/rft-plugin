@@ -670,6 +670,9 @@ main.artifact-open:has(#drawer:not([hidden])) #concept-canvas { width: calc(100%
 .jobs-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--line); }
 .jobs-head #jobs-sum { flex: 1; font-size: 0.9em; }
 .jobs-head button { padding: 1px 8px; }
+.jobs-head #jobs-fold { padding: 1px 6px; }
+.jobs-head #jobs-pause { min-width: 2.2em; display: inline-flex; align-items: center; justify-content: center; }
+.jobs-head #jobs-pause.danger { border-color: var(--dropped); color: var(--dropped); }
 .jobs-tabs { display: flex; gap: 2px; padding: 6px 10px 0; border-bottom: 1px solid var(--line); }
 .jobs-tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 4px 10px; color: var(--muted); }
 .jobs-tabs button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
@@ -727,9 +730,8 @@ main.artifact-open:has(#drawer:not([hidden])) #concept-canvas { width: calc(100%
 .jobs-bar-meter.none { visibility: hidden; }
 .jobs-bar-nums { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .jobs-lastline { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-#jobs.compact { width: min(calc(400px * var(--font-scale)), calc(100vw - 16px)); }
-#jobs.compact .jobs-hosts, #jobs.compact .jobs-gpus, #jobs.compact .jobs-tabs, #jobs.compact .jobs-foot { display: none; }
-.jobs-mini { cursor: pointer; padding: 4px 10px; }
+#jobs.compact .jobs-tabs:not(.jobs-hosts), #jobs.compact .jobs-list, #jobs.compact .jobs-foot { display: none; }
+#jobs.compact .jobs-gpus { border-bottom: 0; }
 .jobs-log-bar { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 4px; }
 .jobs-log-bar button { padding: 1px 7px; }
 .jobs-log-err { margin-top: 3px; color: var(--dropped); overflow-wrap: anywhere; }

@@ -398,8 +398,8 @@ session brings it back).
   - **Queue**: the jobs running (how long, on which GPUs) and those waiting, in their order, each
     with why it waits ("1st in line: needs 2 GPUs, 1 free"). Drag a job, or use ↑ ↓ and **Top**,
     to change the order, or ask Claude ("run E17 before E16": one `rft_job` call, answered
-    with the new order in one line); **Stop** / **Cancel** (press twice) ends a job; **Pause** starts no new
-    job (the running ones go on); Claude can cancel, retry, pause and resume too, when you ask. Untick a GPU to keep it out of the queue (for your own work).
+    with the new order in one line); **Stop** / **Cancel** (press twice) ends a job; pause (press twice) starts no new
+    job (the running ones go on), resume (one press) lets them start again; Claude can cancel, retry, pause and resume too, when you ask. Untick a GPU to keep it out of the queue (for your own work).
   - **History**: every job that ended, newest first, with its experiment, how it ended (done,
     failed with its exit code, cancelled), how long it ran, and **Retry** (first in line again).
   **Log** / **Command** on a job shows its command, the code it ran and its output folder, and its
@@ -429,9 +429,9 @@ session brings it back).
   where a job of several steps appends each (`echo '{"stage": "probe patchpos", "i": 2, "n": 5}'
   >> "$RFT_PROGRESS"`, or a plain line of text). The runner sets `TQDM_MININTERVAL=10` (unless
   the job's environment has it), so a bar redraws every 10 s and logs stay small; a bar's own
-  `mininterval=` still wins. `rft_jobs` gives Claude the same in a line. **▴** at the top folds the
-  panel to just the running jobs and how far they are (and a line for those waiting); a click on
-  one unfolds it with its log, **▾** unfolds it.
+  `mininterval=` still wins. `rft_jobs` gives Claude the same in a line.
+- **▴** at the panel's top left folds the queue away and keeps the GPUs (the panel remembers it);
+  **▾** unfolds it.
 - **The run record**: each job is the record of its run. When it starts, the runner records the
   code it runs: the repo, its commit and branch, and its uncommitted changes to tracked files,
   saved whole as `code.patch` in its output folder (untracked files are counted, not kept); so a
