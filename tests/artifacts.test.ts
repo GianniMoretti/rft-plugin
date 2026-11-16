@@ -202,6 +202,28 @@ describe('artifacts: rft_artifact and rft_set_artifact', () => {
     expect(out).toContain('LaTeX table float')
   })
 
+  test("a notebook's tables are taken in by name, filled when the page is written; rft_artifact names what each notebook saved", async () => {
+    const files = demoFiles()
+    files['vault/tables/E02_gap_by_size.html'] = '<table>\n<caption>Gap by size</caption>\n<tbody><tr><td>1000</td><td>4.1</td></tr></tbody>\n</table>\n'
+    files['vault/results/E02.json'] = JSON.stringify({ exp: 'E02', results: { gap: 4.1 }, figures: ['figures/E02_gap.svg'], tables: ['tables/E02_gap_by_size.html'] })
+    files['vault/figures/E02_gap.svg'] = '<svg xmlns="http://www.w3.org/2000/svg"/>'
+    const { fs, io, l } = await setup(files)
+    const report = await artifactReport(io, l, 'Better variants')
+    expect(report).toContain('Saved by its notebook: <img src="../figures/E02_gap.svg"> · <rft-table src="E02_gap_by_size"></rft-table>')
+    expect(report).toContain('Write their numbers nowhere else on the page')
+    const out = await setArtifact(io, l, 'Better variants', { html: '<h1>Better variants</h1>\n<p><a href="#E02">E02</a></p>\n<rft-table src="E02_gap_by_size"></rft-table>\n<img src="../figures/E02_gap.svg">\n<rft-table src="E02_nothing"></rft-table>\n' }, '2026-11-16')
+    const page = fs.read(FILE)
+    expect(page).toContain('<rft-table src="E02_gap_by_size">\n<table>\n<caption>Gap by size</caption>')
+    expect(page).toContain('<rft-table src="E02_nothing"></rft-table>')
+    expect(out).toContain('Tables not found in tables/: E02_nothing')
+    expect(out).not.toContain('Images not found')
+    // an edit elsewhere on the page fills the table again from the file, as it is now
+    fs.write('vault/tables/E02_gap_by_size.html', '<table>\n<caption>Gap by size</caption>\n<tbody><tr><td>1000</td><td>3.9</td></tr></tbody>\n</table>\n')
+    await setArtifact(io, l, 'Better variants', { edits: [{ old_str: '<h1>Better variants</h1>', new_str: '<h1>Better variants, 2026</h1>' }] }, '2026-11-17')
+    expect(fs.read(FILE)).toContain('<td>3.9</td>')
+    expect(fs.read(FILE)).not.toContain('<td>4.1</td>')
+  })
+
   test('a renamed concept keeps one artifact file, found by the concept id it carries; any name survives the header', async () => {
     const { fs, io, l } = await setup()
     await setArtifact(io, l, 'D01', { html: PAGE }, '2026-03-01')

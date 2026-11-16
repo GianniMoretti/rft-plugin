@@ -14,6 +14,39 @@ export { ARTIFACTS_DIR, resultOf } from './vault'
 /** Where an artifact's figures are kept, in the vault: the page names them `../figures/<file>`. */
 export const FIGURES_DIR = 'figures'
 
+/**
+ * Where the notebooks' tables are kept (`tables/<id>_<name>.html`, server/rft_results.py writes
+ * them) and their runs' numbers (`results/<id>.json`). A page takes a table in by name,
+ * `<rft-table src="<id>_<name>"></rft-table>`: filled here when the page is written, and by
+ * server/rft_results.py whenever a notebook's run writes the table again.
+ */
+export const TABLES_DIR = 'tables'
+export const RESULTS_DIR = 'results'
+const TABLE_TAG = /(<rft-table\s+src\s*=\s*["']([^"']+)["']\s*>)([\s\S]*?)(<\/rft-table>)/gi
+
+/** The page with each <rft-table src="name"> filled with that table of the vault's tables/; the names not found there. */
+export async function fillTables(io: Io, vault: string, html: string): Promise<{ html: string; missing: string[] }> {
+  const found: Record<string, string | null> = {}
+  for (const m of html.matchAll(TABLE_TAG)) {
+    const name = m[2]!
+    if (name in found) continue
+    try { found[name] = (await io.read(join(vault, TABLES_DIR, `${name}.html`))).trim() } catch { found[name] = null }
+  }
+  const missing = Object.keys(found).filter(k => found[k] === null)
+  return { html: html.replace(TABLE_TAG, (all, open: string, name: string, _inner: string, close: string) => (found[name] == null ? all : `${open}\n${found[name]}\n${close}`)), missing }
+}
+
+/** What an experiment's notebook saved for the artifacts: its figures (paths in the vault) and its tables (names); null when it saved none. */
+async function savedOf(io: Io, vault: string, id: string): Promise<{ figures: string[]; tables: string[] } | null> {
+  try {
+    const r = JSON.parse(await io.read(join(vault, RESULTS_DIR, `${id}.json`))) as { figures?: unknown; tables?: unknown }
+    const strs = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
+    return { figures: strs(r.figures), tables: strs(r.tables).map(t => t.replace(/^tables\//, '').replace(/\.html$/, '')) }
+  } catch {
+    return null
+  }
+}
+
 /** The largest page the plugin writes, and the server serves. */
 export const MAX_ARTIFACT_BYTES = 1_000_000
 
@@ -229,6 +262,8 @@ export async function setArtifact(io: Io, loaded: Loaded, ref: string, input: { 
     if (!before) throw new ArtifactError(`"${c.name}" has no artifact yet: write the whole page with html`)
     html = checkedPage(edited(before.html, edits!))
   }
+  const tables = await fillTables(io, config.vault, html)
+  html = checkedPage(tables.html)
   const file = join(ARTIFACTS_DIR, fileName(c))
   const head = headLine({ concept: c.id, name: c.name, updated: date, basis: basisOf(loaded, c.id) })
   await io.write(join(config.vault, file), `${head}\n${html}`)
@@ -238,6 +273,7 @@ export async function setArtifact(io: Io, loaded: Loaded, ref: string, input: { 
   const { warnings, info, missing } = checks(loaded.tree, c, html)
   const lost = await missingImages(io, config.vault, html)
   if (lost.length) warnings.push(`Images not found in ${FIGURES_DIR}/, ${ARTIFACTS_DIR}/ or the vault's top: ${lost.join(', ')}. Keep an artifact's figures in the vault's ${FIGURES_DIR}/ and name them ../${FIGURES_DIR}/<file> (the view finds one by name elsewhere in the vault too).`)
+  if (tables.missing.length) warnings.push(`Tables not found in ${TABLES_DIR}/: ${tables.missing.join(', ')}. A notebook's TABLES are saved there when its run's numbers are the note's (rft_artifact names them); check the name, or run the notebook.`)
   const how = hasHtml ? 'written to' : `updated with ${edits!.length} edit(s) in`
   const coverage = k ? `, ${missing ? `${missing} not on the page` : 'all on the page'}` : ''
   return [
@@ -277,11 +313,17 @@ export async function artifactReport(io: Io, loaded: Loaded, ref: string, opts: 
   // in a concept with code, each result says whether its notebook reproduced it
   const coded = codeRepos(tree.concepts, c.id).length > 0
   out.push('', `Experiments with a result (${results.length}):`)
+  let saved = 0
   for (const n of results) {
     const head = `${MARK[n.status] ?? '-'} ${n.name}${n.supersededBy ? ` [superseded by ${n.supersededBy}]` : ''}${n.summary ? ` — ${n.summary}` : ''}${coded ? ` · ${notebookMark(n)}` : ''}`
     const mark = state?.changed.includes(n.id) ? ' [changed]' : state?.added.includes(n.id) ? ' [new]' : ''
-    if (!a || opts.full || fresh.has(n.id)) out.push(`## ${head}${mark}`, resultOf(loaded.texts[n.id] ?? '') || '(no Result written: it is done)', '')
-    else out.push(`- ${head}`)
+    // what its notebook saved for the page, by name: placed, not copied
+    const kept = await savedOf(io, loaded.config.vault, n.id)
+    const parts = kept ? [...kept.figures.map(f => `<img src="../${f}">`), ...kept.tables.map(t => `<rft-table src="${t}"></rft-table>`)] : []
+    if (parts.length) saved++
+    const keptLine = parts.length ? `Saved by its notebook: ${parts.join(' · ')}` : ''
+    if (!a || opts.full || fresh.has(n.id)) out.push(`## ${head}${mark}`, resultOf(loaded.texts[n.id] ?? '') || '(no Result written: it is done)', ...(keptLine ? [keptLine] : []), '')
+    else out.push(`- ${head}${keptLine ? ` · ${keptLine}` : ''}`)
   }
   if (!results.length) out.push('(none yet: nothing to put on the page)')
   const unproven = coded ? results.filter(n => !n.supersededBy && n.reproduced?.state !== 'ok') : []
@@ -291,6 +333,7 @@ export async function artifactReport(io: Io, loaded: Loaded, ref: string, opts: 
   if (without.length) out.push('', `Without a result yet (${without.length}): ${without.map(n => `${MARK[n.status] ?? '-'} ${n.name}`).join(', ')}`)
   if (c.children.length) out.push('', `Sub-concepts (the view links their artifacts; leave them off this page): ${c.children.map(k => `${tree.concepts![k]!.name} (${k})`).join(', ')}`)
   if (a && !opts.full && results.length > fresh.size) out.push('', 'The unchanged results are one line each: rft_artifact with full: true gives them in full.')
+  if (saved) out.push('', 'Put a notebook\'s figures and tables on the page as named above: an <rft-table> is filled with the table when the page is written, and again whenever the notebook\'s run writes it anew. Write their numbers nowhere else on the page; say what they show.')
   out.push('', PAGE_RULES)
   return out.join('\n').replace(/\n{3,}/g, '\n\n')
 }
