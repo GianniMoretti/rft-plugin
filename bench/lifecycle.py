@@ -15,6 +15,13 @@ code repo, at two stages of one experiment, so `bench.py` measures what Claude s
         notebook is there from the start (it is written when the experiment is planned), as the
         plugin's rules have it; with an older one, it is left to Claude after the result.
 
+    python3 bench/lifecycle.py artifact --project DIR --plugin PLUGIN
+        the record stage, then E08 interpreted and done: what is left is the artifact of its
+        concept, written before E08 (so "E08 new"). With a plugin that has concept notebooks, the
+        concept's notebook and a page placing its figure and table are there from before, as
+        they would be after the artifact's first writing; with an older one, the page's table is
+        typed by hand.
+
 Each task of `lifecycle.json` names its stage as a setup, which bench.py runs in the copy.
 """
 from __future__ import annotations
@@ -119,7 +126,20 @@ def experiment_key(server: Path, vault: Path, nid: str) -> str:
     return rft_server.experiment_key(nodes[nid], path.read_text())
 
 
-def record(project: Path, plugin: Path, timeout: float = 600) -> None:
+CONCEPT_PAGE = """<h1>Mix-based augmentation</h1>
+<p>Where the line stands: mixing images at 1k examples. CutMix closes the gap (<a href="#E05">E05</a>); Mixup does not.</p>
+<h2>Results</h2>
+<rft-table src="D04_results_by_experiment"></rft-table>
+<img src="../figures/D04_accuracy_by_experiment.svg" alt="Accuracy by experiment">
+<p>Next: a schedule that needs no stopping (D05).</p>
+"""
+
+
+def has_concept_notebooks(plugin: Path) -> bool:
+    return "EXPERIMENTS" in (plugin / "server" / "rft_results.py").read_text() if (plugin / "server" / "rft_results.py").exists() else False
+
+
+def record(project: Path, plugin: Path, timeout: float = 600, concept_notebook: bool = False) -> None:
     launch(project)
     vault = project / "vault"
     toy = project / TOY
@@ -136,7 +156,19 @@ def record(project: Path, plugin: Path, timeout: float = 600) -> None:
     head = {"concept": "D04", "name": "Mix-based augmentation", "updated": "2026-11-15",
             "basis": {"E05": experiment_key(plugin / "server", vault, "E05")}}
     (vault / "artifacts").mkdir(exist_ok=True)
-    (vault / "artifacts" / "D04 Mix-based augmentation.html").write_text(f"<!-- rft-artifact {json.dumps(head)} -->\n{ARTIFACT_PAGE}")
+    page = CONCEPT_PAGE if concept_notebook else ARTIFACT_PAGE
+    (vault / "artifacts" / "D04 Mix-based augmentation.html").write_text(f"<!-- rft-artifact {json.dumps(head)} -->\n{page}")
+    if concept_notebook:
+        # written with the concept's first artifact: its notebook, and E05's numbers as its notebook saved them
+        nb = toy / "notebooks" / "D04_mix_based_augmentation.py"
+        nb.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(HERE / "toy" / "concept_notebook.py", nb)
+        (vault / "notebooks").mkdir(exist_ok=True)
+        (vault / "notebooks" / "D04.py").symlink_to(Path("../../code/toy/notebooks") / nb.name)
+        d04 = vault / D04
+        d04.write_text(d04.read_text().replace("concept_repos:", 'notebook: "notebooks/D04.py"\nconcept_repos:', 1))
+        (vault / "results").mkdir(exist_ok=True)
+        (vault / "results" / "E05.json").write_text(json.dumps({"exp": "E05", "concepts": ["D04", "D02", "root"], "results": {"gap_1k": 0.3, "gap_1k_sd": 0.5}}))
     auto = (plugin / "server" / "rft_results.py").exists()
     if auto:
         # the notebook, written when E08 was planned
@@ -164,21 +196,34 @@ def record(project: Path, plugin: Path, timeout: float = 600) -> None:
         raise SystemExit("the queue did not empty in time")
 
 
+def artifact(project: Path, plugin: Path) -> None:
+    """The record stage, then E08 interpreted and set done, as Claude leaves it: only the artifact is left."""
+    record(project, plugin, concept_notebook=has_concept_notebooks(plugin))
+    note = project / "vault" / E08
+    text = note.read_text().replace("status: running", "status: done", 1).replace("running]", "done]", 1)
+    text = text.replace("**Status:** running", "**Status:** done")
+    text = text.replace("\n## Directions found", "\nTraining with no stopping rule settles on the toy problem: the three seeds agree within two test points.\n\n## Directions found", 1)
+    note.write_text(text)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("base").add_argument("--out", required=True, type=Path)
     sub.add_parser("launch").add_argument("--project", required=True, type=Path)
-    p = sub.add_parser("record")
-    p.add_argument("--project", required=True, type=Path)
-    p.add_argument("--plugin", required=True, type=Path)
+    for stage in ("record", "artifact"):
+        p = sub.add_parser(stage)
+        p.add_argument("--project", required=True, type=Path)
+        p.add_argument("--plugin", required=True, type=Path)
     a = ap.parse_args(argv)
     if a.cmd == "base":
         base(a.out)
     elif a.cmd == "launch":
         launch(a.project)
-    else:
+    elif a.cmd == "record":
         record(a.project, a.plugin.expanduser().resolve())
+    else:
+        artifact(a.project, a.plugin.expanduser().resolve())
     return 0
 
 
