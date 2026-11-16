@@ -54,6 +54,10 @@ export type ApplyOutcome = RunOutcome & {
   notes?: string[]
   /** The stamp written on the note. */
   reproduced?: string
+  /** "concept": the run of a concept's notebook, which compares its experiments. */
+  kind?: 'concept'
+  /** After an experiment's run: the notebooks of its concepts, run again. */
+  concepts?: { id: string; state?: string; saved?: ApplyOutcome['saved']; error?: string }[]
 }
 
 /** What the notebook tools need from the host: where the tree is, the link the helper makes, the run. */
@@ -89,17 +93,32 @@ export const runsCell = (exp: string, runsRoot: string) =>
   `RUNS = sorted((_r for _r in (_json.loads(_p.read_text()) for _p in _pathlib.Path(${JSON.stringify(runsRoot)}).glob(${JSON.stringify(`${exp}/*/rft-run.json`)})) if _r.get("state") == "done"), key=lambda _r: _r.get("started") or 0)`
 
 /**
- * The marimo notebook made of `cells` (plain Python, one string per cell): `mo` first, a title
- * cell, the RUNS cell when `runs` is given, then each cell as a function with no arguments, which
- * marimo reads its inputs and outputs from itself; it runs as a script too.
+ * A concept notebook's first cell: EXPERIMENTS, the RESULTS of the concept's experiments as their
+ * notebooks saved them (`results/<id>.json`, which names the concepts each belongs to), by id,
+ * from `resultsDir` (the vault's results/, from the repo's root). New experiments join it as their
+ * notebooks run. As bench/toy/concept_notebook.py has it.
  */
-export function notebookSource(title: string, cells: string[], runs?: { exp: string; root: string }): string {
-  const intro = `mo.md(r"""\n# ${title}\n\nMakes the numbers of the note's Result: \`RESULTS\` holds them, \`FIGURES\` and \`TABLES\` the figures and tables of its concept's artifact. Its run writes them in the Result, or checks them against it.\n""")`
+export const experimentsCell = (concept: string, resultsDir: string) =>
+  '# the concept\'s experiments with a recorded result: their RESULTS by id, from the vault\'s results/\n' +
+  'import json as _json\nimport pathlib as _pathlib\n' +
+  `EXPERIMENTS = {_r["exp"]: _r["results"] for _r in (_json.loads(_p.read_text()) for _p in sorted(_pathlib.Path(${JSON.stringify(resultsDir)}).glob("E*.json"))) if ${JSON.stringify(concept)} in (_r.get("concepts") or []) and isinstance(_r.get("results"), dict)}`
+
+/**
+ * The marimo notebook made of `cells` (plain Python, one string per cell): `mo` first, a title
+ * cell, the RUNS cell (an experiment's) or the EXPERIMENTS cell (a concept's) when given, then each
+ * cell as a function with no arguments, which marimo reads its inputs and outputs from itself; it
+ * runs as a script too.
+ */
+export function notebookSource(title: string, cells: string[], runs?: { exp: string; root: string }, concept?: { id: string; resultsDir: string }): string {
+  const intro = concept
+    ? `mo.md(r"""\n# ${title}\n\nCompares the concept's experiments for its artifact: \`EXPERIMENTS\` holds each one's RESULTS, \`FIGURES\` and \`TABLES\` what the artifact shows. It runs again whenever one of its experiments' notebooks records new numbers.\n""")`
+    : `mo.md(r"""\n# ${title}\n\nMakes the numbers of the note's Result: \`RESULTS\` holds them, \`FIGURES\` and \`TABLES\` the figures and tables of its concept's artifact. Its run writes them in the Result, or checks them against it.\n""")`
   return [
     `import marimo\n\napp = marimo.App(app_title=${JSON.stringify(title)})`,
     '@app.cell\ndef _():\n    import marimo as mo\n    return (mo,)',
     cellBlock(intro, '@app.cell(hide_code=True)'),
     ...(runs ? [cellBlock(runsCell(runs.exp, runs.root), '@app.cell(hide_code=True)')] : []),
+    ...(concept ? [cellBlock(experimentsCell(concept.id, concept.resultsDir), '@app.cell(hide_code=True)')] : []),
     ...cells.map(c => cellBlock(c)),
     'if __name__ == "__main__":\n    app.run()',
   ].join('\n\n\n') + '\n'
@@ -153,7 +172,9 @@ export async function setNotebook(io: Io, loaded: Loaded, env: NotebookEnv, ref:
   const id = resolveId(tree, ref)
   if (!id) throw new NotebookError(`"${ref}" is not a note of the tree`)
   const n = tree.nodes[id]!
-  if (n.type !== 'experiment') throw new NotebookError(`${n.name} is a ${n.type}: only an experiment has a notebook, which rebuilds its Result`)
+  // an experiment's notebook makes its numbers; a concept's, on its start note, compares its experiments
+  const concept = n.type !== 'experiment' ? Object.values(tree.concepts ?? {}).find(c => c.root === id) : undefined
+  if (n.type !== 'experiment' && !concept) throw new NotebookError(`${n.name} is a ${n.type} that starts no concept: an experiment has a notebook (its numbers, figures and tables), and so does the note that starts a concept (the figures and tables comparing its experiments)`)
   if (isLocked(loaded.texts[id] ?? '')) throw new NotebookError(`${n.name} is locked: the user changes it, so ask them to unlock it before it gets a notebook`)
   const repos = codeRepos(tree.concepts, n.concept)
   if (!repos.length) throw new NotebookError(`${n.name}'s concept links no code, and a notebook lives in the concept's repo: link the repo first with rft_set_repos, once the user gives its path`)
@@ -168,11 +189,13 @@ export async function setNotebook(io: Io, loaded: Loaded, env: NotebookEnv, ref:
     if (!(await io.exists(target))) throw new NotebookError(`no file ${target} (a path in ${repo}, or absolute)`)
     code = await io.read(target)
   } else {
-    target = join(repo, NOTEBOOKS_DIR, notebookFile(n))
+    target = join(repo, NOTEBOOKS_DIR, notebookFile(concept ? { id: n.id, title: concept.name } : n))
     if ((await io.exists(target)) && input.replace !== true) throw new NotebookError(`${target} exists: change it with Edit (it is plain Python), or pass replace: true to write it anew from cells`)
     // where the queue's runner keeps the runs of this repo (server/rft_queue.py): <runsDir>/<repo>, else the repo's own runs/
     const root = config.runsDir ? join(repoAbs(env.root, config.runsDir, env.home), repo.split('/').filter(Boolean).pop() ?? '') : 'runs'
-    code = notebookSource(`${n.id} · ${n.title}`, cells, { exp: n.id, root })
+    code = concept
+      ? notebookSource(`${n.id} · ${concept.name}`, cells, undefined, { id: concept.id, resultsDir: relativePath(repo, join(vaultAbs(env, loaded), 'results')) })
+      : notebookSource(`${n.id} · ${n.title}`, cells, { exp: n.id, root })
     await io.write(target, code)
   }
   const rel = `${NOTEBOOKS_DIR}/${n.id}.py`
@@ -183,6 +206,10 @@ export async function setNotebook(io: Io, loaded: Loaded, env: NotebookEnv, ref:
   await io.write(join(config.vault, n.path), text)
   Object.assign(loaded, await load(io, config))
   const how = file ? `linked: ${target}` : `written to ${target} (${cells.length} cell${cells.length === 1 ? '' : 's'})`
+  if (concept) {
+    return `${n.name}: the notebook of the concept "${concept.name}" ${how}, linked from the vault as ${config.vault}/${rel} and from the note (notebook:). ` +
+      `It reads EXPERIMENTS and runs again whenever one of its experiments' notebooks records new numbers; rft_run_notebook ${n.id} runs it now. Its FIGURES and TABLES go on the artifact by name (rft_artifact lists them). Change it with Edit (plain Python).`
+  }
   let out = `${n.name}: notebook ${how}, linked from the vault as ${config.vault}/${rel} and from the note (notebook:). ` +
     `${n.status === 'planned' || n.status === 'running' ? `The queue's runner runs it when ${n.id}'s jobs end and writes RESULTS in its Result; rft_run_notebook ${n.id} runs it now` : `Run it with rft_run_notebook ${n.id}`}; change it with Edit (plain Python).`
   if (!setsResults(code)) out += ' No cell sets RESULTS: put the numbers the note reports in a dict RESULTS, so the run can write them in its Result.'
@@ -227,7 +254,9 @@ export async function runNotebook(io: Io, loaded: Loaded, env: NotebookEnv, ref:
   const checks = r.checks ?? []
   const other = r.skipped?.length ? ` Not numbers, so not checked: ${r.skipped.slice(0, SHOWN).join(', ')}.` : ''
   const lines: string[] = []
-  if (r.state === 'failed' || !r.state) {
+  if (r.kind === 'concept' && r.state === 'ok') {
+    lines.push(`${n.name}: ran${took}${at} (${r.file || n.notebook}), the concept's comparisons.`)
+  } else if (r.state === 'failed' || !r.state) {
     lines.push(`${n.name}: failed${seconds != null ? ` after ${seconds} s` : ''}${at}.`, tail(r.error || 'no error given'),
       'Fix the notebook (plain Python: Edit it) or what it reads, then run it again.')
   } else if (r.state === 'unchecked') {
@@ -248,6 +277,9 @@ export async function runNotebook(io: Io, loaded: Loaded, env: NotebookEnv, ref:
   const saved = savedText(r.saved)
   if (saved) lines.push(saved)
   if (r.notes?.length) lines.push(`Not kept: ${r.notes.join('; ')}.`)
+  for (const c of r.concepts ?? []) {
+    lines.push(c.state === 'ok' ? `Then the notebook of its concept ${c.id}: ok. ${savedText(c.saved)}`.trim() : `Then the notebook of its concept ${c.id}: failed. ${tail(c.error || '', 6)}`.trim())
+  }
   return lines.join('\n')
 }
 

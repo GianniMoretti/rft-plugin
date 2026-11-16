@@ -292,6 +292,17 @@ repo's own uv environment, from the repo's root.
   (new runs, a fixed bug), run it with `record: true`, which rewrites the table and puts the
   artifact out of date. On failed, read the end of the traceback and fix the notebook or what it
   reads.
+- **A concept's notebook**, on the note that starts it (`rft_set_notebook <its id>`), makes the
+  figures and tables that compare the concept's experiments: its first cell (written for you)
+  gives `EXPERIMENTS`, each of its experiments' `RESULTS` by id, read from what their notebooks
+  saved (an experiment joins it once its notebook has run). It sets `FIGURES` and `TABLES` (saved
+  as `figures/<concept id>_<name>.svg`, `tables/<concept id>_<name>.html`) and runs again whenever
+  one of its experiments' notebooks records new numbers, so the artifact's comparisons follow
+  them at no model turn. Write one when the artifact needs a comparison across experiments; never
+  draw it on the page.
+- **Shared plotting code** (the style, the palette, helpers) goes in one module in the repo's
+  `notebooks/` folder, which is first on every notebook's `sys.path` (e.g. `notebooks/figures.py`),
+  and each notebook imports it: write it once per repo, not in every notebook.
 - **Change it** with Edit: it is plain Python.
 - **Never write `reproduced:` or the Result's table**: only a notebook's run writes them (your
   edits of either are refused).

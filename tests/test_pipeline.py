@@ -76,6 +76,9 @@ PAGE = """<h1>Mix-based augmentation</h1>
 <p><a href="#E08">E08</a> runs the toy problem with no stopping rule.</p>
 <rft-table src="E08_accuracy_by_seed"></rft-table>
 <img src="../figures/E08_training_loss.svg" alt="Training loss">
+<h2>The concept's experiments side by side</h2>
+<rft-table src="D04_results_by_experiment"></rft-table>
+<img src="../figures/D04_accuracy_by_experiment.svg" alt="Accuracy by experiment">
 """
 
 
@@ -102,8 +105,14 @@ class PipelineTest(unittest.TestCase):
         nb.parent.mkdir()
         nb.write_text(NOTEBOOK)
         rft_notebook.link(f"../../{lifecycle.TOY}/notebooks/{nb.name}", self.vault / "notebooks" / "E08.py")
+        # and the concept's notebook, on D04, which compares its experiments from their saved RESULTS
+        cnb = self.toy / "notebooks" / "D04_mix_based_augmentation.py"
+        shutil.copy(ROOT / "bench" / "toy" / "concept_notebook.py", cnb)
+        rft_notebook.link(f"../../{lifecycle.TOY}/notebooks/{cnb.name}", self.vault / "notebooks" / "D04.py")
+        d04 = self.vault / lifecycle.D04
+        d04.write_text(d04.read_text().replace("concept_repos:", 'notebook: "notebooks/D04.py"\nconcept_repos:', 1))
         git(self.toy, "add", "-A")
-        git(self.toy, "commit", "-q", "-m", "E08's notebook")
+        git(self.toy, "commit", "-q", "-m", "E08's notebook, D04's notebook")
         # the concept's artifact, written when E08 was planned: E08's table and figure placed by name
         (self.vault / "artifacts").mkdir()
         head = {"concept": "D04", "name": "Mix-based augmentation", "updated": "2026-11-15", "basis": {}}
@@ -164,6 +173,12 @@ class PipelineTest(unittest.TestCase):
             self.assertIn(f"<td>{rft_results.number_text(a)}</td>", page)
         self.assertTrue(page.startswith("<!-- rft-artifact "))
         self.assertIn("<svg", (self.vault / "figures" / "E08_training_loss.svg").read_text())
+        # and the concept's comparisons, its notebook run after E08's, at no model turn either
+        self.assertEqual(saved["concepts"][0], "D04")
+        self.assertIn(f"<tr><td>E08</td><td>{rft_results.number_text(saved['results']['acc_mean'])}</td>", page)
+        self.assertIn("<svg", (self.vault / "figures" / "D04_accuracy_by_experiment.svg").read_text())
+        self.assertIn(f'reproduced: "{time.strftime("%Y-%m-%d")} ok @{commit}', d04_text := (self.vault / lifecycle.D04).read_text())
+        self.assertNotIn("rft-results", d04_text)
 
         # the original moves on: a commit that would change every number
         train = self.toy / "train.py"

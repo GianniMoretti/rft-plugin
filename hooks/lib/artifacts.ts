@@ -339,6 +339,16 @@ export async function artifactReport(io: Io, loaded: Loaded, ref: string, opts: 
     else out.push(`- ${head}${keptLine ? ` · ${keptLine}` : ''}`)
   }
   if (!results.length) out.push('(none yet: nothing to put on the page)')
+  if (coded) {
+    // the concept's own notebook: the figures and tables that compare its experiments
+    // kept under the id of the note that starts the concept (the project's: the root note)
+    const start = c.root ?? null
+    const kept = start && tree.nodes[start]?.notebook ? await savedOf(io, loaded.config.vault, start) : null
+    const parts = kept ? [...kept.figures.map(f => `<img src="../${f}">`), ...kept.tables.map(t => `<rft-table src="${t}"></rft-table>`)] : []
+    if (parts.length) { out.push('', `Saved by the concept's notebook (its comparisons): ${parts.join(' · ')}`); saved++ }
+    else if (start && tree.nodes[start]?.notebook) out.push('', `The concept's notebook saved no figure or table yet: rft_run_notebook ${start} runs it.`)
+    else if (start && results.length > 1) out.push('', `No concept notebook: the figures and tables comparing these experiments come from one (rft_set_notebook ${start}: it reads EXPERIMENTS, each experiment's RESULTS, and sets FIGURES and TABLES), not drawn on the page.`)
+  }
   const unproven = coded ? results.filter(n => !n.supersededBy && n.reproduced?.state !== 'ok') : []
   if (unproven.length) out.push('', `Not reproduced by a notebook (${unproven.length}): ${unproven.map(n => `${n.id} (${notebookMark(n)})`).join(', ')}. Run them with rft_run_notebook (rft_set_notebook writes one) before their numbers go on the page, or say on the page that they are not reproduced. The view marks each linked experiment with its notebook's last run.`)
   if (state?.removed.length) out.push('', `No longer here (moved or deleted): ${state.removed.join(', ')}: take them off the page.`)

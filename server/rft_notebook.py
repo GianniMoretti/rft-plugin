@@ -258,9 +258,19 @@ def apply_run(vault: Path, exp: str, timeout: float, record: bool = False, runs:
     rel = rft_results.field(path.read_text(encoding="utf-8"), "notebook")
     if not rel:
         return {"ok": False, "state": "failed", "error": f"{exp} has no notebook (notebook: in its note)"}
-    link = vault / rel
-    outcome = run(link, timeout, uv)
-    return rft_results.apply(vault, exp, outcome, date or time.strftime("%Y-%m-%d"), record=record, runs=runs)
+    date = date or time.strftime("%Y-%m-%d")
+    if rft_results.field(path.read_text(encoding="utf-8"), "type") != "experiment":
+        # a concept's notebook, on the note that starts it: its comparisons, for its artifact
+        return rft_results.apply_concept(vault, exp, run(vault / rel, timeout, uv), date)
+    got = rft_results.apply(vault, exp, run(vault / rel, timeout, uv), date, record=record, runs=runs)
+    if got.get("state") == "ok" and got.get("saved"):
+        # the experiment's numbers are new or confirmed: the notebooks of its concepts run again
+        got["concepts"] = []
+        for cid in rft_results.concept_notebooks(vault, exp):
+            crel = rft_results.field(rft_results.note_path(vault, cid).read_text(encoding="utf-8"), "notebook")
+            c = rft_results.apply_concept(vault, cid, run(vault / crel, timeout, uv), date)
+            got["concepts"].append({k: c[k] for k in ("state", "saved", "error", "seconds") if k in c} | {"id": cid})
+    return got
 
 
 def free_port() -> int:

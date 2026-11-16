@@ -18,6 +18,13 @@ reports, and may hand back FIGURES and TABLES. `apply` takes that run to the vau
   is written: hooks/lib/artifacts.ts).
 - **Stamped**: the note's `reproduced:` line, the run's date, state, commit and time.
 
+A concept can have a notebook too, on the note that starts it (`apply_concept`): it reads
+EXPERIMENTS, the RESULTS its experiments' notebooks saved (results/<id>.json names the concepts
+each belongs to, the outer ones too), and makes the FIGURES and TABLES that compare them, saved as
+figures/<concept id>_<name>.svg and tables/<concept id>_<name>.html for its artifact. After an
+experiment's run records or checks ok, the notebooks of its concepts run as well (rft_notebook.py
+apply), so an artifact's comparisons follow its experiments at no model turn.
+
     python3 rft_notebook.py apply --vault V --exp E08 [--record]   (runs the notebook, then this)
 """
 from __future__ import annotations
@@ -335,7 +342,7 @@ def save(vault: Path, exp: str, outcome: dict, date: str, runs: list[dict]) -> t
         tables[key] = table_html(str(name), t)
         write_atomic(vault / TABLES_DIR / f"{key}.html", tables[key] + "\n")
     notes.extend(f"{n}" for n in outcome.get("notes") or [])
-    record = {"exp": exp, "date": date, "results": outcome.get("results"), "commit": outcome.get("commit"),
+    record = {"exp": exp, "concepts": concept_chain(vault, exp), "date": date, "results": outcome.get("results"), "commit": outcome.get("commit"),
               "dirty": outcome.get("dirty"), "notebook": outcome.get("file"),
               "runs": [{"id": j["id"], "label": j.get("label") or "", "out": j.get("out"), "commit": j.get("commit"),
                         "patch": j.get("patch")} for j in runs],
@@ -344,6 +351,55 @@ def save(vault: Path, exp: str, outcome: dict, date: str, runs: list[dict]) -> t
     saved = {"results": f"{RESULTS_DIR}/{exp}.json", "figures": figures, "tables": sorted(tables),
              "artifacts": refresh_artifacts(vault, tables)}
     return saved, notes
+
+
+def _concepts(vault: Path) -> tuple[dict, dict]:
+    """The tree's notes by id and its concepts by id, as the server reads them."""
+    import rft_server  # beside this file; only here, where the tree is needed
+    tree = rft_server.Vault(Path(vault), "rft").tree()
+    return {n["id"]: n for n in tree["nodes"]}, {c["id"]: c for c in tree.get("concepts") or []}
+
+
+def concept_chain(vault: Path, nid: str) -> list[str]:
+    """The concepts a note belongs to, its own first, then those above it (the project's is "root")."""
+    nodes, concepts = _concepts(vault)
+    out, cid = [], (nodes.get(nid) or {}).get("concept")
+    while cid and cid not in out:
+        out.append(cid)
+        cid = (concepts.get(cid) or {}).get("parent")
+    return out
+
+
+def concept_notebooks(vault: Path, exp: str) -> list[str]:
+    """The start notes of the concepts above an experiment that have a notebook, its own concept's first."""
+    nodes, concepts = _concepts(vault)
+    out, cid = [], (nodes.get(exp) or {}).get("concept")
+    while cid and cid not in [c for c, _ in out]:
+        start = (concepts.get(cid) or {}).get("root")
+        out.append((cid, start))
+        cid = (concepts.get(cid) or {}).get("parent")
+    return [start for _, start in out if start and (nodes.get(start) or {}).get("notebook")]
+
+
+def apply_concept(vault, cid: str, outcome: dict, date: str) -> dict:
+    """A concept notebook's run taken to the vault: its figures and tables saved (as <cid>_<name>)
+    and filled into the artifacts that name them, its RESULTS if it has any, its note stamped:
+    ok when it ran, failed with the end of its traceback. Nothing is checked against a Result."""
+    vault = Path(vault)
+    path = note_path(vault, cid)
+    out = {k: outcome.get(k) for k in ("ok", "seconds", "commit", "dirty", "file", "error") if outcome.get(k) is not None}
+    out["kind"] = "concept"
+    if path is None:
+        return {**out, "ok": False, "state": "failed", "error": f"no note {cid} in the vault"}
+    out["note"] = str(path.relative_to(vault))
+    state = "ok" if outcome.get("ok") else "failed"
+    out["state"] = state
+    if state == "ok":
+        out["saved"], out["notes"] = save(vault, cid, outcome, date, [])
+    stamp = reproduced_line(date, state, outcome.get("commit"), outcome.get("dirty"), outcome.get("seconds"))
+    write_atomic(path, set_field(path.read_text(encoding="utf-8"), "reproduced", json.dumps(stamp), after="notebook"))
+    out["reproduced"] = stamp
+    return out
 
 
 # ---------------------------------------------------------------- the run, applied

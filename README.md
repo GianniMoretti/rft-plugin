@@ -722,6 +722,17 @@ so you can run it and read the note side by side.
   itself. Opening one runs code, so it needs the page's key, as an edit does. ✕ closes the pane
   and the note's notebook button opens it again; drag its right edge to resize it; ↗ opens it in a
   tab of its own.
+- **A concept's notebook**, on the note that starts it (Claude writes it with `rft_set_notebook <its id>`), makes the
+  figures and tables that compare the concept's experiments: its first cell (written for you)
+  gives `EXPERIMENTS`, each of its experiments' `RESULTS` by id, read from what their notebooks
+  saved (an experiment joins it once its notebook has run). It sets `FIGURES` and `TABLES` (saved
+  as `figures/<concept id>_<name>.svg`, `tables/<concept id>_<name>.html`) and runs again whenever
+  one of its experiments' notebooks records new numbers, so the artifact's comparisons follow
+  them at no model turn. Claude writes one when the artifact needs a comparison across experiments, instead of drawing
+  it on the page.
+- **Shared plotting code** (the style, the palette, helpers) goes in one module in the repo's
+  `notebooks/` folder, which is first on every notebook's `sys.path` (e.g. `notebooks/figures.py`),
+  and each notebook imports it: Claude writes it once per repo, not in every notebook.
 - **In the artifacts**: in a concept with code, `rft_artifact` says for each result whether a
   notebook reproduced it, lists those that are not, and names what each notebook saved; each
   experiment's link in the page carries its last run (✓ reproduced, ≠ differs, ✗ failed).

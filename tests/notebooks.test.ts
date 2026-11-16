@@ -146,10 +146,10 @@ describe('rft_set_notebook', () => {
     await expect(setNotebook(io, loaded, env, 'E02', { file: 'analysis/none.py' })).rejects.toThrow(/no file/)
   })
 
-  test('refuses a note that is not an experiment, a concept with no code, an empty call, and a notebook it would overwrite', async () => {
+  test('refuses a note that is no experiment and starts no concept, a concept with no code, an empty call, and a notebook it would overwrite', async () => {
     const { fs, io, loaded } = await open(project())
     const { env } = envOf()
-    await expect(setNotebook(io, loaded, env, 'D01', { cells: CELLS })).rejects.toThrow(/experiment/)
+    await expect(setNotebook(io, loaded, env, 'D00', { cells: CELLS })).rejects.toThrow(/starts no concept/)
     await expect(setNotebook(io, loaded, env, 'E01', { cells: CELLS })).rejects.toThrow(/rft_set_repos/)
     await expect(setNotebook(io, loaded, env, 'E02', {})).rejects.toThrow(/cells or file/)
     await expect(setNotebook(io, loaded, env, 'E02', { cells: [] })).rejects.toThrow(/cells or file/)
@@ -158,6 +158,31 @@ describe('rft_set_notebook', () => {
     expect(fs.read(NOTEBOOK)).toBe('mine')
     await setNotebook(io, loaded, env, 'E02', { cells: CELLS, replace: true })
     expect(fs.read(NOTEBOOK)).toContain('RESULTS')
+  })
+
+  test("a concept's notebook, on its start note: EXPERIMENTS, read from the vault's results/, to compare its experiments", async () => {
+    const { fs, io, loaded } = await open(project())
+    const { env, links } = envOf()
+    const out = await setNotebook(io, loaded, env, 'D01', { cells: ['TABLES = {"Gap by experiment": [{"experiment": e, **r} for e, r in EXPERIMENTS.items()]}'] })
+    const file = `${SFREE}/notebooks/D01_variants.py`
+    const src = fs.read(file)
+    expect(src).toContain('EXPERIMENTS = {_r["exp"]: _r["results"]')
+    expect(src).toContain('_pathlib.Path("../../demo/vault/results").glob("E*.json")')
+    expect(src).toContain('if "D01" in (_r.get("concepts") or [])')
+    expect(src).not.toContain('RUNS')
+    expect(links).toEqual([['../../../code/sfree/notebooks/D01_variants.py', at('notebooks/D01.py')]])
+    expect(front(fs.read(PATH.D01)).notebook).toBe('"notebooks/D01.py"')
+    expect(out).toContain('the notebook of the concept "Variants"')
+    expect(out).toContain('runs again whenever one of its experiments')
+  })
+
+  test("a concept's run, and the concept runs after an experiment's, in a line each", async () => {
+    const { io, loaded } = await open(project({ e02: 'notebook: "notebooks/E02.py"' }))
+    const concept = await runNotebook(io, loaded, envOf({ ok: true, seconds: 2, commit: 'a1b2c3d4e5', state: 'ok', kind: 'concept', saved: { results: 'results/D01.json', figures: ['figures/D01_gap.svg'], tables: [] } }).env, 'E02')
+    expect(concept).toContain("the concept's comparisons")
+    expect(concept).toContain('figures/D01_gap.svg (in an artifact: <img src="../figures/D01_gap.svg">)')
+    const chained = await runNotebook(io, loaded, envOf({ ...OK, concepts: [{ id: 'D01', state: 'ok', saved: { results: 'results/D01.json', tables: ['D01_gap_by_experiment'] } }] }).env, 'E02')
+    expect(chained).toContain('Then the notebook of its concept D01: ok. Saved: results/D01.json; table D01_gap_by_experiment')
   })
 
   test('refuses a locked note', async () => {

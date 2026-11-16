@@ -227,6 +227,57 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(len(notes), 1)
 
 
+def direction(nid, title, parent, extra=""):
+    return f"""---
+id: {nid}
+type: direction
+status: running
+parent: {f'"[[{parent}]]"' if parent else '""'}
+children: []
+tags: [demo, direction, running]{extra}
+---
+
+# {nid} · {title}
+
+## Idea
+x
+"""
+
+
+class ConceptNotebookTest(unittest.TestCase):
+    """A concept's notebook, on its start note: its experiments' numbers in, comparisons out."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.vault = Path(self.tmp.name) / "vault"
+        for d in ("experiments", "directions"):
+            (self.vault / d).mkdir(parents=True)
+        (self.vault / "directions" / "D00 Does the thing work.md").write_text(direction("D00", "Does the thing work", "", '\nconcept: "Project"'))
+        (self.vault / "directions" / "D01 A better variant.md").write_text(direction("D01", "A better variant", "D00 Does the thing work", '\nconcept: "Variants"\nnotebook: "notebooks/D01.py"'))
+        (self.vault / "experiments" / f"{NAME}.md").write_text(note(""))
+
+    def test_an_experiments_numbers_name_the_concepts_it_belongs_to(self):
+        rft_results.apply(self.vault, "E02", outcome(), "2026-11-16")
+        # the project's own concept, on the root note, is "root" (as the tree has it)
+        self.assertEqual(json.loads((self.vault / "results" / "E02.json").read_text())["concepts"], ["D01", "root"])
+        self.assertEqual(rft_results.concept_notebooks(self.vault, "E02"), ["D01"])
+
+    def test_a_concept_run_saves_its_comparisons_fills_its_artifact_and_stamps_its_note(self):
+        art = self.vault / "artifacts" / "D01 Variants.html"
+        art.parent.mkdir()
+        art.write_text('<!-- rft-artifact {"concept": "D01", "name": "Variants", "updated": "x", "basis": {}} -->\n<rft-table src="D01_gap_by_experiment"></rft-table>\n')
+        got = rft_results.apply_concept(self.vault, "D01", outcome(results=None, figures={"Gap by experiment": "<svg/>"},
+                                                                  tables={"Gap by experiment": {"columns": ["experiment", "gap"], "rows": [["E02", 4.1]]}}), "2026-11-16")
+        self.assertEqual((got["state"], got["kind"]), ("ok", "concept"))
+        self.assertEqual(got["saved"]["figures"], ["figures/D01_gap_by_experiment.svg"])
+        self.assertIn("<tr><td>E02</td><td>4.1</td></tr>", art.read_text())
+        self.assertIn('reproduced: "2026-11-16 ok @a1b2c3d4e5 in 6.1 s"', (self.vault / "directions" / "D01 A better variant.md").read_text())
+        self.assertNotIn("rft-results", (self.vault / "directions" / "D01 A better variant.md").read_text())  # a concept's note has no Result to write
+        failed = rft_results.apply_concept(self.vault, "D01", {"ok": False, "error": "KeyError: 'E09'"}, "2026-11-17")
+        self.assertEqual((failed["state"], "saved" in failed), ("failed", False))
+
+
 TOY = '''import marimo
 app = marimo.App()
 
