@@ -691,7 +691,7 @@ class ProgressTest(unittest.TestCase):
         self.log = Path(self.tmp.name) / "q1.log"
         self.stages = Path(self.tmp.name) / "progress.jsonl"
 
-    def test_the_bars_still_going_outer_first_a_finished_one_left_out(self):
+    def test_one_bar_the_last_drawn_with_a_total_a_finished_one_left_out(self):
         self.log.write_text(
             "# rft job q1 (E24) on GPU 1, 2026-11-16T12:00:00+01:00, in /code\n# $ scripts/local/pose_probes_job.sh mae base\n"
             "2026-11-16 12:00:01 cache whole: output/pose_cache/x\n"
@@ -700,11 +700,23 @@ class ProgressTest(unittest.TestCase):
             "\rtrain shard 3/12:  45%|████▌     | 450/1000 [01:23<01:40, 5.40it/s, loss=0.31]"
             "\rtest shard 1/4: 100%|██████████| 10/10 [00:01<00:00, 9.9it/s]\nrows: 1200it [00:30, 40.0it/s]")
         got = rft_queue.progress_of(self.log)
+        # the count bar "rows" was drawn last, but has no total: the shard bar says more
         self.assertEqual([(b["desc"], b.get("pct"), b["n"], b.get("total"), b.get("left")) for b in got["bars"]],
-                         [("mlp", 4, "2", "50", "08:00"), ("train shard 3/12", 45, "450", "1000", "01:40"), ("rows", None, "1200", None, None)])
-        self.assertEqual(got["bars"][2]["rate"], "40.0it/s")
+                         [("train shard 3/12", 45, "450", "1000", "01:40")])
         self.assertEqual(got["line"], "2026-11-16 12:00:01 cache whole: output/pose_cache/x")
         self.assertNotIn("stage", got)
+        self.log.write_text("rows: 1200it [00:30, 40.0it/s]")
+        self.assertEqual(rft_queue.progress_of(self.log)["bars"][0]["rate"], "40.0it/s")
+
+    def test_a_bar_whose_label_carries_a_changing_metric_is_one_bar_and_ends_when_it_ends(self):
+        draws = [f"mlp train mse {0.034 - k * 1e-4:.5f} val mse {0.035 - k * 1e-4:.5f}: {k}%|#   | {k}/100 [00:{k:02d}<00:10, 1.0it/s]" for k in (96, 97, 98)]
+        self.log.write_text("\r".join(draws))
+        got = rft_queue.progress_of(self.log)
+        self.assertEqual([(b["desc"], b["n"]) for b in got["bars"]], [("mlp train mse 0.02420 val mse 0.02520", "98")])
+        self.log.write_text("\r".join(draws + ["mlp train mse 0.03299 val mse 0.03399: 100%|####| 100/100 [01:40<00:00, 1.0it/s]", "\nloaded probe: output/probes/x"]))
+        got = rft_queue.progress_of(self.log)
+        self.assertNotIn("bars", got)
+        self.assertEqual(got["line"], "loaded probe: output/probes/x")
 
     def test_no_bar_its_last_line_and_its_stage_as_json_or_text(self):
         self.log.write_text("# rft job q1 (E24)\n2026-11-16 12:00:01 waiting for GPU 1: 2048 MiB free, need 14336\n")

@@ -396,8 +396,8 @@ or `/rft-jobs`), where they also reorder, pause, cancel and retry jobs, and keep
   the config's `runsDir` (`<repo>` the name of the job's repo folder), else
   `<repo>/runs/<exp>/<job>` (kept out of git). Have the
   command write there (`--out "$RFT_OUT"`); the notebook finds it as `out` in `RUNS`.
-- **How far it is**: the monitor and `rft_jobs` show, for each running job, its stage, each tqdm
-  bar still going (label, n/total, %, time left) and its last line, read from what it writes. In
+- **How far it is**: the monitor and `rft_jobs` show, for each running job, its stage, the tqdm
+  bar it drew last (label, n/total, %, time left) and its last line, read from what it writes. In
   a script you write for the queue, give each loop longer than a minute a tqdm bar with `desc`
   and `total`; a job of several steps appends each to `$RFT_PROGRESS` (`echo '{"stage":
   "probe patchpos", "i": 2, "n": 5}' >> "$RFT_PROGRESS"`, or a plain line of text). Bars redraw

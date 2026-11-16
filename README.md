@@ -423,8 +423,9 @@ session brings it back).
   with the config's `runsDir` (`<repo>` the name of the job's repo folder, or of its own folder
   outside git), else `<repo>/runs/<experiment>/<job>`, at the top of the job's git repo (the runner
   gives a `runs/` it makes a `.gitignore`, so the outputs stay out of git).
-- **How far it is**: each running job's row shows its stage, each tqdm bar still going (its
-  label, a meter, n/total, % and time left) and its last line of text, read from what the job
+- **How far it is**: each running job's row shows its stage, the tqdm bar it drew last (its
+  label, a meter, n/total, % and time left; a bar whose label carries a changing metric counts as
+  one) and its last line of text, read from what the job
   writes anyway: the end of its log, and `$RFT_PROGRESS` (`progress.jsonl` in its output folder),
   where a job of several steps appends each (`echo '{"stage": "probe patchpos", "i": 2, "n": 5}'
   >> "$RFT_PROGRESS"`, or a plain line of text). The runner sets `TQDM_MININTERVAL=10` (unless

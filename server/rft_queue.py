@@ -29,7 +29,7 @@ has been empty a while; queueing a job, opening the tree view or a new session s
   while it ran. Each output folder holds a copy of its record (rft-run.json), so the outputs say
   what made them; history.jsonl keeps them all.
 - **Progress**: a running job's row says how far it is, from what it writes anyway: the last state
-  of each tqdm bar still going in the end of its log (its label, n/total, %, time left; a bar
+  of the tqdm bar it drew last, still going, in the end of its log (its label, n/total, %, time left; a bar
   redraws every TQDM_MININTERVAL s, 10 unless the job sets it, so logs stay small), its last line
   of text, and the last stage it appended to $RFT_PROGRESS (progress.jsonl in its output folder: a
   JSON line {"stage", "i", "n"}, or plain text), for a job of several steps.
@@ -103,6 +103,7 @@ PROGRESS_BYTES = 65_536  # the end of a log its progress is read from
 TQDM_BAR = re.compile(r"^(?:(?P<desc>.*?): ?)?\s*(?P<pct>\d{1,3})%\|[^|]*\|\s*(?P<n>[\d.]+[kMGTPEZY]?)/(?P<total>[\d.]+[kMGTPEZY]?)\s*"
                       r"\[(?P<elapsed>[\d:]+)<(?P<left>[\d:]+|\?)(?:,\s*(?P<rate>[^,\]]+))?[^\]]*\]")
 TQDM_COUNT = re.compile(r"^(?:(?P<desc>.*?): ?)?(?P<n>\d[\d.]*[kMGTPEZY]?)[A-Za-z]*\s*\[(?P<elapsed>[\d:]+),\s*(?P<rate>[^,\]]+)[^\]]*\]")
+BAR_NUMBERS = re.compile(r"[-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?")
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
 RUNS = "runs"  # the output folders' root when a job names none, at the top of its repo (or folder)
 RUN_RECORD = "rft-run.json"  # each output folder's copy of its job's record
@@ -318,11 +319,13 @@ def _last_bytes(path: Path, n: int) -> bytes:
 
 
 def progress_of(log: Path, stages: Path | None = None) -> dict:
-    """How far a running job is, from what it writes anyway: the bars of tqdm still going in the end
-    of its log (the three last drawn, in the order they started: an outer loop, then inner ones),
-    its last line of text, and its last stage in $RFT_PROGRESS. {} when it says nothing yet."""
+    """How far a running job is, from what it writes anyway: the tqdm bar it drew last in the end of
+    its log, still going (one with a total before one without), its last line of text, and its last
+    stage in $RFT_PROGRESS. A bar is known by its label with its numbers left out, so one whose
+    label carries a changing metric ("mlp train mse 0.0338") is one bar, as last drawn. {} when it
+    says nothing yet."""
     out: dict = {}
-    seen: dict[str, tuple[int, int, dict]] = {}  # a bar's label: (where it was last drawn, where first, its state)
+    seen: dict[str, tuple[int, dict]] = {}  # a bar's label, its numbers left out: (where it was last drawn, its state)
     line, line_at = "", -1
     tail = _last_bytes(log, PROGRESS_BYTES).decode("utf-8", "replace")
     for i, seg in enumerate(re.split(r"[\r\n]", tail)):
@@ -335,12 +338,12 @@ def progress_of(log: Path, stages: Path | None = None) -> dict:
             bar = {"desc": (g.get("desc") or "").strip()[:80], "n": g["n"], "elapsed": g["elapsed"], "rate": (g.get("rate") or "").strip()}
             if g.get("total"):
                 bar.update(total=g["total"], pct=min(100, int(g["pct"])), left=g["left"])
-            seen[bar["desc"]] = (i, seen[bar["desc"]][1] if bar["desc"] in seen else i, bar)
+            seen[BAR_NUMBERS.sub("#", bar["desc"])] = (i, bar)
         elif not seg.startswith(("# rft job ", "# $ ")):
             line, line_at = seg, i
-    going = sorted((v for v in seen.values() if v[2].get("pct") != 100), key=lambda v: -v[0])[:3]
+    going = [v for v in seen.values() if v[1].get("pct") != 100]
     if going:
-        out["bars"] = [v[2] for v in sorted(going, key=lambda v: v[1])]
+        out["bars"] = [max([v for v in going if "total" in v[1]] or going, key=lambda v: v[0])[1]]
     if line:
         out["line"] = line if len(line) <= 200 else "…" + line[-200:]
     if stages is not None:

@@ -63,10 +63,10 @@ export type Job = {
 /** A tqdm bar as the job last drew it. */
 export type Bar = { desc: string; n: string; total?: string; pct?: number; left?: string; elapsed?: string; rate?: string }
 
-/** How far a running job is: its bars still going, its last line of text, its last stage ($RFT_PROGRESS). */
+/** How far a running job is: the tqdm bar it drew last (a list of one), its last line of text, its last stage ($RFT_PROGRESS). */
 export type Progress = { bars?: Bar[]; line?: string; stage?: { stage?: string; i?: number; n?: number } }
 
-/** A running job's progress in a few words: its stage, then each bar (outer first), else its last line. */
+/** A running job's progress in a few words: its stage, then its bar, else its last line. */
 export function progressText(p: Progress | undefined): string {
   if (!p) return ''
   const parts: string[] = []

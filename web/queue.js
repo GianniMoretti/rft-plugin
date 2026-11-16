@@ -70,7 +70,7 @@
 
   /**
    * How far a running job is, as its row shows it (server/rft_queue.py's progress_of): its stage
-   * ($RFT_PROGRESS), each tqdm bar still going (label, fraction, numbers and time left), its last
+   * ($RFT_PROGRESS), the tqdm bar it drew last (label, fraction, numbers and time left), its last
    * line of text; null when it says nothing yet.
    */
   function progressParts(p) {
