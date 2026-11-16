@@ -22,7 +22,7 @@ export const FEATURE_TOOLS = {
   comments: ['rft_comments', 'rft_comment', 'rft_suggest'],
   artifacts: ['rft_artifact', 'rft_set_artifact'],
   notebooks: ['rft_set_notebook', 'rft_run_notebook'],
-  queue: ['rft_queue', 'rft_jobs', 'rft_move_job', 'rft_cancel_job'],
+  queue: ['rft_queue', 'rft_jobs', 'rft_job'],
 } as const
 
 export type Feature = keyof typeof FEATURE_TOOLS

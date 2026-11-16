@@ -1,7 +1,7 @@
 // The experiment queue as Claude and the session see it. The queue itself is server/rft_queue.py:
 // its runner, a process of its own, starts each job on this machine's GPUs in the user's order and
 // records how it ended, in the vault's .queue/ folder. Claude queues, reads and cancels through its
-// command line (rft_queue, rft_jobs, rft_cancel_job); the session reads the files at each tick of its
+// command line (rft_queue, rft_jobs, rft_job); the session reads the files at each tick of its
 // poll to set a planned experiment running when its job starts, toast a job that ended, and flag a
 // result to record. None of that is a model turn: the answers here are a few lines each.
 
@@ -332,14 +332,18 @@ export function jobsReport(v: QueueView, loaded: Loaded, now: number, opts: { re
   return out.join('\n')
 }
 
-/** rft_move_job's answer: the job moved and the waiting order it leaves, in one line. */
+/** rft_job move's answer: the job moved and the waiting order it leaves, in one line. */
 export function movedText(r: { job: Job; waiting?: { id: string; exp: string; gpus: number }[] }): string {
   const w = r.waiting ?? []
   const order = w.slice(0, 10).map((j, i) => `${i + 1}. ${j.id} ${j.exp}${j.gpus !== 1 ? ` (${gpuWord(j.gpus)})` : ''}`)
   return `Moved ${r.job.id} (${r.job.exp}). Waiting: ${order.join(' · ')}${w.length > 10 ? ` · … ${w.length - 10} more` : ''}`
 }
 
-/** rft_cancel_job's answer. */
+/** rft_job retry's answer: the new job, first in line. */
+export const retriedText = (r: { job: Job; outlook?: string }) =>
+  `Retried ${r.job.retry_of ?? 'the job'} as ${r.job.id} (${r.job.exp}${r.job.label ? ` [${r.job.label}]` : ''}), first in line${r.outlook ? `: ${r.outlook}` : ''}.`
+
+/** rft_job cancel's answer. */
 export function cancelledText(j: Job, loaded: Loaded, now: number): string {
   const what = j.started ? `it ran on ${gpuList(j.gpu_ids)} for ${duration((j.ended ?? now) - j.started)}; its output stays in ${QUEUE_DIR}/logs/${j.id}.log` : 'it had not started'
   return `Cancelled ${named(loaded, j)}: ${what}.${loaded.tree.nodes[j.exp]?.status === 'running' ? ` ${j.exp} still says running: set its status once you know what to keep.` : ''}`

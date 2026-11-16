@@ -21,7 +21,7 @@ describe('tool list', () => {
     mock.clock(on)
     const w = world(on, demoFiles())
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.tools).toHaveLength(38)
+    expect(w.tools).toHaveLength(37)
     expect(inPrompt(w)).toEqual([...CORE_TOOLS].sort())
     for (const t of Object.values(FEATURE_TOOLS).flat()) expect(w.deferred).toContain(t)
   })

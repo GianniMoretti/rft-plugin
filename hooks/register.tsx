@@ -40,7 +40,7 @@ import { SMALL_TREE, mapGaps, mapReport, mapWarnings, projectMap, readDigests, r
 import { ARTIFACTS_DIR, artifactMarks, artifactReport, artifactWarnings, artifactsToWrite, setArtifact } from './lib/artifacts'
 import type { ApplyOutcome, NotebookEnv } from './lib/notebooks'
 import { MAX_TIMEOUT_S, REPRODUCED_LINE, changesReproduced, changesResultsBlock, reproducedEditText, resultsBlockEditText, runNotebook, setNotebook } from './lib/notebooks'
-import { QUEUE_CLI, QUEUE_FILE, addedText, cancelledText, jobEvents, jobsNext, jobsReport, movedText, queueLine, readQueue, toStart } from './lib/queue'
+import { QUEUE_CLI, QUEUE_FILE, addedText, cancelledText, jobEvents, jobsNext, jobsReport, movedText, queueLine, readQueue, retriedText, toStart } from './lib/queue'
 import type { Job, QueueView } from './lib/queue'
 import { CONFIG_PATH, LEGEND, MARK, NODE_TYPES, bodyOf, isLiterature, counts, countsLine, isAbsolute, join, locate, readConfig, repoAbs, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
 
@@ -525,28 +525,18 @@ const TOOLS = {
       },
     },
   },
-  rft_move_job: {
+  rft_job: {
     description:
-      'Move a waiting job of the experiment queue, when the user asks (the order is theirs): to the top, to the end, or before another waiting job. Answers the new waiting order in one line, so no rft_jobs is needed after it.',
+      'Change the experiment queue, only when the user asks (the order and the queue are theirs). move: a waiting job to the top, the end, or before another waiting job. cancel: a waiting job leaves the queue, a running one is stopped with all it started (the experiment\'s status is left to you). retry: a job that ended is queued again, first in line. pause: no new job starts (those running go on); resume: they start again. Answers in a line, a move or a retry with the new waiting order, so no rft_jobs is needed after it.',
     inputSchema: {
       type: 'object',
       properties: {
-        id: { type: 'string', description: 'The waiting job, e.g. q7.' },
-        before: { type: 'string', description: '"top", "end" (the default), or the waiting job it goes before, e.g. q3.' },
+        action: { type: 'string', enum: ['move', 'cancel', 'retry', 'pause', 'resume'] },
+        id: { type: 'string', description: 'The job, e.g. q7 (move, cancel, retry).' },
+        before: { type: 'string', description: 'move: "top", "end" (the default), or the waiting job it goes before, e.g. q3.' },
+        why: { type: 'string', description: 'cancel: why, in a few words.' },
       },
-      required: ['id'],
-    },
-  },
-  rft_cancel_job: {
-    description:
-      'Cancel a job of the experiment queue, only when the user asks: a waiting job leaves the queue, a running one is stopped (its whole process group). The experiment\'s status is left to you.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'The job, e.g. q7.' },
-        why: { type: 'string', description: 'Why, in a few words.' },
-      },
-      required: ['id'],
+      required: ['action'],
     },
   },
 } as const
@@ -913,13 +903,24 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
         : undefined
       return jobsReport(v, loaded, await nowS($), { ref, log })
     }
-    case 'rft_move_job': {
-      const before = str(i.before)?.trim().toLowerCase() || 'end'
-      const r = await queueCli($, h, loaded.config, ['move', '--id', String(i.id ?? '').trim().toLowerCase(), '--before', before])
-      return movedText(r as unknown as Parameters<typeof movedText>[0])
-    }
-    case 'rft_cancel_job': {
-      const r = await queueCli($, h, loaded.config, ['cancel', '--id', String(i.id ?? '').trim().toLowerCase(), '--why', str(i.why) ?? 'cancelled by Claude'])
+    case 'rft_job': {
+      const action = String(i.action ?? '')
+      const id = String(i.id ?? '').trim().toLowerCase()
+      if (action === 'pause' || action === 'resume') {
+        await queueCli($, h, loaded.config, [action])
+        return action === 'pause' ? 'Paused: no new job starts; the jobs running go on. rft_job resume starts them again.' : 'Resumed: the waiting jobs start as their GPUs free.'
+      }
+      if (!['move', 'cancel', 'retry'].includes(action)) throw new Error(`action is one of move, cancel, retry, pause, resume (not "${action}")`)
+      if (!/^q\d+$/.test(id)) throw new Error(`${action} needs the id of a job, e.g. q7 (rft_jobs lists them)`)
+      if (action === 'move') {
+        const r = await queueCli($, h, loaded.config, ['move', '--id', id, '--before', str(i.before)?.trim().toLowerCase() || 'end'])
+        return movedText(r as unknown as Parameters<typeof movedText>[0])
+      }
+      if (action === 'retry') {
+        const r = await queueCli($, h, loaded.config, ['retry', '--id', id])
+        return retriedText(r as { job: Job; outlook?: string })
+      }
+      const r = await queueCli($, h, loaded.config, ['cancel', '--id', id, '--why', str(i.why) ?? 'cancelled by Claude'])
       return cancelledText(r.job as Job, loaded, await nowS($))
     }
     case 'rft_map':

@@ -188,7 +188,7 @@ describe('queue: in a session', () => {
       },
     })
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    for (const t of ['rft_queue', 'rft_jobs', 'rft_cancel_job']) {
+    for (const t of ['rft_queue', 'rft_jobs', 'rft_job']) {
       expect(w.tools).toContain(t)
       expect(w.deferred).not.toContain(t)
     }
@@ -208,7 +208,7 @@ describe('queue: in a session', () => {
     expect(String(bad.text)).toContain('experiment')
   })
 
-  test('rft_move_job moves one job and answers the new order in one line', async ($, on) => {
+  test('rft_job moves one job and answers the new order in one line', async ($, on) => {
     mock.clock(on)
     const calls: string[][] = []
     const waiting = [{ id: 'q4', exp: 'E05', gpus: 1 }, { id: 'q3', exp: 'E03', gpus: 2 }, { id: 'q5', exp: 'E04', gpus: 1 }]
@@ -222,22 +222,48 @@ describe('queue: in a session', () => {
       },
     })
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.tools).toContain('rft_move_job')
-    expect(w.deferred).not.toContain('rft_move_job')
+    expect(w.tools).toContain('rft_job')
+    expect(w.deferred).not.toContain('rft_job')
     // example 1: E17's job (here q4) before E16's (q3)
-    const r = await $.tool.call({ tool: 'mcp__rft__rft_move_job', id: 'Q4', before: 'q3' } as never)
+    const r = await $.tool.call({ tool: 'mcp__rft__rft_job', action: 'move', id: 'Q4', before: 'q3' } as never)
     expect(r.isError).toBeFalsy()
     const move = calls.find(c => c[2] === 'move')!
     expect(move.slice(move.indexOf('--id'))).toEqual(['--id', 'q4', '--before', 'q3'])
     expect(String(r.text)).toBe('Moved q4 (E05). Waiting: 1. q4 E05 · 2. q3 E03 (2 GPUs) · 3. q5 E04')
     // the top and the end are words; no before means the end
-    await $.tool.call({ tool: 'mcp__rft__rft_move_job', id: 'q5', before: 'top' } as never)
+    await $.tool.call({ tool: 'mcp__rft__rft_job', action: 'move', id: 'q5', before: 'top' } as never)
     expect(calls.at(-1)!.slice(-4)).toEqual(['--id', 'q5', '--before', 'top'])
-    await $.tool.call({ tool: 'mcp__rft__rft_move_job', id: 'q5' } as never)
+    await $.tool.call({ tool: 'mcp__rft__rft_job', action: 'move', id: 'q5' } as never)
     expect(calls.at(-1)!.slice(-4)).toEqual(['--id', 'q5', '--before', 'end'])
-    const bad = await $.tool.call({ tool: 'mcp__rft__rft_move_job', id: 'q9', before: 'top' } as never)
+    const bad = await $.tool.call({ tool: 'mcp__rft__rft_job', action: 'move', id: 'q9', before: 'top' } as never)
     expect(bad.isError).toBe(true)
     expect(String(bad.text)).toBe('no job q9')
+  })
+
+  test('rft_job also retries a job that ended, and pauses and resumes the queue, each in a line', async ($, on) => {
+    mock.clock(on)
+    const calls: string[][] = []
+    world(on, files({ 'vault/.queue/queue.json': JSON.stringify({ version: 1, seq: 5, paused: false, jobs: [] }) }), {
+      process: argv => {
+        if (!PY.test(argv[1] ?? '')) return undefined
+        calls.push([...argv])
+        if (argv[2] === 'retry') return { exitCode: 0, stderr: '', stdout: JSON.stringify({ job: job('q6', 'E04', 'pending', { retry_of: 'q1', label: 'bs 512' }), outlook: '1st in line: needs 1 GPU, 0 free' }) }
+        if (argv[2] === 'pause' || argv[2] === 'resume') return { exitCode: 0, stderr: '', stdout: JSON.stringify({ paused: argv[2] === 'pause' }) }
+        return { exitCode: 0, stderr: '', stdout: '{}' }
+      },
+    })
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const r = await $.tool.call({ tool: 'mcp__rft__rft_job', action: 'retry', id: 'q1' } as never)
+    expect(calls.at(-1)!.slice(2)).toEqual(['retry', '--vault', `${CWD}/vault`, '--id', 'q1'])
+    expect(String(r.text)).toBe('Retried q1 as q6 (E04 [bs 512]), first in line: 1st in line: needs 1 GPU, 0 free.')
+    expect(String((await $.tool.call({ tool: 'mcp__rft__rft_job', action: 'pause' } as never)).text)).toContain('Paused: no new job starts')
+    expect(calls.at(-1)![2]).toBe('pause')
+    expect(String((await $.tool.call({ tool: 'mcp__rft__rft_job', action: 'resume' } as never)).text)).toContain('Resumed')
+    expect(calls.at(-1)![2]).toBe('resume')
+    const bad = await $.tool.call({ tool: 'mcp__rft__rft_job', action: 'cancel' } as never)
+    expect(bad.isError).toBe(true)
+    expect(String(bad.text)).toContain('needs the id of a job')
+    expect((await $.tool.call({ tool: 'mcp__rft__rft_job', action: 'stop', id: 'q1' } as never)).isError).toBe(true)
   })
 
   test('without a queue the tools wait behind ToolSearch', async ($, on) => {
