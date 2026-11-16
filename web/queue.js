@@ -81,7 +81,7 @@
   const newLog = () => ({ lines: [], partial: '', cut: false, next: -1 })
 
   /**
-   * The log once a piece read from the server is added (api/queue/log: {text, start, end, reset}):
+   * The log once a piece read from the server is added (api/queue/output: {text, start, end, reset}):
    * whole lines join `lines`, the last one waits in `partial` until its newline comes (so a bar
    * redrawn across two reads ends on its last state); `reset` starts it again from that piece.
    */
@@ -134,6 +134,9 @@
     let armed = null // a cancel waiting for its second press: { id, until }
     let dragging = null
     let timer = 0
+    let answered = 0 // when the server last answered the queue: a log it does not answer is then refused on the way
+    // where a job's output is read: api/queue/output, or api/queue/log on a server started before it
+    let outputAt = 'api/queue/output'
     const canWrite = () => !!key()
     const now = () => Date.now() / 1000
 
@@ -166,6 +169,7 @@
           return true
         }
         view = got
+        answered = Date.now()
         // an open log follows its job while it runs, and gets its last lines once it has ended
         for (const id of shown) {
           const j = view.jobs.find(x => x.id === id) || view.history.find(x => x.id === id)
@@ -236,8 +240,13 @@
       l.busy = true
       const from = l.log.next >= 0 ? `&from=${l.log.next}` : ''
       try {
-        const res = await fetch(`api/queue/log?id=${encodeURIComponent(id)}${from}`, { cache: 'no-store', headers: { 'X-RFT-Token': key() } })
-        const got = await res.json().catch(() => null)
+        let res = await fetch(`${outputAt}?id=${encodeURIComponent(id)}${from}`, { cache: 'no-store', headers: { 'X-RFT-Token': key() } })
+        let got = await res.json().catch(() => null)
+        if (res.status === 404 && !got && outputAt !== 'api/queue/log') {
+          outputAt = 'api/queue/log'
+          res = await fetch(`${outputAt}?id=${encodeURIComponent(id)}${from}`, { cache: 'no-store', headers: { 'X-RFT-Token': key() } })
+          got = await res.json().catch(() => null)
+        }
         if (res.ok && got && typeof got.end === 'number') {
           l.log = feedLog(l.log, got)
           l.error = ''
@@ -249,7 +258,7 @@
           l.error = `Not read: the server answered ${res.status}${got && got.error ? `: ${got.error}` : ''}.`
         }
       } catch (e) {
-        l.error = 'Not read: no answer from the server. If the light at the top is not green, it has stopped: it runs with the Claude session that ran /rft (run /rft again), and over SSH it needs the tunnel to its port.'
+        l.error = noAnswer(e)
       }
       l.busy = false
       if (shown.has(id) && !dragging) {
@@ -262,11 +271,19 @@
       }
     }
 
+    /** Why a request got no answer, with what the browser says: refused on the way while the server answers the queue, else the server gone. */
+    function noAnswer(e) {
+      const said = e && e.message ? ` (the browser says: ${e.message})` : ''
+      return Date.now() - answered < 3 * every + 2000
+        ? `Not read: the request did not reach the server, though it answers the queue${said}. A blocker extension (uBlock, AdGuard, Brave shields…) may refuse it: allow this page in it, or open its console to see what refused it.`
+        : `Not read: no answer from the server${said}. If the light at the top is not green, it has stopped: it runs with the Claude session that ran /rft (run /rft again), and over SSH it needs the tunnel to its port.`
+    }
+
     /** Saves a job's whole log as a file (it needs the key, so it is fetched, then handed to the browser). */
     async function saveLog(id) {
       setMsg(`Reading ${id}'s whole log…`)
       try {
-        const res = await fetch(`api/queue/log?id=${encodeURIComponent(id)}&raw=1`, { cache: 'no-store', headers: { 'X-RFT-Token': key() } })
+        const res = await fetch(`${outputAt}?id=${encodeURIComponent(id)}&raw=1`, { cache: 'no-store', headers: { 'X-RFT-Token': key() } })
         if (!res.ok) {
           const got = await res.json().catch(() => ({}))
           setMsg(`Not saved: ${got.error || `the server answered ${res.status}`}.`, true)
@@ -280,7 +297,7 @@
         setTimeout(() => URL.revokeObjectURL(url), 10000)
         setMsg('')
       } catch (e) {
-        setMsg('Not saved: no answer from the server.', true)
+        setMsg(noAnswer(e).replace('Not read', 'Not saved'), true)
       }
     }
 

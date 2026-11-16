@@ -630,6 +630,11 @@ class ServerQueueTest(unittest.TestCase):
         self.assertIn("some-output", r["text"])
         status, _ = self.call("GET", "/api/queue/log?id=q99&lines=10")
         self.assertEqual(status, 404)
+        # the address the page reads it at now (blockers refuse ones like api/queue/log); the old one stays for older pages
+        self.assertEqual(self.call("GET", f"/api/queue/output?id={jid}", key=None)[0], 403)
+        status, r = self.call("GET", f"/api/queue/output?id={jid}")
+        self.assertEqual(status, 200)
+        self.assertIn("some-output", r["text"])
 
     def test_the_monitor_follows_a_log_by_byte_in_bounded_pieces(self):
         go = Path(self.qdir.name) / "go"
@@ -639,7 +644,7 @@ class ServerQueueTest(unittest.TestCase):
         jid = self.q.add("E16", cmd, self.qdir.name, gpus=0)["id"]
         self.q.tick()
         self.assertTrue(wait_until(lambda: "after" in self.q.log(jid, 5).splitlines(), self.q.tick))
-        status, first = self.call("GET", f"/api/queue/log?id={jid}")
+        status, first = self.call("GET", f"/api/queue/output?id={jid}")
         self.assertEqual(status, 200)
         self.assertGreater(first["size"], 1_000_000)
         self.assertTrue(first["reset"])
@@ -649,9 +654,9 @@ class ServerQueueTest(unittest.TestCase):
         # then only what came since
         go.touch()
         self.assertTrue(wait_until(lambda: self.q.find(jid)["state"] == "done", self.q.tick))
-        status, more = self.call("GET", f"/api/queue/log?id={jid}&from={first['end']}")
+        status, more = self.call("GET", f"/api/queue/output?id={jid}&from={first['end']}")
         self.assertEqual((status, more["reset"], more["text"], more["state"]), (200, False, "last-words\n", "done"))
-        status, same = self.call("GET", f"/api/queue/log?id={jid}&from={more['end']}")
+        status, same = self.call("GET", f"/api/queue/output?id={jid}&from={more['end']}")
         self.assertEqual((same["text"], same["end"]), ("", more["end"]))
         # what Claude reads: the bar's last state, cut short, not a megabyte
         tail = self.q.log(jid, 5)
@@ -659,20 +664,20 @@ class ServerQueueTest(unittest.TestCase):
         self.assertIn("step  39999", tail)
         # the whole log, as a file to save, with the key only
         c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
-        c.request("GET", f"/api/queue/log?id={jid}&raw=1", headers={"Host": f"127.0.0.1:{self.port}", "X-RFT-Token": KEY})
+        c.request("GET", f"/api/queue/output?id={jid}&raw=1", headers={"Host": f"127.0.0.1:{self.port}", "X-RFT-Token": KEY})
         r = c.getresponse()
         body = r.read()
         c.close()
         self.assertEqual((r.status, r.getheader("Content-Disposition")), (200, f'attachment; filename="{jid}.log"'))
         self.assertEqual(len(body), more["size"])
-        self.assertEqual(self.call("GET", f"/api/queue/log?id={jid}&raw=1", key=None)[0], 403)
+        self.assertEqual(self.call("GET", f"/api/queue/output?id={jid}&raw=1", key=None)[0], 403)
 
     def test_a_log_that_cannot_be_read_says_why_instead_of_dropping_the_connection(self):
         jid = self.q.add("E16", "true", self.qdir.name, gpus=0)["id"]
         self.assertTrue(wait_until(lambda: self.q.find(jid)["state"] == "done", self.q.tick))
         broken = lambda *a, **k: (_ for _ in ()).throw(ValueError("odd bytes"))  # noqa: E731
         self.q.read_log = broken
-        status, r = self.call("GET", f"/api/queue/log?id={jid}")
+        status, r = self.call("GET", f"/api/queue/output?id={jid}")
         self.assertEqual(status, 500)
         self.assertIn("ValueError: odd bytes", r["error"])
 

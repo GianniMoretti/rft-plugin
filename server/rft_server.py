@@ -23,7 +23,7 @@ resolves inside one of the vault's note folders (experiments/, directions/, refe
 theory/), a deadline only in milestones/, and the scratchpad only as a plain file at the vault's
 top. It shows the experiment queue (GET api/queue: the GPUs, the jobs waiting and running, the
 history; rft_queue.py beside it) and takes the user's changes to it (POST api/queue: a job moved,
-cancelled or retried, the queue paused, the GPUs it may use); a job's output (GET api/queue/log)
+cancelled or retried, the queue paused, the GPUs it may use); a job's output (GET api/queue/output)
 goes only to a request carrying the key. A write (PUT api/note, PUT api/scratchpad, POST api/node, api/type, api/comment, api/lock,
 api/priority, api/dates, api/milestone, api/queue) must also come from the page itself (its
 Origin) and carry the vault's key, which is in the address the server prints, so neither
@@ -1589,7 +1589,7 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 self.wfile.write(data)
 
         def _queue_log(self, q: dict, head_only: bool):
-            """GET api/queue/log?id=<job>: a job's output, only for the page carrying the key
+            """GET api/queue/output?id=<job>: a job's output, only for the page carrying the key
             (X-RFT-Token, a header no other page can send): a log may hold what a note does not.
             The monitor follows it by byte, in bounded pieces (rft_queue.read_log): with no `from`,
             its last 64 KB from a line's start; with `from=<end of the last piece>`, what came since.
@@ -1684,7 +1684,9 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 return self._json(*vault.scratchpad(), head_only)
             if route == "/api/queue":
                 return self._json(*queue_snapshot(vault.queue), head_only)
-            if route == "/api/queue/log":
+            # a job's output: api/queue/output (api/queue/log for older pages, though ad and tracker
+            # blockers refuse addresses like it, taking them for an analytics beacon)
+            if route in ("/api/queue/output", "/api/queue/log"):
                 return self._queue_log(parse_qs(url.query), head_only)
             if route == "/api/paper":
                 path = vault.paper((parse_qs(url.query).get("id") or [""])[0])
