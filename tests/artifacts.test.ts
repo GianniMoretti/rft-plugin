@@ -205,11 +205,17 @@ describe('artifacts: rft_artifact and rft_set_artifact', () => {
   test("a notebook's tables are taken in by name, filled when the page is written; rft_artifact names what each notebook saved", async () => {
     const files = demoFiles()
     files['vault/tables/E02_gap_by_size.html'] = '<table>\n<caption>Gap by size</caption>\n<tbody><tr><td>1000</td><td>4.1</td></tr></tbody>\n</table>\n'
-    files['vault/results/E02.json'] = JSON.stringify({ exp: 'E02', results: { gap: 4.1 }, figures: ['figures/E02_gap.svg'], tables: ['tables/E02_gap_by_size.html'] })
+    files['vault/results/E02.json'] = JSON.stringify({
+      exp: 'E02', results: { gap: 4.1 }, figures: ['figures/E02_gap.svg'], tables: ['tables/E02_gap_by_size.html'],
+      captions: { 'figures/E02_gap.svg': 'Gap to the 10k baseline' },
+      contents: { E02_gap_by_size: { caption: 'Gap by size', columns: ['size', 'gap'], rows: [[1000, 4.1], [10000, 0.8]], more_rows: 0 } },
+    })
     files['vault/figures/E02_gap.svg'] = '<svg xmlns="http://www.w3.org/2000/svg"/>'
     const { fs, io, l } = await setup(files)
     const report = await artifactReport(io, l, 'Better variants')
-    expect(report).toContain('Saved by its notebook: <img src="../figures/E02_gap.svg"> · <rft-table src="E02_gap_by_size"></rft-table>')
+    // each placement with what it shows, so the page is written without opening the files
+    expect(report).toContain('Saved by its notebook:\n  <img src="../figures/E02_gap.svg" alt="Gap to the 10k baseline"> (figure: Gap to the 10k baseline)\n  <rft-table src="E02_gap_by_size"></rft-table> (table: Gap by size; size | gap; 1000 | 4.1; 10000 | 0.8)')
+    expect(report).toContain('not by opening the files')
     expect(report).toContain('Write their numbers nowhere else on the page')
     const out = await setArtifact(io, l, 'Better variants', { html: '<h1>Better variants</h1>\n<p><a href="#E02">E02</a></p>\n<rft-table src="E02_gap_by_size"></rft-table>\n<img src="../figures/E02_gap.svg">\n<rft-table src="E02_nothing"></rft-table>\n' }, '2026-11-16')
     const page = fs.read(FILE)

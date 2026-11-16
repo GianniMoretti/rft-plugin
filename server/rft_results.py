@@ -323,7 +323,7 @@ def refresh_artifacts(vault: Path, tables: dict[str, str]) -> list[str]:
 def save(vault: Path, exp: str, outcome: dict, date: str, runs: list[dict]) -> tuple[dict, list[str]]:
     """RESULTS, the figures and the tables of a run, kept in the vault; what was saved, and what was not (why)."""
     notes: list[str] = []
-    figures, tables = [], {}
+    figures, tables, captions, contents = [], {}, {}, {}
     for name, svg in (outcome.get("figures") or {}).items():
         if not isinstance(svg, str) or "<svg" not in svg[:2000]:
             notes.append(f"figure {name!r}: not an SVG")
@@ -334,19 +334,23 @@ def save(vault: Path, exp: str, outcome: dict, date: str, runs: list[dict]) -> t
         file = f"{exp}_{slug(name)}.svg"
         write_atomic(vault / FIGURES_DIR / file, svg)
         figures.append(f"{FIGURES_DIR}/{file}")
+        captions[f"{FIGURES_DIR}/{file}"] = str(name)
     for name, t in (outcome.get("tables") or {}).items():
         if not isinstance(t, dict) or not isinstance(t.get("columns"), list):
             notes.append(f"table {name!r}: not a table")
             continue
         key = f"{exp}_{slug(name)}"
         tables[key] = table_html(str(name), t)
+        contents[key] = {"caption": str(name), "columns": t["columns"][:12], "rows": [r[:12] for r in (t.get("rows") or [])[:20]],
+                         "more_rows": max(0, len(t.get("rows") or []) - 20)}
         write_atomic(vault / TABLES_DIR / f"{key}.html", tables[key] + "\n")
     notes.extend(f"{n}" for n in outcome.get("notes") or [])
     record = {"exp": exp, "concepts": concept_chain(vault, exp), "date": date, "results": outcome.get("results"), "commit": outcome.get("commit"),
               "dirty": outcome.get("dirty"), "notebook": outcome.get("file"),
               "runs": [{"id": j["id"], "label": j.get("label") or "", "out": j.get("out"), "commit": j.get("commit"),
                         "patch": j.get("patch")} for j in runs],
-              "figures": figures, "tables": [f"{TABLES_DIR}/{k}.html" for k in tables]}
+              "figures": figures, "tables": [f"{TABLES_DIR}/{k}.html" for k in tables],
+              "captions": captions, "contents": contents}
     write_atomic(vault / RESULTS_DIR / f"{exp}.json", json.dumps(record, ensure_ascii=False, indent=1) + "\n")
     saved = {"results": f"{RESULTS_DIR}/{exp}.json", "figures": figures, "tables": sorted(tables),
              "artifacts": refresh_artifacts(vault, tables)}

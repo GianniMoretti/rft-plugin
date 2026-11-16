@@ -22,7 +22,8 @@ def _():
 @app.cell
 def _():
     def bars():
-        vals = [(e, r.get("acc_mean", 1 - r.get("gap_1k", 0) / 100)) for e, r in sorted(EXPERIMENTS.items())]
+        # only the experiments that report the same measure: held-out accuracy
+        vals = [(e, r["acc_mean"]) for e, r in sorted(EXPERIMENTS.items()) if "acc_mean" in r]
         rects = "".join(f'<rect x="{20 + 50 * i}" y="{100 - 90 * v:.1f}" width="30" height="{90 * v:.1f}" fill="#4D4875"/>'
                         f'<text x="{35 + 50 * i}" y="115" font-size="9" text-anchor="middle">{e}</text>' for i, (e, v) in enumerate(vals))
         return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {40 + 50 * len(vals)} 120">{rects}</svg>'

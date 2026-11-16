@@ -107,6 +107,9 @@ class ApplyTest(unittest.TestCase):
         self.assertIn("<caption>Gap by size</caption>", table)
         self.assertIn("<tr><td>1000</td><td>4.1</td></tr>", table)
         self.assertEqual(got["saved"]["tables"], ["E02_gap_by_size"])
+        # what each figure is called and each table holds, for rft_artifact to say without opening the files
+        self.assertEqual(saved["captions"], {"figures/E02_gap_by_size.svg": "Gap by size"})
+        self.assertEqual(saved["contents"]["E02_gap_by_size"], {"caption": "Gap by size", "columns": ["size", "gap"], "rows": [[1000, 4.1], [10000, 0.8]], "more_rows": 0})
         # the rest of the note as it was
         self.assertIn("## What\nThree seeds.\n", t)
         self.assertIn("\n## Directions found\n", t)
