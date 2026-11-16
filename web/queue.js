@@ -80,7 +80,7 @@
     const bars = (p.bars || []).map(b => ({
       label: b.desc || 'progress',
       pct: b.total ? b.pct : null,
-      nums: b.total ? `${b.n}/${b.total} · ${b.pct}%${b.left && b.left !== '?' ? ` · ${b.left} left` : ''}` : `${b.n}${b.rate ? ` · ${b.rate}` : ''}`,
+      nums: `${b.total ? `${b.n}/${b.total} · ${b.pct}%${b.left && b.left !== '?' ? ` · ${b.left} left` : ''}` : `${b.n}${b.rate ? ` · ${b.rate}` : ''}`}${b.post ? ` · ${b.post}` : ''}`,
       title: [b.elapsed ? `${b.elapsed} so far` : '', b.rate || ''].filter(Boolean).join(', '),
     }))
     return { stage, bars, line: p.line || '' }

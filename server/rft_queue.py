@@ -101,8 +101,9 @@ PROGRESS_BYTES = 65_536  # the end of a log its progress is read from
 # a tqdm bar as it draws itself: "<desc>: 45%|####      | 450/1000 [01:23<01:40, 5.40it/s, loss=0.3]",
 # and one with no total: "<desc>: 450it [01:23, 5.40it/s]"
 TQDM_BAR = re.compile(r"^(?:(?P<desc>.*?): ?)?\s*(?P<pct>\d{1,3})%\|[^|]*\|\s*(?P<n>[\d.]+[kMGTPEZY]?)/(?P<total>[\d.]+[kMGTPEZY]?)\s*"
-                      r"\[(?P<elapsed>[\d:]+)<(?P<left>[\d:]+|\?)(?:,\s*(?P<rate>[^,\]]+))?[^\]]*\]")
-TQDM_COUNT = re.compile(r"^(?:(?P<desc>.*?): ?)?(?P<n>\d[\d.]*[kMGTPEZY]?)[A-Za-z]*\s*\[(?P<elapsed>[\d:]+),\s*(?P<rate>[^,\]]+)[^\]]*\]")
+                      r"\[(?P<elapsed>[\d:]+)<(?P<left>[\d:]+|\?)(?:,\s*(?P<rate>[^,\]]+))?(?:,\s*(?P<post>[^\]]*))?\]")
+TQDM_COUNT = re.compile(r"^(?:(?P<desc>.*?): ?)?(?P<n>\d[\d.]*[kMGTPEZY]?)[A-Za-z]*\s*\[(?P<elapsed>[\d:]+),\s*(?P<rate>[^,\]]+)(?:,\s*(?P<post>[^\]]*))?\]")
+CURSOR_UP = "\x1b[A"  # tqdm draws a nested bar a line below its parent, then moves back up: one per level
 BAR_NUMBERS = re.compile(r"[-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?")
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
 RUNS = "runs"  # the output folders' root when a job names none, at the top of its repo (or folder)
@@ -319,18 +320,24 @@ def _last_bytes(path: Path, n: int) -> bytes:
 
 
 def progress_of(log: Path, stages: Path | None = None) -> dict:
-    """How far a running job is, from what it writes anyway: the tqdm bar it drew last in the end of
-    its log, still going (one with a total before one without), its last line of text, and its last
+    """How far a running job is, from what it writes anyway: one tqdm bar still going in the end of
+    its log (the outermost: an epoch's rather than a batch's, as the cursor moves tqdm writes after
+    a nested bar tell; one with a total before one without; of two at the same level, the one
+    drawn last), with its postfix (`set_postfix(loss=…)`); its last line of text; and its last
     stage in $RFT_PROGRESS. A bar is known by its label with its numbers left out, so one whose
-    label carries a changing metric ("mlp train mse 0.0338") is one bar, as last drawn. {} when it
-    says nothing yet."""
+    label carries a changing metric ("mlp train mse 0.0338") is one bar, as last drawn. {} when
+    it says nothing yet."""
     out: dict = {}
-    seen: dict[str, tuple[int, dict]] = {}  # a bar's label, its numbers left out: (where it was last drawn, its state)
+    seen: dict[str, tuple[int, int, dict]] = {}  # a bar's label, its numbers left out: (where it was last drawn, its level, its state)
     line, line_at = "", -1
     tail = _last_bytes(log, PROGRESS_BYTES).decode("utf-8", "replace")
-    for i, seg in enumerate(re.split(r"[\r\n]", tail)):
-        seg = ANSI.sub("", seg).strip()
+    for i, raw in enumerate(re.split(r"[\r\n]", tail)):
+        seg = ANSI.sub("", raw).strip()
         if not seg:
+            # a bar closed with leave=False is blanked where it was, the cursor then back up: it is gone
+            level = raw.count(CURSOR_UP)
+            if level:
+                seen = {k: v for k, v in seen.items() if v[1] != level}
             continue
         m = TQDM_BAR.match(seg) or TQDM_COUNT.match(seg)
         if m:
@@ -338,12 +345,14 @@ def progress_of(log: Path, stages: Path | None = None) -> dict:
             bar = {"desc": (g.get("desc") or "").strip()[:80], "n": g["n"], "elapsed": g["elapsed"], "rate": (g.get("rate") or "").strip()}
             if g.get("total"):
                 bar.update(total=g["total"], pct=min(100, int(g["pct"])), left=g["left"])
-            seen[BAR_NUMBERS.sub("#", bar["desc"])] = (i, bar)
-        elif not seg.startswith(("# rft job ", "# $ ")):
+            if (g.get("post") or "").strip():
+                bar["post"] = g["post"].strip()[:80]
+            seen[BAR_NUMBERS.sub("#", bar["desc"])] = (i, raw.count(CURSOR_UP), bar)
+        elif not seg.startswith(("# rft job ", "# $ ")) and "%|" not in seg:  # not a bar caught half written
             line, line_at = seg, i
-    going = [v for v in seen.values() if v[1].get("pct") != 100]
+    going = [v for v in seen.values() if v[2].get("pct") != 100]
     if going:
-        out["bars"] = [max([v for v in going if "total" in v[1]] or going, key=lambda v: v[0])[1]]
+        out["bars"] = [min([v for v in going if "total" in v[2]] or going, key=lambda v: (v[1], -v[0]))[2]]
     if line:
         out["line"] = line if len(line) <= 200 else "…" + line[-200:]
     if stages is not None:

@@ -423,14 +423,12 @@ session brings it back).
   with the config's `runsDir` (`<repo>` the name of the job's repo folder, or of its own folder
   outside git), else `<repo>/runs/<experiment>/<job>`, at the top of the job's git repo (the runner
   gives a `runs/` it makes a `.gitignore`, so the outputs stay out of git).
-- **How far it is**: each running job's row shows its stage, the tqdm bar it drew last (its
-  label, a meter, n/total, % and time left; a bar whose label carries a changing metric counts as
-  one) and its last line of text, read from what the job
-  writes anyway: the end of its log, and `$RFT_PROGRESS` (`progress.jsonl` in its output folder),
-  where a job of several steps appends each (`echo '{"stage": "probe patchpos", "i": 2, "n": 5}'
-  >> "$RFT_PROGRESS"`, or a plain line of text). The runner sets `TQDM_MININTERVAL=10` (unless
-  the job's environment has it), so a bar redraws every 10 s and logs stay small; a bar's own
-  `mininterval=` still wins. `rft_jobs` gives Claude the same in a line.
+- **How far it is**: each running job's row shows its stage, one tqdm bar (the outermost still
+  running: its label, a meter, n/total, % and time left, and its postfix such as `loss=0.31`) and
+  its last line of text, read from what the job writes anyway: the end of its log, and
+  `$RFT_PROGRESS` (`progress.jsonl` in its output folder). A bar whose label carries a changing
+  metric counts as one. `rft_jobs` gives Claude the same in a line. How to write a job so the
+  monitor reads it well is just below.
 - **▴** at the panel's top left folds the waiting jobs into one line ("▸ 3 waiting: q11 E25, …");
   the GPUs, the running jobs with their progress and the history stay. The panel remembers it;
   **▾**, or a click on that line, unfolds them.
@@ -459,6 +457,40 @@ session brings it back).
   `.gitignore` keeps the logs out of git.
 - Only this machine's NVIDIA GPUs for now (nvidia-smi); clusters (SLURM over SSH) would be further
   tabs beside this machine's.
+
+#### Writing a job the monitor can read
+
+The monitor reads three things a job writes: its tqdm bars, its lines of text, and
+`$RFT_PROGRESS`. Claude follows these when it writes a script for the queue (the manual has them);
+for your own scripts:
+
+1. **A tqdm bar on each loop longer than a minute**, with a fixed `desc` and a `total`:
+   `tqdm(loader, desc="train", total=len(loader))`. The monitor shows one bar per job: the
+   outermost still running (the epochs, not the batches inside them).
+2. **Numbers that change go in the postfix, never in the label**:
+   `bar.set_postfix(loss=f"{loss:.4f}")`, not `bar.set_description(f"train loss {loss:.4f}")`.
+   The monitor shows the postfix after the bar.
+3. **Inner loops** get `leave=False`. Leave `mininterval` alone: the runner sets 10 s
+   (`TQDM_MININTERVAL`), so a bar redraws every 10 s and logs stay small.
+4. **Stages**: a job of several steps appends one line per step to `$RFT_PROGRESS`, a JSON
+   object `{"stage": "train", "i": 2, "n": 3}` (or a plain line of text). From bash:
+   `echo '{"stage": "probe patchpos", "i": 2, "n": 5}' >> "$RFT_PROGRESS"`. The monitor shows
+   "Stage 2/3: train" above the bar.
+5. **Lines of text**: one per event, starting with the time (`2026-11-16 12:00:05 epoch 7: val
+   acc 0.912`), written as they happen (`print(..., flush=True)`, or `PYTHONUNBUFFERED=1`). The
+   last one shows under the bar. Nothing per batch.
+6. **Results go to `$RFT_OUT`**, never into the log: no arrays, tables or per-sample prints.
+7. **Failures raise**: let the exception end the job with its traceback (the runner keeps its
+   end, and `rft_jobs` shows it) and a non-zero exit; never catch it and only print.
+
+[`examples/job_progress.py`](examples/job_progress.py) does all of this in 50 lines, and
+`tests/test_queue.py` runs it through the queue to check the monitor reads it as above:
+
+```
+Stage 2/3: train
+train  ███████░░░  7/10 · 70% · 00:12 left · loss=0.1429
+2026-11-16 12:00:05 epoch 7: val acc 0.912
+```
 
 ### Concepts
 

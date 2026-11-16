@@ -396,13 +396,10 @@ or `/rft-jobs`), where they also reorder, pause, cancel and retry jobs, and keep
   the config's `runsDir` (`<repo>` the name of the job's repo folder), else
   `<repo>/runs/<exp>/<job>` (kept out of git). Have the
   command write there (`--out "$RFT_OUT"`); the notebook finds it as `out` in `RUNS`.
-- **How far it is**: the monitor and `rft_jobs` show, for each running job, its stage, the tqdm
-  bar it drew last (label, n/total, %, time left) and its last line, read from what it writes. In
-  a script you write for the queue, give each loop longer than a minute a tqdm bar with `desc`
-  and `total`; a job of several steps appends each to `$RFT_PROGRESS` (`echo '{"stage":
-  "probe patchpos", "i": 2, "n": 5}' >> "$RFT_PROGRESS"`, or a plain line of text). Bars redraw
-  every 10 s in a job (`TQDM_MININTERVAL`, unless it sets its own), so logs stay small. To say
-  how far a job is, read `rft_jobs`, not its log.
+- **How far it is**: the monitor and `rft_jobs` show, for each running job, its stage, one tqdm
+  bar (label, n/total, %, time left, postfix) and its last line, read from what it writes. To say
+  how far a job is, read `rft_jobs`, not its log. A script you write or change for the queue
+  follows "Writing a job the monitor can read", below.
 - **The run record**: when a job starts, the runner records the code it runs (repo, commit,
   branch; uncommitted changes saved whole as `code.patch` in its output folder); when it ends,
   a failed one's traceback, and whether the repo's code moved while it ran. Each output folder
@@ -428,6 +425,33 @@ or `/rft-jobs`), where they also reorder, pause, cancel and retry jobs, and keep
 - `rft_next` lists what runs and waits, and the results to record.
 - The queue lives in `<vault>/.queue/` (`queue.json`, the history in `history.jsonl`); edit
   neither by hand.
+
+### Writing a job the monitor can read
+
+The monitor and `rft_jobs` read three things a job writes: its tqdm bars, its lines of text, and
+`$RFT_PROGRESS`. When you write or change a script that runs through the queue:
+
+1. **A tqdm bar on each loop longer than a minute**, with a fixed `desc` and a `total`:
+   `tqdm(loader, desc="train", total=len(loader))`. The monitor shows one bar per job: the
+   outermost still running (the epochs, not the batches inside them).
+2. **Numbers that change go in the postfix, never in the label**:
+   `bar.set_postfix(loss=f"{loss:.4f}")`, not `bar.set_description(f"train loss {loss:.4f}")`.
+   The monitor shows the postfix after the bar.
+3. **Inner loops** get `leave=False`. Leave `mininterval` alone: the runner sets 10 s
+   (`TQDM_MININTERVAL`), so a bar redraws every 10 s and logs stay small.
+4. **Stages**: a job of several steps appends one line per step to `$RFT_PROGRESS`, a JSON
+   object `{"stage": "train", "i": 2, "n": 3}` (or a plain line of text). From bash:
+   `echo '{"stage": "probe patchpos", "i": 2, "n": 5}' >> "$RFT_PROGRESS"`. The monitor shows
+   "Stage 2/3: train" above the bar.
+5. **Lines of text**: one per event, starting with the time (`2026-11-16 12:00:05 epoch 7: val
+   acc 0.912`), written as they happen (`print(..., flush=True)`, or `PYTHONUNBUFFERED=1`). The
+   last one shows under the bar. Nothing per batch.
+6. **Results go to `$RFT_OUT`**, never into the log: no arrays, tables or per-sample prints.
+7. **Failures raise**: let the exception end the job with its traceback (the runner keeps its
+   end, and `rft_jobs` shows it) and a non-zero exit; never catch it and only print.
+
+`examples/job_progress.py` in the plugin's folder does all of this in 50 lines; start from it.
+Code the user wrote that does not follow it still works: the monitor then shows less.
 
 ## Restructuring the tree
 

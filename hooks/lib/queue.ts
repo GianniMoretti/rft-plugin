@@ -61,7 +61,7 @@ export type Job = {
 }
 
 /** A tqdm bar as the job last drew it. */
-export type Bar = { desc: string; n: string; total?: string; pct?: number; left?: string; elapsed?: string; rate?: string }
+export type Bar = { desc: string; n: string; total?: string; pct?: number; left?: string; elapsed?: string; rate?: string; post?: string }
 
 /** How far a running job is: the tqdm bar it drew last (a list of one), its last line of text, its last stage ($RFT_PROGRESS). */
 export type Progress = { bars?: Bar[]; line?: string; stage?: { stage?: string; i?: number; n?: number } }
@@ -74,7 +74,7 @@ export function progressText(p: Progress | undefined): string {
   if (st && (st.stage || st.n)) parts.push(`${st.i != null && st.n != null ? `stage ${st.i}/${st.n}` : 'stage'}${st.stage ? `: ${st.stage}` : ''}`)
   for (const b of p.bars ?? []) {
     const left = b.left && b.left !== '?' ? `, ${b.left} left` : ''
-    parts.push(`${b.desc ? `${b.desc} ` : ''}${b.total ? `${b.n}/${b.total} (${b.pct}%${left})` : `${b.n} done${b.rate ? `, ${b.rate}` : ''}`}`)
+    parts.push(`${b.desc ? `${b.desc} ` : ''}${b.total ? `${b.n}/${b.total} (${b.pct}%${left})` : `${b.n} done${b.rate ? `, ${b.rate}` : ''}`}${b.post ? ` ${b.post}` : ''}`)
   }
   if (!p.bars?.length && p.line) parts.push(`"${p.line.length > 120 ? `${p.line.slice(0, 117)}…` : p.line}"`)
   return parts.join(' · ')

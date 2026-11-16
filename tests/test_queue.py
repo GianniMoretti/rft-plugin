@@ -718,6 +718,17 @@ class ProgressTest(unittest.TestCase):
         self.assertNotIn("bars", got)
         self.assertEqual(got["line"], "loaded probe: output/probes/x")
 
+    def test_of_nested_bars_the_outer_one_with_its_postfix_and_an_inner_one_blanked_is_gone(self):
+        # as tqdm writes them to a file: the inner bar a line below, then the cursor back up (\x1b[A)
+        up, inner = "\x1b[A", lambda k: f"\rbatch:  {k * 25}%|##        | {k}/4 [00:00<00:00, 99.0it/s]"
+        self.log.write_text("\repoch:   0%|          | 0/3 [00:00<?, ?it/s]" + inner(0) + up + inner(2) + up
+                            + "\r" + " " * 50 + up + "\repoch:  33%|###       | 1/3 [00:01<00:02, 1.00it/s, loss=1.000]" + inner(1) + up)
+        bar = rft_queue.progress_of(self.log)["bars"][0]
+        self.assertEqual((bar["desc"], bar["n"], bar["total"], bar["post"]), ("epoch", "1", "3", "loss=1.000"))
+        # the outer bar done, the inner one blanked as it closed: nothing runs any more
+        self.log.write_text(self.log.read_text() + "\r" + " " * 50 + up + "\repoch: 100%|##########| 3/3 [00:03<00:00, 1.00it/s, loss=0.333]\ndone\n")
+        self.assertEqual(rft_queue.progress_of(self.log), {"line": "done"})
+
     def test_no_bar_its_last_line_and_its_stage_as_json_or_text(self):
         self.log.write_text("# rft job q1 (E24)\n2026-11-16 12:00:01 waiting for GPU 1: 2048 MiB free, need 14336\n")
         self.stages.write_text('{"stage": "cache", "i": 1, "n": 5}\n{"stage": "probe patchpos", "i": 2, "n": 5, "extra": [1]}\n')
@@ -747,6 +758,42 @@ class ProgressTest(unittest.TestCase):
         finally:
             go.touch()
             wait_until(lambda: q.find(j["id"])["state"] != "running", q.tick)
+
+
+@unittest.skipUnless(subprocess.run([sys.executable, "-c", "import tqdm"], capture_output=True).returncode == 0, "no tqdm here")
+class ExampleJobTest(unittest.TestCase):
+    """The manual's example of a job the monitor reads well (examples/job_progress.py), run through
+    the queue with the real tqdm: what the monitor shows is what the guideline says it shows."""
+
+    def test_the_example_job_shows_its_stage_its_outer_bar_with_its_loss_and_its_last_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault, work = Path(tmp) / "vault", Path(tmp) / "work"
+            vault.mkdir()
+            work.mkdir()
+            example = Path(__file__).resolve().parents[1] / "examples" / "job_progress.py"
+            q = rft_queue.Queue(vault, probe=FakeGpus(1), wake=lambda: None)
+            j = q.add("E1", f"EXAMPLE_SECONDS=0.02 TQDM_MININTERVAL=0.2 {shlex.quote(sys.executable)} {shlex.quote(str(example))}", str(work), gpus=0)
+            q.tick()
+            seen = []
+
+            def look():
+                p = (q.snapshot()["jobs"] or [{}])[0].get("progress") or {}
+                if (p.get("stage") or {}).get("stage") == "train" and p.get("bars") and p["bars"][0].get("post"):
+                    seen.append(p)
+                return bool(seen)
+            try:
+                self.assertTrue(wait_until(look, q.tick, timeout=60))
+                p = seen[0]
+                self.assertEqual(p["stage"], {"stage": "train", "i": 2, "n": 3})
+                bar = p["bars"][0]
+                self.assertEqual((bar["desc"], bar["total"]), ("train", "10"))  # the epochs, not the batches inside
+                self.assertRegex(bar["post"], r"^loss=\d\.\d{4}$")
+                self.assertRegex(p["line"], r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d (stage 2/3: train|epoch \d+: val acc \d\.\d{3})$")
+                self.assertTrue(wait_until(lambda: q.find(j["id"])["state"] == "done", q.tick, timeout=120))
+                self.assertTrue((Path(j["out"]) / "metrics.json").is_file())
+            finally:
+                if q.find(j["id"])["state"] == "running":
+                    q.cancel(j["id"], "test over")
 
 
 class ReadLogTest(unittest.TestCase):
