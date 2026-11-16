@@ -149,8 +149,8 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_set_repos` | links code repositories to a concept (or, on the root note, to the whole project), once you give the path |
   | `rft_code` | a note's code context: its repos by priority, the commit it was last checked against, and the commits and files changed since |
   | `rft_set_code` | writes or updates a note's `## Code` section (how it relates to the code, how to reproduce its results), recording each repo's current commit |
-  | `rft_set_notebook` | gives an experiment its marimo notebook, written from plain cells in its concept's repo (`notebooks/<id>_<title>.py`) or one already there, linked from `vault/notebooks/<id>.py` and the note (`notebook:`) |
-  | `rft_run_notebook` | runs the notebook in its repo's uv environment and checks its `RESULTS` against the note's Result, in a few lines (ok, differs, failed); stamps the note (`reproduced:`) |
+  | `rft_set_notebook` | gives an experiment its marimo notebook, best when it is planned: written from plain cells in its concept's repo (`notebooks/<id>_<title>.py`, a first cell reading `RUNS`, its runs in the queue) or one already there, linked from `vault/notebooks/<id>.py` and the note (`notebook:`) |
+  | `rft_run_notebook` | runs the notebook now in its repo's uv environment: its `RESULTS` written in the note's Result as a table, or checked against it (ok, differs, failed), in a few lines; its figures and tables saved for the artifacts; stamps the note (`reproduced:`) |
   | `rft_tree` | prints the tree or a subtree |
   | `rft_validate` | checks ids, types, statuses, titles, parents, broken wikilinks, derived fields |
   | `rft_sync` | regenerates children / up / down, the index tree and the canvas after hand edits |
@@ -158,9 +158,8 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_comment` | replies in a thread (or closes a suggestion it made in the note), or starts a comment on a quote |
   | `rft_suggest` | proposes new text for a quote, or the text an open suggestion asks for; you accept or reject it |
   | `rft_queue` | queues a run of an experiment on this machine's GPUs (command, folder, GPUs, a label); it starts once its GPUs are free, in your order (see The experiment queue) |
-  | `rft_jobs` | the queue in a few lines: the GPUs, the jobs running and waiting (with why each waits), the last ones that ended, the results still to record; one job with the end of its output |
-  | `rft_move_job` | moves one waiting job to the top, the end, or before another waiting job, when you ask; answers the new order in one line |
-  | `rft_cancel_job` | cancels a waiting job or stops a running one, when you ask |
+  | `rft_jobs` | the queue in a few lines: the GPUs, the jobs running and waiting (with why each waits), the last ones that ended, the results still to record; one job with its run record (the code it ran, its outputs, the end of its traceback) and the end of its output |
+  | `rft_job` | changes the queue when you ask: moves one waiting job to the top, the end, or before another (answering the new order in one line), cancels one, retries one that ended, pauses or resumes the queue |
 
 - **The outline pane** opens as a sidebar at session start in the terminal and VS Code where the
   surface docks panes (turn this off with the `autoOpen` option), and with `/rft list`: an indented, coloured outline of the tree, the same on
@@ -398,9 +397,9 @@ session brings it back).
   or a process outside the queue), then two tabs:
   - **Queue**: the jobs running (how long, on which GPUs) and those waiting, in their order, each
     with why it waits ("1st in line: needs 2 GPUs, 1 free"). Drag a job, or use ↑ ↓ and **Top**,
-    to change the order, or ask Claude ("run E17 before E16": one `rft_move_job` call, answered
+    to change the order, or ask Claude ("run E17 before E16": one `rft_job` call, answered
     with the new order in one line); **Stop** / **Cancel** (press twice) ends a job; **Pause** starts no new
-    job (the running ones go on). Untick a GPU to keep it out of the queue (for your own work).
+    job (the running ones go on); Claude can cancel, retry, pause and resume too, when you ask. Untick a GPU to keep it out of the queue (for your own work).
   - **History**: every job that ended, newest first, with its experiment, how it ended (done,
     failed with its exit code, cancelled), how long it ran, and **Retry** (first in line again).
   **Log** / **Command** on a job shows its command and the end of its output. The experiment ids
@@ -410,16 +409,33 @@ session brings it back).
   waits. A GPU with someone else's process on it, or more than 1000 MiB of memory taken, counts
   as busy, so the queue never starts a job on top of your notebook.
 - **A job runs** as `bash -c <command>` in its folder, in a process group of its own, with
-  `CUDA_VISIBLE_DEVICES` set to its GPUs (numbered as nvidia-smi numbers them), `RFT_JOB` and
-  `RFT_EXPERIMENT`; its output goes to `vault/.queue/logs/<job>.log`. It gets the environment the
+  `CUDA_VISIBLE_DEVICES` set to its GPUs (numbered as nvidia-smi numbers them), `RFT_JOB`,
+  `RFT_EXPERIMENT` and `RFT_OUT`; its log goes to `vault/.queue/logs/<job>.log`. It gets the environment the
   runner started with, not your interactive shell's, so its command activates its conda or venv
   itself. A job whose process is gone without an exit code (killed, or the machine restarted) is
   recorded as lost.
+- **Its outputs** go to `$RFT_OUT`, a folder of its own: `<runs>/<experiment>/<job>`, `<runs>`
+  being the config's `runsDir`, else `runs/` at the top of the job's git repo (the runner gives a
+  `runs/` it makes a `.gitignore`, so the outputs stay out of git).
+- **The run record**: each job is the record of its run. When it starts, the runner records the
+  code it runs: the repo, its commit and branch, and its uncommitted changes to tracked files,
+  saved whole as `code.patch` in its output folder (untracked files are counted, not kept); so a
+  job never waits for a commit, and the run can be made again exactly from its commit, its patch
+  and its command. When it ends: the end of a failed one's traceback (the session's line and
+  `rft_jobs` show it, so Claude rarely reads the log), and whether the repo's code moved while it
+  ran. Each output folder holds a copy of its record (`rft-run.json`), so the outputs say what made
+  them.
+- **The notebook, after the runs**: when an experiment's last job ends well and the experiment
+  has a notebook, the runner runs it as a job of its own (`notebook`, no GPU): its numbers land in
+  the note's Result, its figures and tables in the vault and the concept's artifact, at no model
+  turn and with no session open (see Experiment notebooks). The session then tells Claude the
+  numbers are recorded, and Claude writes what they mean.
 - **With the notes**: when a job starts, its experiment goes from planned to running (the plugin
   does it, no model turn) and a toast says so; when one ends, a toast says how. The note is then
   left to Claude: `rft_next`, `/rft-next` and the start of the next session list the experiments
-  whose job ended and whose result is not recorded yet, and Claude reads the end of the job's
-  output (`rft_jobs <job>`) only then, not by polling.
+  whose job ended and whose result is not recorded yet (or whose numbers the notebook recorded,
+  to be interpreted), and Claude reads the job's record (`rft_jobs <job>`) only then, not by
+  polling.
 - `/rft-jobs` prints the queue in the terminal, at no model turn.
 - **Files**, in the vault's `.queue/` (a dot folder Obsidian leaves alone): `queue.json`, the jobs
   waiting and running in their order; `history.jsonl`, one line per job that ended. Its
@@ -545,6 +561,10 @@ Claude writes it; you read it in the tree view.
   concept with results that has none. `/rft-artifact [concept]` asks for one, or for every one
   missing or out of date. Only numbers that are in the notes go on it. Claude's own edits of the
   files are refused, so the stamp stays true.
+- **A notebook's figures and tables** go on the page by name: `<img src="../figures/E08_loss.svg">`
+  and `<rft-table src="E08_accuracy_by_seed"></rft-table>`, which the plugin fills with the table
+  when the page is written and again whenever the notebook's run writes it anew. `rft_artifact`
+  names what each experiment's notebook saved, so Claude places them instead of writing them out.
 - **Figures** are kept in `vault/figures/` and named from the page as `../figures/<file>.svg`
   (which also works when the file is opened on its own); an image is looked for there first, then
   as a note's images are. An SVG comes inside the page (a browser refuses one sent to the
@@ -606,29 +626,46 @@ figures as PDF) are bundled, so the page needs no network.
 
 ### Experiment notebooks
 
-An experiment with a result can have a **notebook** that rebuilds its numbers: a
+An experiment in a concept with code has a **notebook** that makes the numbers of its Result: a
 [marimo](https://marimo.io) notebook in its concept's code repository, which runs in that repo's
-own [uv](https://docs.astral.sh/uv/) environment. It reads the run's saved raw outputs after an
-expensive training run, or reruns a short experiment from scratch. It opens on the **left** of
-the tree view while the note is open on the right, so you can run it and read the note side by
-side.
+own [uv](https://docs.astral.sh/uv/) environment. It reads its runs' saved outputs after an
+expensive training run, or reruns a short experiment from scratch. Claude writes it when the
+experiment is planned, and its run records the result when the jobs end, so no one copies a
+number by hand. It opens on the **left** of the tree view while the note is open on the right,
+so you can run it and read the note side by side.
 
 - **Where it is**: `<repo>/notebooks/E02_<title>.py`, in the first repo the concept links (see Code
   repos), versioned with the code it imports. The vault links it as `vault/notebooks/E02.py` (a
   relative symbolic link) and the note says so in `notebook:`. It is plain Python, so it diffs
   and reviews like code.
 - **Claude writes it** with `rft_set_notebook`, as plain cells (the tool writes marimo's format),
-  or links one already in the repo; later changes are ordinary edits of the `.py` file. It puts
-  the numbers the note reports in a dict `RESULTS`.
-- **Claude runs it** with `rft_run_notebook`, without the browser: in the repo's environment
-  (`uv run --project <repo> --with marimo`, so the repo need not list marimo), with the repo's
-  root as working folder and the notebook's folder first on `sys.path`, as the editor runs it. The
-  answer is a few lines, never the cells' outputs: **ok** when every number of `RESULTS` is in the
-  note's Result (at the precision the Result gives), **differs** with the numbers that are not,
-  **failed** with the end of the traceback. A run stops after 9 minutes; longer is a launch, not a
-  check. The run is stamped on the note: `reproduced: "2026-11-15 ok @3f2a1c9d0e in 6.1 s"` (the
-  repo's commit, `+dirty` with uncommitted changes). Only `rft_run_notebook` writes that line:
-  Claude's own edits of it are refused, so it says what a run really did.
+  or links one already in the repo; later changes are ordinary edits of the `.py` file. A new one
+  starts with a cell giving `RUNS`: the experiment's runs in the queue that ended well, each its
+  run record, with `out`, its output folder. The notebook sets:
+  - `RESULTS`, a dict of the numbers the note reports, rounded as it reports them;
+  - `FIGURES`, `{name: matplotlib figure or SVG text}`: saved as `vault/figures/<id>_<name>.svg`;
+  - `TABLES`, `{name: DataFrame, list of row dicts, or dict of columns}`: saved as
+    `vault/tables/<id>_<name>.html`, its name as caption.
+- **Its run** (by the queue's runner after the experiment's last job, or by Claude with
+  `rft_run_notebook`) is taken to the vault by `server/rft_results.py`, without the browser:
+  - **Recorded**: `RESULTS` written in the note's Result as a table, between two comment lines
+    (`<!-- rft-results … -->`, hidden in the tree view and Obsidian), with the line it comes from:
+    the notebook, its commit, and the runs it read with theirs. The runner's run always records
+    (new runs, new numbers); `rft_run_notebook` records when the Result has no table and no
+    number yet, or with `record: true`. A locked note is left as it is. Only a run writes that
+    table: Claude's own edits of it are refused, so Claude writes what the numbers mean around it.
+  - **Checked** otherwise: **ok** when every number of `RESULTS` is in the Result (at the
+    precision the Result gives), **differs** with the numbers that are not, **failed** with the
+    end of the traceback. The answer is a few lines, never the cells' outputs.
+  - **Saved**, when recorded or ok (so the vault shows what the note says): `RESULTS` as
+    `vault/results/<id>.json` (with its commit and runs), the figures and the tables; the tables
+    are filled into the artifacts that name them.
+  - **Stamped**: `reproduced: "2026-11-15 ok @3f2a1c9d0e in 6.1 s"` (the repo's commit, `+dirty`
+    with uncommitted changes). Only a run writes that line: Claude's own edits of it are refused,
+    so it says what a run really did.
+  A run is `uv run --project <repo> --with marimo` (so the repo need not list marimo), with the
+  repo's root as working folder and the notebook's folder first on `sys.path`, as the editor
+  runs it. It stops after 9 minutes; longer is a launch, not a check.
 - **In the tree view**: opening an experiment with a notebook opens it on the left, in marimo's
   editor, with its last run above it. Nothing runs until you press run. The server starts one
   editor per repo the first time one of its notebooks is opened (that can take a minute the
@@ -637,8 +674,8 @@ side.
   and the note's notebook button opens it again; drag its right edge to resize it; ↗ opens it in a
   tab of its own.
 - **In the artifacts**: in a concept with code, `rft_artifact` says for each result whether a
-  notebook reproduced it, and lists those that are not; each experiment's link in the page carries
-  its last run (✓ reproduced, ≠ differs, ✗ failed).
+  notebook reproduced it, lists those that are not, and names what each notebook saved; each
+  experiment's link in the page carries its last run (✓ reproduced, ≠ differs, ✗ failed).
 - It needs `uv` on `PATH`. A vault where no experiment has a notebook sees none of this: the two
   tools wait behind ToolSearch, and their rules are left out.
 
@@ -677,7 +714,8 @@ and it runs. The terminal's typeahead lists them.
 
 ```json
 { "version": 2, "vault": "vault", "project": "my-project", "canvas": true, "mermaid": false,
-  "lastId": { "E": 12, "D": 9 }, "webPort": 0, "requireRefs": true, "gpus": 2 }
+  "lastId": { "E": 12, "D": 9 }, "webPort": 0, "requireRefs": true, "gpus": 2,
+  "runsDir": "/data/rft-runs" }
 ```
 
 `version` is the vault's format, not the plugin's: it changes only when what a vault holds
@@ -687,7 +725,9 @@ tree view's port (0: a free one), handy for a standing `ssh -L` forward. `requir
 (set by `/rft-init` on a new vault, off on an adopted one) makes `rft_validate` warn about
 experiments and directions in work that name no reference. `gpus` is how many GPUs the
 experiments share: the Calendar and `rft_next` report the days the planned and running ones need
-more. A config that holds
+more. `runsDir` is where the queue's runs keep their outputs
+(`<runsDir>/<experiment>/<job>`; absolute, `~/…`, or from the tree's folder), e.g. a data drive;
+without it, `runs/` at the top of each job's repo. A config that holds
 only `tree` is a link to a tree in another folder (see above). The code a concept runs on is
 linked in its note, not in the config (see Code repos).
 
@@ -731,16 +771,25 @@ session with the plugin loaded from this folder.
   dark themes; vendored d3), one codebase for the live view and `/rft-view`, which shows the
   threads read-only.
 - `server/rft_server.py`: the local server (Python standard library); `server/rft_notebook.py` an
-  experiment's notebook: the vault's link followed, the run in its repo's uv environment, the
-  marimo editors the tree view frames; `server/rft_queue.py` the experiment queue: its runner,
-  its command line (what the queue tools call) and what `api/queue` reads and changes.
+  experiment's notebook: the vault's link followed, the run in its repo's uv environment (its
+  `RESULTS`, `FIGURES` and `TABLES`), the marimo editors the tree view frames;
+  `server/rft_results.py` what a run leaves in the vault (the Result's table, the check, the saved
+  numbers, figures and tables, the artifacts' tables, the stamp); `server/rft_queue.py` the
+  experiment queue: its runner, the run records, the notebook run after an experiment's jobs, its
+  command line (what the queue tools call) and what `api/queue` reads and changes.
   `hooks/lib/queue.ts`: the queue as Claude and the session see it.
 - `skills/rft-manual/SKILL.md`: the manual; `tests/`: the mod's tests on an in-memory vault, the
-  outline pane on every surface, and the server's tests.
+  outline pane on every surface, and the server's tests; `tests/test_pipeline.py` the end-to-end
+  check, with no model: an experiment of the demo queued, run, its notebook run after its jobs,
+  its numbers in the note and its table in the artifact, then the same `RESULTS` made again from
+  a fresh clone at the recorded commit and patch.
 - `bench/bench.py`: the token benchmark. It runs tasks headless (`claude -p`) on fresh copies of a
   project, once per plugin folder, and prints the input tokens, output tokens, cost and turns of
   each: `python3 bench/bench.py --project <copy> --tasks tasks.json --plugin old=<folder>
-  --plugin new=. --runs 3`. The project is copied, never changed.
+  --plugin new=. --runs 3`. The project is copied, never changed. A task may name a setup that
+  brings the copy to its stage: `bench/lifecycle.json` measures one experiment's lifecycle
+  (planned and queued; its jobs ended and its result to record) on the demo with a toy repo
+  (`python3 bench/lifecycle.py base --out <dir>` makes the project).
 
 ## License
 

@@ -1,6 +1,6 @@
 ---
 name: rft-manual
-description: Operating manual of the Reasoning Flow Tree: experiment (E..), direction (D..), reference (R..) and theory (T..) notes recording a research project's reasoning, grouped into concepts (lines of research) with their code repositories. Use in a project with .rft/config.json whenever an experiment is planned, launched (GPU runs: rft_queue) or finished (a queued job ended), a result needs a notebook (rft_set_notebook), an idea or question comes up (even a rejected one), a paper or review is read, a new field comes up (offer a literature search first), a definition or method is written down, an idea is dropped or moved, a branch belongs under another note (move it), a new line of research opens (propose a concept, ask for its code), work starts on an experiment whose concept links code, Claude is asked to answer a tree-view comment or suggestion, a note is locked, a note's priority comes up (suggest one, never set it), or the user asks about the tree, its concepts, its code or what was tried (start from rft_map).
+description: Operating manual of the Reasoning Flow Tree: experiment (E..), direction (D..), reference (R..) and theory (T..) notes recording a research project's reasoning, grouped into concepts (lines of research) with their code repositories. Use in a project with .rft/config.json whenever an experiment is planned, launched (GPU runs: rft_queue) or finished (a queued job ended), an experiment in a concept with code is planned (write its notebook: rft_set_notebook), an idea or question comes up (even a rejected one), a paper or review is read, a new field comes up (offer a literature search first), a definition or method is written down, an idea is dropped or moved, a branch belongs under another note (move it), a new line of research opens (propose a concept, ask for its code), work starts on an experiment whose concept links code, Claude is asked to answer a tree-view comment or suggestion, a note is locked, a note's priority comes up (suggest one, never set it), or the user asks about the tree, its concepts, its code or what was tried (start from rft_map).
 ---
 
 # Reasoning Flow Tree (rft)
@@ -246,6 +246,11 @@ key results as tables and small charts, what failed, what is still running.
   `--line`, `--accent`, `--good`, `--bad`, and `--c1` … `--c6` for series. Link every note id,
   `<a href="#E05">E05</a>` (or `data-note="E05"` on any element): the view opens the note and
   marks the link with its status, superseded results struck through.
+- **A notebook's figures and tables** (its `FIGURES` and `TABLES`, saved by its run) go on the
+  page by the names `rft_artifact` lists: `<img src="../figures/E08_training_loss.svg">` and
+  `<rft-table src="E08_accuracy_by_seed"></rft-table>`. The plugin fills an `<rft-table>` with
+  the table when the page is written, and again whenever the notebook's run writes it anew; write
+  their numbers nowhere else on the page, and say what they show.
 - **Only numbers that are in the notes**, with their spread over seeds; a superseded result is
   cited with the note that replaced it. `rft_set_artifact` names the results left off the page,
   links to no note, superseded results cited alone, and files the view would block.
@@ -254,28 +259,40 @@ key results as tables and small charts, what failed, what is still running.
 
 ## Experiment notebooks
 
-An experiment with a result gets a **notebook** that rebuilds the numbers of its Result, so a
-reader can rerun them and the concept's artifact rests on numbers that were reproduced. It is a
-marimo notebook in the concept's first repo (`notebooks/<id>_<title>.py`), linked from the vault
-(`vault/notebooks/<id>.py`) and the note (`notebook:`); it runs in the repo's own uv environment.
+An experiment in a concept with code gets a **notebook** that makes the numbers of its Result, so
+no one types them, a reader can rerun them, and the concept's artifact rests on numbers that were
+reproduced. It is a marimo notebook in the concept's first repo (`notebooks/<id>_<title>.py`),
+linked from the vault (`vault/notebooks/<id>.py`) and the note (`notebook:`); it runs in the
+repo's own uv environment, from the repo's root.
 
-- **Write it** with `rft_set_notebook(id, cells)`: plain Python, one string per cell (a markdown
-  cell as `mo.md("...")`; `mo` is imported for you); or `file`, a notebook already in the repo.
-  Read the run's outputs where the repo keeps them (paths from the repo's root, the working
-  folder); after an expensive run, rebuild from its saved raw outputs, never retrain; a short
-  experiment may run from scratch. Put the numbers the note reports in a dict `RESULTS`, in the
-  units and rounding the Result uses (`{"gap_1k": 4.1, "gap_1k_sd": 0.6}`).
-- **Check it** with `rft_run_notebook(id)`: ok, differs or failed, in a few lines. On differs,
-  find out which side is wrong: fix the notebook, or, if its numbers are right, the Result and
-  the summary (`rft_set_status` with results), which puts the artifact out of date. On failed,
-  read the end of the traceback and fix the notebook or what it reads.
-- **Change it** with Edit: it is plain Python. Never read a notebook's outputs into the chat;
-  `RESULTS` is what you need.
-- **Never write `reproduced:`**: only `rft_run_notebook` stamps a run (your edits of it are
-  refused).
-- **When**: once an experiment in a concept with code has a result (done, or a partial Result
-  worth keeping), give it a notebook and run it before its numbers go on the concept's artifact.
-  `rft_artifact` lists the results no notebook reproduced.
+- **Write it when you plan the experiment**, with `rft_set_notebook(id, cells)`: plain Python, one
+  string per cell (a markdown cell as `mo.md("...")`; `mo` is imported for you); or `file`, a
+  notebook already in the repo. Its first cell (written for you) gives `RUNS`: the experiment's
+  runs in the queue that ended well, oldest first, each its record with `out` (its output folder,
+  `$RFT_OUT`), `label` and `commit`; read each run's outputs from `out`. After an expensive run,
+  rebuild from its saved outputs, never retrain; a short experiment may run from scratch. Set:
+  - `RESULTS`: a dict of the numbers the note reports, rounded as it reports them
+    (`{"gap_1k": 4.1, "gap_1k_sd": 0.6}`);
+  - `FIGURES`: `{name: matplotlib figure or SVG text}`, saved as `figures/<id>_<name>.svg`;
+  - `TABLES`: `{name: DataFrame, list of row dicts, or dict of columns}`, saved as
+    `tables/<id>_<name>.html` (the name is its caption).
+- **When its jobs end**, the queue's runner runs it (a job of its own, `notebook`, no GPU) and,
+  at no model turn: writes `RESULTS` in the note's Result as a table between two `rft-results`
+  comment lines, with the notebook, commit and runs they come from; saves `RESULTS`
+  (`results/<id>.json`), the figures and the tables; fills the tables into the artifacts that
+  name them; and stamps the note (`reproduced:`). The session then says the numbers are in the
+  Result: read it, write what they mean around the table (and the summary), and set the status.
+  Never type the numbers yourself, and never read the runs' or the cells' outputs into the chat.
+- **Run it now** with `rft_run_notebook(id)`: a Result with no table and no number yet gets the
+  table (recorded); else the numbers are checked against it: ok, differs or failed, in a few
+  lines. On differs, find out which side is wrong: fix the notebook, or, if its numbers are right
+  (new runs, a fixed bug), run it with `record: true`, which rewrites the table and puts the
+  artifact out of date. On failed, read the end of the traceback and fix the notebook or what it
+  reads.
+- **Change it** with Edit: it is plain Python.
+- **Never write `reproduced:` or the Result's table**: only a notebook's run writes them (your
+  edits of either are refused).
+- `rft_artifact` lists the results no notebook reproduced, and what each notebook saved.
 
 ## State of knowledge
 
@@ -370,25 +387,37 @@ or `/rft-jobs`), where they also reorder, pause, cancel and retry jobs, and keep
   answer says its place in line and why it waits. Put it first in line (`top`) only when the user
   asks.
 - **The command** runs as `bash -c <cmd>` in `cwd`, in a session of its own, with
-  `CUDA_VISIBLE_DEVICES` set to its GPUs (numbered as nvidia-smi numbers them), `RFT_JOB` and
-  `RFT_EXPERIMENT`. It has the session's environment only, not your shell's: activate its conda
+  `CUDA_VISIBLE_DEVICES` set to its GPUs (numbered as nvidia-smi numbers them), `RFT_JOB`,
+  `RFT_EXPERIMENT` and `RFT_OUT`. It has the session's environment only, not your shell's: activate its conda
   or venv in the command (`source ~/miniconda3/bin/activate env && python train.py ...`) or give
   the interpreter's full path. Check the command once by hand (a dry run, `--help`) before queueing
-  a long run. Its output goes to `<vault>/.queue/logs/<job>.log`.
+  a long run. Its log goes to `<vault>/.queue/logs/<job>.log`.
+- **Its outputs** go to `$RFT_OUT`, a folder of its own: `<runs>/<exp>/<job>`, `<runs>` being
+  the config's `runsDir`, else `runs/` at the top of the job's repo (kept out of git). Have the
+  command write there (`--out "$RFT_OUT"`); the notebook finds it as `out` in `RUNS`.
+- **The run record**: when a job starts, the runner records the code it runs (repo, commit,
+  branch; uncommitted changes saved whole as `code.patch` in its output folder); when it ends,
+  a failed one's traceback, and whether the repo's code moved while it ran. Each output folder
+  holds its record (`rft-run.json`). `rft_jobs <job>` shows them; a run can be made again from
+  its commit, its patch and its command.
 - **Order** is strict: the first waiting job that needs GPUs takes them once enough are free, and
   nothing behind it starts first. A GPU with a process of someone else's on it, or more than
   1000 MiB of memory taken, counts as busy.
 - **Do not poll.** The plugin sets the experiment running when its job starts and tells the user
   when one ends. Read `rft_jobs` when the user asks, or when the session starts with "Jobs that
-  ended, their result not recorded yet": `rft_jobs <job> log: 40` gives how it ended and the end
-  of its output. Then record the real result (rft_set_status with the numbers), or the failure and
-  its cause; a failed run may deserve a fix and `rft_queue` again, after the user agrees.
-- **Reorder** only when the user asks (the order is theirs): `rft_move_job {id, before}` moves one
-  waiting job to `"top"`, to `"end"`, or before another waiting job (`"q3"`), and answers the new
-  waiting order in one line: no `rft_jobs` after it. "Run E17 before E16": find their jobs (the
-  session's list, or `rft_jobs` once), then one call, `{id: "q4", before: "q3"}`.
-- `rft_next` lists what runs and waits, and the results to record. `rft_cancel_job` only when the
-  user asks; it leaves the experiment's status to you.
+  ended, their result not recorded yet". Where the notebook wrote the numbers, they are in the
+  Result already: read it and say what they mean. Otherwise `rft_jobs <job>` says how it ended (a
+  failed one with the end of its traceback; `log: 40` for more of its output); then record the
+  real result, or the failure and its cause; a failed run may deserve a fix and `rft_queue` again,
+  after the user agrees.
+- **Change the queue** only when the user asks (the order is theirs), with `rft_job {action}`:
+  `move` one waiting job to `"top"`, to `"end"`, or before another waiting job (`before: "q3"`),
+  answered with the new waiting order in one line (no `rft_jobs` after it); `cancel` one (it
+  leaves the experiment's status to you); `retry` one that ended (first in line again); `pause`
+  the queue (no new job starts; the running ones go on) and `resume` it. "Run E17 before E16":
+  find their jobs (the session's list, or `rft_jobs` once), then one call,
+  `{action: "move", id: "q4", before: "q3"}`.
+- `rft_next` lists what runs and waits, and the results to record.
 - The queue lives in `<vault>/.queue/` (`queue.json`, the history in `history.jsonl`); edit
   neither by hand.
 
@@ -423,15 +452,16 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
    In a concept with code, call `rft_code` first and plan from the code as it is now; the note's
    `## Code` section says how the run uses the code. A run on this machine's GPUs is then queued
    with `rft_queue` (see The experiment queue), not started in the background: the plugin sets
-   the note running when its job starts.
+   the note running when its job starts. In a concept with code, write its notebook now
+   (`rft_set_notebook`), so its run records the result when the jobs end.
 2. **When it finishes or gives a partial result** (for a queued run: the user is told when its
-   job ends, and the session start lists the jobs whose result is not recorded yet; `rft_jobs
-   <job>` with `log` gives how it ended and the end of its output): edit its note to fill **Result** (numbers with
-   spread over seeds, what failed and why, caveats, processed from the run's outputs),
-   **Directions found**, and **Code / data** (commit, script, results folder, machine); in a
-   concept with code, record how to reproduce the results with `rft_set_code`'s `reproduce`;
-   then `rft_set_status` (`done`, or keep `running` for partial results). The `note` argument
-   appends to Result.
+   job ends, and the session start lists the jobs whose result is not recorded yet): when its
+   notebook's run wrote the numbers in **Result**, write what they mean around the table, what
+   failed and the caveats; otherwise fill **Result** yourself (numbers with spread over seeds,
+   processed from the run's outputs; `rft_jobs <job>` says how a job ended). Fill **Directions
+   found**; in a concept with code, `rft_set_code`'s `reproduce` adds what the Result's source
+   line and the run records do not say (config, data). Then `rft_set_status` (`done`, or keep
+   `running` for partial results). The `note` argument appends to Result.
 3. **When a new idea or question comes up** (from a result, the user, a discussion), even if it
    is rejected at once: `rft_add_node` with `type: direction` and `parent` = the note it comes
    from, and its topical `tags`. A rejected idea gets status `discussed`.
@@ -495,8 +525,8 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 | `rft_set_repos` | link code repos to a concept (or, on the root note, to the project); an empty list removes them |
 | `rft_code` | a note's code context: its repos by priority, the commit it was checked against, what changed since |
 | `rft_set_code` | write or update a note's `## Code` section (description, Reproduce), recording each repo's current commit |
-| `rft_set_notebook` | give an experiment its marimo notebook: plain cells written to its concept's repo, or a file already there; linked from the vault and the note |
-| `rft_run_notebook` | run the notebook in its repo's uv environment and check its `RESULTS` against the Result (ok, differs, failed); stamps `reproduced:` |
+| `rft_set_notebook` | give an experiment its marimo notebook, best when it is planned: plain cells written to its concept's repo (a first cell gives `RUNS`), or a file already there; linked from the vault and the note |
+| `rft_run_notebook` | run the notebook now in its repo's uv environment: `RESULTS` written in the Result's table (recorded, or `record: true`) or checked against it (ok, differs, failed); `FIGURES` and `TABLES` saved; stamps `reproduced:` |
 | `rft_tree` | the current tree, or the subtree of one node (`root`, `depth`) |
 | `rft_validate` | errors (bad ids, statuses, titles, missing parents, broken links) and warnings |
 | `rft_sync` | regenerate children / up / down, the tree in `00 Index.md`, the canvas |
@@ -504,9 +534,8 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 | `rft_comment` | reply in a thread (`applied: true` closes a suggestion you made in an unlocked note), or start a comment on a `quote` |
 | `rft_suggest` | propose new text for a `quote`, or the replacement an open suggestion asks for; the user accepts it |
 | `rft_queue` | queue a run of an experiment on this machine's GPUs (exp, cmd, cwd, gpus, label); it starts once its GPUs are free, in the user's order |
-| `rft_jobs` | the queue in a few lines: GPUs, jobs running and waiting, the last ones that ended, results to record; one job with `log` lines of its output |
-| `rft_move_job` | move one waiting job to the top, the end, or before another waiting job, when the user asks; answers the new order in one line |
-| `rft_cancel_job` | cancel a waiting job or stop a running one, only when the user asks |
+| `rft_jobs` | the queue in a few lines: GPUs, jobs running and waiting, the last ones that ended, results to record; one job with its run record (code, outputs, error) and `log` lines of its output |
+| `rft_job` | change the queue, only when the user asks: `move` a waiting job (answers the new order), `cancel`, `retry`, `pause`, `resume` |
 
 Before proposing an experiment or an idea, `rft_search` whether the tree already has it; to
 answer "what did we try on X", look at the map and search first, and read only the notes that
