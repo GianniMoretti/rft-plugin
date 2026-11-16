@@ -12,8 +12,8 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import '../web/artifacts.js'
 
 import { artifactReport } from '../hooks/lib/artifacts'
-import type { NotebookEnv, RunOutcome } from '../hooks/lib/notebooks'
-import { MAX_TIMEOUT_S, checkResults, notebookFile, notebookSource, parseReproduced, relativePath, reproducedLine, runNotebook, setNotebook } from '../hooks/lib/notebooks'
+import type { ApplyOutcome, NotebookEnv } from '../hooks/lib/notebooks'
+import { MAX_TIMEOUT_S, notebookFile, notebookSource, parseReproduced, relativePath, reproducedLine, runNotebook, runsCell, setNotebook } from '../hooks/lib/notebooks'
 import { rulesText } from '../hooks/lib/ops'
 import { treeJson } from '../hooks/lib/page'
 import { CORE_TOOLS, FEATURE_TOOLS } from '../hooks/lib/tools'
@@ -43,14 +43,20 @@ const open = async (files: Record<string, string>) => {
   return { fs, io, loaded: await load(io, (await readConfig(io))!) }
 }
 
-/** A notebook env that records its links and runs, and answers each run with `outcome`. */
-function envOf(outcome: RunOutcome = { ok: true, seconds: 6.1, results: { gap_1k: 4.1234, gap_10k: 0.8 }, commit: 'a1b2c3d4e5', dirty: false, file: NOTEBOOK }) {
+const OK: ApplyOutcome = {
+  ok: true, seconds: 6.1, results: { gap_1k: 4.1234, gap_10k: 0.8 }, commit: 'a1b2c3d4e5', dirty: false, file: NOTEBOOK, state: 'ok', recorded: false,
+  checks: [{ key: 'gap_1k', value: 4.1234, found: true }, { key: 'gap_10k', value: 0.8, found: true }], skipped: [],
+  saved: { results: 'results/E02.json', figures: ['figures/E02_gap.svg'], tables: ['E02_gap_by_size'], artifacts: [] },
+}
+
+/** A notebook env that records its links and runs, and answers each run with `outcome` (server/rft_results.py's answer, tested in test_notebook.py). */
+function envOf(outcome: ApplyOutcome = OK) {
   const links: [string, string][] = []
-  const runs: [string, number][] = []
+  const runs: [string, string, { timeoutS: number; record: boolean }][] = []
   const env: NotebookEnv = {
     root: ROOT, date: '2026-11-15',
     link: async (target, where) => { links.push([target, where]) },
-    run: async (link, timeout) => { runs.push([link, timeout]); return outcome },
+    apply: async (vault, exp, opts) => { runs.push([vault, exp, opts]); return outcome },
   }
   return { env, links, runs }
 }
@@ -69,6 +75,17 @@ describe('the notebook file', () => {
     expect(src).toContain('@app.cell\ndef _():\n    RESULTS = {"gap_1k": runs["gap"][0], "gap_10k": runs["gap"][2]}\n    return\n')
     expect(notebookSource('x', ['a = 1\n\nb = 2'])).toContain('    a = 1\n\n    b = 2\n')
     expect(src.trimEnd().endsWith('if __name__ == "__main__":\n    app.run()')).toBe(true)
+    expect(src).not.toContain('RUNS')
+  })
+
+  test("a new notebook reads RUNS, the experiment's runs in the queue, with names of its own so the cells may import json too", () => {
+    const src = notebookSource('E02 · Variant run', CELLS, { exp: 'E02', root: 'runs' })
+    expect(src).toContain(`@app.cell(hide_code=True)\ndef _():\n    # E02's runs`)
+    expect(src).toContain('    import json as _json\n    import pathlib as _pathlib\n')
+    expect(src).toContain('_pathlib.Path("runs").glob("E02/*/rft-run.json")')
+    expect(src).toContain('if _r.get("state") == "done"')
+    expect(src.indexOf('RUNS = ')).toBeLessThan(src.indexOf('RESULTS = '))
+    expect(runsCell('E07', '/data/rft-runs')).toContain('_pathlib.Path("/data/rft-runs").glob("E07/*/rft-run.json")')
   })
 
   test('the file is named from the id and the title, as a Python module may be', async () => {
@@ -89,7 +106,7 @@ describe('rft_set_notebook', () => {
     const { fs, io, loaded } = await open(project())
     const { env, links } = envOf()
     const out = await setNotebook(io, loaded, env, 'E02', { cells: CELLS })
-    expect(fs.read(NOTEBOOK)).toBe(notebookSource('E02 · Variant run', CELLS))
+    expect(fs.read(NOTEBOOK)).toBe(notebookSource('E02 · Variant run', CELLS, { exp: 'E02', root: 'runs' }))
     expect(links).toEqual([['../../../code/sfree/notebooks/E02_variant_run.py', LINK]])
     expect(front(fs.read(PATH.E02)).notebook).toBe('"notebooks/E02.py"')
     expect(loaded.tree.nodes.E02!.notebook).toBe('notebooks/E02.py')
@@ -141,53 +158,55 @@ describe('rft_set_notebook', () => {
 
 describe('rft_run_notebook', () => {
   const linked = () => project({ e02: 'notebook: "notebooks/E02.py"' })
+  const VAULT = `${ROOT}/vault`
 
-  test("ok: every number of RESULTS is in the note's Result; the run is stamped on the note", async () => {
-    const { fs, io, loaded } = await open(linked())
+  test('ok: every number of RESULTS is in the Result, and where its figures and tables were saved, in a few lines', async () => {
+    const { io, loaded } = await open(linked())
     const { env, runs } = envOf()
     const out = await runNotebook(io, loaded, env, 'E02')
-    expect(runs).toEqual([[LINK, MAX_TIMEOUT_S]])
-    expect(out).toContain('ok')
+    expect(runs).toEqual([[VAULT, 'E02', { timeoutS: MAX_TIMEOUT_S, record: false }]])
+    expect(out).toContain('E02 Variant run: ok, reproduced in 6.1 s at a1b2c3d4e5')
     expect(out).toContain('gap_1k 4.1234 ✓')
     expect(out).toContain('gap_10k 0.8 ✓')
-    expect(out).toContain('a1b2c3d4e5')
-    expect(front(fs.read(PATH.E02)).reproduced).toBe('"2026-11-15 ok @a1b2c3d4e5 in 6.1 s"')
-    expect(loaded.tree.nodes.E02!.reproduced).toEqual({ date: '2026-11-15', state: 'ok', commit: 'a1b2c3d4e5', seconds: 6.1 })
+    expect(out).toContain('results/E02.json; figures/E02_gap.svg (in an artifact: <img src="../figures/E02_gap.svg">); table E02_gap_by_size (in an artifact: <rft-table src="E02_gap_by_size"></rft-table>)')
     expect(out.split('\n').length).toBeLessThanOrEqual(4)
   })
 
+  test('recorded: RESULTS written in the Result, so Claude writes what they mean, not the numbers', async () => {
+    const { io, loaded } = await open(linked())
+    const { env, runs } = envOf({ ...OK, recorded: true, saved: { results: 'results/E02.json', artifacts: ['artifacts/D01 Variants.html'] } })
+    const out = await runNotebook(io, loaded, env, 'E02', { record: true })
+    expect(runs[0]![2].record).toBe(true)
+    expect(out).toContain('E02 Variant run: recorded')
+    expect(out).toContain("RESULTS written in its Result's table: gap_1k 4.1234, gap_10k 0.8.")
+    expect(out).toContain('not the numbers again')
+    expect(out).toContain('Tables filled again in artifacts/D01 Variants.html')
+  })
+
   test('differs: a number that is not in the Result is named, with what to do', async () => {
-    const { fs, io, loaded } = await open(linked())
-    const { env } = envOf({ ok: true, seconds: 3, results: { gap_1k: 4.6, gap_10k: 0.8 }, commit: 'a1b2c3d4e5', dirty: true })
+    const { io, loaded } = await open(linked())
+    const { env } = envOf({ ok: true, seconds: 3, commit: 'a1b2c3d4e5', dirty: true, state: 'differs', checks: [{ key: 'gap_1k', value: 4.6, found: false }, { key: 'gap_10k', value: 0.8, found: true }], skipped: [] })
     const out = await runNotebook(io, loaded, env, 'E02', { timeout: 60 })
-    expect(out).toContain('differs')
+    expect(out).toContain('differs, ran in 3 s at a1b2c3d4e5 (with uncommitted changes)')
     expect(out).toContain('gap_1k 4.6 ✗')
-    expect(out).toContain('rft_set_status')
-    expect(front(fs.read(PATH.E02)).reproduced).toBe('"2026-11-15 differs @a1b2c3d4e5+dirty in 3 s"')
+    expect(out).toContain('record: true')
+    expect(out).not.toContain('Saved')
   })
 
   test('failed: the end of the traceback, nothing more', async () => {
-    const { fs, io, loaded } = await open(linked())
+    const { io, loaded } = await open(linked())
     const tb = ['Traceback (most recent call last):', '  File "x.py", line 1', 'FileNotFoundError: [Errno 2] No such file: runs/e02/summary.json'].join('\n')
-    const { env } = envOf({ ok: false, seconds: 0.4, error: tb, commit: 'a1b2c3d4e5' })
-    const out = await runNotebook(io, loaded, env, 'E02')
-    expect(out).toContain('failed')
+    const out = await runNotebook(io, loaded, envOf({ ok: false, seconds: 0.4, error: tb, commit: 'a1b2c3d4e5', state: 'failed' }).env, 'E02')
+    expect(out).toContain('failed after 0.4 s at a1b2c3d4e5')
     expect(out).toContain('FileNotFoundError: [Errno 2] No such file: runs/e02/summary.json')
-    expect(front(fs.read(PATH.E02)).reproduced).toBe('"2026-11-15 failed @a1b2c3d4e5 in 0.4 s"')
   })
 
-  test('unchecked: no RESULTS, or no Result to check them against', async () => {
+  test('unchecked: no RESULTS, or a locked note whose Result is not written', async () => {
     const { io, loaded } = await open(linked())
-    const out = await runNotebook(io, loaded, envOf({ ok: true, seconds: 1, commit: 'a1b2c3d4e5' }).env, 'E02')
-    expect(out).toContain('no RESULTS')
-    expect(loaded.tree.nodes.E02!.reproduced?.state).toBe('unchecked')
-    const files = linked()
-    files[PATH.E02] = files[PATH.E02]!.replace(RESULT, '')
-    const b = await open(files)
-    const out2 = await runNotebook(b.io, b.loaded, envOf().env, 'E02')
-    expect(out2).toContain('no Result')
-    expect(out2).toContain('gap_1k 4.1234')
-    expect(b.loaded.tree.nodes.E02!.reproduced?.state).toBe('unchecked')
+    expect(await runNotebook(io, loaded, envOf({ ok: true, seconds: 1, state: 'unchecked', why: 'no RESULTS' }).env, 'E02')).toContain('defines no RESULTS')
+    const locked = await runNotebook(io, loaded, envOf({ ...OK, state: 'unchecked', why: 'locked', saved: undefined }).env, 'E02')
+    expect(locked).toContain('it is locked, so its Result was not written')
+    expect(locked).toContain('gap_1k 4.1234')
   })
 
   test('the timeout is kept between a second and the most a call can wait; a note with no notebook is refused', async () => {
@@ -195,33 +214,14 @@ describe('rft_run_notebook', () => {
     const { env, runs } = envOf()
     await runNotebook(io, loaded, env, 'E02', { timeout: 100000 })
     await runNotebook(io, loaded, env, 'E02', { timeout: 0 })
-    expect(runs.map(r => r[1])).toEqual([MAX_TIMEOUT_S, 1])
+    expect(runs.map(r => r[2].timeoutS)).toEqual([MAX_TIMEOUT_S, 1])
     const plain = await open(project())
     await expect(runNotebook(plain.io, plain.loaded, env, 'E02')).rejects.toThrow(/rft_set_notebook/)
   })
 })
 
-describe('RESULTS against the Result', () => {
-  test('a number matches one in the text at the precision the text gives', () => {
-    const r = checkResults({ a: 4.1234, b: 0.31, c: -2.5, d: 41.2, e: 5 }, 'Gap 4.1 ± 0.3; loss −2.5; 41.2% at 5 seeds.')
-    expect(r.checks).toEqual([
-      { key: 'a', value: 4.1234, found: true },
-      { key: 'b', value: 0.31, found: true },
-      { key: 'c', value: -2.5, found: true },
-      { key: 'd', value: 41.2, found: true },
-      { key: 'e', value: 5, found: true },
-    ])
-    expect(checkResults({ a: 4.16 }, 'Gap 4.1').checks[0]!.found).toBe(false)
-  })
-
-  test('nested values by their path, lists by index; what is not a number is listed apart', () => {
-    const r = checkResults({ gap: { '1k': 4.1, sizes: [1000, 10000] }, model: 'resnet18', ok: true }, 'at 1000 and 10000 images: 4.1')
-    expect(r.checks.map(c => [c.key, c.found])).toEqual([['gap.1k', true], ['gap.sizes[0]', true], ['gap.sizes[1]', true]])
-    expect(r.skipped).toEqual(['model', 'ok'])
-    expect(checkResults(3.5, 'is 3.5').checks).toEqual([{ key: 'RESULTS', value: 3.5, found: true }])
-  })
-
-  test('the run stamp, read back', () => {
+describe('the run stamp', () => {
+  test('read back', () => {
     for (const line of ['2026-11-15 ok @a1b2c3d4e5 in 6.1 s', '2026-11-15 differs @a1b2c3d+dirty in 3 s', '2026-11-15 failed in 0.4 s', '2026-11-15 unchecked']) {
       expect(reproducedLine(parseReproduced(line)!)).toBe(line)
     }
@@ -281,23 +281,24 @@ describe('the notebook tools in a session', () => {
     expect(rulesText(loaded.tree, loaded.config, 'vault', {}, undefined, new Set())).not.toContain('rft_run_notebook')
   })
 
-  test('rft_run_notebook runs the helper on the vault link and stamps the note', async ($, on) => {
+  test('rft_run_notebook asks the helper to run and apply the notebook of the experiment, in its vault', async ($, on) => {
     mock.clock(on)
     const calls: string[][] = []
-    const w = world(on, project({ e02: 'notebook: "notebooks/E02.py"' }), {
+    world(on, project({ e02: 'notebook: "notebooks/E02.py"' }), {
       cwd: ROOT,
       process: argv => {
         if (!argv[1]?.endsWith('server/rft_notebook.py')) return undefined
         calls.push([...argv])
-        return { exitCode: 0, stdout: 'marimo says hi\n' + JSON.stringify({ ok: true, seconds: 2, results: { gap_1k: 4.1 }, commit: 'a1b2c3d4e5', dirty: false, file: NOTEBOOK }) + '\n', stderr: '' }
+        return { exitCode: 0, stdout: 'marimo says hi\n' + JSON.stringify({ ...OK, checks: [{ key: 'gap_1k', value: 4.1, found: true }] }) + '\n', stderr: '' }
       },
     })
     await $.session.start({ cwd: ROOT, source: 'startup' } as never)
-    const r = await $.tool.call({ tool: 'mcp__rft__rft_run_notebook', id: 'E02', timeout: 30 } as never)
+    const r = await $.tool.call({ tool: 'mcp__rft__rft_run_notebook', id: 'E02', timeout: 30, record: true } as never)
     expect(calls).toHaveLength(1)
-    expect(calls[0]!.slice(2)).toEqual(['run', LINK, '--timeout', '30'])
+    expect(calls[0]!.slice(2, 9)).toEqual(['apply', '--vault', `${ROOT}/vault`, '--exp', 'E02', '--timeout', '30'])
+    expect(calls[0]!.slice(9, 10)).toEqual(['--date'])
+    expect(calls[0]!.at(-1)).toBe('--record')
     expect(r.text).toContain('gap_1k 4.1 ✓')
-    expect(front(w.fs.read(PATH.E02)).reproduced).toContain('ok @a1b2c3d4e5')
   })
 
   test("only rft_run_notebook writes reproduced:, so the stamp says what a run did; the rest of the note is Claude's to edit", async ($, on) => {
@@ -318,6 +319,28 @@ describe('the notebook tools in a session', () => {
     }
     expect(ran).toEqual([])
     await $.tool.call({ tool: 'Edit', file_path: PATH.E02, old_string: RESULT, new_string: 'Long training loses 4.2 ± 0.6 points.' } as never)
+    expect(ran).toEqual(['Edit'])
+  })
+
+  test("only a notebook's run writes the table of RESULTS in a Result: Claude writes around it", async ($, on) => {
+    mock.clock(on)
+    const block = '<!-- rft-results: the notebook\'s RESULTS, written by its run; rft_run_notebook rewrites it -->\n| RESULTS | value |\n|---|---|\n| gap_1k | 4.1 |\n\n*From `nb.py`.*\n<!-- /rft-results -->'
+    const files = project({ e02: 'notebook: "notebooks/E02.py"' })
+    files[PATH.E02] = files[PATH.E02]!.replace(RESULT, `${block}\n\n${RESULT}`)
+    world(on, files, { cwd: ROOT })
+    const ran: string[] = []
+    on('tool.call', (_$, e) => { ran.push(String(e.tool)); return { result: 'ok', text: 'ok' } as never })
+    await $.session.start({ cwd: ROOT, source: 'startup' } as never)
+    for (const call of [
+      { tool: 'Edit', file_path: PATH.E02, old_string: '| gap_1k | 4.1 |', new_string: '| gap_1k | 4.2 |' },
+      { tool: 'Edit', file_path: PATH.E02, old_string: `${block}\n\n`, new_string: '' },
+      { tool: 'Bash', command: `sed -i 's/rft-results/x/' "${PATH.E02}"` },
+    ]) {
+      const res = await $.tool.call(call as never)
+      expect({ call, deny: (res as { deny?: string }).deny }).toEqual({ call, deny: expect.stringContaining('writes the table of RESULTS') })
+    }
+    expect(ran).toEqual([])
+    await $.tool.call({ tool: 'Edit', file_path: PATH.E02, old_string: RESULT, new_string: 'The gap closes at 10k.' } as never)
     expect(ran).toEqual(['Edit'])
   })
 

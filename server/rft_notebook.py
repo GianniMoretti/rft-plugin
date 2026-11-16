@@ -3,12 +3,16 @@ its repo, runs it in that repo's uv environment, and serves it in the marimo edi
 
     python3 rft_notebook.py link <target> <link>         make <link> a symlink to <target>
     python3 rft_notebook.py run <notebook or link> [--timeout S]
+    python3 rft_notebook.py apply --vault V --exp E08 [--record] [--runs q1,q2] [--timeout S] [--date D]
+        run the experiment's notebook, then take its run to the note and the vault (rft_results.py)
     python3 rft_notebook.py exec <notebook>              (inside the repo's environment: the run itself)
 
 `link` and `run` print one line of JSON, their answer. A run is the notebook as the editor runs
 it: the repo's root (the folder of its pyproject.toml) as working folder and the notebook's own
 folder first on sys.path; it answers the notebook's RESULTS, the repo's commit, and the end of the
-traceback when a cell fails. The editors (`Editors`) are one `marimo edit` per repo, on 127.0.0.1
+traceback when a cell fails; and FIGURES (each an SVG: a matplotlib figure, or SVG text) and
+TABLES (each a DataFrame, a list of rows as dicts, or a dict of columns), as SVG text and as
+columns and rows. The editors (`Editors`) are one `marimo edit` per repo, on 127.0.0.1
 with a key of their own, started when the tree view first opens a notebook of that repo and
 stopped with the server. Standard library only: marimo itself runs in the repo's environment
 (`uv run --with marimo`), so the repos need not list it.
@@ -156,9 +160,13 @@ def run(path: Path, timeout: float, uv: str = "uv") -> dict:
     got = next((line[len(MARK):] for line in reversed(stdout.splitlines()) if line.startswith(MARK)), None)
     if proc.returncode == 0 and got is not None:
         try:
-            out["results"] = json.loads(got).get("results")
+            said = json.loads(got)
         except ValueError:
             return {**out, "ok": False, "error": "the run's answer was not JSON"}
+        out["results"] = said.get("results")
+        for k in ("figures", "tables", "notes"):
+            if said.get(k):
+                out[k] = said[k]
         return {**out, "ok": True}
     return {**out, "ok": False, "error": tail(stderr or stdout) or f"the run exited with {proc.returncode}"}
 
@@ -181,10 +189,78 @@ def exec_notebook(path: str) -> int:
     except BaseException:  # noqa: BLE001 — a cell's error, whatever it is, is the answer
         traceback.print_exc()
         return 1
-    results = defs.get("RESULTS") if hasattr(defs, "get") else None
+    get = defs.get if hasattr(defs, "get") else (lambda _k: None)
+    notes: list[str] = []
+    figures = {str(k): svg for k, v in (get("FIGURES") or {}).items() if (svg := svg_of(k, v, notes)) is not None} \
+        if isinstance(get("FIGURES"), dict) else {}
+    tables = {str(k): t for k, v in (get("TABLES") or {}).items() if (t := table_of(k, v, notes)) is not None} \
+        if isinstance(get("TABLES"), dict) else {}
+    answer = {"results": jsonable(get("RESULTS")), "figures": figures, "tables": tables, "notes": notes}
     sys.stdout.flush()
-    print("\n" + MARK + json.dumps({"results": jsonable(results)}, allow_nan=False), flush=True)
+    print("\n" + MARK + json.dumps(answer, allow_nan=False), flush=True)
     return 0
+
+
+def svg_of(name, v, notes: list[str]) -> str | None:
+    """A figure of FIGURES as SVG text: SVG text as it is, a matplotlib figure (or its axes) saved as SVG."""
+    if isinstance(v, str):
+        return v if "<svg" in v[:2000] else (notes.append(f"figure {name!r}: text that is not an SVG") or None)
+    fig = v if callable(getattr(v, "savefig", None)) else getattr(v, "figure", None)
+    if fig is not None and callable(getattr(fig, "savefig", None)):
+        import io
+        buf = io.StringIO()
+        try:
+            fig.savefig(buf, format="svg", bbox_inches="tight")
+        except Exception as e:  # noqa: BLE001 - said, not raised: the numbers still count
+            notes.append(f"figure {name!r}: not saved ({type(e).__name__}: {e})")
+            return None
+        return buf.getvalue()
+    notes.append(f"figure {name!r}: a {type(v).__name__}, not a matplotlib figure or SVG text")
+    return None
+
+
+def table_of(name, v, notes: list[str]) -> dict | None:
+    """A table of TABLES as {"columns", "rows"}: a DataFrame (its index too when it is not 0..n-1), a
+    list of rows as dicts, a dict of columns, or a list of lists whose first row names the columns."""
+    if callable(getattr(v, "to_dict", None)) and hasattr(v, "columns"):
+        try:
+            d = v.to_dict(orient="split")
+        except Exception as e:  # noqa: BLE001
+            notes.append(f"table {name!r}: not read ({type(e).__name__}: {e})")
+            return None
+        cols, rows, index = [str(c) for c in d.get("columns", [])], d.get("data", []), d.get("index", [])
+        if list(index) != list(range(len(rows))):
+            label = getattr(getattr(v, "index", None), "name", None)
+            cols, rows = [str(label or "")] + cols, [[i, *r] for i, r in zip(index, rows)]
+        return {"columns": cols, "rows": jsonable(rows)}
+    if isinstance(v, list) and v and all(isinstance(r, dict) for r in v):
+        cols = list(dict.fromkeys(str(k) for r in v for k in r))
+        return {"columns": cols, "rows": jsonable([[r.get(c) for c in cols] for r in v])}
+    if isinstance(v, dict) and v and all(isinstance(c, (list, tuple)) for c in v.values()):
+        cols = [str(k) for k in v]
+        n = max(len(c) for c in v.values())
+        return {"columns": cols, "rows": jsonable([[c[i] if i < len(c) else None for c in v.values()] for i in range(n)])}
+    if isinstance(v, list) and len(v) > 1 and all(isinstance(r, (list, tuple)) for r in v):
+        return {"columns": [str(c) for c in v[0]], "rows": jsonable([list(r) for r in v[1:]])}
+    notes.append(f"table {name!r}: a {type(v).__name__}, not a DataFrame, rows as dicts or columns")
+    return None
+
+
+def apply_run(vault: Path, exp: str, timeout: float, record: bool = False, runs: list[str] | None = None,
+              date: str | None = None, uv: str = "uv") -> dict:
+    """Runs an experiment's notebook (the note's `notebook:`, a link in the vault) and takes the run
+    to its note and the vault (rft_results.apply): checked, recorded, saved, stamped."""
+    import rft_results  # beside this file; not needed by the run itself (exec), so not loaded there
+    vault = Path(vault)
+    path = rft_results.note_path(vault, exp)
+    if path is None:
+        return {"ok": False, "state": "failed", "error": f"no note {exp} in the vault"}
+    rel = rft_results.field(path.read_text(encoding="utf-8"), "notebook")
+    if not rel:
+        return {"ok": False, "state": "failed", "error": f"{exp} has no notebook (notebook: in its note)"}
+    link = vault / rel
+    outcome = run(link, timeout, uv)
+    return rft_results.apply(vault, exp, outcome, date or time.strftime("%Y-%m-%d"), record=record, runs=runs)
 
 
 def free_port() -> int:
@@ -268,11 +344,25 @@ def main(argv=None) -> int:
     a_run = sub.add_parser("run")
     a_run.add_argument("path")
     a_run.add_argument("--timeout", type=float, default=540)
+    a_apply = sub.add_parser("apply")
+    a_apply.add_argument("--vault", required=True)
+    a_apply.add_argument("--exp", required=True)
+    a_apply.add_argument("--record", action="store_true")
+    a_apply.add_argument("--runs", default="")
+    a_apply.add_argument("--timeout", type=float, default=540)
+    a_apply.add_argument("--date", default=None)
     a_exec = sub.add_parser("exec")
     a_exec.add_argument("path")
     a = ap.parse_args(argv)
     if a.cmd == "exec":
         return exec_notebook(a.path)
+    if a.cmd == "apply":
+        try:
+            got = apply_run(Path(a.vault), a.exp, max(1.0, a.timeout), a.record, [r for r in a.runs.split(",") if r] or None, a.date)
+        except OSError as e:
+            got = {"ok": False, "state": "failed", "error": f"{type(e).__name__}: {e}"}
+        print(json.dumps(got, allow_nan=False), flush=True)
+        return 0
     if a.cmd == "link":
         try:
             link(a.target, Path(a.at))

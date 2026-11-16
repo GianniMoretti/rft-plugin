@@ -140,6 +140,15 @@ describe('source runs', () => {
     // footnote definitions are not part of the text
     expect(sources.some(s => s.includes('Seeds 0–4'))).toBe(false)
   })
+  test("a line that is only an HTML comment is not shown, as in Obsidian: the lines around a Result's table of RESULTS", () => {
+    const src = '<!-- rft-results: the notebook\'s RESULTS -->\n| RESULTS | value |\n|---|---|\n| gap | 4.1 |\n\n*From `nb.py`.*\n<!-- /rft-results -->\nText <!-- inline --> stays.'
+    const { html } = md.render(src)
+    expect(html).not.toContain('rft-results')
+    expect(html.split('&lt;!--').length).toBe(2) // only the comment inside a line of text
+    expect(html).toContain('<table>')
+    expect(runs(html).map(r => src.slice(r.s, r.e))).toContain('gap')
+    expect(html).toContain('Text &lt;!-- inline --&gt; stays.')
+  })
 })
 
 describe('selections and highlights', () => {

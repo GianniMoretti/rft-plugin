@@ -38,8 +38,8 @@ import { applyUpdate, behindLine, planText, planUpdate } from './lib/update'
 import type { Feature } from './lib/tools'
 import { SMALL_TREE, mapGaps, mapReport, mapWarnings, projectMap, readDigests, resolveConcept, setDigest, setSummaries } from './lib/map'
 import { ARTIFACTS_DIR, artifactMarks, artifactReport, artifactWarnings, artifactsToWrite, setArtifact } from './lib/artifacts'
-import type { NotebookEnv, RunOutcome } from './lib/notebooks'
-import { MAX_TIMEOUT_S, REPRODUCED_LINE, changesReproduced, reproducedEditText, runNotebook, setNotebook } from './lib/notebooks'
+import type { ApplyOutcome, NotebookEnv } from './lib/notebooks'
+import { MAX_TIMEOUT_S, REPRODUCED_LINE, changesReproduced, changesResultsBlock, reproducedEditText, resultsBlockEditText, runNotebook, setNotebook } from './lib/notebooks'
 import { QUEUE_CLI, QUEUE_FILE, addedText, cancelledText, jobEvents, jobsNext, jobsReport, movedText, queueLine, readQueue, toStart } from './lib/queue'
 import type { Job, QueueView } from './lib/queue'
 import { CONFIG_PATH, LEGEND, MARK, NODE_TYPES, bodyOf, isLiterature, counts, countsLine, isAbsolute, join, locate, readConfig, repoAbs, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
@@ -155,7 +155,7 @@ const TOOLS = {
   },
   rft_set_notebook: {
     description:
-      'Give an experiment with a result its marimo notebook, which rebuilds the numbers of its Result: from the run\'s saved raw outputs after an expensive run, from scratch for a short one. Pass cells (plain Python, one string per cell; the tool writes marimo\'s format, with mo imported) and it is written in the concept\'s first repo as notebooks/<id>_<title>.py; or file, a notebook already in the repo. Either way it is linked from the vault (notebooks/<id>.py) and the note (notebook:). It runs in the repo\'s uv environment with the repo\'s root as working folder and the notebook\'s folder first on sys.path; put the numbers the note reports in a dict RESULTS, in the units the Result uses. Change it later with Edit (plain Python), not with this tool.',
+      'Give an experiment its marimo notebook, which makes the numbers of its Result: from its runs\' saved outputs after an expensive run, from scratch for a short one. Write it when the experiment is planned: the queue\'s runner runs it when the experiment\'s jobs end and writes RESULTS in its Result, at no model turn. Pass cells (plain Python, one string per cell; the tool writes marimo\'s format, with mo imported and a first cell setting RUNS: the queue\'s runs of the experiment that ended well, each a dict with out, its output folder ($RFT_OUT), label and commit) and it is written in the concept\'s first repo as notebooks/<id>_<title>.py; or file, a notebook already in the repo. Either way it is linked from the vault (notebooks/<id>.py) and the note (notebook:). It runs in the repo\'s uv environment with the repo\'s root as working folder and the notebook\'s folder first on sys.path. Set RESULTS, a dict of the numbers the note reports, rounded as it should report them; and for the concept\'s artifact, FIGURES ({name: matplotlib figure or SVG text}) and TABLES ({name: DataFrame, list of row dicts or dict of columns}). Change it later with Edit (plain Python), not with this tool.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -169,12 +169,13 @@ const TOOLS = {
   },
   rft_run_notebook: {
     description:
-      `Run an experiment's notebook (in its repo's uv environment, without the browser) and check its RESULTS against the note's Result. Answers in a few lines: ok (every number of RESULTS is in the Result), differs (the numbers that are not), failed (the end of the traceback), or nothing to check; never the cells' outputs. Stamps the note with the run (reproduced:). A run longer than the timeout is stopped: a notebook that retrains for longer is a launch, not a check.`,
+      `Run an experiment's notebook now (in its repo's uv environment, without the browser): its RESULTS are written in the note's Result as a table when the Result has none and no number yet (or with record), else checked against it. Answers in a few lines: recorded, ok (every number of RESULTS is in the Result), differs (the numbers that are not), failed (the end of the traceback), or nothing to check; never the cells' outputs. With the numbers recorded or ok, it saves RESULTS, FIGURES and TABLES in the vault (results/, figures/, tables/) for the artifacts. Stamps the note (reproduced:). A run longer than the timeout is stopped: a notebook that retrains for longer is a launch, not a check.`,
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string', description: 'Id (e.g. E12) or full name of the experiment.' },
         timeout: { type: 'number', description: `Seconds the run may take (${MAX_TIMEOUT_S} at most, the default).` },
+        record: { type: 'boolean', description: 'Write RESULTS in the Result\'s table, replacing the one there: when its numbers are right and the Result\'s are not (new runs, a fixed bug).' },
       },
       required: ['id'],
     },
@@ -776,7 +777,8 @@ const notebookEnv = async ($: EngineInterface, h: Here): Promise<NotebookEnv> =>
     const r = await notebookHelper($, ['link', target, at], 20000)
     if (r.ok !== true) throw new Error(`the vault's link to the notebook was not made: ${String(r.error ?? 'no answer')}`)
   },
-  run: async (link, timeoutS) => (await notebookHelper($, ['run', link, '--timeout', String(timeoutS)], (timeoutS + 50) * 1000)) as RunOutcome,
+  apply: async (vault, exp, { timeoutS, record }) =>
+    (await notebookHelper($, ['apply', '--vault', vault, '--exp', exp, '--timeout', String(timeoutS), '--date', today(), ...(record ? ['--record'] : [])], (timeoutS + 50) * 1000)) as ApplyOutcome,
 })
 
 const UNLOCK_ASK = {
@@ -840,7 +842,7 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
     case 'rft_set_notebook':
       return setNotebook(io, loaded, await notebookEnv($, h), String(i.id ?? ''), { cells: i.cells, file: i.file, replace: i.replace })
     case 'rft_run_notebook':
-      return runNotebook(io, loaded, await notebookEnv($, h), String(i.id ?? ''), { timeout: i.timeout })
+      return runNotebook(io, loaded, await notebookEnv($, h), String(i.id ?? ''), { timeout: i.timeout, record: i.record })
     case 'rft_move_node':
       return unlocking($, unlock => moveNode(io, loaded, String(i.id ?? ''), String(i.parent ?? ''), today(), str(i.why), unlock), view.unlock)
     case 'rft_set_refs':
@@ -1566,9 +1568,10 @@ async function datesEdit($: EngineInterface, e: Record<string, unknown>): Promis
 }
 
 /**
- * Why Claude may not make this tool call, or null: it would change a note's `reproduced:`, which
- * only rft_run_notebook writes (an Edit or Write of a note in the vault that adds, changes or
- * removes the field; a shell command that writes, holds a `reproduced:` line and names the vault or a note).
+ * Why Claude may not make this tool call, or null: it would change a note's `reproduced:`, or the
+ * table of RESULTS in its Result, which only a notebook's run writes (an Edit or Write of a note
+ * in the vault that adds, changes or removes either; a shell command that writes, holds a
+ * `reproduced:` line or an rft-results one, and names the vault or a note).
  */
 async function reproducedEdit($: EngineInterface, e: Record<string, unknown>): Promise<string | null> {
   const tool = String(e.tool)
@@ -1578,13 +1581,14 @@ async function reproducedEdit($: EngineInterface, e: Record<string, unknown>): P
   const vault = resolvePath(s.vault, '.')
   if (tool === 'Bash') {
     const cmd = String(e.command ?? '')
-    if (!REPRODUCED_LINE.test(cmd)) return null
+    const text = REPRODUCED_LINE.test(cmd) ? reproducedEditText : cmd.includes('rft-results') ? resultsBlockEditText : null
+    if (!text) return null
     const t = await shellTouches($, cmd, vault, Object.values(s.nodes))
-    if (t.notes.length || t.inVault) return reproducedEditText(t.notes[0] ?? null)
+    if (t.notes.length || t.inVault) return text(t.notes[0] ?? null)
     if (!t.script) return null
     const named = namedIn(cmd, Object.values(s.nodes))
     const folder = vault.split('/').pop()
-    return named || cmd.includes(vault) || (folder && cmd.includes(`${folder}/`)) ? reproducedEditText(named) : null
+    return named || cmd.includes(vault) || (folder && cmd.includes(`${folder}/`)) ? text(named) : null
   }
   const raw = e.file_path
   if (typeof raw !== 'string' || !raw.endsWith('.md')) return null
@@ -1593,8 +1597,10 @@ async function reproducedEdit($: EngineInterface, e: Record<string, unknown>): P
   let before = ''
   try { before = await $.fs.read(abs) } catch { /* a new file */ }
   const after = afterCall(tool, e, before)
-  if (after === null || !changesReproduced(before, after)) return null
-  return reproducedEditText(Object.values(s.nodes).find(x => join(vault, x.path) === abs) ?? null)
+  if (after === null) return null
+  const n = Object.values(s.nodes).find(x => join(vault, x.path) === abs) ?? null
+  if (changesReproduced(before, after)) return reproducedEditText(n)
+  return changesResultsBlock(before, after) ? resultsBlockEditText(n) : null
 }
 
 /**
