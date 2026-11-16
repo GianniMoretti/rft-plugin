@@ -86,6 +86,11 @@ MAX_CMD = 10_000
 MAX_LABEL = 120
 MAX_GPUS = 64
 MAX_LOG_LINES = 500
+TAIL_BYTES = 65_536  # the end of a log the monitor first gets, from a line's start
+CHUNK_BYTES = 262_144  # the most of a log the monitor gets in one read as it follows; further behind, it starts again from the end
+MAX_TAIL_READ = 4_000_000  # the most of a log read to find its last lines (a progress bar redrawn without a newline is one long line)
+MAX_ROW = 400  # a line of a log as Claude reads it, cut to its end (where a redrawn bar's last state is)
+ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
 RUNS = "runs"  # the output folders' root when a job names none, at the top of its repo (or folder)
 RUN_RECORD = "rft-run.json"  # each output folder's copy of its job's record
 PATCH = "code.patch"
@@ -264,8 +269,10 @@ def code_sig(state: dict) -> str | None:
     return hashlib.sha1(state["commit"].encode() + b"\0" + state.get("diff", b"")).hexdigest()[:12]
 
 
-def _tail_lines(path: Path, lines: int) -> list[str]:
-    """The last `lines` lines of a file; a progress bar's redraws (\\r) count as its last state."""
+def _tail_lines(path: Path, lines: int, row_max: int | None = None) -> list[str]:
+    """The last `lines` lines of a file, from its last MAX_TAIL_READ bytes at most; a progress bar's
+    redraws (\\r) count as its last state, colour codes are dropped, and a line longer than
+    `row_max` keeps its end."""
     try:
         with open(path, "rb") as f:
             f.seek(0, os.SEEK_END)
@@ -274,13 +281,52 @@ def _tail_lines(path: Path, lines: int) -> list[str]:
             while True:
                 f.seek(size - take)
                 data = f.read(take)
-                if take >= size or data.count(b"\n") > lines:
+                if take >= size or take >= MAX_TAIL_READ or data.count(b"\n") > lines:
                     break
-                take = min(size, take * 4)
+                take = min(size, take * 4, MAX_TAIL_READ)
     except FileNotFoundError:
         return []
-    rows = [r.split("\r")[-1] for r in data.decode("utf-8", "replace").rstrip("\n").split("\n")]
+    rows = [ANSI.sub("", r.rstrip("\r").split("\r")[-1]) for r in data.decode("utf-8", "replace").rstrip("\n").split("\n")]
+    if take < size and rows:
+        rows[0] = "…" + rows[0][-(row_max or MAX_ROW):]  # cut where the read began
+    if row_max:
+        rows = [r if len(r) <= row_max else "…" + r[-row_max:] for r in rows]
     return rows[-lines:]
+
+
+def _utf8_end(data: bytes) -> int:
+    """How much of `data` holds whole UTF-8 characters: a character cut at its end waits for the next read."""
+    i = len(data) - 1
+    while i >= 0 and len(data) - i <= 4 and data[i] & 0xC0 == 0x80:
+        i -= 1
+    if i < 0:
+        return len(data)
+    lead = data[i]
+    need = 1 if lead < 0x80 else 2 if lead >> 5 == 0b110 else 3 if lead >> 4 == 0b1110 else 4 if lead >> 3 == 0b11110 else 1
+    return len(data) if len(data) - i >= need else i
+
+
+def read_log(path: Path, start: int | None = None) -> dict:
+    """A piece of a log for the monitor to follow, by byte: from `start` to the end, or, with no
+    start (or one the log no longer has: it started anew, or more than CHUNK_BYTES behind), its last
+    TAIL_BYTES from a line's start (`reset`). {"text", "start", "end", "size", "reset"}: `end` is
+    where the next read starts; a character cut in two waits for it."""
+    try:
+        f = open(path, "rb")
+    except FileNotFoundError:
+        return {"text": "", "start": 0, "end": 0, "size": 0, "reset": start is None or start != 0}
+    with f:
+        size = os.fstat(f.fileno()).st_size
+        reset = start is None or start < 0 or start > size or size - start > CHUNK_BYTES
+        begin = max(0, size - TAIL_BYTES) if reset else start
+        f.seek(begin)
+        data = f.read(size - begin)
+    if reset and begin > 0:
+        nl = data.find(b"\n")
+        if 0 <= nl < len(data) - 1:
+            data, begin = data[nl + 1:], begin + nl + 1
+    data = data[:_utf8_end(data)]
+    return {"text": data.decode("utf-8", "replace"), "start": begin, "end": begin + len(data), "size": size, "reset": reset}
 
 
 def error_of(rows: list[str]) -> str:
@@ -778,7 +824,22 @@ class Queue:
             raise NotFound(f"no job {jid}")
         if not j.get("log"):
             return ""
-        return "\n".join(_tail_lines(self.dir / j["log"], max(1, min(int(lines), MAX_LOG_LINES))))
+        return "\n".join(_tail_lines(self.dir / j["log"], max(1, min(int(lines), MAX_LOG_LINES)), MAX_ROW))
+
+    def log_path(self, jid: str) -> Path | None:
+        """Where a job's output is kept; None before it started."""
+        j = self.find(jid)
+        if j is None:
+            raise NotFound(f"no job {jid}")
+        return self.dir / j["log"] if j.get("log") else None
+
+    def read_log(self, jid: str, start: int | None = None) -> dict:
+        """A piece of a job's output for the monitor to follow (read_log), with the job's state."""
+        j = self.find(jid)
+        if j is None:
+            raise NotFound(f"no job {jid}")
+        got = read_log(self.dir / j["log"], start) if j.get("log") else {"text": "", "start": 0, "end": 0, "size": 0, "reset": True}
+        return {"id": jid, "state": j["state"], **got}
 
 
 # ---------------------------------------------------------------- the runner

@@ -631,6 +631,83 @@ class ServerQueueTest(unittest.TestCase):
         status, _ = self.call("GET", "/api/queue/log?id=q99&lines=10")
         self.assertEqual(status, 404)
 
+    def test_the_monitor_follows_a_log_by_byte_in_bounded_pieces(self):
+        go = Path(self.qdir.name) / "go"
+        # a progress bar redrawn without newlines for a while: one line of more than a megabyte
+        (Path(self.qdir.name) / "bar.py").write_text('import sys\nfor i in range(40000):\n    sys.stdout.write("\\rstep %6d |" % i + "#" * 20)\nprint()\n')
+        cmd = f"python3 bar.py; echo after; while [ ! -e {go} ]; do sleep 0.05; done; echo last-words"
+        jid = self.q.add("E16", cmd, self.qdir.name, gpus=0)["id"]
+        self.q.tick()
+        self.assertTrue(wait_until(lambda: "after" in self.q.log(jid, 5).splitlines(), self.q.tick))
+        status, first = self.call("GET", f"/api/queue/log?id={jid}")
+        self.assertEqual(status, 200)
+        self.assertGreater(first["size"], 1_000_000)
+        self.assertTrue(first["reset"])
+        self.assertLessEqual(len(first["text"].encode()), rft_queue.TAIL_BYTES)  # the end, not the whole file
+        self.assertTrue(first["text"].rstrip().endswith("after"))
+        self.assertEqual((first["end"], first["state"]), (first["size"], "running"))
+        # then only what came since
+        go.touch()
+        self.assertTrue(wait_until(lambda: self.q.find(jid)["state"] == "done", self.q.tick))
+        status, more = self.call("GET", f"/api/queue/log?id={jid}&from={first['end']}")
+        self.assertEqual((status, more["reset"], more["text"], more["state"]), (200, False, "last-words\n", "done"))
+        status, same = self.call("GET", f"/api/queue/log?id={jid}&from={more['end']}")
+        self.assertEqual((same["text"], same["end"]), ("", more["end"]))
+        # what Claude reads: the bar's last state, cut short, not a megabyte
+        tail = self.q.log(jid, 5)
+        self.assertLess(len(tail), 2 * rft_queue.MAX_ROW)
+        self.assertIn("step  39999", tail)
+        # the whole log, as a file to save, with the key only
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.request("GET", f"/api/queue/log?id={jid}&raw=1", headers={"Host": f"127.0.0.1:{self.port}", "X-RFT-Token": KEY})
+        r = c.getresponse()
+        body = r.read()
+        c.close()
+        self.assertEqual((r.status, r.getheader("Content-Disposition")), (200, f'attachment; filename="{jid}.log"'))
+        self.assertEqual(len(body), more["size"])
+        self.assertEqual(self.call("GET", f"/api/queue/log?id={jid}&raw=1", key=None)[0], 403)
+
+    def test_a_log_that_cannot_be_read_says_why_instead_of_dropping_the_connection(self):
+        jid = self.q.add("E16", "true", self.qdir.name, gpus=0)["id"]
+        self.assertTrue(wait_until(lambda: self.q.find(jid)["state"] == "done", self.q.tick))
+        broken = lambda *a, **k: (_ for _ in ()).throw(ValueError("odd bytes"))  # noqa: E731
+        self.q.read_log = broken
+        status, r = self.call("GET", f"/api/queue/log?id={jid}")
+        self.assertEqual(status, 500)
+        self.assertIn("ValueError: odd bytes", r["error"])
+
+
+class ReadLogTest(unittest.TestCase):
+    """rft_queue.read_log: a log in bounded pieces, by byte."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "q1.log"
+
+    def test_a_piece_never_cuts_a_character_and_a_log_that_started_anew_is_read_from_its_end(self):
+        self.path.write_bytes("loss 0.5 → 0.4\n".encode())
+        whole = rft_queue.read_log(self.path, 0)
+        cut = len("loss 0.5 ".encode()) + 1  # in the middle of →
+        with open(self.path, "wb") as f:
+            f.write("loss 0.5 → 0.4\n".encode()[:cut])
+        got = rft_queue.read_log(self.path, 0)
+        self.assertEqual((got["text"], got["end"]), ("loss 0.5 ", len("loss 0.5 ".encode())))
+        self.path.write_bytes("loss 0.5 → 0.4\n".encode())
+        rest = rft_queue.read_log(self.path, got["end"])
+        self.assertEqual(rest["text"], "→ 0.4\n")
+        self.assertEqual(rest["end"], whole["end"])
+        self.path.write_bytes(b"new\n")  # truncated: started anew
+        self.assertEqual((rft_queue.read_log(self.path, whole["end"])["text"], rft_queue.read_log(self.path, whole["end"])["reset"]), ("new\n", True))
+        self.assertEqual(rft_queue.read_log(Path(self.tmp.name) / "none.log", None)["text"], "")
+
+    def test_far_behind_it_starts_again_from_the_end(self):
+        self.path.write_bytes(b"x" * 10 + b"\n" + b"line\n" * 100_000)
+        got = rft_queue.read_log(self.path, 5)
+        self.assertTrue(got["reset"])
+        self.assertTrue(got["text"].startswith("line\n"))  # from a line's start
+        self.assertLessEqual(len(got["text"]), rft_queue.TAIL_BYTES)
+
 
 if __name__ == "__main__":
     unittest.main()

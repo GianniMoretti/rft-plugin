@@ -718,7 +718,10 @@ main.artifact-open:has(#drawer:not([hidden])) #concept-canvas { width: calc(100%
 .jobs-actions button.danger { border-color: var(--dropped); color: var(--dropped); }
 .jobs-details { margin-top: 4px; font-size: 0.9em; }
 .jobs-cmd { display: block; white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.jobs-log { margin: 4px 0 0; max-height: 220px; overflow: auto; padding: 6px 8px; border-radius: 6px; background: var(--bg);
+.jobs-log-bar { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 4px; }
+.jobs-log-bar button { padding: 1px 7px; }
+.jobs-log-err { margin-top: 3px; color: var(--dropped); overflow-wrap: anywhere; }
+.jobs-log { margin: 4px 0 0; height: min(calc(300px * var(--font-scale)), 45vh); min-height: 80px; resize: vertical; overflow: auto; padding: 6px 8px; border-radius: 6px; background: var(--bg);
   border: 1px solid var(--line); font: calc(11.5px * var(--font-scale))/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .jobs-foot { display: flex; align-items: center; gap: 6px; padding: 4px 10px 5px 12px; border-top: 1px solid var(--line); font-size: 0.88em; color: var(--muted); }
 #jobs-msg { flex: 1; min-width: 0; }

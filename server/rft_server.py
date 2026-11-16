@@ -1589,22 +1589,62 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 self.wfile.write(data)
 
         def _queue_log(self, q: dict, head_only: bool):
-            """GET api/queue/log?id=<job>&lines=<n>: the end of a job's output, only for the page carrying
-            the key (X-RFT-Token, a header no other page can send): a log may hold what a note does not."""
+            """GET api/queue/log?id=<job>: a job's output, only for the page carrying the key
+            (X-RFT-Token, a header no other page can send): a log may hold what a note does not.
+            The monitor follows it by byte, in bounded pieces (rft_queue.read_log): with no `from`,
+            its last 64 KB from a line's start; with `from=<end of the last piece>`, what came since.
+            `raw=1`: the whole log, as a file to save. `lines=<n>`: its last lines (older pages).
+            Whatever goes wrong is answered as an error, never a dropped connection."""
             given = self.headers.get("X-RFT-Token") or ""
             if not token or not secrets.compare_digest(given, token):
                 return self._json(403, {"error": "the key is missing or out of date: open the address /rft printed"}, head_only)
             jid = (q.get("id") or [""])[0]
+            one = lambda k: (q.get(k) or [""])[0]  # noqa: E731
             try:
-                lines = int((q.get("lines") or ["40"])[0])
-            except ValueError:
-                lines = 40
-            try:
+                if one("raw") == "1":
+                    return self._log_file(jid, head_only)
+                if "from" in q or "lines" not in q:
+                    try:
+                        start = int(one("from")) if one("from") else None
+                    except ValueError:
+                        start = None
+                    return self._json(200, vault.queue.read_log(jid, start), head_only)
+                try:
+                    lines = int(one("lines"))
+                except ValueError:
+                    lines = 40
                 return self._json(200, {"id": jid, "text": vault.queue.log(jid, lines)}, head_only)
             except rft_queue.NotFound as err:
                 return self._json(404, {"error": str(err)}, head_only)
             except (rft_queue.QueueError, OSError) as err:
                 return self._json(409, {"error": str(err)}, head_only)
+            except Exception as err:  # noqa: BLE001 - said to the page, which shows it, instead of a dropped connection
+                return self._json(500, {"error": f"the log was not read: {type(err).__name__}: {err}"}, head_only)
+
+        def _log_file(self, jid: str, head_only: bool):
+            """A job's whole output as a file to save, sent in pieces as it is on disk now."""
+            path = vault.queue.log_path(jid)
+            if path is None or not path.is_file():
+                return self._json(404, {"error": f"{jid} has no output yet"}, head_only)
+            with open(path, "rb") as f:
+                size = os.fstat(f.fileno()).st_size
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(size))
+                self.send_header("Content-Disposition", f'attachment; filename="{jid}.log"')
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Content-Security-Policy", PAGE_CSP)
+                self.end_headers()
+                if head_only:
+                    return
+                left = size
+                while left > 0:
+                    data = f.read(min(1 << 20, left))
+                    if not data:
+                        break
+                    self.wfile.write(data)
+                    left -= len(data)
 
         def _json(self, status: int, obj, head_only=False):
             self._send(status, json.dumps(obj, ensure_ascii=False).encode(), "application/json; charset=utf-8", head_only)

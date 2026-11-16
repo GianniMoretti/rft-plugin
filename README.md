@@ -402,7 +402,12 @@ session brings it back).
     job (the running ones go on); Claude can cancel, retry, pause and resume too, when you ask. Untick a GPU to keep it out of the queue (for your own work).
   - **History**: every job that ended, newest first, with its experiment, how it ended (done,
     failed with its exit code, cancelled), how long it ran, and **Retry** (first in line again).
-  **Log** / **Command** on a job shows its command and the end of its output. The experiment ids
+  **Log** / **Command** on a job shows its command, the code it ran and its output folder, and its
+  output: the last 64 KB, then what it writes as it comes (only the new bytes cross an SSH tunnel),
+  in a box that follows the end unless you scroll up to read, keeps its place across refreshes, and
+  can be made taller; a progress bar shows its last state, colour codes are dropped. **Whole log**
+  saves the whole output as a file. The history says how each notebook run went (wrote the
+  numbers, reproduced, differs, failed). The experiment ids
   open their notes in the drawer. Watching, reordering and retrying cost no model turn and no token.
 - **Order**: strict. The first waiting job that needs GPUs takes them once enough are free; nothing
   behind it starts first (move it down to let smaller jobs pass). A job that takes no GPU never

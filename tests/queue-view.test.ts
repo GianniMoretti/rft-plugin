@@ -6,7 +6,13 @@ import { describe, expect, test } from 'claude-code/testing'
 import '../web/queue.js'
 
 type Job = { id: string; exp: string; state: string; exit?: number | null; reason?: string; started?: number; ended?: number }
+type Log = { lines: string[]; partial: string; cut: boolean; next: number }
 type Api = {
+  notebookWord: (j: Job & { kind?: string; outcome?: Record<string, unknown>; error?: string }) => string
+  cleanLine: (line: string) => string
+  newLog: () => Log
+  feedLog: (log: Log, piece: { text: string; start: number; end: number; reset?: boolean }) => Log
+  logText: (log: Log) => string
   duration: (s: number) => string
   moveOp: (order: string[], id: string, to: number) => { id: string; before: string | null }
   gpuState: (g: Record<string, unknown>, jobs: Job[]) => { kind: string; text: string; exp: string | null }
@@ -56,5 +62,34 @@ describe('queue monitor', () => {
     const b = Q.badge({ jobs: [{ id: 'q1', exp: 'E14', state: 'running' }, { id: 'q3', exp: 'E16', state: 'pending' }, { id: 'q4', exp: 'E17', state: 'pending' }], paused: true })
     expect([b.count, b.running, b.waiting]).toEqual([3, 1, 2])
     expect(b.label).toBe('Experiment queue: 1 running, 2 waiting (paused)')
+  })
+
+  test('a log followed piece by piece: a bar redrawn across two reads ends on its last state, colour codes dropped', () => {
+    let log = Q.feedLog(Q.newLog(), { text: 'epoch 1\ntrain  10%|#   \rtrain  5', start: 0, end: 30, reset: true })
+    expect(Q.logText(log)).toBe('epoch 1\ntrain  5')
+    expect(log.next).toBe(30)
+    log = Q.feedLog(log, { text: '0%|#####\rtrain 100%|##########\n\x1b[32mval acc 0.91\x1b[0m\r\n', start: 30, end: 90 })
+    expect(Q.logText(log)).toBe('epoch 1\ntrain 100%|##########\nval acc 0.91')
+    expect(log.next).toBe(90)
+    // the first piece of a long log starts within it; a reset (the log started anew) starts again
+    expect(Q.logText(Q.feedLog(Q.newLog(), { text: 'last line\n', start: 5000, end: 5010, reset: true }))).toBe('… earlier output: Whole log\nlast line')
+    expect(Q.logText(Q.feedLog(log, { text: 'new run\n', start: 0, end: 8, reset: true }))).toBe('new run')
+    expect(Q.cleanLine('a\rb\rc\r')).toBe('c')
+  })
+
+  test('a log keeps its last lines in the page; the earlier ones are in the whole log', () => {
+    const text = Array.from({ length: 3500 }, (_, i) => `step ${i}`).join('\n') + '\n'
+    const log = Q.feedLog(Q.newLog(), { text, start: 0, end: text.length, reset: true })
+    expect(log.lines).toHaveLength(3000)
+    expect(log.lines[0]).toBe('step 500')
+    expect(log.cut).toBe(true)
+  })
+
+  test("how an experiment's notebook run went, in the history", () => {
+    const nb = { id: 'q4', exp: 'E08', state: 'done', kind: 'notebook' }
+    expect(Q.notebookWord({ ...nb, outcome: { state: 'ok', recorded: true } })).toBe('wrote the numbers in its Result')
+    expect(Q.notebookWord({ ...nb, outcome: { state: 'ok' } })).toBe('reproduced its Result')
+    expect(Q.notebookWord({ ...nb, outcome: { state: 'differs' } })).toBe('differs from its Result')
+    expect(Q.notebookWord({ ...nb, outcome: { state: 'failed' }, error: "Traceback (most recent call last):\nKeyError: 'acc'" })).toBe("failed: KeyError: 'acc'")
   })
 })

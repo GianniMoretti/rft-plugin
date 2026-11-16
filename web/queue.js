@@ -56,6 +56,51 @@
 
   const ranFor = j => (j.started && j.ended ? ` after ${duration(j.ended - j.started)}` : j.state === 'cancelled' && !j.started ? ' before it started' : '')
 
+  /** How the run of an experiment's notebook went (the runner queues it after the experiment's jobs), as hooks/lib/queue.ts says it. */
+  function notebookWord(j) {
+    const o = j.outcome
+    const err = String(j.error || '').trim().split('\n').pop()
+    if (!o) return j.state === 'done' ? 'ran' : endWord(j)
+    if (o.state === 'failed') return `failed${err ? `: ${err}` : ''}`
+    if (o.recorded) return 'wrote the numbers in its Result'
+    if (o.state === 'ok') return 'reproduced its Result'
+    if (o.state === 'differs') return 'differs from its Result'
+    return `ran (${o.why || 'nothing checked'})`
+  }
+
+  // ---------------------------------------------------------------- a log, followed piece by piece
+
+  const LOG_LINES = 3000 // the lines a log keeps in the page; earlier ones are in the whole log
+  // colour codes and cursor moves, which a terminal reads and a page shows as junk
+  const ANSI = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07/g
+
+  /** A line as a terminal leaves it: a progress bar's redraws (\r) end on its last state, colour codes dropped. */
+  const cleanLine = line => line.replace(/\r+$/, '').split('\r').pop().replace(ANSI, '')
+
+  /** A log as the page keeps it: its lines, the line still being written, whether earlier ones were left out. */
+  const newLog = () => ({ lines: [], partial: '', cut: false, next: -1 })
+
+  /**
+   * The log once a piece read from the server is added (api/queue/log: {text, start, end, reset}):
+   * whole lines join `lines`, the last one waits in `partial` until its newline comes (so a bar
+   * redrawn across two reads ends on its last state); `reset` starts it again from that piece.
+   */
+  function feedLog(log, piece) {
+    const out = piece.reset ? { ...newLog(), cut: piece.start > 0 } : { ...log, lines: log.lines.slice() }
+    const parts = (out.partial + (piece.text || '')).split('\n')
+    out.partial = parts.pop()
+    for (const p of parts) out.lines.push(cleanLine(p))
+    if (out.lines.length > LOG_LINES) {
+      out.lines.splice(0, out.lines.length - LOG_LINES)
+      out.cut = true
+    }
+    out.next = piece.end
+    return out
+  }
+
+  /** The text the page shows for a log. */
+  const logText = log => [...(log.cut ? ['… earlier output: Whole log'] : []), ...log.lines, ...(log.partial ? [cleanLine(log.partial)] : [])].join('\n')
+
   /** The button's badge and label: how many jobs run and wait. */
   function badge(v) {
     const running = v.jobs.filter(j => j.state === 'running').length
@@ -84,7 +129,8 @@
     let view = null
     let tab = store.get('jobsTab', 'queue') === 'history' ? 'history' : 'queue'
     const shown = new Set() // the jobs whose command and log are unfolded
-    const logs = new Map() // their logs as last read
+    // their logs: what was read so far, its box (kept across redraws, so its scroll stays) and the last error
+    const logs = new Map()
     let armed = null // a cancel waiting for its second press: { id, until }
     let dragging = null
     let timer = 0
@@ -120,7 +166,14 @@
           return true
         }
         view = got
-        for (const id of shown) if (view.jobs.some(j => j.id === id && j.state === 'running')) readLog(id)
+        // an open log follows its job while it runs, and gets its last lines once it has ended
+        for (const id of shown) {
+          const j = view.jobs.find(x => x.id === id) || view.history.find(x => x.id === id)
+          const l = logs.get(id)
+          if (!j || j.state === 'pending' || !l) continue
+          if (j.state === 'running') readLog(id)
+          else if (!l.final) { l.final = true; readLog(id) }
+        }
         if (dragging) showBadge()
         else draw()
       } catch (e) {
@@ -147,19 +200,88 @@
       await load()
     }
 
+    /** A job's log in the page: what was read, its box, and its error; made the first time it is shown. */
+    function logOf(id) {
+      let l = logs.get(id)
+      if (!l) {
+        const box = el('pre', { class: 'jobs-log', tabindex: '0', 'aria-label': `The output of ${id}` })
+        l = { log: newLog(), box, error: '', stick: true, top: 0, busy: false }
+        // following the end, unless the user scrolled up to read
+        box.addEventListener('scroll', () => {
+          if (!box.isConnected) return
+          l.stick = box.scrollTop + box.clientHeight >= box.scrollHeight - 8
+          l.top = box.scrollTop
+        }, { passive: true })
+        logs.set(id, l)
+      }
+      return l
+    }
+
+    /** Shows a log in its box, at the end when it follows, else where the user left it. */
+    function paint(l) {
+      const text = l.log.next < 0 && !l.error ? 'Reading…' : (logText(l.log) || 'No output yet.')
+      if (l.box.textContent !== text) l.box.textContent = text
+      l.box.scrollTop = l.stick ? l.box.scrollHeight : l.top
+    }
+
+    /** Reads what a job wrote since the last read (all of its last 64 KB the first time). */
     async function readLog(id) {
+      const l = logOf(id)
       if (!canWrite()) {
-        logs.set(id, 'A job’s output needs the key: open the address /rft printed (it ends in ?token=…).')
+        l.error = 'A job’s output needs the key: open the address /rft printed (it ends in ?token=…).'
+        if (shown.has(id) && !dragging) draw()
         return
       }
+      if (l.busy) return
+      l.busy = true
+      const from = l.log.next >= 0 ? `&from=${l.log.next}` : ''
       try {
-        const res = await fetch(`api/queue/log?id=${encodeURIComponent(id)}&lines=60`, { cache: 'no-store', headers: { 'X-RFT-Token': key() } })
-        const got = await res.json().catch(() => ({}))
-        logs.set(id, res.ok ? (got.text || 'No output yet.') : `Not read: ${got.error || res.status}.`)
+        const res = await fetch(`api/queue/log?id=${encodeURIComponent(id)}${from}`, { cache: 'no-store', headers: { 'X-RFT-Token': key() } })
+        const got = await res.json().catch(() => null)
+        if (res.ok && got && typeof got.end === 'number') {
+          l.log = feedLog(l.log, got)
+          l.error = ''
+        } else if (res.ok && got && typeof got.text === 'string') {
+          // a server started before logs were followed: its last lines each time
+          l.log = feedLog(newLog(), { text: got.text, start: 0, end: 0, reset: true })
+          l.error = 'This server shows only the last lines: restart it to follow the log (in the Claude session, /rft stop, then /rft; the address stays the same).'
+        } else {
+          l.error = `Not read: the server answered ${res.status}${got && got.error ? `: ${got.error}` : ''}.`
+        }
       } catch (e) {
-        logs.set(id, 'Not read: the server is not answering.')
+        l.error = 'Not read: no answer from the server. If the light at the top is not green, it has stopped: it runs with the Claude session that ran /rft (run /rft again), and over SSH it needs the tunnel to its port.'
       }
-      if (shown.has(id) && !dragging) draw()
+      l.busy = false
+      if (shown.has(id) && !dragging) {
+        const err = l.box.parentNode && l.box.parentNode.querySelector('.jobs-log-err')
+        if (err) {
+          err.textContent = l.error
+          err.hidden = !l.error
+          paint(l)
+        } else draw()
+      }
+    }
+
+    /** Saves a job's whole log as a file (it needs the key, so it is fetched, then handed to the browser). */
+    async function saveLog(id) {
+      setMsg(`Reading ${id}'s whole log…`)
+      try {
+        const res = await fetch(`api/queue/log?id=${encodeURIComponent(id)}&raw=1`, { cache: 'no-store', headers: { 'X-RFT-Token': key() } })
+        if (!res.ok) {
+          const got = await res.json().catch(() => ({}))
+          setMsg(`Not saved: ${got.error || `the server answered ${res.status}`}.`, true)
+          return
+        }
+        const url = URL.createObjectURL(await res.blob())
+        const a = el('a', { href: url, download: `${id}.log` })
+        document.body.append(a)
+        a.click()
+        a.remove()
+        setTimeout(() => URL.revokeObjectURL(url), 10000)
+        setMsg('')
+      } catch (e) {
+        setMsg('Not saved: no answer from the server.', true)
+      }
     }
 
     function showBadge() {
@@ -209,8 +331,10 @@
     }
 
     function toggle(j) {
-      if (shown.has(j.id)) shown.delete(j.id)
-      else {
+      if (shown.has(j.id)) {
+        shown.delete(j.id)
+        logs.delete(j.id) // read anew, from its end, the next time
+      } else {
         shown.add(j.id)
         if (j.state !== 'pending') readLog(j.id)
       }
@@ -219,11 +343,26 @@
 
     function details(j) {
       if (!shown.has(j.id)) return null
-      const by = j.by === 'user' ? 'you' : 'Claude'
-      return el('div', { class: 'jobs-details' },
+      const by = j.by === 'user' ? 'you' : j.by === 'runner' ? `the runner, after ${j.after || 'its jobs'}` : 'Claude'
+      const code = j.commit ? `${j.repo ? `${j.repo} ` : ''}@ ${j.commit}${j.branch ? ` (${j.branch})` : ''}${j.patch ? ', with its uncommitted changes (code.patch)' : ''}${j.changed ? ' · the code moved while it ran' : ''}` : ''
+      if (j.state === 'pending') {
+        return el('div', { class: 'jobs-details' },
+          el('code', { class: 'jobs-cmd', text: `$ ${j.cmd}` }),
+          el('div', { class: 'muted', text: `in ${j.cwd} · queued by ${by}${j.added ? ` ${when(j.added)}` : ''}${j.retry_of ? ` · retry of ${j.retry_of}` : ''}` }))
+      }
+      const l = logOf(j.id)
+      const box = el('div', { class: 'jobs-details' },
         el('code', { class: 'jobs-cmd', text: `$ ${j.cmd}` }),
         el('div', { class: 'muted', text: `in ${j.cwd} · queued by ${by}${j.added ? ` ${when(j.added)}` : ''}${j.retry_of ? ` · retry of ${j.retry_of}` : ''}${j.reason && j.state !== 'done' ? ` · ${j.reason}` : ''}` }),
-        j.state !== 'pending' ? el('pre', { class: 'jobs-log', text: logs.has(j.id) ? logs.get(j.id) : 'Reading…' }) : null)
+        code ? el('div', { class: 'muted', text: `code: ${code}` }) : null,
+        j.out ? el('div', { class: 'muted', text: `outputs: ${j.out}` }) : null,
+        el('div', { class: 'jobs-log-bar' },
+          el('span', { class: 'muted', text: j.state === 'running' ? 'Its output, as it comes' : 'Its output' }),
+          canWrite() ? el('button', { type: 'button', title: 'Save its whole output as a file', onclick: () => saveLog(j.id) }, 'Whole log') : null),
+        l.box,
+        el('div', { class: 'jobs-log-err', role: 'status', hidden: !l.error, text: l.error }))
+      paint(l)
+      return box
     }
 
     function cancelBtn(j) {
@@ -322,7 +461,8 @@
     function historyRows() {
       if (!view.history.length) return [el('p', { class: 'muted jobs-empty', text: 'No job has ended yet. Each one that does is kept here, with the experiment it ran and how it ended.' })]
       return view.history.map(j => row(j, {
-        meta: `${endWord(j)}${ranFor(j)}${j.ended ? ` · ${when(j.ended)}` : ''}${j.gpu_ids && j.gpu_ids.length ? ` · ${gpuList(j.gpu_ids)}` : ''}`,
+        meta: `${j.kind === 'notebook' ? `notebook ${notebookWord(j)}` : endWord(j)}${ranFor(j)}${j.ended ? ` · ${when(j.ended)}` : ''}${j.gpu_ids && j.gpu_ids.length ? ` · ${gpuList(j.gpu_ids)}` : ''}` +
+          `${j.state === 'failed' && j.error ? ` · ${String(j.error).trim().split('\n').pop()}` : ''}`,
         actions: [moreBtn(j), canWrite() ? el('button', { type: 'button', title: 'Queue it again, first in line', onclick: () => change({ op: 'retry', id: j.id }, `${j.id} queued again`) }, 'Retry') : null],
       }))
     }
@@ -348,6 +488,8 @@
       const top = list.scrollTop
       list.replaceChildren(...(tab === 'queue' ? queueRows() : historyRows()))
       list.scrollTop = top
+      // a log's box moved into the new rows: back at its end, or where the user left it
+      for (const l of logs.values()) if (l.box.isConnected) l.box.scrollTop = l.stick ? l.box.scrollHeight : l.top
       if (!canWrite()) setMsg('Read-only: open the address /rft printed (it ends in ?token=…) to change the queue.')
     }
 
@@ -397,5 +539,5 @@
     })
   }
 
-  root.RftQueue = { duration, moveOp, gpuState, endWord, badge, when, mount }
+  root.RftQueue = { duration, moveOp, gpuState, endWord, notebookWord, cleanLine, newLog, feedLog, logText, badge, when, mount }
 })(typeof globalThis !== 'undefined' ? globalThis : window)
