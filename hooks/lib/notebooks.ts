@@ -240,7 +240,9 @@ export async function runNotebook(io: Io, loaded: Loaded, env: NotebookEnv, ref:
     const missing = checks.filter(c => !c.found)
     lines.push(`${n.name}: ${missing.length ? `differs, ran${took}` : `ok, reproduced${took}`}${at} (${r.file || n.notebook}).`,
       `RESULTS against its Result: ${listed(checks, true)}.${other}`)
-    if (missing.length) lines.push(`Not in the Result: ${listed(missing, false)}. Fix the notebook, or, if its numbers are right, run it again with record: true, which writes them in the Result's table.`)
+    if (missing.length) lines.push(`Not in the Result: ${listed(missing, false)}. ` + (r.why === 'locked'
+      ? 'It is locked, so a run does not write its Result: fix the notebook, or ask the user to correct the Result or unlock it.'
+      : 'Fix the notebook, or, if its numbers are right, run it again with record: true, which writes them in the Result\'s table.'))
   }
   const saved = savedText(r.saved)
   if (saved) lines.push(saved)

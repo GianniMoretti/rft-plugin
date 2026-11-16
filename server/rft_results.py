@@ -207,8 +207,6 @@ def write_atomic(path: Path, data: str | bytes) -> None:
 
 def number_text(v) -> str:
     """A value as RESULTS gives it (the notebook rounds to what the note reports)."""
-    if isinstance(v, float) and v.is_integer() and abs(v) < 1e15:
-        return str(int(v)) if not math.copysign(1, v) < 0 or v != 0 else "0"
     return v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
 
 
@@ -375,10 +373,11 @@ def apply(vault, exp: str, outcome: dict, date: str, record: bool = False, runs:
             state, out["why"] = "unchecked", "no number in RESULTS"
         else:
             has_block = bool(BLOCK_RE.search(result))
-            if record or (not has_block and not numbers_in(result)):
+            if (record or (not has_block and not numbers_in(result))) and (locked and not numbers_in(result)):
+                state, out["why"] = "unchecked", "locked"  # nothing to check against, and not ours to write
+            elif record or (not has_block and not numbers_in(result)):
                 if locked:
-                    state, out["why"] = ("unchecked", "locked") if not result or not has_block else (
-                        "ok" if all(c["found"] for c in checks) else "differs", "locked")
+                    state, out["why"] = "ok" if all(c["found"] for c in checks) else "differs", "locked"
                 else:
                     ran = runs_of(vault, exp, runs)
                     rel = None

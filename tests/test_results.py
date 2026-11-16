@@ -155,6 +155,11 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual((got["state"], got["recorded"], got["why"]), ("unchecked", False, "locked"))
         self.assertNotIn(rft_results.BLOCK_BEGIN, self.text())
         self.assertIn('reproduced: "2026-11-16 unchecked', self.text())
+        # a locked note with numbers of its own is checked against them, never written
+        self.write("Gap 4.1 at 1k and 0.8 at 10k, over 3 seeds.\n", "\nlocked: true")
+        got = rft_results.apply(self.vault, "E02", outcome(results={"gap_1k": 4.2, "gap_10k": 0.8, "seeds": 3}), "2026-11-16", record=True)
+        self.assertEqual((got["state"], got["recorded"], got["why"]), ("differs", False, "locked"))
+        self.assertNotIn(rft_results.BLOCK_BEGIN, self.text())
 
     def test_a_failed_run_and_a_run_with_no_results(self):
         self.write("")
