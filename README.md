@@ -430,7 +430,7 @@ session brings it back).
   metric counts as one. `rft_jobs` gives Claude the same in a line. How to write a job so the
   monitor reads it well is just below.
 - **The waiting jobs fold** into one line ("▸ 3 waiting: q11 E25, …") with a click on their
-  heading ("▾ 3 waiting, in order"), or **▴** at the panel's top left; the GPUs, the running jobs
+  heading ("▾ 3 waiting, in order"); the GPUs, the running jobs
   with their progress and the history stay. The panel remembers it; a click on the line unfolds them.
 - **The run record**: each job is the record of its run. When it starts, the runner records the
   code it runs: the repo, its commit and branch, and its uncommitted changes to tracked files,

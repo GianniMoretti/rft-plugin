@@ -142,7 +142,7 @@
   function mount({ key, store, open, title, every = 3000, idle = 15000 }) {
     const $ = id => document.getElementById(id)
     const btn = $('jobs-toggle'), badgeEl = $('jobs-badge'), panel = $('jobs'), sum = $('jobs-sum')
-    const foldBtn = $('jobs-fold'), pauseBtn = $('jobs-pause'), hosts = $('jobs-hosts'), gpusEl = $('jobs-gpus'), list = $('jobs-list'), msg = $('jobs-msg')
+    const pauseBtn = $('jobs-pause'), hosts = $('jobs-hosts'), gpusEl = $('jobs-gpus'), list = $('jobs-list'), msg = $('jobs-msg')
     const tabs = [...panel.querySelectorAll('[data-jtab]')]
     let view = null
     let tab = store.get('jobsTab', 'queue') === 'history' ? 'history' : 'queue'
@@ -558,11 +558,6 @@
       for (const t of tabs) t.setAttribute('aria-selected', String(t.dataset.jtab === tab))
       $('jobs-nq').textContent = view.jobs.length ? String(view.jobs.length) : ''
       $('jobs-nh').textContent = view.history.length ? `${view.history.length}${failed ? ` · ${failed} failed` : ''}` : ''
-      panel.classList.toggle('compact', compact)
-      foldBtn.textContent = compact ? '▾' : '▴'
-      foldBtn.setAttribute('aria-expanded', String(!compact))
-      foldBtn.title = compact ? 'Unfold the waiting jobs' : 'Fold the waiting jobs into one line (the running ones stay)'
-      foldBtn.setAttribute('aria-label', compact ? 'Unfold the waiting jobs' : 'Fold the waiting jobs')
       const top = list.scrollTop
       list.replaceChildren(...(tab === 'queue' ? queueRows() : historyRows()))
       list.scrollTop = top
@@ -590,11 +585,6 @@
 
     btn.addEventListener('click', () => setOpen(panel.hidden))
     $('jobs-close').addEventListener('click', () => setOpen(false))
-    foldBtn.addEventListener('click', () => {
-      compact = !compact
-      store.set('jobsCompact', compact)
-      draw()
-    })
     // resuming is one press; pausing asks for a second within 4 s, as stopping a job does
     pauseBtn.addEventListener('click', () => {
       if (!view) return

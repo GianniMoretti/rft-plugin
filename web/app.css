@@ -670,7 +670,6 @@ main.artifact-open:has(#drawer:not([hidden])) #concept-canvas { width: calc(100%
 .jobs-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--line); }
 .jobs-head #jobs-sum { flex: 1; font-size: 0.9em; }
 .jobs-head button { padding: 1px 8px; }
-.jobs-head #jobs-fold { padding: 1px 6px; }
 .jobs-head #jobs-pause { min-width: 2.2em; display: inline-flex; align-items: center; justify-content: center; }
 .jobs-head #jobs-pause.danger { border-color: var(--dropped); color: var(--dropped); }
 .jobs-tabs { display: flex; gap: 2px; padding: 6px 10px 0; border-bottom: 1px solid var(--line); }
