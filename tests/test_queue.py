@@ -467,6 +467,12 @@ class NotebookAfterRunsTest(unittest.TestCase):
         nb = self.q.find("q2")
         self.assertEqual((nb["state"], nb["outcome"]["state"], nb["error"].splitlines()[-1]), ("done", "failed", "KeyError: 'acc'"))
 
+    def test_a_notebook_job_may_run_a_concepts_notebook_or_all_of_them_a_run_only_an_experiment(self):
+        j = self.q.add("D00", "true", str(self.work), gpus=0, label="notebooks: run again (3)", by="user", kind="notebook")
+        self.assertEqual((j["exp"], j["kind"], "out" in j), ("D00", "notebook", False))
+        with self.assertRaises(rft_queue.QueueError):
+            self.q.add("D00", "true", str(self.work), gpus=0)
+
     def test_the_command_runs_the_notebook_helper_on_the_vault(self):
         q = rft_queue.Queue(self.vault, probe=FakeGpus(1), wake=lambda: None)
         cmd = q.notebook_cmd("E14")

@@ -57,7 +57,7 @@ export type Job = {
   progress?: Progress
   /** A notebook's run: the run it followed, and how it went (server/rft_results.py's answer, in short). */
   after?: string
-  outcome?: { state?: string; recorded?: boolean; why?: string; reproduced?: string }
+  outcome?: { state?: string; recorded?: boolean; why?: string; reproduced?: string; summary?: string }
 }
 
 /** A tqdm bar as the job last drew it. */
@@ -200,7 +200,8 @@ export function toRecord(v: QueueView, loaded: Loaded): { exp: string; job: Job 
   for (const j of v.history) {
     if (seen.has(j.exp)) continue
     seen.add(j.exp)
-    if (!active.has(j.exp) && loaded.tree.nodes[j.exp]?.status === 'running') out.push({ exp: j.exp, job: j })
+    const n = loaded.tree.nodes[j.exp]
+    if (!active.has(j.exp) && n?.type === 'experiment' && n.status === 'running') out.push({ exp: j.exp, job: j })
   }
   return out
 }
@@ -214,6 +215,7 @@ export const errorLine = (j: Job) => {
 /** How the run of an experiment's notebook went, in a few words. */
 export function notebookWord(j: Job): string {
   const o = j.outcome
+  if (o?.summary) return o.summary
   if (!o) return j.state === 'done' ? 'its notebook ran' : `its notebook's run ${endWord(j)}`
   if (o.state === 'failed') return `its notebook failed${errorLine(j) ? `: ${errorLine(j)}` : ''}`
   if (o.recorded) return 'its notebook wrote the numbers in its Result'

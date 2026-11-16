@@ -34,7 +34,7 @@ import { RECALL_HINT, searchesVault } from './lib/recall'
 import { eagerTools, featuresInUse } from './lib/tools'
 import { matches, shellWrites } from './lib/shell'
 import { Answers, type ThreadJob } from './lib/answers'
-import { applyUpdate, behindLine, planText, planUpdate } from './lib/update'
+import { applyUpdate, behindLine, gapsText, notebookGaps, planText, planUpdate } from './lib/update'
 import type { Feature } from './lib/tools'
 import { SMALL_TREE, mapGaps, mapReport, mapWarnings, projectMap, readDigests, resolveConcept, setDigest, setSummaries } from './lib/map'
 import { ARTIFACTS_DIR, artifactMarks, artifactReport, artifactWarnings, artifactsToWrite, setArtifact } from './lib/artifacts'
@@ -699,7 +699,7 @@ async function registerCommands($: EngineInterface): Promise<void> {
   await attempt('rft-jobs', () => $.command.register({ name: 'rft-jobs', description: 'The experiment queue: GPUs, jobs running and waiting, the ones that ended (no model turn)', argumentHint: '[job or experiment]' }))
   await attempt('rft-summarize', () => $.command.register({ name: 'rft-summarize', description: 'Ask Claude to write the missing one-line note summaries and concept digests (the project map)', argumentHint: '[concept]' }))
   await attempt('rft-artifact', () => $.command.register({ name: 'rft-artifact', description: "Ask Claude to write a concept's artifact, the page of its experiments' results (no concept: every one missing or out of date)", argumentHint: '[concept]' }))
-  await attempt('rft-update', () => $.command.register({ name: 'rft-update', description: 'Bring a vault made by an older version up to this one: shows what it adds; apply writes it', argumentHint: '[apply] [--sections]' }))
+  await attempt('rft-update', () => $.command.register({ name: 'rft-update', description: 'Bring a vault made by an older version up to this one: shows what it adds; apply writes it. notebooks: run every notebook again in the queue and list what is still to write (--write: ask Claude to write it)', argumentHint: '[apply] [--sections] | notebooks [--write] [concept]' }))
   await attempt('rft-view', () => $.command.register({ name: 'rft-view', description: 'Write a standalone HTML view of the tree to <vault>/tree.html' }))
   if (failed.length) reportFailures($, failed)
 }
@@ -1613,6 +1613,45 @@ async function reproducedEdit($: EngineInterface, e: Record<string, unknown>): P
  */
 const literaturePrompt = (subject: string, where: string | null) => `Run a thorough literature search on ${JSON.stringify(subject)} for this project (rft-manual skill, "Literature"). ${where ? `Place it under ${where}.` : 'First find where it belongs in the tree (rft_tree, rft_concepts): the note or concept it is about; if it opens a new field, ask me where to put it before adding a note.'} Use the search tools you have (web search, deep research, arXiv); prefer peer-reviewed papers, well-known preprints and surveys, the most cited and the most recent. Read each source before writing about it; never invent a citation or a result. Write the whole search as ONE literature note, not a note per paper: rft_add_node with type reference, tags ["literature"], title "Literature on <topic>", status done, and sections Search (what was searched, with which tools, on what date), Papers (one entry per key paper, usually 4 to 10, each starting with a "### <year> <first author> — <title>" line, then a link that can be checked (DOI, arXiv id or URL), what it claims and how, its key results as reported (with the table or section), and what it means for this project), Synthesis (what is known, what is open, which setups an experiment could start from) and Relevance (in a line or two). Then call rft_collect_papers with the note's id: it saves the open-access PDFs in the background and links each under its entry. Then give me a short synthesis in the chat and list the directions it suggests, and the papers that deserve a reference note of their own; add those only once I say which.`
 
+/**
+ * /rft-update notebooks [--write] [concept]: brings an older vault's notebooks up to what the plugin
+ * does now. Without --write, at no model turn: every notebook runs again in the queue (one job,
+ * no GPU, one notebook after another, in check mode), so each saves its numbers, figures and
+ * tables, and the report lists, by concept with code, what is still to write. With --write, the
+ * same report, and a prompt asking Claude to write it, concept by concept.
+ */
+async function updateNotebooks($: EngineInterface, words: string[]): Promise<string> {
+  const write = words.includes('--write')
+  const name = words.filter(w => w !== '--write').join(' ').trim()
+  const h = await mustHere($)
+  const loaded = await loadActive(h.io)
+  const c = name ? resolveConcept(loaded.tree, name) : null
+  if (name && !c) return `"${name}" is not a concept: /rft-concepts lists them.`
+  const gaps = await notebookGaps(h.io, loaded, c ?? undefined)
+  if (write) {
+    if (!gaps.byConcept.length) return gapsText(gaps, null, c ?? undefined)
+    pendingPrompts.push(notebooksPrompt(gaps.byConcept.map(g => g.concept.name)))
+    return `${gapsText(gaps, null, c ?? undefined)}\n\nClaude will start in a moment, concept by concept: it writes the missing notebooks from what each repo saved, checks each against its note, writes the concept notebooks, and places their figures and tables on the artifacts. It reads code and outputs, so this is a long, one-off job; /rft-update notebooks --write <concept> does one line of research at a time.`
+  }
+  let queued: string | null = null
+  const all = gaps.experiments.length + gaps.concepts.length
+  if (all) {
+    const vault = resolvePath(h.root, vaultOf(h, loaded.config))
+    const sq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
+    const root = loaded.tree.roots[0] ?? 'D00'
+    const spec = {
+      exp: c?.root ?? root, kind: 'notebook', gpus: 0, by: 'user', cwd: vault, label: `notebooks: run again (${all})`,
+      cmd: `python3 ${sq(join($.plugin.root, 'server/rft_notebook.py'))} backfill --vault ${sq(vault)}${c ? ` --only ${sq(c.id)}` : ''}`,
+    }
+    const r = await queueCli($, h, loaded.config, ['add', '--job', JSON.stringify(spec)])
+    queued = `Queued ${(r.job as Job).id}`
+  }
+  return gapsText(gaps, queued, c ?? undefined)
+}
+
+/** The request to write what /rft-update notebooks found missing, concept by concept. */
+const notebooksPrompt = (names: string[]) => `Bring the notebooks of this research tree up to what the plugin does now (rft-manual skill, "Experiment notebooks" and "Concept artifacts"), concept by concept: ${names.map(n => JSON.stringify(n)).join(', ')}. For each concept: (1) if its repo has no shared plotting module in notebooks/, write one first (style and palette; the user's own palette if their instructions give one). (2) For each of its experiments with a result and no notebook (rft_validate and rft_map <concept> list them): rft_code <id>, then find where its run's outputs were saved (its ## Code and Reproduce lines, its run records in rft_jobs, the repo's output folders); write its notebook with rft_set_notebook, cells that read those saved outputs (never retrain; a computation of a few minutes may run from scratch), setting RESULTS to the numbers its Result reports, rounded as reported, and FIGURES and TABLES for the artifact; run it with rft_run_notebook. ok means it reproduces the note. On differs, never record over the note's numbers: note which numbers differ and go on. On failed, fix the notebook; if the outputs are gone, say so and leave that experiment without a notebook. (3) When the concept has two results or more, write its concept notebook (rft_set_notebook on its start note), comparing them from EXPERIMENTS, and run it. (4) Update its artifact (rft_artifact, then rft_set_artifact with edits): replace the charts drawn and the tables typed by hand with the notebooks' figures and tables, placed by name; keep the prose. Go on to the next concept without asking me. At the end, list for each concept the notebooks written, those that reproduce their note, those that differ (with the numbers), and the experiments whose outputs are gone.`
+
 /** The rebalancing request; `scope` (a concept name or a note id) narrows it to one part of the tree. */
 const rebalancePrompt = (scope: string) => `Propose a rebalancing of the reasoning tree (rft-manual skill, "Restructuring the tree")${scope ? `, limited to ${JSON.stringify(scope)} (a concept or a note: consider the branches in it, and moves into it or out of it)` : ''}. Over time some branches grow out of one line of research but belong to another: an experiment hung under the note that happened to come before it, an idea that opened a different line, a branch that would sit better under another concept. Start from the map: rft_map, then rft_map <concept> for the concepts involved (their digests and one-line note summaries); read a note's file only when its summary leaves the move in doubt. For each branch that clearly belongs elsewhere, propose one move: the note to move (its subtree goes with it), its parent now, the new parent, and why in one line. Keep the tree's history in mind: a note that came out of a result stays where the reasoning produced it unless it really is part of another line; when in doubt, leave it. Moves only: if a new concept would help, say so separately (rft_set_concept, after the user agrees). Present the moves as a short numbered table, say what you would leave as it is, and ask me which moves to apply. Do not call rft_move_node until I say yes; then apply only the moves I confirm, each with its why, and finish with rft_validate.`
 
@@ -1814,6 +1853,7 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'rft-update' }, async ($, e) => {
     try {
       const words = e.args.trim().split(/\s+/).filter(Boolean)
+      if (words[0] === 'notebooks') return { text: await updateNotebooks($, words.slice(1)) }
       const unknown = words.filter(w => w !== 'apply' && w !== '--sections')
       if (unknown.length) return { text: `Usage: /rft-update [apply] [--sections] (not ${unknown.join(' ')}).` }
       const sections = words.includes('--sections')

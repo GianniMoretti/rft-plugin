@@ -85,6 +85,7 @@ EVERY_S = 3.0  # how often the runner looks
 IDLE_S = 60.0  # how long the queue stays empty before the runner stops
 KILL_WAIT_S = 5.0  # how long a cancelled job has to stop before it is killed
 EXP_RE = re.compile(r"^E\d+$")
+NOTE_RE = re.compile(r"^[A-Z]\d+$")  # a notebook job may run a concept's notebook, or all of them (on the root note)
 WAITING, RUNNING = "pending", "running"
 FINISHED = ("done", "failed", "cancelled")
 MAX_CMD = 10_000
@@ -527,7 +528,7 @@ class Queue:
         git); else `runs/` at the top of its repo or folder (<repo>/runs/<exp>/<id>). `kind`: "run", or "notebook" for the run of an experiment's notebook (no output
         folder of its own)."""
         exp, cmd, label = str(exp or "").strip(), str(cmd or ""), str(label or "").strip()
-        if not EXP_RE.match(exp):
+        if not (NOTE_RE if kind == "notebook" else EXP_RE).match(exp):
             raise QueueError(f'a job runs an experiment: "{exp}" is not an experiment id like E14')
         if not cmd.strip():
             raise QueueError("the command is empty")
@@ -817,7 +818,7 @@ class Queue:
                     break
                 said = None
             if said:
-                j["outcome"] = {k: said[k] for k in ("state", "recorded", "why", "reproduced") if k in said}
+                j["outcome"] = {k: said[k] for k in ("state", "recorded", "why", "reproduced", "summary") if k in said}
                 if said.get("state") == "failed" and said.get("error"):
                     j["error"] = str(said["error"])[-2000:]
                 return
@@ -1047,7 +1048,8 @@ def main(argv=None) -> int:
             if not isinstance(spec, dict):
                 raise QueueError("--job is a JSON object")
             j = q.add(spec.get("exp"), spec.get("cmd"), spec.get("cwd"), spec.get("gpus", 1), spec.get("label", ""),
-                      spec.get("by", "claude"), top=a.top or spec.get("top") is True, runs=spec.get("runs"))
+                      spec.get("by", "claude"), top=a.top or spec.get("top") is True, runs=spec.get("runs"),
+                      kind=spec.get("kind") or "run")
             out = {"job": j, "outlook": q.outlook(q.find(j["id"]) or j)}
         elif a.cmd == "status":
             out = q.snapshot(a.history)

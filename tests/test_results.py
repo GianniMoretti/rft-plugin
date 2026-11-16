@@ -17,6 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import rft_notebook  # noqa: E402
+import rft_queue  # noqa: E402
 import rft_results  # noqa: E402
 
 HAS_UV = bool(shutil.which("uv")) and not os.environ.get("RFT_SKIP_UV")
@@ -279,6 +280,46 @@ class ConceptNotebookTest(unittest.TestCase):
         self.assertNotIn("rft-results", (self.vault / "directions" / "D01 A better variant.md").read_text())  # a concept's note has no Result to write
         failed = rft_results.apply_concept(self.vault, "D01", {"ok": False, "error": "KeyError: 'E09'"}, "2026-11-17")
         self.assertEqual((failed["state"], "saved" in failed), ("failed", False))
+
+
+class BackfillTest(unittest.TestCase):
+    """/rft-update notebooks: every notebook run again, experiments then concepts, in check mode."""
+
+    def test_every_notebook_again_in_check_mode_the_concept_once_and_a_bar_for_the_monitor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp) / "vault"
+            for d in ("experiments", "directions"):
+                (vault / d).mkdir(parents=True)
+            (vault / "directions" / "D00 Does the thing work.md").write_text(direction("D00", "Does the thing work", ""))
+            (vault / "directions" / "D01 A better variant.md").write_text(direction("D01", "A better variant", "D00 Does the thing work", '\nconcept: "Variants"\nnotebook: "notebooks/D01.py"'))
+            hand = "Gap 4.6 at 1k and 0.8 at 10k, over 3 seeds.\n"  # numbers written by hand, which a rerun never replaces
+            (vault / "experiments" / f"{NAME}.md").write_text(note(hand))
+            (vault / "experiments" / "E03 Other.md").write_text(note("").replace("E02", "E03").replace("Variant run", "Other").replace('notebook: "notebooks/E02.py"', 'notebook: "notebooks/E03.py"'))
+            ran, said = [], []
+            real = rft_notebook.run
+
+            def fake(path, timeout, uv="uv"):
+                ran.append(Path(path).name)
+                if Path(path).name == "E03.py":
+                    return {"ok": False, "error": "Traceback (most recent call last):\nFileNotFoundError: runs/E03"}
+                return outcome()
+            rft_notebook.run = fake
+            try:
+                got = rft_notebook.backfill(vault, 30, out=lambda line, **_: said.append(line))
+            finally:
+                rft_notebook.run = real
+            self.assertEqual(ran, ["E02.py", "E03.py", "D01.py"])  # experiments first, the concept once, last
+            self.assertIn(hand.strip(), (vault / "experiments" / f"{NAME}.md").read_text())
+            self.assertNotIn(rft_results.BLOCK_BEGIN, (vault / "experiments" / f"{NAME}.md").read_text())
+            self.assertEqual(got["summary"], "rerun of 3 notebooks: 1 ok, 1 differs, 1 failed (differs: E02; failed: E03)")
+            self.assertEqual(got["state"], "failed")
+            self.assertIn("E02: differs: gap_1k 4.1", "\n".join(said))
+            self.assertIn("E03: failed: FileNotFoundError: runs/E03", "\n".join(said))
+            # the monitor reads the bar
+            log = Path(tmp) / "q.log"
+            log.write_text("\n".join(said[:3]) + "\n")
+            bar = rft_queue.progress_of(log)["bars"][0]
+            self.assertEqual((bar["desc"], bar["n"], bar["total"]), ("notebooks", "1", "3"))
 
 
 TOY = '''import marimo

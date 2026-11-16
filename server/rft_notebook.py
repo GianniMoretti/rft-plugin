@@ -5,6 +5,9 @@ its repo, runs it in that repo's uv environment, and serves it in the marimo edi
     python3 rft_notebook.py run <notebook or link> [--timeout S]
     python3 rft_notebook.py apply --vault V --exp E08 [--record] [--runs q1,q2] [--timeout S] [--date D]
         run the experiment's notebook, then take its run to the note and the vault (rft_results.py)
+    python3 rft_notebook.py backfill --vault V [--only D04] [--timeout S]
+        every notebook of the vault (or of one concept) run again, one after another, in check mode
+        (no number written over a Result's): experiments first, then concepts; a bar and a line each
     python3 rft_notebook.py exec <notebook>              (inside the repo's environment: the run itself)
 
 `link` and `run` print one line of JSON, their answer. A run is the notebook as the editor runs
@@ -247,7 +250,7 @@ def table_of(name, v, notes: list[str]) -> dict | None:
 
 
 def apply_run(vault: Path, exp: str, timeout: float, record: bool = False, runs: list[str] | None = None,
-              date: str | None = None, uv: str = "uv") -> dict:
+              date: str | None = None, uv: str = "uv", chain: bool = True) -> dict:
     """Runs an experiment's notebook (the note's `notebook:`, a link in the vault) and takes the run
     to its note and the vault (rft_results.apply): checked, recorded, saved, stamped."""
     import rft_results  # beside this file; not needed by the run itself (exec), so not loaded there
@@ -263,7 +266,7 @@ def apply_run(vault: Path, exp: str, timeout: float, record: bool = False, runs:
         # a concept's notebook, on the note that starts it: its comparisons, for its artifact
         return rft_results.apply_concept(vault, exp, run(vault / rel, timeout, uv), date)
     got = rft_results.apply(vault, exp, run(vault / rel, timeout, uv), date, record=record, runs=runs)
-    if got.get("state") == "ok" and got.get("saved"):
+    if chain and got.get("state") == "ok" and got.get("saved"):
         # the experiment's numbers are new or confirmed: the notebooks of its concepts run again
         got["concepts"] = []
         for cid in rft_results.concept_notebooks(vault, exp):
@@ -345,6 +348,62 @@ class Editors:
             stop(p)
 
 
+def _clock(s: float) -> str:
+    s = int(s)
+    return f"{s // 3600}:{s // 60 % 60:02d}:{s % 60:02d}" if s >= 3600 else f"{s // 60:02d}:{s % 60:02d}"
+
+
+def backfill(vault: Path, timeout: float, only: str | None = None, out=print) -> dict:
+    """Every notebook of the vault run again, one after another, in check mode: each experiment's
+    (its numbers checked against its Result, never written over them; saved with its figures,
+    tables and concepts), then each concept's (its comparisons, its artifact's tables). `only`: a
+    concept, its sub-concepts included. A bar as tqdm draws it, for the queue's monitor, and a
+    line per notebook; the answer counts them, and names the ones that differ or failed."""
+    import rft_results
+    vault = Path(vault)
+    nodes, concepts = rft_results._concepts(vault)
+
+    def inside(cid: str | None) -> bool:
+        seen = set()
+        while cid and cid not in seen:
+            if cid == only:
+                return True
+            seen.add(cid)
+            cid = (concepts.get(cid) or {}).get("parent")
+        return False
+    starts = {c.get("root"): c["id"] for c in concepts.values() if c.get("root")}
+    exps = sorted((n["id"] for n in nodes.values() if n["type"] == "experiment" and n.get("notebook") and (not only or inside(n.get("concept")))),
+                  key=lambda i: int(i[1:]))
+    cons = sorted((s for s, cid in starts.items() if (nodes.get(s) or {}).get("notebook") and (not only or inside(cid))),
+                  key=lambda i: (-(concepts[starts[i]].get("depth") or 0), i))
+    todo = exps + cons
+    tally: dict[str, list[str]] = {"ok": [], "recorded": [], "differs": [], "failed": [], "unchecked": []}
+    t0 = time.monotonic()
+    for i, nid in enumerate(todo):
+        done = time.monotonic() - t0
+        left = done / i * (len(todo) - i) if i else 0
+        pct = int(100 * i / len(todo))
+        out(f"notebooks: {pct:3d}%|{'#' * (pct // 10):<10}| {i}/{len(todo)} [{_clock(done)}<{_clock(left) if i else '?'}, {nid}]", flush=True)
+        try:
+            got = apply_run(vault, nid, timeout, chain=False)
+        except Exception as e:  # noqa: BLE001 - one notebook's trouble is its own line, the rest go on
+            got = {"state": "failed", "error": f"{type(e).__name__}: {e}"}
+        state = "recorded" if got.get("recorded") else got.get("state") or "failed"
+        tally.setdefault(state, []).append(nid)
+        why = ""
+        if state == "differs":
+            why = ": " + ", ".join(f"{c['key']} {c['value']}" for c in got.get("checks") or [] if not c.get("found"))[:200]
+        elif state == "failed":
+            last = str(got.get("error") or "").strip().splitlines()
+            why = f": {last[-1][:200]}" if last else ""
+        out(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {nid}: {state}{why}", flush=True)
+    out(f"notebooks: 100%|##########| {len(todo)}/{len(todo)} [{_clock(time.monotonic() - t0)}<00:00, done]", flush=True)
+    parts = [f"{len(tally[k])} {k}" for k in ("ok", "recorded", "differs", "failed", "unchecked") if tally.get(k)]
+    named = "; ".join(f"{k}: {', '.join(tally[k])}" for k in ("differs", "failed") if tally.get(k))
+    summary = f"rerun of {len(todo)} notebook{'s' if len(todo) != 1 else ''}: {', '.join(parts) or 'none'}" + (f" ({named})" if named else "")
+    return {"ok": True, "state": "failed" if tally.get("failed") else "ok", "summary": summary, "tally": tally}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -361,11 +420,19 @@ def main(argv=None) -> int:
     a_apply.add_argument("--runs", default="")
     a_apply.add_argument("--timeout", type=float, default=540)
     a_apply.add_argument("--date", default=None)
+    a_back = sub.add_parser("backfill")
+    a_back.add_argument("--vault", required=True)
+    a_back.add_argument("--only", default=None)
+    a_back.add_argument("--timeout", type=float, default=540)
     a_exec = sub.add_parser("exec")
     a_exec.add_argument("path")
     a = ap.parse_args(argv)
     if a.cmd == "exec":
         return exec_notebook(a.path)
+    if a.cmd == "backfill":
+        got = backfill(Path(a.vault), max(1.0, a.timeout), a.only or None)
+        print(json.dumps(got, allow_nan=False), flush=True)
+        return 0
     if a.cmd == "apply":
         try:
             got = apply_run(Path(a.vault), a.exp, max(1.0, a.timeout), a.record, [r for r in a.runs.split(",") if r] or None, a.date)

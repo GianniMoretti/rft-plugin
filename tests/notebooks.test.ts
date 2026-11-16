@@ -410,6 +410,47 @@ describe('the notebook tools in a session', () => {
     expect(String(d.text)).not.toContain('notebook')
   })
 
+  test('/rft-update notebooks runs every notebook again in the queue, and lists by concept what is still to write', async ($, on) => {
+    const clock = mock.clock(on)
+    const files = project({ e02: 'notebook: "notebooks/E02.py"' })
+    // a second result in the concept, with no notebook; its artifact draws a chart and types a table
+    files[at('experiments/E03 Seed sweep.md')] = files[PATH.E02]!.replace(/E02/g, 'E03').replace('Variant run', 'Seed sweep').replace(/notebook: .*\n/, '')
+    files[PATH.D01] = files[PATH.D01]!.replace('children: [', 'children: ["[[E03 Seed sweep]]", ').replace('## Children in the tree\n', '## Children in the tree\n- [[E03 Seed sweep]]\n')
+    files[at('artifacts/D01 Variants.html')] = '<!-- rft-artifact {"concept": "D01", "name": "Variants", "updated": "x", "basis": {}} -->\n<svg viewBox="0 0 1 1"></svg>\n<table><tr><td>4.1</td></tr></table>\n<rft-table src="E02_gap"><table><tr><td>4.1</td></tr></table></rft-table>\n'
+    const calls: string[][] = []
+    world(on, files, {
+      cwd: ROOT,
+      process: argv => {
+        if (!argv[1]?.endsWith('server/rft_queue.py')) return undefined
+        calls.push([...argv])
+        if (argv[2] === 'add') return { exitCode: 0, stderr: '', stdout: JSON.stringify({ job: { id: 'q31', exp: 'D00', state: 'pending' }, outlook: 'starts in a few seconds (no GPU)' }) }
+        return { exitCode: 0, stderr: '', stdout: '{}' }
+      },
+    })
+    const prompts: string[] = []
+    on('prompt.submit', (_$, e) => { prompts.push(String(e.text)); return { text: e.text } as never })
+    await $.session.start({ cwd: ROOT, source: 'startup' } as never)
+    const run = (args: string) => $.command.run({ command: 'rft-update', args, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } } as never)
+    const text = String((await run('notebooks')).text)
+    const add = calls.find(c => c[2] === 'add')!
+    const spec = JSON.parse(add[add.indexOf('--job') + 1]!)
+    expect(spec).toMatchObject({ exp: 'D00', kind: 'notebook', gpus: 0, by: 'user', cwd: `${ROOT}/vault`, label: 'notebooks: run again (1)' })
+    expect(spec.cmd).toMatch(/^python3 '.*server\/rft_notebook\.py' backfill --vault '\/work\/demo\/vault'$/)
+    expect(text).toContain('Notebooks: 1 experiment notebook, 0 concept notebooks; 1 not run since a run saves its figures, tables and numbers for the artifacts (E02).')
+    expect(text).toContain('Queued q31: all 1 run again, one after another')
+    expect(text).toContain('- Variants (D01): 1 experiment with a result and no notebook (E03); no concept notebook to compare its 2 results; its artifact draws 1 chart and types 1 table by hand.')
+    await clock.advance(5000)
+    expect(prompts).toHaveLength(0) // no model turn
+    // --write: the same report, and Claude asked to write it
+    expect(String((await run('notebooks --write Variants')).text)).toContain('Claude will start in a moment, concept by concept')
+    expect(calls.filter(c => c[2] === 'add')).toHaveLength(1) // nothing queued
+    await clock.advance(5000)
+    expect(prompts).toHaveLength(1)
+    expect(prompts[0]).toContain('concept by concept: "Variants"')
+    expect(prompts[0]).toContain('never record over the note\'s numbers')
+    expect(String((await run('notebooks --write Nope')).text)).toContain('is not a concept')
+  })
+
   test('rft_set_notebook writes the file and asks the helper for the link', async ($, on) => {
     mock.clock(on)
     const calls: string[][] = []

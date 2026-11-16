@@ -60,6 +60,7 @@
   function notebookWord(j) {
     const o = j.outcome
     const err = String(j.error || '').trim().split('\n').pop()
+    if (o && o.summary) return o.summary
     if (!o) return j.state === 'done' ? 'ran' : endWord(j)
     if (o.state === 'failed') return `failed${err ? `: ${err}` : ''}`
     if (o.recorded) return 'wrote the numbers in its Result'

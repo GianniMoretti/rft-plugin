@@ -736,6 +736,14 @@ so you can run it and read the note side by side.
 - **In the artifacts**: in a concept with code, `rft_artifact` says for each result whether a
   notebook reproduced it, lists those that are not, and names what each notebook saved; each
   experiment's link in the page carries its last run (✓ reproduced, ≠ differs, ✗ failed).
+- **An older vault**: `/rft-update notebooks` runs every notebook again, one after another, as one
+  job of the queue with no GPU, in check mode (a Result's numbers are checked, never written
+  over), so each saves what a run saves now; the monitor shows how far it is, and its end names
+  the notebooks that differ or failed. It lists, by concept with code, what is still to write;
+  `/rft-update notebooks --write [concept]` asks Claude to write it: the missing experiment
+  notebooks from what each repo saved (each checked against its note: one that differs is
+  reported, never recorded over it), the concept notebooks, and the artifacts' figures and
+  tables placed instead of drawn.
 - It needs `uv` on `PATH`. A vault where no experiment has a notebook sees none of this: the two
   tools wait behind ToolSearch, and their rules are left out.
 
@@ -757,6 +765,7 @@ so you can run it and read the note side by side.
 | `/rft-summarize [concept]` | ask Claude to write the missing note summaries and concept digests of an existing tree, concept by concept (a one-off job) |
 | `/rft-artifact [concept]` | ask Claude to write a concept's artifact, or, with no concept, every one missing or out of date |
 | `/rft-update [apply] [--sections]` | bring a vault made by an older version up to this one: list what it lacks (the folders and templates of newer note types, the config's format); `apply` writes it and refreshes the derived files. Notes are never changed, except that `--sections` adds the sections their type has gained, as empty headings, to unlocked notes. A session on an older vault starts with a toast pointing here (no model turn) |
+| `/rft-update notebooks [--write] [concept]` | bring an older vault's notebooks up to what the plugin does now: every notebook runs again in the queue (one job, no GPU, in check mode, no model turn), so each saves its numbers, figures and tables; and a list, by concept with code, of what is still to write (experiments with a result and no notebook, a missing concept notebook, an artifact's hand-drawn charts and typed tables). `--write` asks Claude to write it, concept by concept (a long one-off job; name a concept for one line of research) |
 | `/rft-view` | write `vault/tree.html`: the same tree view as one standalone file, every note inside (images as placeholders), to open anywhere or share |
 
 The plugin registers these commands when a session starts, so the desktop app's slash-command
