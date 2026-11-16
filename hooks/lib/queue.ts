@@ -53,6 +53,9 @@ export type Job = {
   changed?: boolean
   /** A failed run: the end of its traceback, or its last lines. */
   error?: string
+  /** A notebook's run: the run it followed, and how it went (server/rft_results.py's answer, in short). */
+  after?: string
+  outcome?: { state?: string; recorded?: boolean; why?: string; reproduced?: string }
 }
 
 export type Gpu = {
@@ -186,8 +189,23 @@ export const errorLine = (j: Job) => {
   return last ? (last.length > 120 ? `${last.slice(0, 117)}…` : last) : ''
 }
 
+/** How the run of an experiment's notebook went, in a few words. */
+export function notebookWord(j: Job): string {
+  const o = j.outcome
+  if (!o) return j.state === 'done' ? 'its notebook ran' : `its notebook's run ${endWord(j)}`
+  if (o.state === 'failed') return `its notebook failed${errorLine(j) ? `: ${errorLine(j)}` : ''}`
+  if (o.recorded) return 'its notebook wrote the numbers in its Result'
+  if (o.state === 'ok') return 'its notebook reproduced its Result'
+  if (o.state === 'differs') return 'its notebook differs from its Result'
+  return `its notebook ran (${o.why || 'nothing checked'})`
+}
+
+/** The numbers of the experiment are in its Result, written by its notebook's run. */
+const numbersIn = (j: Job) => j.kind === 'notebook' && (j.outcome?.recorded === true || j.outcome?.state === 'ok')
+
 const recordText = (r: { exp: string; job: Job }, now: number) => {
   const j = r.job
+  if (j.kind === 'notebook') return `${r.exp} (${notebookWord(j)}, ${ago(j.ended, now)})`
   const how = j.state === 'failed' ? `failed, ${j.exit != null ? `exit ${j.exit}` : 'lost'}` : j.state
   const err = j.state === 'failed' ? errorLine(j) : ''
   return `${r.exp} (${j.id} ${how}, ${ago(j.ended, now)}${err ? `: ${err}` : ''})`
@@ -210,7 +228,8 @@ export function queueLine(v: QueueView, loaded: Loaded, now: number): string | n
   const parts = [`Experiment queue: ${running} running, ${waiting} waiting${v.paused ? ' (paused)' : ''}.`]
   if (rec.length) {
     parts.push(`Jobs that ended, their result not recorded yet: ${rec.slice(0, 6).map(r => recordText(r, now)).join(', ')}${rec.length > 6 ? `, and ${rec.length - 6} more` : ''}. ` +
-      'rft_jobs <id> says how it ended (a failed one with the end of its traceback); then record the result or the failure in the note.')
+      (rec.some(r => numbersIn(r.job)) ? 'Where the notebook wrote the numbers, they are in the Result already: read it, then write what they mean and set the status (rft_set_status), not the numbers again. ' : '') +
+      (rec.some(r => !numbersIn(r.job)) ? 'Otherwise rft_jobs <id> says how a job ended (a failed one with the end of its traceback); then record the result or the failure in the note.' : '').trim())
   }
   return parts.join(' ')
 }
@@ -240,7 +259,7 @@ export function jobEvents(prev: QueueView | null, next: QueueView): string[] {
   }
   for (const j of next.history) {
     if (known.has(j.id)) continue
-    out.push(`${j.id} (${j.exp}) ${j.state === 'done' ? 'finished' : endWord(j)}${ranFor(j)}`)
+    out.push(j.kind === 'notebook' ? `${j.id} (${j.exp}): ${notebookWord(j)}` : `${j.id} (${j.exp}) ${j.state === 'done' ? 'finished' : endWord(j)}${ranFor(j)}`)
   }
   return out
 }
@@ -276,7 +295,7 @@ export function jobsReport(v: QueueView, loaded: Loaded, now: number, opts: { re
     const how = j.state === 'running' ? `running on ${gpuList(j.gpu_ids)} for ${duration(now - (j.started ?? now))}`
       : j.state === 'pending' ? `waiting: ${j.outlook || 'in line'}`
         : `${endWord(j)}${ranFor(j)}, ${ago(j.ended, now)}${j.reason && j.state !== 'failed' ? ` (${j.reason})` : j.reason?.startsWith('lost') ? ` (${j.reason})` : ''}`
-    const lines = [`${named(loaded, j)} · ${gpuWord(j.gpus)} · ${how}`, `$ ${j.cmd}`, `in ${j.cwd}${j.retry_of ? ` · retry of ${j.retry_of}` : ''}`]
+    const lines = [`${named(loaded, j)} · ${gpuWord(j.gpus)} · ${how}${j.kind === 'notebook' && j.state !== 'pending' && j.state !== 'running' ? ` · ${notebookWord(j)}` : ''}`, `$ ${j.cmd}`, `in ${j.cwd}${j.retry_of ? ` · retry of ${j.retry_of}` : ''}`]
     const code = codeLine(j)
     if (code) lines.push(code)
     if (j.out) lines.push(`outputs: ${j.out}`)

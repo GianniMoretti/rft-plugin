@@ -104,6 +104,23 @@ describe('queue: what Claude reads', () => {
     expect(queueLine(v, loaded, NOW)).toContain('E04 (q1 failed, exit 1, 3h ago: RuntimeError: CUDA out of memory')
   })
 
+  test("after the runs, the notebook's run: its numbers are in the Result, so Claude only says what they mean", async () => {
+    const loaded = await loadedOf()
+    const v = example2()
+    const nb = job('q3', 'E02', 'done', { kind: 'notebook', label: 'notebook', gpus: 0, by: 'runner', after: 'q2', started: NOW - 3500, ended: NOW - 3400, exit: 0, outcome: { state: 'ok', recorded: true } })
+    const after = { ...v, history: [nb, ...v.history] }
+    expect(toRecord(after, loaded).map(r => `${r.exp} ${r.job.id}`)).toEqual(['E02 q3', 'E04 q1'])
+    const line = queueLine(after, loaded, NOW)!
+    expect(line).toContain('E02 (its notebook wrote the numbers in its Result, 56m ago)')
+    expect(line).toContain('they are in the Result already')
+    expect(line).toContain('not the numbers again')
+    expect(line).toContain('Otherwise rft_jobs <id>') // E04 failed, without a notebook run
+    expect(jobEvents(v, after)).toEqual(['q3 (E02): its notebook wrote the numbers in its Result'])
+    const failed = { ...nb, outcome: { state: 'failed' }, error: "Traceback (most recent call last):\nKeyError: 'acc'" }
+    expect(jobEvents(v, { ...v, history: [failed, ...v.history] })).toEqual(["q3 (E02): its notebook failed: KeyError: 'acc'"])
+    expect(queueLine({ ...v, history: [nb] }, loaded, NOW)).not.toContain('Otherwise')
+  })
+
   test('a finished job whose experiment still says running is a result to record', async () => {
     const loaded = await loadedOf()
     // E02 and E04 are both running in the tree; their jobs ended

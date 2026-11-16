@@ -10,6 +10,7 @@ are a fake probe, so the tests mean the same on a machine with no GPU.
 import http.client
 import json
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -403,6 +404,69 @@ class RunRecordTest(unittest.TestCase):
         go.touch()
         self.assertTrue(self.ended("q1"))
         self.assertTrue(self.q.find("q1")["changed"])
+
+
+class NotebookAfterRunsTest(unittest.TestCase):
+    """When an experiment's last run ends well and it has a notebook, the runner queues the
+    notebook's run (no GPU), which records the result: no session, no model turn."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name).resolve()
+        self.vault = base / "vault"
+        (self.vault / "notebooks").mkdir(parents=True)
+        self.work = base / "code"
+        self.work.mkdir()
+        self.q = rft_queue.Queue(self.vault, probe=FakeGpus(2), wake=lambda: None)
+        said = json.dumps({"ok": True, "state": "ok", "recorded": True, "reproduced": "2026-11-16 ok @a1b2c3d4e5 in 1 s", "checks": []})
+        self.q.notebook_cmd = lambda exp: f"echo 'marimo noise'; echo '{said}'"
+
+    def tearDown(self):
+        for j in self.q.read()["jobs"]:
+            if j["state"] == "running":
+                self.q.cancel(j["id"], "test over")
+
+    def settle(self):
+        return wait_until(lambda: not self.q.read()["jobs"], self.q.tick)
+
+    def test_the_notebook_runs_once_after_the_last_run_and_keeps_how_it_went(self):
+        (self.vault / "notebooks" / "E14.py").write_text("# the link")
+        go = self.work / "go"
+        self.q.add("E14", "true", str(self.work), gpus=1, label="seed 0")
+        self.q.add("E14", f"while [ ! -e {go} ]; do sleep 0.05; done", str(self.work), gpus=1, label="seed 1")
+        self.q.tick()
+        self.assertTrue(wait_until(lambda: self.q.find("q1")["state"] == "done", self.q.tick))
+        self.assertFalse(any(j.get("kind") == "notebook" for j in self.q.read()["jobs"]))  # seed 1 still runs
+        go.touch()
+        self.assertTrue(self.settle())
+        nb = self.q.find("q3")
+        self.assertEqual((nb["kind"], nb["exp"], nb["gpus"], nb["by"], nb["after"], nb["state"]), ("notebook", "E14", 0, "runner", "q2", "done"))
+        self.assertEqual(nb["outcome"], {"state": "ok", "recorded": True, "reproduced": "2026-11-16 ok @a1b2c3d4e5 in 1 s"})
+        self.assertNotIn("out", nb)
+        self.assertEqual(len([j for j in self.q.history() if j.get("kind") == "notebook"]), 1)
+
+    def test_no_notebook_after_a_failed_run_or_for_an_experiment_with_none(self):
+        (self.vault / "notebooks" / "E14.py").write_text("# the link")
+        self.q.add("E14", "exit 1", str(self.work), gpus=0)
+        self.q.add("E15", "true", str(self.work), gpus=0)
+        self.assertTrue(self.settle())
+        self.assertEqual([j["id"] for j in self.q.history()], ["q2", "q1"])
+
+    def test_a_notebook_that_failed_keeps_its_error(self):
+        (self.vault / "notebooks" / "E14.py").write_text("# the link")
+        said = json.dumps({"ok": False, "state": "failed", "error": "Traceback (most recent call last):\nKeyError: 'acc'"})
+        self.q.notebook_cmd = lambda exp: f"printf '%s\\n' {shlex.quote(said)}"
+        self.q.add("E14", "true", str(self.work), gpus=0)
+        self.assertTrue(self.settle())
+        nb = self.q.find("q2")
+        self.assertEqual((nb["state"], nb["outcome"]["state"], nb["error"].splitlines()[-1]), ("done", "failed", "KeyError: 'acc'"))
+
+    def test_the_command_runs_the_notebook_helper_on_the_vault(self):
+        q = rft_queue.Queue(self.vault, probe=FakeGpus(1), wake=lambda: None)
+        cmd = q.notebook_cmd("E14")
+        self.assertIn("rft_notebook.py apply --vault", cmd)
+        self.assertTrue(cmd.endswith("--exp E14 --record"))
 
 
 class ProbeTest(unittest.TestCase):

@@ -27,6 +27,11 @@ has been empty a while; queueing a job, opening the tree view or a new session s
   the end of the traceback of a failed one (`error`), and `changed` when its repo's code moved
   while it ran. Each output folder holds a copy of its record (rft-run.json), so the outputs say
   what made them; history.jsonl keeps them all.
+- **The notebook, after the runs**: when an experiment's last run waiting or running ends well
+  and the experiment has a notebook (the vault's link notebooks/<exp>.py), the runner queues the
+  notebook's run (kind "notebook", no GPU): rft_notebook.py apply --record runs it and writes its
+  RESULTS in the note's Result, saves its figures and tables, and stamps the note, so a result is
+  recorded with no session open and no model turn. How it went is kept on that job (`outcome`).
 - **Files**, in the vault's .queue/ (a dot folder Obsidian leaves alone): queue.json, the jobs
   waiting and running in their order (rewritten whole, under `lock`); history.jsonl, one line per
   job that ended (appended); logs/ and run/, which its .gitignore keeps out of git.
@@ -52,6 +57,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import signal
 import socket
 import subprocess
@@ -83,6 +89,8 @@ RUNS = "runs"  # the output folders' root when a job names none, at the top of i
 RUN_RECORD = "rft-run.json"  # each output folder's copy of its job's record
 PATCH = "code.patch"
 ERROR_LINES = 14  # a failed job's error: the traceback's first line and its end
+NOTEBOOKS = "notebooks"  # the vault's links to the experiments' notebooks
+NOTEBOOK_CLI = Path(__file__).resolve().parent / "rft_notebook.py"
 # the job's command in a shell of its own; its exit code (128 + n when a signal n ended it) lands
 # in a file, written whole
 WRAP = 'bash -c "$1"; c=$?; printf "%s\\n" "$c" > "$2.tmp" && mv -f "$2.tmp" "$2"'
@@ -299,6 +307,9 @@ class Queue:
 
     def __init__(self, vault, probe=probe_gpus, wake=None, clock=time.time):
         self.root = Path(vault)
+        # the command of an experiment's notebook run (a test gives one that needs no uv)
+        self.notebook_cmd = lambda exp: (f"{shlex.quote(sys.executable)} {shlex.quote(str(NOTEBOOK_CLI))} apply "
+                                         f"--vault {shlex.quote(str(self.root.resolve()))} --exp {shlex.quote(exp)} --record")
         self.dir = self.root / QUEUE_DIR
         self.probe = probe
         self.wake = wake if wake is not None else (lambda: ensure_runner(self.root))
@@ -572,6 +583,7 @@ class Queue:
                 self._release(j["id"])
                 self._finish(j)
                 events.append({"event": "ended", "job": dict(j)})
+                self._notebook_after(st, j, now)
             if not st["paused"]:
                 for j, ids in plan(st["jobs"], free_gpus(gpus, st["jobs"], st["allowed"], st["free_mib"])):
                     self._launch(j, ids, now)
@@ -646,9 +658,40 @@ class Queue:
         if sig:
             j["code_sig"] = sig
 
+    def _notebook_after(self, st: dict, j: dict, now: float):
+        """Queues the run of the experiment's notebook once its last run waiting or running ended
+        well, when the experiment has a notebook and no run of it is queued already."""
+        exp = j["exp"]
+        if j["state"] != "done" or j.get("kind") == "notebook":
+            return
+        if any(x["exp"] == exp and x["state"] in (WAITING, RUNNING) for x in st["jobs"]):
+            return
+        if not (self.root / NOTEBOOKS / f"{exp}.py").exists():
+            return
+        st["seq"] += 1
+        st["jobs"].append({"id": f"q{st['seq']}", "exp": exp, "label": "notebook", "cmd": self.notebook_cmd(exp),
+                           "cwd": str(self.root.resolve()), "gpus": 0, "by": "runner", "kind": "notebook",
+                           "state": WAITING, "added": now, "after": j["id"]})
+
     def _finish(self, j: dict):
         """A run that ended: the end of its traceback when it failed, whether its repo's code moved
-        while it ran, and its record written in its output folder."""
+        while it ran, and its record written in its output folder. A notebook's run: how it went,
+        from the answer it printed last."""
+        if j.get("kind") == "notebook" and j.get("log"):
+            said = None
+            for row in reversed(_tail_lines(self.dir / j["log"], 20)):
+                try:
+                    said = json.loads(row)
+                except ValueError:
+                    continue
+                if isinstance(said, dict) and "state" in said:
+                    break
+                said = None
+            if said:
+                j["outcome"] = {k: said[k] for k in ("state", "recorded", "why", "reproduced") if k in said}
+                if said.get("state") == "failed" and said.get("error"):
+                    j["error"] = str(said["error"])[-2000:]
+                return
         if j["state"] == "failed" and j.get("log"):
             err = error_of(_tail_lines(self.dir / j["log"], 200))
             if err:
