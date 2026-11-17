@@ -90,6 +90,11 @@ PAGE_FILES = {
     "/scratchpad.js": ("scratchpad.js", "text/javascript; charset=utf-8"),
     "/queue.js": ("queue.js", "text/javascript; charset=utf-8"),
     "/artifacts.js": ("artifacts.js", "text/javascript; charset=utf-8"),
+    "/manuscript.js": ("manuscript.js", "text/javascript; charset=utf-8"),
+    # the Manuscript tab's editor
+    "/vendor/codemirror.v5.65.16.min.js": ("vendor/codemirror.v5.65.16.min.js", "text/javascript; charset=utf-8"),
+    "/vendor/codemirror.v5.65.16.min.css": ("vendor/codemirror.v5.65.16.min.css", "text/css; charset=utf-8"),
+    "/vendor/LICENSE-codemirror.txt": ("vendor/LICENSE-codemirror.txt", "text/plain; charset=utf-8"),
     "/vendor/d3.v7.9.0.min.js": ("vendor/d3.v7.9.0.min.js", "text/javascript; charset=utf-8"),
     "/vendor/LICENSE-d3.txt": ("vendor/LICENSE-d3.txt", "text/plain; charset=utf-8"),
     "/vendor/katex.v0.16.22.min.js": ("vendor/katex.v0.16.22.min.js", "text/javascript; charset=utf-8"),
@@ -114,8 +119,9 @@ RESCAN_S = 5.0  # a name not found looks through the folders again at most this 
 MAX_SCAN_FILES = 2_000_000  # the most files a search by name looks through
 SKIP_DIRS = {"node_modules", "__pycache__"}  # with every dot folder: never searched by name
 PAGE_CSP = ("default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; "
-            "connect-src 'self'; frame-src 'self' http://127.0.0.1:*; frame-ancestors 'self'")
-# frame-src: the page's own frames (the artifacts), and the marimo editors of the experiments'
+            "connect-src 'self'; frame-src 'self' blob: http://127.0.0.1:*; frame-ancestors 'self'")
+# frame-src: the page's own frames (the artifacts), the manuscript's PDF (fetched with the key, shown
+# from a blob: address only the page itself can make), and the marimo editors of the experiments'
 # notebooks, each on a port of its own on this machine (rft_notebook.Editors)
 # a concept's artifact: a page of Claude's, served as a document of its own in a sandbox (an opaque
 # origin: it reads no storage and makes no write as the page), its scripts inline, nothing from

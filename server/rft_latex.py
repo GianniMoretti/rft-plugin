@@ -187,6 +187,8 @@ def read_log(log: str, ms: Path, doc: str) -> tuple[list[dict], list[str]]:
     lines = log.splitlines()
     for i, line in enumerate(lines):
         m = ERROR_RE.match(line)
+        if m and m.group(3).strip().startswith("==> Fatal error occurred"):
+            continue  # TeX's last word after an error, not one of its own
         if m:
             context = " ".join(x.strip() for x in lines[i + 1:i + 3] if x.strip() and not x.startswith("!"))
             errors.append({**where(m.group(1), ms, doc), "line": int(m.group(2)), "message": m.group(3).strip(), "context": context[:200]})

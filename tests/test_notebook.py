@@ -286,7 +286,8 @@ class ServerTest(unittest.TestCase):
     def test_the_page_may_frame_the_local_editors_only(self):
         _, hdrs, _ = self.request("GET", "/")
         csp = {k.lower(): v for k, v in hdrs.items()}["content-security-policy"]
-        self.assertIn("frame-src 'self' http://127.0.0.1:*", csp)
+        # and the manuscript's PDF, from a blob: address only the page itself can make
+        self.assertIn("frame-src 'self' blob: http://127.0.0.1:*;", csp)
         self.assertNotIn("https:", csp)
 
 

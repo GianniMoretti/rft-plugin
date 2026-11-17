@@ -64,7 +64,8 @@
   let showOrigins = false
   let retyping = false
   const K = window.RftKanban
-  const PAGES = ['tree', 'concepts', 'kanban', 'calendar']
+  const PAGES = ['tree', 'concepts', 'kanban', 'calendar', 'manuscript']
+  let manuscriptView = null // web/manuscript.js, mounted on the live page only
   let boardSet = new Set() // the notes on the kanban: those that match, in the focused concept when there is one
   let kanbanOrder = 'priority' // priority | date
   let kanbanOpen = new Set() // the folded columns opened
@@ -513,6 +514,7 @@
     renderConceptPath(document.getElementById('drawer-concept'), n.concept, "Open this concept's artifact", openArtifact)
     renderOrigin(n)
     renderRefs(n)
+    renderWritten(n)
     renderCode(document.getElementById('drawer-code'), n.concept)
     document.getElementById('drawer-meta').textContent = `${n.type} · ${MARK[n.status] || ''} ${n.status}${n.date ? ' · ' + n.date : ''}${n.tags && n.tags.length ? ' · #' + n.tags.join(' #') : ''}`
     renderDrawerPriority(n)
@@ -995,6 +997,24 @@
   }
 
   /** The notes it builds on (`refs:`), and for a reference the notes that cite it, as links. */
+  /** The manuscript's snippets that rest on the note: each opens in the Manuscript tab. */
+  function renderWritten(n) {
+    const box = document.getElementById('drawer-written')
+    box.replaceChildren()
+    const ids = manuscriptView ? manuscriptView.writtenIn(n.id) : []
+    box.hidden = !ids.length
+    if (!ids.length) return
+    box.append('Written in ')
+    ids.forEach((id, i) => {
+      if (i) box.append(', ')
+      const a = document.createElement('a')
+      a.textContent = id
+      a.title = 'Open this snippet in the Manuscript tab'
+      a.addEventListener('click', ev => { ev.preventDefault(); setView('manuscript'); manuscriptView.openSnippet(id) })
+      box.appendChild(a)
+    })
+  }
+
   function renderRefs(n) {
     const box = document.getElementById('drawer-refs')
     box.innerHTML = ''
@@ -1654,7 +1674,9 @@
     document.getElementById('concept-canvas').toggleAttribute('hidden', v !== 'concepts')
     document.getElementById('kanban').hidden = v !== 'kanban'
     calSection.hidden = v !== 'calendar'
+    document.getElementById('manuscript').hidden = v !== 'manuscript'
     syncConceptButtons()
+    if (v === 'manuscript' && manuscriptView) void manuscriptView.show()
     if (v === 'concepts') drawConceptTree()
     if (v === 'kanban') drawKanban()
     if (v === 'calendar') drawCalendar()
@@ -4168,6 +4190,19 @@
         open: id => { if (byId.has(id)) select(id) },
         title: id => (byId.get(id) || {}).title || '',
       })
+    }
+    // the manuscript's tab: only on the server (the standalone page leaves its script out)
+    if (!EMBED && window.RftManuscript) {
+      manuscriptView = window.RftManuscript.mount({
+        key: editKey, store, notify,
+        open: id => { if (byId.has(id)) select(id) },
+        nodes: () => byId,
+        visible: () => view === 'manuscript',
+        changed: () => { if (selected && byId.has(selected)) renderWritten(byId.get(selected)) },
+      })
+    } else {
+      document.getElementById('show-manuscript').hidden = true
+      if (view === 'manuscript') view = 'tree'
     }
     render(false)
     hasView = true

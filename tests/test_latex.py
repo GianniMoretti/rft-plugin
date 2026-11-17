@@ -215,7 +215,7 @@ class GeneratedTest(unittest.TestCase):
         (ms / "snippets" / "S01.tex").write_text("% rft-snippet S01 · result · X\n% basis: E05\nFine.\n\\notacommand here\n")
         r = rft_latex.compile_doc(self.vault, "paper")
         self.assertFalse(r["ok"])
-        self.assertEqual((r["errors"][0]["snippet"], r["errors"][0]["line"], r["errors"][0]["message"]), ("S01", 4, "Undefined control sequence."))
+        self.assertEqual([(e["snippet"], e["line"], e["message"]) for e in r["errors"]], [("S01", 4, "Undefined control sequence.")])
 
     def test_no_such_document(self):
         self.assertEqual(rft_latex.compile_doc(self.vault, "../x"), {"ok": False, "error": "no document ../x in the manuscript"})

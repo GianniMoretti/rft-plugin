@@ -66,6 +66,10 @@ export function staticPage(a: PageAssets, tree: Tree, texts: Record<string, stri
     .replace(/<script src="scratchpad\.js" data-rft-inline><\/script>/, () => script(a.scratchpad))
     // the experiment queue's monitor reads the live server: a standalone page has none
     .replace(/<script src="queue\.js"><\/script>\n?/, '')
+    // the manuscript's tab lives on the server: its editor and its script stay out of the standalone page
+    .replace(/<link rel="stylesheet" href="vendor\/codemirror[^"]*">\n?/, '')
+    .replace(/<script src="vendor\/codemirror[^"]*"><\/script>\n?/, '')
+    .replace(/<script src="manuscript\.js"><\/script>\n?/, '')
     .replace(/<script src="artifacts\.js" data-rft-inline><\/script>/, () => script(a.artifacts))
     .replace(/<script src="app\.js" data-rft-inline><\/script>/, () => script(`window.RFT_DATA = ${data};`) + script(a.js))
 }

@@ -7,6 +7,7 @@
 <script src="theme.js" data-rft-inline></script>
 <link rel="stylesheet" href="app.css" data-rft-inline>
 <link rel="stylesheet" href="vendor/katex.v0.16.22.min.css" data-rft-inline>
+<link rel="stylesheet" href="vendor/codemirror.v5.65.16.min.css">
 </head>
 <body>
 <header id="bar">
@@ -23,6 +24,7 @@
     <button data-show="concepts" aria-pressed="false" title="A tree whose nodes are the concepts">Concepts</button>
     <button data-show="kanban" aria-pressed="false" title="The notes in one column per status, ordered by priority or date">Kanban</button>
     <button data-show="calendar" aria-pressed="false" title="The deadlines and the runs: a timeline, or a month">Calendar</button>
+    <button data-show="manuscript" id="show-manuscript" aria-pressed="false" title="The manuscript: LaTeX snippets resting on verified notes, assembled into documents, and their PDF">Manuscript</button>
   </div>
   <div class="group tree-only" role="group" aria-label="View">
     <!-- each toggle shows the symbol of its state (or of what a click does); its tooltip names it -->
@@ -178,6 +180,44 @@
     </div>
     <div id="kb-cols" class="kb-cols"></div>
   </section>
+  <section id="manuscript" hidden aria-label="The manuscript">
+    <div class="ms-bar">
+      <label class="ms-needs">Document <select id="ms-doc" aria-label="Document"></select></label>
+      <button id="ms-new-doc" class="ms-needs" type="button" title="A new document: a paper (article) or a thesis chapter (report)">+ Document</button>
+      <button id="ms-new" class="ms-needs" type="button" title="A new snippet, resting on notes of the tree">+ Snippet</button>
+      <button id="ms-lock" class="icon-btn cycle ms-needs" type="button" aria-pressed="true" aria-label="Lock">
+        <svg class="ico lock-open" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.6-1.7"/></svg>
+        <svg class="ico lock-closed on" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+      </button>
+      <button id="ms-compile" class="primary ms-needs" type="button">Compile</button>
+      <span id="ms-status" class="muted" role="status"></span>
+    </div>
+    <form id="ms-new-form" class="ms-new-form" hidden>
+      <select id="ms-new-kind" aria-label="Kind"></select>
+      <input id="ms-new-title" type="text" autocomplete="off" placeholder="Title" aria-label="Title" required>
+      <input id="ms-new-basis" type="text" autocomplete="off" list="ms-notes" placeholder="Rests on: E05, T02 (verified notes first)" aria-label="The notes it rests on" required>
+      <datalist id="ms-notes"></datalist>
+      <button type="submit" class="primary">Add</button><button id="ms-new-cancel" type="button">Cancel</button>
+    </form>
+    <div id="ms-empty" class="ms-empty" hidden>
+      <p>No manuscript yet. A manuscript turns verified notes into LaTeX: one snippet at a time, each resting on its notes, assembled into documents (a paper, a thesis chapter).</p>
+      <p>It is yours to write: Claude proposes snippets from verified notes, comments and suggests, and writes only once you unlock it.</p>
+      <button id="ms-start" type="button" class="primary">Start a manuscript</button>
+    </div>
+    <div id="ms-body" class="ms-body" hidden>
+      <nav id="ms-list" class="ms-list" aria-label="Snippets"></nav>
+      <div class="ms-editor">
+        <div id="ms-head" class="ms-head"></div>
+        <div id="ms-cm" class="ms-cm"></div>
+        <div id="ms-threads" class="ms-threads" hidden></div>
+      </div>
+      <div class="ms-pdf">
+        <div id="ms-errors" class="ms-errors" hidden></div>
+        <p id="ms-pdf-note" class="muted ms-pdf-note">No PDF yet: Compile.</p>
+        <iframe id="ms-pdf-frame" title="The document's PDF" hidden></iframe>
+      </div>
+    </div>
+  </section>
   <section id="calendar" hidden aria-label="The deadlines and the runs">
     <div class="cal-bar">
       <span class="seg" role="group" aria-label="Calendar">
@@ -313,6 +353,7 @@
     <div id="drawer-superseded" class="drawer-superseded" hidden></div>
     <div id="drawer-origin" class="drawer-origin muted" hidden></div>
     <div id="drawer-refs" class="drawer-origin muted" hidden></div>
+    <div id="drawer-written" class="drawer-origin muted" hidden></div>
     <article id="note"></article>
     <section id="threads" hidden aria-label="Comments and suggestions"></section>
     <div id="sel-bar" class="sel-bar" hidden role="toolbar" aria-label="On the selected text">
@@ -381,6 +422,8 @@
 <script src="markdown.js" data-rft-inline></script>
 <script src="scratchpad.js" data-rft-inline></script>
 <script src="queue.js"></script>
+<script src="vendor/codemirror.v5.65.16.min.js"></script>
+<script src="manuscript.js"></script>
 <script src="artifacts.js" data-rft-inline></script>
 <script src="app.js" data-rft-inline></script>
 </body>
