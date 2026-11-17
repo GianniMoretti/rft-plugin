@@ -57,6 +57,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import signal
 import stat
 import sys
@@ -66,6 +67,8 @@ from pathlib import Path
 from html import escape as html_escape, unescape as html_unescape
 from urllib.parse import parse_qs, quote, urlsplit
 
+import rft_latex  # the manuscript's LaTeX: its generated files and the compile
+import rft_manuscript  # the manuscript as the page shows it
 import rft_notebook
 import rft_queue  # the experiment queue, beside this file
 
@@ -582,6 +585,7 @@ class Vault:
         self._lock = threading.Lock()
         self._write_lock = threading.Lock()
         self._ask_lock = threading.Lock()
+        self._compile_lock = threading.Lock()
         self._sig: str | None = None
         self._tree: dict | None = None
         # the folders an image is searched in by name: the vault, then the Obsidian vault around it
@@ -870,8 +874,9 @@ class Vault:
 
     def note(self, nid: str) -> dict | None:
         """A note as the page shows it: its body, version, whether it is locked, and its threads,
-        each placed in the body as it is now (`at`: [start, end], or None when detached)."""
-        path = self.note_path(nid)
+        each placed in the body as it is now (`at`: [start, end], or None when detached). A
+        manuscript's snippet (S..) reads the same way: its LaTeX as the body, locked as the manuscript is."""
+        path = self.text_path(nid)
         if path is None:
             return None
         data = path.read_bytes()
@@ -881,8 +886,20 @@ class Vault:
         for t in self._threads(nid)["threads"]:
             at = locate(body, str(t.get("quote") or ""), str(t.get("prefix") or ""), str(t.get("suffix") or ""))
             threads.append({**t, "at": [at[0], at[1]] if at else None, "exact": bool(at and at[2])})
+        if rft_manuscript.SNIPPET_ID.match(nid):
+            h = rft_manuscript.header(text)
+            return {"id": nid, "name": f"{nid} {h['title']}" if h else nid, "body": body, "version": version_of(data),
+                    "locked": rft_manuscript.snippet_locked(rft_manuscript.read_registry(self.root), nid), "threads": threads}
         return {"id": nid, "name": path.name[:-3], "body": body, "version": version_of(data),
                 "locked": is_locked(front(text)), "threads": threads}
+
+    def text_path(self, nid: str) -> Path | None:
+        """A note's file, or a manuscript snippet's (S.., manuscript/snippets/S...tex): what the page
+        reads, edits and discusses."""
+        if rft_manuscript.SNIPPET_ID.match(nid or ""):
+            path = (rft_manuscript.manuscript_dir(self.root) / "snippets" / f"{nid}.tex").resolve()
+            return path if path.parent == (rft_manuscript.manuscript_dir(self.root) / "snippets").resolve() and path.is_file() else None
+        return self.note_path(nid)
 
     def inside(self, path: Path) -> bool:
         return self.root in path.parents
@@ -968,7 +985,7 @@ class Vault:
     def write_body(self, nid: str, body: str, version: str | None) -> tuple[int, dict]:
         """Replaces a note's body, keeping its frontmatter byte for byte. Refused, with the note as
         it is now, when the file changed since `version` (None: write anyway)."""
-        path = self.note_path(nid)
+        path = self.text_path(nid)
         if path is None:
             return 404, {"error": "no such note"}
         with self._write_lock:
@@ -1295,8 +1312,8 @@ class Vault:
         accept {thread}: a suggestion's replacement written into the note, when the quote is still
           there as it was; reject {thread};
         ask {thread}: the session that runs the server asked to answer it (a model turn).
-        The answer is the note as api/note gives it."""
-        path = self.note_path(nid)
+        The answer is the note as api/note gives it. A manuscript's snippet (S..) is discussed the same way."""
+        path = self.text_path(nid)
         if path is None:
             return 404, {"error": "no such note"}
         action = req.get("action")
@@ -1452,6 +1469,144 @@ class Vault:
         return 504, {"error": f"the Claude Code session did not change the note's type within {NODE_WAIT_S:g} s; "
                               "it may still change (is the session that ran /rft still open?)"}
 
+
+    # ---------------------------------------------------------------- the manuscript
+
+    def manuscript(self) -> dict:
+        """The manuscript as the page shows it (rft_manuscript.summary), with each snippet's open
+        threads, each document's last PDF, and whether latexmk is there to compile."""
+        texts: dict[str, str] = {}
+        paths = {n["id"]: n["path"] for n in self.tree()["nodes"]}
+
+        def read(nid: str) -> str:
+            if nid not in texts:
+                try:
+                    texts[nid] = (self.root / paths[nid]).read_text(encoding="utf-8", errors="replace")
+                except (KeyError, OSError):
+                    texts[nid] = ""
+            return texts[nid]
+
+        out = rft_manuscript.summary(self.root, self.tree(), read)
+        if not out["exists"]:
+            return out
+        for s in out["snippets"]:
+            s["threads"] = sum(1 for t in self._threads(s["id"])["threads"] if t.get("state") == "open")
+        for d in out["documents"]:
+            pdf = rft_manuscript.manuscript_dir(self.root) / ".build" / d["name"] / "main.pdf"
+            if pdf.is_file():
+                d["built"] = int(pdf.stat().st_mtime)
+        out["latexmk"] = bool(shutil.which("latexmk"))
+        return out
+
+    def manuscript_path(self, rel: str) -> Path | None:
+        """A file of the manuscript the page may read and write: a snippet (snippets/S<n>.tex, an
+        existing one) or a document (documents/<name>/main.tex)."""
+        m = re.fullmatch(r"snippets/(S\d+)\.tex|documents/([a-z0-9][a-z0-9-]*)/main\.tex", rel or "")
+        if not m:
+            return None
+        path = rft_manuscript.manuscript_dir(self.root) / rel
+        return path if path.is_file() and not path.is_symlink() else None
+
+    def manuscript_file(self, rel: str) -> tuple[int, dict]:
+        path = self.manuscript_path(rel)
+        if path is None:
+            return 404, {"error": "no such file in the manuscript"}
+        data = path.read_bytes()
+        reg = rft_manuscript.read_registry(self.root)
+        sid = Path(rel).stem if rel.startswith("snippets/") else None
+        return 200, {"path": rel, "text": data.decode("utf-8", errors="replace"), "version": version_of(data),
+                     "locked": rft_manuscript.snippet_locked(reg, sid) if sid else reg["locked"]}
+
+    def write_manuscript_file(self, rel: str, text: str, version: str | None) -> tuple[int, dict]:
+        """The user's edit of a snippet or a document, refused with the file as it is now when it
+        changed since `version` (None: write anyway)."""
+        path = self.manuscript_path(rel)
+        if path is None:
+            return 404, {"error": "no such file in the manuscript"}
+        with self._write_lock:
+            data = path.read_bytes()
+            if version is not None and version != version_of(data):
+                return 409, {"error": "the file changed since it was opened", **self.manuscript_file(rel)[1]}
+            self._write_note(path, data.decode("utf-8", errors="replace"), "", text)
+        return self.manuscript_file(rel)
+
+    def set_manuscript_lock(self, locked: bool, sid: str | None = None) -> tuple[int, dict]:
+        """Locks or unlocks the whole manuscript, or (`sid`) one snippet while it is locked."""
+        path = rft_manuscript.manuscript_dir(self.root) / "manuscript.json"
+        if not path.is_file():
+            return 404, {"error": "this vault has no manuscript"}
+        with self._write_lock:
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except ValueError:
+                return 422, {"error": "manuscript.json is not JSON: fix it by hand"}
+            if sid is None:
+                raw["locked"] = locked
+            else:
+                if self.text_path(sid) is None or not rft_manuscript.SNIPPET_ID.match(sid):
+                    return 404, {"error": "no such snippet"}
+                unlocked = [x for x in raw.get("unlocked") or [] if x != sid]
+                raw["unlocked"] = unlocked if locked else unlocked + [sid]
+            tmp = path.with_name(f".{path.name}.rft-tmp")
+            tmp.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
+            os.replace(tmp, path)
+        return 200, self.manuscript()
+
+    def compile_manuscript(self, doc: str) -> tuple[int, dict]:
+        """Compiles a document (rft_latex.compile_doc), one compile at a time."""
+        if not rft_manuscript.DOC_RE.match(doc or ""):
+            return 404, {"error": "no such document"}
+        with self._compile_lock:
+            r = rft_latex.compile_doc(self.root, doc)
+        r.pop("pdf", None)  # a path on disk: the page asks api/manuscript/pdf
+        return (404 if str(r.get("error", "")).startswith("no document") else 200), r
+
+    def manuscript_pdf(self, doc: str) -> Path | None:
+        if not rft_manuscript.DOC_RE.match(doc or ""):
+            return None
+        pdf = rft_manuscript.manuscript_dir(self.root) / ".build" / doc / "main.pdf"
+        return pdf if pdf.is_file() else None
+
+    def manuscript_ask(self, req: dict, ask) -> tuple[int, dict]:
+        """What the session does for the page, as it does for Claude (hooks/lib/manuscript.ts), so a
+        snippet's stamp is computed in one place: `new` {kind, title, basis, document?} a snippet the
+        user starts; `reviewed` {id} its stamp taken anew; `document` {name, kind} a new document.
+        The answer comes once the files show it."""
+        action = req.get("action")
+        ms = rft_manuscript.manuscript_dir(self.root)
+        if action == "new":
+            if not all(isinstance(req.get(k), str) and req[k].strip() for k in ("kind", "title")) or not isinstance(req.get("basis"), list):
+                return 400, {"error": "expected {action: new, kind, title, basis: [ids], document?}"}
+            before = {p.stem for p in rft_manuscript.snippet_files(self.root)}
+            found = lambda: next((p.stem for p in rft_manuscript.snippet_files(self.root) if p.stem not in before), None)  # noqa: E731
+        elif action == "reviewed":
+            sid = req.get("id")
+            if not isinstance(sid, str) or self.text_path(sid) is None or not rft_manuscript.SNIPPET_ID.match(sid):
+                return 404, {"error": "no such snippet"}
+            reg = ms / "manuscript.json"
+            was = reg.stat().st_mtime_ns if reg.is_file() else 0
+            found = lambda: sid if reg.is_file() and reg.stat().st_mtime_ns != was else None  # noqa: E731
+        elif action == "document":
+            name, kind = req.get("name"), req.get("kind", "article")
+            if not isinstance(name, str) or not rft_manuscript.DOC_RE.match(name) or kind not in ("article", "report"):
+                return 400, {"error": "expected {action: document, name: lowercase letters, digits and dashes, kind: article or report}"}
+            if (ms / "documents" / name / "main.tex").exists():
+                return 409, {"error": f"the manuscript already has a document {name}"}
+            found = lambda: name if (ms / "documents" / name / "main.tex").is_file() else None  # noqa: E731
+        else:
+            return 400, {"error": "action must be new, reviewed or document"}
+        with self._ask_lock:
+            try:
+                ask("RFT_MANUSCRIPT", {k: v for k, v in req.items() if k in ("action", "id", "kind", "title", "basis", "document", "name")})
+            except (OSError, ValueError):
+                return 503, {"error": "the Claude Code session that ran /rft is gone"}
+            deadline = time.monotonic() + NODE_WAIT_S
+            while time.monotonic() < deadline:
+                time.sleep(0.1)
+                got = found()
+                if got:
+                    return 200, {"id": got, **self.manuscript()}
+        return 504, {"error": f"the Claude Code session did not answer within {NODE_WAIT_S:g} s; is the session that ran /rft still open?"}
 
     def verify(self, nid: str, action: str, ask) -> tuple[int, dict]:
         """The user verifies a note (`verify`: verified, locked and stamped with a fingerprint of
@@ -1739,6 +1894,19 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 return self._artifact(parse_qs(url.query), head_only)
             if route == "/api/scratchpad":
                 return self._json(*vault.scratchpad(), head_only)
+            if route == "/api/manuscript":
+                return self._json(200, vault.manuscript(), head_only)
+            if route == "/api/manuscript/file":
+                return self._json(*vault.manuscript_file((parse_qs(url.query).get("path") or [""])[0]), head_only)
+            if route == "/api/manuscript/pdf":
+                # the PDF only for the page carrying the key: a document may hold what no note shows
+                given = self.headers.get("X-RFT-Token") or ""
+                if not token or not secrets.compare_digest(given, token):
+                    return self._json(403, {"error": "the key is missing or out of date: open the address /rft printed"}, head_only)
+                pdf = vault.manuscript_pdf((parse_qs(url.query).get("doc") or [""])[0])
+                if pdf is None:
+                    return self._json(404, {"error": "not compiled yet"}, head_only)
+                return self._send(200, pdf.read_bytes(), "application/pdf", head_only)
             if route == "/api/queue":
                 return self._json(*queue_snapshot(vault.queue), head_only)
             # a job's output: api/queue/output (api/queue/log for older pages, though ad and tracker
@@ -1790,6 +1958,16 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
         def do_PUT(self):
             """PUT api/note?id=<id> {"body": "...", "version": "<as read>"} or {"body": "...", "force": true};
             PUT api/scratchpad {"text": "...", "version": "<as read>" or null} or {"text": "...", "force": true}."""
+            if urlsplit(self.path).path == "/api/manuscript/file":
+                got = self._write_request("/api/manuscript/file", MAX_NOTE_BYTES)
+                if got is None:
+                    return
+                _, req = got
+                force = req.get("force") is True
+                version = None if force else req.get("version")
+                if not isinstance(req.get("path"), str) or not isinstance(req.get("text"), str) or not (force or isinstance(version, str)):
+                    return self._json(400, {"error": "expected {path, text, version} or {path, text, force: true}"})
+                return self._json(*vault.write_manuscript_file(req["path"], req["text"], version))
             if urlsplit(self.path).path == "/api/scratchpad":
                 got = self._write_request("/api/scratchpad", MAX_NOTE_BYTES)
                 if got is None:
@@ -1901,6 +2079,27 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 if "priority" not in req or (req["priority"] is not None and req["priority"] not in PRIORITIES):
                     return self._json(400, bad)
                 return self._json(*vault.set_priority(req["id"], req["priority"]))
+            if route == "/api/manuscript/compile":
+                got = self._write_request("/api/manuscript/compile", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                _, req = got
+                if not isinstance(req.get("doc"), str):
+                    return self._json(400, {"error": "expected {doc}"})
+                return self._json(*vault.compile_manuscript(req["doc"]))
+            if route == "/api/manuscript/lock":
+                got = self._write_request("/api/manuscript/lock", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                _, req = got
+                if not isinstance(req.get("locked"), bool) or ("id" in req and not isinstance(req["id"], str)):
+                    return self._json(400, {"error": "expected {locked: true or false, id?: a snippet}"})
+                return self._json(*vault.set_manuscript_lock(req["locked"], req.get("id")))
+            if route == "/api/manuscript/ask":
+                got = self._write_request("/api/manuscript/ask", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                return self._json(*vault.manuscript_ask(got[1], ask))
             if route == "/api/verify":
                 got = self._write_request("/api/verify", MAX_NODE_BYTES)
                 if got is None:

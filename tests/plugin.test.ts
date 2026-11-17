@@ -536,6 +536,23 @@ describe('web view', () => {
     expect(w.fs.read(path)).toContain('to review, by the user')
   })
 
+  test('the Manuscript tab\'s requests reach the session: a document, a snippet the user starts, a snippet reviewed', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, demoFiles())
+    const srv = fakeServer(on)
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    await $.command.run(RUN(''))
+    srv.print(`RFT_MANUSCRIPT ${JSON.stringify({ action: 'document', name: 'paper', kind: 'article' })}\n`)
+    await until(() => w.fs.exists('vault/manuscript/documents/paper/main.tex'))
+    srv.print(`RFT_MANUSCRIPT ${JSON.stringify({ action: 'new', kind: 'result', title: 'Mine', basis: ['E02'], document: 'paper' })}\n`)
+    await until(() => w.fs.exists('vault/manuscript/snippets/S01.tex'))
+    expect(w.fs.read('vault/manuscript/snippets/S01.tex')).toContain('% basis: E02')
+    expect(w.fs.read('vault/manuscript/documents/paper/main.tex')).toContain('\\rftsnippet{S01}')
+    srv.print(`RFT_MANUSCRIPT ${JSON.stringify({ action: 'reviewed', id: 'S01' })}\n`)
+    await until(() => w.fs.read('vault/manuscript/manuscript.json').includes('reviewed'))
+    expect(JSON.parse(w.fs.read('vault/manuscript/manuscript.json')).snippets.S01.reviewed).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+
   test('/rft outside an RFT project starts nothing', async ($, on) => {
     mock.clock(on)
     world(on, {})

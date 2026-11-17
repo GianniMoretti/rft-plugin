@@ -7,7 +7,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { comment, commentsReport, suggest } from '../hooks/lib/comments'
 import { nextReport, supersede } from '../hooks/lib/knowledge'
-import { basisOf, citeIndex, isStub, macroProblems, manuscriptReport, manuscriptWarnings, newDocument, placed, readManuscript, setSnippet, stateOf, usesIn } from '../hooks/lib/manuscript'
+import { basisOf, citeIndex, isStub, macroProblems, manuscriptReport, markReviewed, manuscriptWarnings, newDocument, placed, readManuscript, setSnippet, stateOf, usesIn } from '../hooks/lib/manuscript'
 import { readRegistry, writeRegistry } from '../hooks/lib/snippets'
 import { eagerTools, featuresInUse } from '../hooks/lib/tools'
 import { verifyNote } from '../hooks/lib/verify'
@@ -199,6 +199,26 @@ describe('what a snippet rests on', () => {
       'vault/manuscript/documents/paper/main.tex: places snippets that do not exist: S07',
     ])
     expect(await macroProblems(io, l, '\\rftnum{E02}{x}')).toEqual(['\\rftnum{E02}{x}: E02 has no saved RESULTS (its notebook has not run, or did not reproduce it)'])
+  })
+})
+
+describe('from the tree view', () => {
+  test('the user starts a snippet on any note (flagged until verified) and marks one reviewed', async () => {
+    const { fs, io, l } = await setup()
+    expect(await setSnippet(io, l, { kind: 'discussion', title: 'Open question', basis: ['D01'], document: 'paper' }, DATE, { byUser: true })).toContain('S01 proposed')
+    const text = fs.read(S01_PATH)
+    expect(text).toBe('% rft-snippet S01 · discussion · Open question\n% basis: D01\n\\paragraph{Open question}\n% your text\n')
+    const ms = (await readManuscript(io, l))!
+    expect(stateOf(ms.snippets[0]!, l, ms.registry).unverified).toEqual(['D01'])
+    // reviewed: the stamp taken anew, so a change seen before is no longer one
+    await setSnippet(io, l, stub, DATE)
+    fs.write(E01_PATH, fs.read(E01_PATH).replace('Text of E01.', 'Text of E01, rerun.'))
+    Object.assign(l, await load(io, l.config))
+    const s2 = async () => { const m = (await readManuscript(io, l))!; return stateOf(m.snippets[1]!, l, m.registry).review }
+    expect(await s2()).toEqual(['E01 changed'])
+    expect(await markReviewed(io, l, 'S02', '2026-11-18')).toBe('S02 reviewed: stamped with its basis as it is now.')
+    expect(await s2()).toEqual([])
+    expect((await readRegistry(io, 'vault')).snippets.S02!.reviewed).toBe('2026-11-18')
   })
 })
 

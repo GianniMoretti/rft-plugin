@@ -13,7 +13,9 @@ reports, and may hand back FIGURES and TABLES. `apply` takes that run to the vau
   never copies a number into a note: it writes what they mean around them.
 - **Saved**, when the numbers are recorded or check ok (so what the vault shows is what the note
   says): RESULTS as results/<id>.json; each figure as figures/<id>_<name>.svg, which a concept's
-  artifact names as ../figures/<file>; each table as tables/<id>_<name>.html, which an artifact
+  artifact names as ../figures/<file> (and as .pdf beside it, for the manuscript's \\rftfig, when the
+  notebook gave a matplotlib figure); each table as tables/<id>_<name>.html (and .tex, a booktabs
+  tabular for the manuscript's \\rfttable), which an artifact
   takes in with <rft-table src="<id>_<name>"></rft-table> (filled in here, and when the artifact
   is written: hooks/lib/artifacts.ts).
 - **Stamped**: the note's `reproduced:` line, the run's date, state, commit and time.
@@ -32,6 +34,7 @@ apply), so an artifact's comparisons follow its experiments at no model turn.
 """
 from __future__ import annotations
 
+import base64
 import html
 import json
 import math
@@ -321,6 +324,33 @@ def slug(name: str) -> str:
     return s or "figure"
 
 
+TEX_SPECIAL = {"\\": r"\textbackslash{}", "&": r"\&", "%": r"\%", "$": r"\$", "#": r"\#", "_": r"\_",
+               "{": r"\{", "}": r"\}", "~": r"\textasciitilde{}", "^": r"\textasciicircum{}"}
+
+
+def tex_text(s: str) -> str:
+    """Text as LaTeX typesets it: its special characters escaped, ± as math."""
+    out = "".join(TEX_SPECIAL.get(ch, ch) for ch in s)
+    return out.replace("±", r"$\pm$")
+
+
+def is_number(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def table_tex(t: dict) -> str:
+    """A table of the notebook as a booktabs tabular, for the manuscript (\\rfttable): its header above
+    \\midrule, columns of numbers right-aligned; no float, so the snippet gives the table, caption and label."""
+    cols = [str(c) for c in t.get("columns") or []]
+    rows = [list(r) + [None] * (len(cols) - len(r)) for r in t.get("rows") or []]
+    numeric = [bool(rows) and all(r[i] is None or is_number(r[i]) for r in rows) for i in range(len(cols))]
+    cell = lambda v: "" if v is None else tex_text(number_text(v))  # noqa: E731
+    lines = [r"\begin{tabular}{" + "".join("r" if n else "l" for n in numeric) + "}", r"\toprule",
+             " & ".join(tex_text(c) for c in cols) + r" \\", r"\midrule",
+             *(" & ".join(cell(v) for v in r[:len(cols)]) + r" \\" for r in rows), r"\bottomrule", r"\end{tabular}"]
+    return "\n".join(lines) + "\n"
+
+
 def table_html(caption: str, t: dict) -> str:
     """A table of the notebook (columns and rows) as the HTML an artifact takes in; numbers right-aligned by the page's style."""
     esc = lambda v: html.escape(number_text(v) if v is not None else "")  # noqa: E731
@@ -374,6 +404,18 @@ def save(vault: Path, exp: str, outcome: dict, date: str, runs: list[dict]) -> t
         write_atomic(vault / FIGURES_DIR / file, svg)
         figures.append(f"{FIGURES_DIR}/{file}")
         captions[f"{FIGURES_DIR}/{file}"] = str(name)
+        # the same figure as PDF, for the manuscript's \rftfig, when the notebook gave one (a matplotlib figure)
+        pdf = (outcome.get("pdfs") or {}).get(name)
+        pdf_path = vault / FIGURES_DIR / f"{exp}_{slug(name)}.pdf"
+        if isinstance(pdf, str):
+            try:
+                data = base64.b64decode(pdf, validate=True)
+            except ValueError:
+                data = b""
+            if data.startswith(b"%PDF") and len(data) <= MAX_FIGURE:
+                write_atomic(pdf_path, data)
+        elif pdf_path.exists():
+            pdf_path.unlink()  # an older run's, which would no longer show this figure
     for name, t in (outcome.get("tables") or {}).items():
         if not isinstance(t, dict) or not isinstance(t.get("columns"), list):
             notes.append(f"table {name!r}: not a table")
@@ -383,6 +425,7 @@ def save(vault: Path, exp: str, outcome: dict, date: str, runs: list[dict]) -> t
         contents[key] = {"caption": str(name), "columns": t["columns"][:12], "rows": [r[:12] for r in (t.get("rows") or [])[:20]],
                          "more_rows": max(0, len(t.get("rows") or []) - 20)}
         write_atomic(vault / TABLES_DIR / f"{key}.html", tables[key] + "\n")
+        write_atomic(vault / TABLES_DIR / f"{key}.tex", table_tex(t))
     notes.extend(f"{n}" for n in outcome.get("notes") or [])
     record = {"exp": exp, "concepts": concept_chain(vault, exp), "date": date, "results": outcome.get("results"), "commit": outcome.get("commit"),
               "dirty": outcome.get("dirty"), "notebook": outcome.get("file"),

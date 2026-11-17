@@ -277,9 +277,9 @@ async function snippetReport(io: Io, loaded: Loaded, ms: Manuscript, id: string,
 // ---------------------------------------------------------------- writing
 
 /** A new snippet's text: its header, the outline as comments, the kind's environment, the body left to the user (or `text`). */
-export function stubText(h: Header, outline: string[], date: string, text?: string): string {
+export function stubText(h: Header, outline: string[], date: string, text?: string, byUser = false): string {
   const lines = [headerText(h).trimEnd()]
-  if (text == null) {
+  if (text == null && !byUser) {
     lines.push('%', `% Proposed by Claude on ${date}, for you to write: Claude comments and suggests, and writes it only once you unlock it.`)
     if (outline.length) lines.push('% What to say:', ...outline.map(l => `%   - ${l}`))
   }
@@ -331,7 +331,7 @@ const cleanTitle = (t: unknown) => String(t ?? '').replace(/[·\n\r{}\\%]/g, ' '
  * edits, its basis, its title), only when it is unlocked. The basis must be verified notes, and
  * every macro must name what a notebook saved. Stamped with the basis notes' substance.
  */
-export async function setSnippet(io: Io, loaded: Loaded, i: SnippetInput, date: string): Promise<string> {
+export async function setSnippet(io: Io, loaded: Loaded, i: SnippetInput, date: string, opts: { byUser?: boolean } = {}): Promise<string> {
   const ms = await readManuscript(io, loaded)
   if (!ms) throw new ManuscriptError('This vault has no manuscript: the user starts one with /rft-manuscript')
   const vault = loaded.config.vault
@@ -344,7 +344,8 @@ export async function setSnippet(io: Io, loaded: Loaded, i: SnippetInput, date: 
       if (!ids.includes(id)) ids.push(id)
     }
     const unverified = ids.filter(id => loaded.tree.nodes[id]!.status !== 'verified')
-    if (unverified.length) {
+    // the user may rest a snippet on any note (it is flagged until the note is verified); Claude only on verified ones
+    if (unverified.length && !opts.byUser) {
       throw new ManuscriptError(`only verified notes are candidates for the manuscript: ${unverified.map(id => `${id} is ${loaded.tree.nodes[id]!.status}`).join(', ')}. ` +
         'When one is ready, suggest verifying it (rft_set_status verified, with what was checked); the user verifies it in the tree view.')
     }
@@ -361,10 +362,10 @@ export async function setSnippet(io: Io, loaded: Loaded, i: SnippetInput, date: 
     const title = cleanTitle(i.title)
     if (!title) throw new ManuscriptError('give the snippet a title')
     if (!i.basis?.length) throw new ManuscriptError('give its basis: the verified notes it rests on')
-    if (text && reg.locked) throw new ManuscriptError('the manuscript is locked: the user writes the text. Propose the snippet as a stub (outline: what it should say), with no text')
+    if (text && reg.locked && !opts.byUser) throw new ManuscriptError('the manuscript is locked: the user writes the text. Propose the snippet as a stub (outline: what it should say), with no text')
     const ids = basisIds(i.basis)
     const id = `S${String(reg.next).padStart(2, '0')}`
-    const body = stubText({ id, kind: i.kind, title, basis: ids }, outline, date, text)
+    const body = stubText({ id, kind: i.kind, title, basis: ids }, outline, date, text, opts.byUser)
     const problems = await macroProblems(io, loaded, body)
     if (problems.length) throw new ManuscriptError(`its macros name what no notebook saved:\n${problems.join('\n')}`)
     await io.write(join(vault, snippetRel(id)), body)
@@ -406,6 +407,17 @@ export async function setSnippet(io: Io, loaded: Loaded, i: SnippetInput, date: 
   await writeRegistry(io, vault, reg)
   if (doc) await io.write(join(vault, doc.path), placed(doc.text, id, i.after?.trim()))
   return `${id} written (${vault}/${s.path}), stamped with its basis as it is now.${doc ? ` Placed in ${doc.name}.` : ''}`
+}
+
+/** The user marks a snippet reviewed (the tree view's Reviewed): its stamp taken anew from its basis as it is now. */
+export async function markReviewed(io: Io, loaded: Loaded, ref: string, date: string): Promise<string> {
+  const ms = await readManuscript(io, loaded)
+  const id = ref.trim().toUpperCase()
+  const s = ms?.snippets.find(x => x.id === id)
+  if (!ms || !s) throw new ManuscriptError(`${id} is no snippet of the manuscript`)
+  ms.registry.snippets[id] = { ...ms.registry.snippets[id], stamp: stampOf(loaded, basisOf(s, loaded).ids), reviewed: date }
+  await writeRegistry(io, loaded.config.vault, ms.registry)
+  return `${id} reviewed: stamped with its basis as it is now.`
 }
 
 /** A new document's main.tex: `article` (a paper) or `report` (a thesis chapter). */

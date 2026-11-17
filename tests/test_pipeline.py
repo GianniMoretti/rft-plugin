@@ -25,11 +25,36 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 sys.path.insert(0, str(ROOT / "bench"))
 import lifecycle  # noqa: E402
+import rft_latex  # noqa: E402
 import rft_notebook  # noqa: E402
 import rft_queue  # noqa: E402
 import rft_results  # noqa: E402
 
 HAS_UV = bool(shutil.which("uv")) and not os.environ.get("RFT_SKIP_UV")
+HAS_TEX = bool(shutil.which("latexmk") and shutil.which("pdftotext"))
+
+# the manuscript: a document as /rft-manuscript writes it (documentTemplate in hooks/lib/manuscript.ts),
+# and a snippet that takes E08's numbers and table by name
+DOCUMENT = r"""\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx,booktabs}
+\usepackage[numbers]{natbib}
+\usepackage{rft}
+\usepackage{hyperref}
+\title{demo}
+\begin{document}
+\maketitle
+\rftsnippet{S01}
+\end{document}
+"""
+SNIPPET = r"""% rft-snippet S01 · result · A schedule with no stopping rule
+% basis: E08
+\paragraph{A schedule with no stopping rule}
+The toy run reaches a mean accuracy of \rftnum{E08}{acc_mean} (std \rftnum{E08}{acc_std}) over \rftnum{E08}{seeds} seeds.
+\begin{table}[h]\centering\caption{Accuracy by seed}\rfttable{E08}{accuracy_by_seed}\end{table}
+"""
 SEEDS = (0, 1, 2)
 
 # E08's notebook as rft_set_notebook writes it: the RUNS cell (runsCell in hooks/lib/notebooks.ts),
@@ -179,6 +204,23 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("<svg", (self.vault / "figures" / "D04_accuracy_by_experiment.svg").read_text())
         self.assertIn(f'reproduced: "{time.strftime("%Y-%m-%d")} ok @{commit}', d04_text := (self.vault / lifecycle.D04).read_text())
         self.assertNotIn("rft-results", d04_text)
+
+        # the manuscript: a snippet that names E08's numbers and table compiles, and its PDF holds
+        # exactly what the run saved, the per-seed accuracies included: no one typed them
+        if HAS_TEX:
+            ms = self.vault / "manuscript"
+            (ms / "documents" / "paper").mkdir(parents=True)
+            (ms / "documents" / "paper" / "main.tex").write_text(DOCUMENT)
+            (ms / "snippets").mkdir()
+            (ms / "snippets" / "S01.tex").write_text(SNIPPET)
+            built = rft_latex.compile_doc(self.vault, "paper")
+            self.assertTrue(built["ok"], built)
+            self.assertEqual(built["warnings"], [])
+            pdf = subprocess.run(["pdftotext", built["pdf"], "-"], capture_output=True, text=True, check=True).stdout
+            r = saved["results"]
+            self.assertIn(f"mean accuracy of {rft_results.number_text(r['acc_mean'])} (std {rft_results.number_text(r['acc_std'])}) over 3 seeds", " ".join(pdf.split()))
+            for a in accs:
+                self.assertIn(rft_results.number_text(a), pdf)
 
         # the original moves on: a commit that would change every number
         train = self.toy / "train.py"

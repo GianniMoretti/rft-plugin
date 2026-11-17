@@ -30,7 +30,7 @@ import { candidates, candidatesReport } from './lib/rebalance'
 import { nextReport, supersede } from './lib/knowledge'
 import { changesPriority, priorityText, suggestPriority } from './lib/priority'
 import { changesVerified, dismissVerified, keepVerified, toReview, verifiedText, verifyNote } from './lib/verify'
-import { manuscriptReport, manuscriptWarnings, newDocument, readManuscript, setSnippet } from './lib/manuscript'
+import { markReviewed, manuscriptReport, manuscriptWarnings, newDocument, readManuscript, setSnippet } from './lib/manuscript'
 import { GENERATED, KINDS, MANUSCRIPT_DIR, isSnippetLocked, readRegistry } from './lib/snippets'
 import { addDeadline, changesDates, checkDeadline, datesText, deadlineQuestion, deadlinesLine, suggestDates, suggestDeadline } from './lib/schedule'
 import { RECALL_HINT, searchesVault } from './lib/recall'
@@ -894,6 +894,12 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       return tagsReport(loaded)
     case 'rft_set_status':
       return unlocking($, unlock => setStatus(io, loaded, String(i.id ?? ''), String(i.status ?? ''), str(i.note), str(i.summary), today(), unlock))
+    case 'rft_manuscript_view': {
+      // the Manuscript tab's + Snippet, Reviewed and + Document (never a tool of the model's: only FROM_VIEW reaches it)
+      if (i.action === 'reviewed') return markReviewed(io, loaded, String(i.id ?? ''), today())
+      if (i.action === 'document') return newDocument(io, loaded, String(i.name ?? ''), i.kind === 'report' ? 'report' : 'article')
+      return setSnippet(io, loaded, { kind: i.kind, title: i.title, basis: strings(i.basis), document: str(i.document) }, today(), { byUser: true })
+    }
     case 'rft_verify': {
       // the tree view's Verify, Dismiss and Back to review (never a tool of the model's: only FROM_VIEW reaches it)
       const id = String(i.id ?? '')
@@ -1121,6 +1127,7 @@ const FROM_VIEW = [
   { line: 'RFT_SET_TYPE ', tool: 'rft_set_type', fields: ['id', 'type'], what: "change a note's type" },
   { line: 'RFT_MOVE_NODE ', tool: 'rft_move_node', fields: ['id', 'parent'], what: 'move a note' },
   { line: 'RFT_VERIFY ', tool: 'rft_verify', fields: ['id', 'action'], what: 'verify a note' },
+  { line: 'RFT_MANUSCRIPT ', tool: 'rft_manuscript_view', fields: ['action', 'id', 'kind', 'title', 'basis', 'document', 'name'], what: 'change the manuscript' },
 ] as const
 
 /**

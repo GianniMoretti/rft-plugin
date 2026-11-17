@@ -6,6 +6,7 @@ and TABLES out of a real run (marimo in a throwaway uv project; skipped without 
 
     python3 -m unittest discover -s tests -p "test_*.py"
 """
+import base64
 import json
 import os
 import shutil
@@ -107,6 +108,9 @@ class ApplyTest(unittest.TestCase):
         table = (self.vault / "tables" / "E02_gap_by_size.html").read_text()
         self.assertIn("<caption>Gap by size</caption>", table)
         self.assertIn("<tr><td>1000</td><td>4.1</td></tr>", table)
+        # and as LaTeX, for the manuscript's \\rfttable; no PDF for a figure given as SVG text
+        self.assertIn("1000 & 4.1 \\\\", (self.vault / "tables" / "E02_gap_by_size.tex").read_text())
+        self.assertFalse((self.vault / "figures" / "E02_gap_by_size.pdf").exists())
         self.assertEqual(got["saved"]["tables"], ["E02_gap_by_size"])
         # what each figure is called and each table holds, for rft_artifact to say without opening the files
         self.assertEqual(saved["captions"], {"figures/E02_gap_by_size.svg": "Gap by size"})
@@ -114,6 +118,18 @@ class ApplyTest(unittest.TestCase):
         # the rest of the note as it was
         self.assertIn("## What\nThree seeds.\n", t)
         self.assertIn("\n## Directions found\n", t)
+
+    def test_a_matplotlib_figure_is_kept_as_pdf_too(self):
+        self.write("")
+        pdf = base64.b64encode(b"%PDF-1.4 figure").decode()
+        rft_results.apply(self.vault, "E02", outcome(pdfs={"Gap by size": pdf}), "2026-11-16")
+        self.assertEqual((self.vault / "figures" / "E02_gap_by_size.pdf").read_bytes(), b"%PDF-1.4 figure")
+        # a later run that gives it as SVG text only: the old PDF goes, it would no longer match
+        rft_results.apply(self.vault, "E02", outcome(), "2026-11-17", record=True)
+        self.assertFalse((self.vault / "figures" / "E02_gap_by_size.pdf").exists())
+        # what is not a PDF is not kept
+        rft_results.apply(self.vault, "E02", outcome(pdfs={"Gap by size": base64.b64encode(b"<html>").decode()}), "2026-11-17", record=True)
+        self.assertFalse((self.vault / "figures" / "E02_gap_by_size.pdf").exists())
 
     def test_prose_with_no_number_is_kept_under_the_table(self):
         self.write("Running on GPU one.\n")

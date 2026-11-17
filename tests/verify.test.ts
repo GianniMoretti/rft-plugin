@@ -41,6 +41,16 @@ describe('the substance of a note', () => {
   })
 })
 
+describe('the same fingerprint as the server', () => {
+  test('server/rft_manuscript.py computes these too (tests/test_server.py)', () => {
+    const e = '---\nid: E05\n---\n# E05 · X\n\n## Result\nCutMix  closes the gap: 0.3 ± 0.5 points.\n<!-- rft-results a -->\n| acc | 71.3 |\n\n## Code\nx\n'
+    expect(substanceOf('experiment', e)).toBe('Result: CutMix closes the gap: 0.3 ± 0.5 points. | acc | 71.3 |')
+    expect(substanceFingerprint('experiment', e)).toBe('58942782')
+    const t = '---\nid: T01\n---\n## Statement\nA gap $g = a - b$.\n\n## Builds on\nE05.\n\n## Explanation\n“Proof” — by ε.\n'
+    expect(substanceFingerprint('theory', t)).toBe('1a85e809')
+  })
+})
+
 describe('verification', () => {
   test('Claude only suggests it, with its reason; a note that is not ready is refused with what is missing', async () => {
     const { fs, io, l } = await setup()

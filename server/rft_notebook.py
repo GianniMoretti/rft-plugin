@@ -167,7 +167,7 @@ def run(path: Path, timeout: float, uv: str = "uv") -> dict:
         except ValueError:
             return {**out, "ok": False, "error": "the run's answer was not JSON"}
         out["results"] = said.get("results")
-        for k in ("figures", "tables", "notes"):
+        for k in ("figures", "pdfs", "tables", "notes"):
             if said.get(k):
                 out[k] = said[k]
         return {**out, "ok": True}
@@ -198,7 +198,10 @@ def exec_notebook(path: str) -> int:
         if isinstance(get("FIGURES"), dict) else {}
     tables = {str(k): t for k, v in (get("TABLES") or {}).items() if (t := table_of(k, v, notes)) is not None} \
         if isinstance(get("TABLES"), dict) else {}
-    answer = {"results": jsonable(get("RESULTS")), "figures": figures, "tables": tables, "notes": notes}
+    # a matplotlib figure is also kept as PDF, for the manuscript's LaTeX (an SVG given as text has none)
+    pdfs = {str(k): pdf for k, v in (get("FIGURES") or {}).items() if str(k) in figures and (pdf := pdf_of(v)) is not None} \
+        if isinstance(get("FIGURES"), dict) else {}
+    answer = {"results": jsonable(get("RESULTS")), "figures": figures, "pdfs": pdfs, "tables": tables, "notes": notes}
     sys.stdout.flush()
     print("\n" + MARK + json.dumps(answer, allow_nan=False), flush=True)
     return 0
@@ -220,6 +223,23 @@ def svg_of(name, v, notes: list[str]) -> str | None:
         return buf.getvalue()
     notes.append(f"figure {name!r}: a {type(v).__name__}, not a matplotlib figure or SVG text")
     return None
+
+
+def pdf_of(v) -> str | None:
+    """A matplotlib figure (or its axes) saved as PDF, base64; None for anything else, or when it cannot be saved."""
+    if isinstance(v, str):
+        return None
+    fig = v if callable(getattr(v, "savefig", None)) else getattr(v, "figure", None)
+    if fig is None or not callable(getattr(fig, "savefig", None)):
+        return None
+    import base64
+    import io
+    buf = io.BytesIO()
+    try:
+        fig.savefig(buf, format="pdf", bbox_inches="tight")
+    except Exception:  # noqa: BLE001 - the SVG is the figure; the PDF only follows it
+        return None
+    return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
 def table_of(name, v, notes: list[str]) -> dict | None:
