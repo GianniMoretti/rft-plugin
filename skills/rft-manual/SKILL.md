@@ -1,6 +1,6 @@
 ---
 name: rft-manual
-description: Operating manual of the Reasoning Flow Tree: experiment (E..), direction (D..), reference (R..) and theory (T..) notes recording a research project's reasoning, grouped into concepts (lines of research) with their code repositories. Use in a project with .rft/config.json whenever an experiment is planned, launched (GPU runs: rft_queue) or finished (a queued job ended), an experiment in a concept with code is planned (write its notebook: rft_set_notebook), an idea or question comes up (even a rejected one), a paper or review is read, a new field comes up (offer a literature search first), a definition or method is written down, an idea is dropped or moved, a branch belongs under another note (move it), a new line of research opens (propose a concept, ask for its code), work starts on an experiment whose concept links code, Claude is asked to answer a tree-view comment or suggestion, a note is locked, a note's priority comes up (suggest one, never set it), or the user asks about the tree, its concepts, its code or what was tried (start from rft_map).
+description: Operating manual of the Reasoning Flow Tree: experiment (E..), direction (D..), reference (R..) and theory (T..) notes recording a research project's reasoning, grouped into concepts (lines of research) with their code repositories. Use in a project with .rft/config.json whenever an experiment is planned, launched (GPU runs: rft_queue) or finished (a queued job ended), an experiment in a concept with code is planned (write its notebook: rft_set_notebook), an idea or question comes up (even a rejected one), a paper or review is read, a new field comes up (offer a literature search first), a definition or method is written down, an idea is dropped or moved, a branch belongs under another note (move it), a new line of research opens (propose a concept, ask for its code), work starts on an experiment whose concept links code, Claude is asked to answer a tree-view comment or suggestion, a note is locked, a note's priority comes up (suggest one, never set it), a result is final (suggest verifying it, never set verified), a verified note's claim may no longer hold (review), the manuscript comes up (stubs from verified notes, the user writes them), or the user asks about the tree, its concepts, its code or what was tried (start from rft_map).
 ---
 
 # Reasoning Flow Tree (rft)
@@ -40,6 +40,8 @@ children / up / down fields are derived from their `parent:` field by the rft to
 | `planned` | decided, not started | → |
 | `running` | in progress, partial results possible | … |
 | `done` | finished, result recorded | ✓ |
+| `review` | was verified; its claim changed since, or was overturned: the user checks it again | ↺ |
+| `verified` | the user checked what it claims (only they set it; it locks the note) | ✔ |
 | `idea` | proposed, not decided | ? |
 | `dropped` | tried or considered and abandoned (say why) | ✗ |
 | `discussed` | discussed and deliberately not pursued | · |
@@ -553,6 +555,8 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 | `rft_artifact` | what a concept's artifact is written from: its results, what changed since, how to write the page |
 | `rft_set_artifact` | write a concept's artifact, whole (html) or with edits, stamped with the results it was written from |
 | `rft_supersede` | mark a note whose result a newer one overturns (`superseded_by:`), or clear the mark |
+| `rft_manuscript` | the manuscript: each document's snippets with their state and basis, those in no document, the verified notes still to write; a snippet in full, with the numbers, figures and tables its notes saved |
+| `rft_set_snippet` | a new snippet resting on verified notes (a stub while locked), placed in a document; or, unlocked, a snippet's text or edits |
 | `rft_next` | the deadlines (nearest first, what puts them at risk) and GPU clashes, the user's priorities, then what is still open by concept: running, planned, unexplored directions, open questions; the queue's jobs and the results to record |
 | `rft_suggest_priority` | suggest a priority for a note, with why; the user accepts or dismisses it (never set `priority:` yourself) |
 | `rft_suggest_dates` | suggest an experiment's start and/or estimate, with why; the user accepts or dismisses it (never set `start:`, `est:` or `due:` yourself) |
@@ -593,6 +597,63 @@ error. Never edit `up:` / `down:` by hand, nor the list under `## The tree` in t
 
 A note made with the wrong type is fixed with `rft_set_type`, never renamed by hand: its id, its
 folder and every link to it change together.
+
+## Verified notes
+
+- **`verified`** says the user checked what a note claims: an experiment's Result, a theory note's
+  Statement and Explanation, a reference's Source and Key results, a direction's Idea. Only the
+  user verifies a note, in the tree view, which locks it and stamps it (`verified: <date>
+  <fingerprint>` of those sections). Only verified notes go into the manuscript.
+- **Suggest it** when a result is final: `rft_set_status {id, status: "verified", note: what was
+  checked and how}` writes `suggested_verified:`, which the user accepts or dismisses. It is
+  refused, with what is missing, unless the note is done (or in review), not superseded, and: an
+  experiment with a notebook reproduced (`reproduced: … ok`); a direction with a verified note
+  under it. Edits that write `status: verified` or `verified:` are refused.
+- **Review** (↺): a verified note goes there by itself, unlocked, with a History line, when what it
+  claims changes (an accepted suggestion, an edit), when it is superseded, or when its notebook's
+  run differs or fails. Set one there yourself with `rft_set_status {id, status: "review", note:
+  why}` when you find its claim may no longer hold (the session asks the user first, as the note is
+  locked). A verified note's other status changes are the user's. `rft_next` lists the notes in
+  review and your suggestions waiting.
+
+## The manuscript
+
+The manuscript (`<vault>/manuscript/`, started by the user with `/rft-manuscript` or the tree view's
+Manuscript tab) turns verified notes into LaTeX, one **snippet** at a time; **documents** (a paper,
+a thesis chapter) assemble them. Without one, its tools wait behind ToolSearch and none of this applies.
+
+- **A snippet** is `manuscript/snippets/S<nn>.tex`, opening with two comment lines:
+  `% rft-snippet S04 · result · CutMix at 1k images` and `% basis: E05, E02`. Kinds: definition,
+  theorem, lemma, proposition, corollary, proof, method, result, related-work, motivation,
+  discussion, figure, table. A document (`manuscript/documents/<name>/main.tex`) places each with
+  a line `\rftsnippet{S04}`.
+- **It rests on notes**: its `% basis:` line, and the notes its macros and citations name. Never
+  type a number, figure or table of the tree: `\rftnum{E05}{acc.1k}` prints a number of
+  `results/E05.json` (the notebook's RESULTS, by path), `\rftfig[width=…]{E08}{loss}` its figure
+  (`figures/E08_loss.pdf`, saved by the notebook's run from a matplotlib figure),
+  `\rfttable{E08}{by_seed}` its table (a booktabs tabular; the snippet gives the `table`, caption
+  and label). `\cite{R07}` cites a reference note; a paper of a literature note is cited by its
+  own key, from the ```` ```bibtex ```` block of its entry. When you fill a reference's Source, add
+  its BibTeX in such a block: `refs.bib` is made from them.
+- **Locked by default**: the user writes it. You:
+  - propose snippets only from verified notes. When `rft_manuscript` or `rft_next` lists verified
+    notes no snippet rests on, offer stubs as a table (kind, title, basis, what it would say,
+    where), and create only the ones the user picks with `rft_set_snippet {kind, title, basis,
+    outline, document, after?}`: the outline says the claim, the numbers and the macros that give
+    them, the caveats; the body is left to the user;
+  - comment and suggest on their text when asked, with `rft_comment` and `rft_suggest` and the
+    snippet's id, as on a note; never write it (Edit, Write and shell writes to the manuscript
+    are refused).
+- **Unlocked** (the whole manuscript, or one snippet, by the user's padlock): write the text with
+  `rft_set_snippet {id, text}` or `{id, edits}`; its basis is checked the same way, and it is
+  stamped with its notes as they are.
+- **Review**: a snippet whose basis note changed since its stamp, went to review, was superseded or
+  dropped is in review (`rft_manuscript` says why). Point it out and suggest how its text should
+  follow; the user marks it **Reviewed** in the tab.
+- The files the plugin writes (`manuscript.json`, `rft.sty`, `rft-numbers.tex`, `refs.bib`,
+  `.build/`) are never edited by hand. The server compiles a document with latexmk when the user
+  asks; `rft_validate` names a basis that is no note, a macro that names nothing saved, an
+  unknown citation and a cited reference with no BibTeX.
 
 ## Locked notes, comments and suggestions
 

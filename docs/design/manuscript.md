@@ -1,6 +1,9 @@
 # Design note: from the tree to a manuscript
 
-Status: proposed 2026-11-17, to be built in the phases at the end.
+Status: built 2026-11-17, in the phases at the end (all five). The user-facing description is the
+README's "The manuscript" and "Statuses"; Claude's is the manual's "Verified notes" and "The
+manuscript". Later: clicking in the PDF to jump to the source line, an HTML export for blog posts.
+An older vault needs nothing from `/rft-update`: the manuscript starts when the user starts it.
 
 ## The problem
 
