@@ -9,7 +9,7 @@ import { anchorFor, answerThread, askText, comment, commentsPath, commentsReport
 import { loadActive, setCode, setStatus, setType } from '../hooks/lib/ops'
 import { CWD, E01, E02, MemoryFs, demoFiles, world } from './fixture'
 import { Answers } from '../hooks/lib/answers'
-import { subagentAskText } from '../hooks/lib/comments'
+import { subagentAskText, subjectOf } from '../hooks/lib/comments'
 
 const E02_PATH = `vault/experiments/${E02}.md`
 const NOW = '2026-11-07 10:02'
@@ -149,7 +149,7 @@ describe('Claude in the discussion', () => {
 describe('Ask Claude', () => {
   const ask = async (opts: { locked?: boolean; t: Thread }) => {
     const { io, loaded } = await project({ locked: opts.locked, threads: [opts.t] })
-    return askText(loaded, await readComments(io, 'vault', 'E02'), 'E02', 'c1', `vault/${loaded.tree.nodes.E02!.path}`)
+    return askText(await subjectOf(io, loaded, 'E02'), await readComments(io, 'vault', 'E02'), 'c1', `vault/${loaded.tree.nodes.E02!.path}`)
   }
 
   test('a comment is answered in its thread, and the note is left as it is', async () => {
@@ -334,7 +334,7 @@ describe('Ask Claude in a subagent', () => {
   test('the subagent\'s final message goes into its thread: a reply, or a replacement for a suggestion', async () => {
     const { fs, io, loaded } = await project({ threads: [thread({ asked: NOW }), thread({ id: 'c2', kind: 'suggestion', asked: NOW })] })
     const before = fs.read(E02_PATH)
-    expect(subagentAskText(loaded, saved(fs), 'E02', 'c2', 'x.md')).toContain('<replacement>')
+    expect(subagentAskText(await subjectOf(fs.io(), loaded, 'E02'), saved(fs), 'c2', 'x.md')).toContain('<replacement>')
     expect(await answerThread(io, loaded, 'E02', 'c1', ' Yes: 5 seeds. ', NOW)).toContain('E02 c1: replied')
     expect(await answerThread(io, loaded, 'E02', 'c2', '<replacement>\nCutMix closes the gap.\n</replacement>\nFrom E05.', NOW)).toContain('replacement written')
     const [c1, c2] = saved(fs).threads

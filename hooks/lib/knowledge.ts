@@ -10,6 +10,7 @@ import { readDigests, resolveConcept } from './map'
 import { scheduleReport } from './schedule'
 import { artifactMarks, describeState } from './artifacts'
 import type { Io, Loaded, RftNode } from './vault'
+import { manuscriptNext } from './manuscript'
 import { MARK, OPEN_STATUSES, PRIORITIES, conceptOrder, conceptPath, join, load, removeField, resolveId, setField, sync, withHistory, withStatus, lacksNotebook } from './vault'
 
 export class KnowledgeError extends Error {}
@@ -136,6 +137,8 @@ export async function nextReport(io: Io, loaded: Loaded, today: string, ref?: st
       toVerify.length ? `Verifications you suggested, waiting for the user: ${toVerify.map(n => n.id).join(', ')}.` : '',
     ].filter(Boolean).join(' '))
   }
+  const writing = await manuscriptNext(io, loaded)
+  if (writing.length) tail.push(...(tail.length ? [] : ['']), writing.join(' '))
   const sched = scheduleReport(loaded, today)
   tail.push(...(sched.tail.length && !tail.length ? [''] : []), ...sched.tail)
   // in a vault with artifacts: the concepts whose artifact is out of date, or missing while they have results

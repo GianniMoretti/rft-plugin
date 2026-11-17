@@ -269,6 +269,9 @@ export const MILESTONE_RE = /^M(\d+)$/
 export const ICS = 'rft.ics'
 /** The concepts' artifacts: one HTML page each, whose first line is this header. */
 export const ARTIFACTS_DIR = 'artifacts'
+/** The manuscript (docs/design/manuscript.md): its folder in the vault, and its registry, whose presence turns it on. */
+export const MANUSCRIPT_DIR = 'manuscript'
+export const MANUSCRIPT_REGISTRY = `${MANUSCRIPT_DIR}/manuscript.json`
 export const ARTIFACT_HEAD = /^<!-- rft-artifact (\{.*\}) -->[ \t]*(?:\r?\n|$)/
 
 export const join = (...parts: string[]) =>
@@ -522,6 +525,8 @@ export type Loaded = {
   milestones: Milestone[]
   /** The vault holds at least one concept artifact (`artifacts/*.html` with its header). */
   hasArtifacts?: boolean
+  /** The vault has a manuscript (`manuscript/manuscript.json`). */
+  hasManuscript?: boolean
 }
 
 export async function signatureOf(io: Io, vault: string): Promise<string> {
@@ -645,7 +650,7 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
   const tree: Tree = { nodes, roots }
   tree.concepts = computeConcepts(tree, config.project, conceptDeclarations(texts))
   const milestones = await loadMilestones(io, config.vault, byName, nodes)
-  return { config, tree, texts, problems, signature: await signatureOf(io, config.vault), milestones, hasArtifacts: await hasArtifacts(io, config.vault) }
+  return { config, tree, texts, problems, signature: await signatureOf(io, config.vault), milestones, hasArtifacts: await hasArtifacts(io, config.vault), hasManuscript: await io.exists(join(config.vault, MANUSCRIPT_REGISTRY)).catch(() => false) }
 }
 
 /** Whether the vault holds a concept artifact: an html file in `artifacts/` that starts with the header. */

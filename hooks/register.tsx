@@ -18,7 +18,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { RftSnapshot } from '../types'
-import { COMMENTS_DIR, LockedChange, answerThread, askText, comment as addComment, commentsReport, isLocked, readComments, subagentAskText, suggest as addSuggestion } from './lib/comments'
+import { COMMENTS_DIR, LockedChange, answerThread, askText, comment as addComment, commentsReport, isLocked, readComments, subagentAskText, subjectOf, suggest as addSuggestion } from './lib/comments'
 import type { CodeEnv, Git } from './lib/ops'
 import { addNode, codeReport, conceptsReport, exportHtml, initVault, loadActive, lockedText, moveNode, rulesText, setCode, setConcept, setRefs, setRepos, setStatus, setTags, setType, tagsReport, today, treeReport } from './lib/ops'
 import { ASSET_PATHS } from './lib/page'
@@ -30,6 +30,8 @@ import { candidates, candidatesReport } from './lib/rebalance'
 import { nextReport, supersede } from './lib/knowledge'
 import { changesPriority, priorityText, suggestPriority } from './lib/priority'
 import { changesVerified, dismissVerified, keepVerified, toReview, verifiedText, verifyNote } from './lib/verify'
+import { manuscriptReport, manuscriptWarnings, newDocument, readManuscript, setSnippet } from './lib/manuscript'
+import { GENERATED, KINDS, MANUSCRIPT_DIR, isSnippetLocked, readRegistry } from './lib/snippets'
 import { addDeadline, changesDates, checkDeadline, datesText, deadlineQuestion, deadlinesLine, suggestDates, suggestDeadline } from './lib/schedule'
 import { RECALL_HINT, searchesVault } from './lib/recall'
 import { eagerTools, featuresInUse } from './lib/tools'
@@ -313,6 +315,32 @@ const TOOLS = {
         full: { type: 'boolean', description: 'Every result in full, not only the new and changed ones.' },
       },
       required: ['concept'],
+    },
+  },
+  rft_manuscript: {
+    description:
+      'The manuscript (vault manuscript/: LaTeX snippets S.., each resting on verified notes, assembled by documents): each document\'s snippets in order with their state (stub, written, review, unverified basis), those in no document, and the verified notes still to write. With a snippet id: its basis notes with what their notebooks saved (as \\rftnum, \\rftfig, \\rfttable), and its file.',
+    inputSchema: {
+      type: 'object',
+      properties: { ref: { type: 'string', description: 'A document\'s name, or a snippet id (S04).' } },
+    },
+  },
+  rft_set_snippet: {
+    description:
+      'Write in the manuscript. Without id: a new snippet resting on verified notes (basis); while the manuscript is locked, a stub only (kind, title, basis, outline: what it should say), which the user writes. document (and after) places it. With id: its text or edits, only once the user unlocked it. Numbers, figures and tables only through \\rftnum{E05}{key}, \\rftfig{E08}{name}, \\rfttable{E08}{name}; citations \\cite{R07}. Stamped with its basis, so a change to those notes puts it in review.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'An existing snippet (S04), to write its text; leave out for a new one.' },
+        kind: { type: 'string', enum: [...KINDS] },
+        title: { type: 'string' },
+        basis: { type: 'array', items: { type: 'string' }, description: 'The verified notes it rests on (ids).' },
+        outline: { type: 'array', items: { type: 'string' }, description: 'A stub\'s lines for the user: the claim, the numbers and the macros that give them, the caveats.' },
+        text: { type: 'string', description: 'The LaTeX, when the snippet is unlocked.' },
+        edits: { type: 'array', items: { type: 'object', properties: { old_str: { type: 'string' }, new_str: { type: 'string' } }, required: ['old_str', 'new_str'] } },
+        document: { type: 'string', description: 'The document to place it in.' },
+        after: { type: 'string', description: 'The snippet it goes after in that document (default: last).' },
+      },
     },
   },
   rft_set_artifact: {
@@ -703,6 +731,7 @@ async function registerCommands($: EngineInterface): Promise<void> {
   await attempt('rft-next', () => $.command.register({ name: 'rft-next', description: 'What is still open, by concept: running and planned experiments, unexplored directions, open questions', argumentHint: '[concept]' }))
   await attempt('rft-jobs', () => $.command.register({ name: 'rft-jobs', description: 'The experiment queue: GPUs, jobs running and waiting, the ones that ended (no model turn)', argumentHint: '[job or experiment]' }))
   await attempt('rft-summarize', () => $.command.register({ name: 'rft-summarize', description: 'Ask Claude to write the missing one-line note summaries and concept digests (the project map)', argumentHint: '[concept]' }))
+  await attempt('rft-manuscript', () => $.command.register({ name: 'rft-manuscript', description: 'Start the manuscript (LaTeX snippets resting on verified notes), add a document to it, or ask Claude to propose what to write next', argumentHint: '[document] | new <name> [article|report]' }))
   await attempt('rft-artifact', () => $.command.register({ name: 'rft-artifact', description: "Ask Claude to write a concept's artifact, the page of its experiments' results (no concept: every one missing or out of date)", argumentHint: '[concept]' }))
   await attempt('rft-update', () => $.command.register({ name: 'rft-update', description: 'Bring a vault made by an older version up to this one: shows what it adds; apply writes it. notebooks: run every notebook again in the queue and list what is still to write (--write: ask Claude to write it)', argumentHint: '[apply] [--sections] | notebooks [--write] [concept]' }))
   await attempt('rft-view', () => $.command.register({ name: 'rft-view', description: 'Write a standalone HTML view of the tree to <vault>/tree.html' }))
@@ -947,11 +976,18 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       return artifactReport(io, loaded, String(i.concept ?? ''), { full: i.full === true })
     case 'rft_set_artifact':
       return setArtifact(io, loaded, String(i.concept ?? ''), { html: i.html, edits: i.edits }, today())
+    case 'rft_manuscript':
+      return manuscriptReport(io, loaded, str(i.ref))
+    case 'rft_set_snippet':
+      return setSnippet(io, loaded, {
+        id: str(i.id), kind: i.kind, title: i.title, basis: i.basis === undefined ? undefined : strings(i.basis), outline: i.outline,
+        text: i.text, edits: i.edits, document: str(i.document), after: str(i.after),
+      }, today())
     case 'rft_tree':
       return treeReport(loaded, { root: str(i.root), depth: typeof i.depth === 'number' ? i.depth : undefined, vault: shownVault(h, loaded.config) })
     case 'rft_validate': {
       const v = await validate(io, loaded, { root: h.root, home: await homeOf($) })
-      v.warnings.push(...(await mapWarnings(io, loaded)), ...(await artifactWarnings(io, loaded)))
+      v.warnings.push(...(await mapWarnings(io, loaded)), ...(await artifactWarnings(io, loaded)), ...(await manuscriptWarnings(io, loaded)))
       const lines = [v.errors.length
         ? `FAILED: ${v.errors.length} error(s), ${v.warnings.length} warning(s).`
         : `OK: no errors, ${v.warnings.length} warning(s).`]
@@ -1112,13 +1148,12 @@ async function askFromView($: EngineInterface, request: string): Promise<void> {
     const r = JSON.parse(request) as Record<string, unknown>
     const h = await mustHere($)
     const loaded = await loadActive(h.io)
-    const id = String(r.id ?? '')
-    const n = loaded.tree.nodes[id]
-    if (!n) throw new Error(`"${id}" is not a note of the tree`)
+    const n = await subjectOf(h.io, loaded, String(r.id ?? ''))
+    const id = n.id
     const c = await readComments(h.io, loaded.config.vault, id)
     const thread = String(r.thread ?? '')
     const path = join(shownVault(h, loaded.config), n.path)
-    await answerInSubagent($, { id, thread, what: `thread ${thread} on ${id}` }, subagentAskText(loaded, c, id, thread, path), () => askText(loaded, c, id, thread, path))
+    await answerInSubagent($, { id, thread, what: `thread ${thread} on ${id}` }, subagentAskText(n, c, thread, path), () => askText(n, c, thread, path))
   } catch (err) {
     $.ui.toast(`rft: the tree view could not ask Claude (${message(err)})`)
   }
@@ -1621,6 +1656,56 @@ async function reproducedEdit($: EngineInterface, e: Record<string, unknown>): P
   return changesResultsBlock(before, after) ? resultsBlockEditText(n) : null
 }
 
+/** /rft-manuscript's request: proposals as a table, nothing written until the user picks. */
+const manuscriptPrompt = (doc?: string) =>
+  `Propose what to write in the manuscript${doc ? `'s document ${doc}` : ''}. Call rft_manuscript${doc ? ` ${doc}` : ''}; for the verified notes still to write (and the snippets in review), give me a table: kind, title, basis, what it would say in one line, where it goes${doc ? '' : ' (which document)'}. ` +
+  'Write nothing until I pick. Then create the ones I pick with rft_set_snippet: while the manuscript is locked as stubs (outline: the claim, the numbers and the macros that give them, the caveats), placed in the document, for me to write.'
+
+const MANUSCRIPT_GENERATED = `The plugin writes the manuscript's ${GENERATED.join(', ')}: snippets go through rft_set_snippet (rft_manuscript shows them), the rest is generated when a document compiles.`
+const manuscriptLocked = (id?: string) =>
+  `The manuscript is locked: ${id ? `${id} is` : 'its snippets and documents are'} the user's to write. Propose a snippet as a stub with rft_set_snippet (document places it), and comment or suggest on the user's text with rft_comment / rft_suggest {id: "${id ?? 'S..'}", quote, …}; they accept or reject it.`
+
+/**
+ * Why Claude may not make this tool call, or null: it would write the manuscript by hand where it is
+ * not Claude's to (an Edit or Write in vault/manuscript/, a shell command that writes there): the
+ * generated files and the registry always, a new snippet's file (rft_set_snippet numbers and stamps
+ * it), and while the manuscript is locked its snippets (but the ones unlocked alone) and documents.
+ */
+async function manuscriptEdit($: EngineInterface, e: Record<string, unknown>): Promise<string | null> {
+  const tool = String(e.tool)
+  if (!EDIT_TOOLS.has(tool) && tool !== 'Bash') return null
+  const s = await read($, snapshot)
+  if (!s?.isActive || !s.vault) return null
+  const vault = resolvePath(s.vault, '.')
+  const dir = `${vault}/${MANUSCRIPT_DIR}/`
+  let files: string[] = []
+  if (tool === 'Bash') {
+    const cmd = String(e.command ?? '')
+    const w = shellWrites(cmd, resolvePath(await $.session.cwd(), '.'))
+    files = w.files.filter(f => f.startsWith(dir))
+    if (!files.length && w.script && (cmd.includes(dir) || cmd.includes(`${vault.split('/').pop()}/${MANUSCRIPT_DIR}/`))) files = [dir]
+  } else {
+    const raw = e.file_path ?? e.notebook_path
+    if (typeof raw !== 'string') return null
+    const abs = resolvePath(resolvePath(await $.session.cwd(), '.'), raw)
+    if (abs.startsWith(dir)) files = [abs]
+  }
+  if (!files.length) return null
+  const reg = await readRegistry({ read: (p: string) => $.fs.read(p) } as never, vault)
+  for (const f of files) {
+    const rel = f.slice(dir.length)
+    if (GENERATED.some(g => rel === g || rel.startsWith(`${g}/`))) return MANUSCRIPT_GENERATED
+    const m = /^snippets\/(S\d+)\.tex$/.exec(rel)
+    if (m) {
+      let exists = true
+      try { await $.fs.read(f) } catch { exists = false }
+      if (!exists) return `A new snippet is made with rft_set_snippet, which numbers it, writes its header and stamps it with its basis: not by hand.`
+      if (isSnippetLocked(reg, m[1]!)) return manuscriptLocked(m[1])
+    } else if (reg.locked) return manuscriptLocked()
+  }
+  return null
+}
+
 /** A `status: verified` or `verified:` line. */
 const VERIFIED_LINE = /(^|[^\w])(status\s*:\s*["']?verified|verified\s*:)/m
 
@@ -1988,6 +2073,28 @@ export const register: Register = (on, options) => {
     }
   })
 
+  on('command.run', { command: 'rft-manuscript' }, async ($, e) => {
+    try {
+      const io = (await mustHere($)).io
+      const loaded = await loadActive(io)
+      const args = e.args.trim().split(/\s+/).filter(Boolean)
+      const ms = await readManuscript(io, loaded)
+      if (args[0] === 'new' || !ms) {
+        const [name = 'paper', kind = 'article'] = args[0] === 'new' ? args.slice(1) : args
+        if (kind !== 'article' && kind !== 'report') return { text: 'A document is an article (a paper) or a report (a thesis chapter): /rft-manuscript new <name> [article|report].' }
+        const made = await newDocument(io, loaded, name, kind)
+        await refresh($, true)
+        return { text: `${made} The tree view's Manuscript tab shows it; /rft-manuscript asks Claude what to write from the verified notes.` }
+      }
+      const doc = args[0]
+      if (doc && !ms.documents.some(d => d.name === doc)) return { text: `"${doc}" is no document of the manuscript (${ms.documents.map(d => d.name).join(', ') || 'none yet'}); /rft-manuscript new ${doc} makes it.` }
+      pendingPrompts.push(manuscriptPrompt(doc))
+      return { text: `Asked Claude to propose what to write${doc ? ` in ${doc}` : ''}: a table to choose from; nothing is written until you pick.` }
+    } catch (err) {
+      return { text: message(err) }
+    }
+  })
+
   on('command.run', { command: 'rft-view' }, async $ => {
     try {
       const h = await mustHere($)
@@ -2040,7 +2147,7 @@ export const register: Register = (on, options) => {
     }
     if (rules) {
       const call = e as unknown as Record<string, unknown>
-      const why = (await artifactEdit($, call)) ?? (await lockedEdit($, call)) ?? (await priorityEdit($, call)) ?? (await datesEdit($, call)) ?? (await reproducedEdit($, call)) ?? (await verifiedEdit($, call))
+      const why = (await artifactEdit($, call)) ?? (await lockedEdit($, call)) ?? (await priorityEdit($, call)) ?? (await datesEdit($, call)) ?? (await reproducedEdit($, call)) ?? (await verifiedEdit($, call)) ?? (await manuscriptEdit($, call))
       if (why) return { deny: why }
     }
     const ran = await next(e)
