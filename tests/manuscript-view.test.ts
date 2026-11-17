@@ -17,6 +17,8 @@ type Api = {
   usedWords: (s: Snippet) => string
   outlineOf: (text: string, copies: { id: string; state: string; snippetReview?: boolean }[]) => Record<string, unknown>[]
   writtenIn: (ms: Ms | null, id: string) => string[]
+  slugOf: (title: string) => string
+  docNameProblem: (name: string, taken: string[]) => string
   errorText: (e: { file: string; snippet?: string; line: number | null; message: string; context?: string }) => string
 }
 const M = (globalThis as unknown as { RftManuscript: Api }).RftManuscript
@@ -72,6 +74,18 @@ describe('the manuscript tab', () => {
     expect(M.writtenIn(ms, 'E05')).toEqual(['S01', 'S03'])
     expect(M.writtenIn(ms, 'D01')).toEqual([])
     expect(M.writtenIn(null, 'E05')).toEqual([])
+  })
+
+  test('a new document: its name made from its title, and checked', () => {
+    expect(M.slugOf('Strong augmentation on small data')).toBe('strong-augmentation-on-small-data')
+    expect(M.slugOf('  Données: l\'écart à 1k images! ')).toBe('donnees-l-ecart-a-1k-images')
+    expect(M.slugOf('Chapter 3 — Mixup & CutMix, revisited for small datasets in vision')).toBe('chapter-3-mixup-cutmix-revisited-for-sma')
+    expect(M.slugOf('???')).toBe('')
+    expect(M.docNameProblem('', [])).toBe('Give it a name: it is its folder, documents/<name>/')
+    expect(M.docNameProblem('My Paper', [])).toBe('Lowercase letters, digits and dashes only, starting with a letter or digit')
+    expect(M.docNameProblem('-paper', [])).toBe('Lowercase letters, digits and dashes only, starting with a letter or digit')
+    expect(M.docNameProblem('paper', ['paper', 'thesis'])).toBe('There is already a document paper')
+    expect(M.docNameProblem('thesis-ch3', ['paper'])).toBe('')
   })
 
   test('an error of the compile in a line', () => {

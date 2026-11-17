@@ -818,7 +818,7 @@ vault/documents/
     threads; **+ Snippet**; the open snippet in the editor (CodeMirror, LaTeX mode), its notes as
     chips that open them in the drawer, **Used in** with each document (a click goes to the copy),
     **Place in** a document; **Compile snippet** shows it alone, in a minimal article.
-  - **Documents**: the document menu and **+ Document**; its outline (headings and copies, each copy
+  - **Documents**: the document menu and **+ Document** (a paper or a thesis chapter, its title, and its name, made from the title and checked as you type); its outline (headings and copies, each copy
     with its state); **Place** a snippet from the library after a copy or a heading; the copy the
     cursor is in, with **Move after**, **Remove**, and in review the snippet **then and now** with
     **Take the new text** and **Keep mine**; the editor on `main.tex`, copies shaded by state;

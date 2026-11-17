@@ -910,7 +910,7 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
     case 'rft_manuscript_view': {
       // the Manuscript tab's + Snippet, Reviewed and + Document (never a tool of the model's: only FROM_VIEW reaches it)
       if (i.action === 'reviewed') return markReviewed(io, loaded, String(i.id ?? ''), today())
-      if (i.action === 'document') return newDocument(io, loaded, String(i.name ?? ''), i.kind === 'report' ? 'report' : 'article')
+      if (i.action === 'document') return newDocument(io, loaded, String(i.name ?? ''), i.kind === 'report' ? 'report' : 'article', str(i.title))
       if (i.action === 'place' || i.action === 'move' || i.action === 'remove') {
         return setDocument(io, loaded, { name: String(i.name ?? ''), [i.action]: String(i.id ?? ''), after: str(i.after) })
       }

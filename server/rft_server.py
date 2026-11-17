@@ -1611,9 +1611,10 @@ class Vault:
             reg, was = sdir / "snippets.json", stamp(sdir / "snippets.json")
             found = lambda: sid if stamp(reg) != was else None  # noqa: E731
         elif action == "document":
-            name, kind = req.get("name"), req.get("kind", "article")
-            if not isinstance(name, str) or not rft_manuscript.DOC_RE.match(name) or kind not in ("article", "report"):
-                return 400, {"error": "expected {action: document, name: lowercase letters, digits and dashes, kind: article or report}"}
+            name, kind, title = req.get("name"), req.get("kind", "article"), req.get("title", "")
+            if not isinstance(name, str) or not rft_manuscript.DOC_RE.match(name) or kind not in ("article", "report") \
+                    or not isinstance(title, str) or len(title) > 200 or "\n" in title:
+                return 400, {"error": "expected {action: document, name: lowercase letters, digits and dashes, kind: article or report, title?: one line}"}
             if (ddir / name / "main.tex").exists():
                 return 409, {"error": f"there is already a document {name}"}
             found = lambda: name if (ddir / name / "main.tex").is_file() else None  # noqa: E731

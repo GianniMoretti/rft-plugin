@@ -202,6 +202,20 @@
       <datalist id="ms-notes"></datalist>
       <button type="submit" class="primary">Add</button><button id="ms-new-cancel" type="button">Cancel</button>
     </form>
+    <form id="ms-doc-form" class="ms-doc-form" hidden aria-label="A new document">
+      <div class="ms-doc-row">
+        <span class="seg ms-doc-kinds" role="radiogroup" aria-label="Kind">
+          <button type="button" data-doc-kind="article" role="radio" aria-checked="true" title="An article: \section headings, a title, a bibliography">Paper</button><button type="button" data-doc-kind="report" role="radio" aria-checked="false" title="A report with a \chapter: a chapter of a thesis, compiled on its own">Thesis chapter</button>
+        </span>
+        <input id="ms-doc-title" type="text" autocomplete="off" placeholder="Title, e.g. Strong augmentation on small data" aria-label="Title">
+      </div>
+      <div class="ms-doc-row">
+        <label class="ms-doc-name">Name <input id="ms-doc-name" type="text" autocomplete="off" spellcheck="false" placeholder="paper" aria-describedby="ms-doc-hint" required></label>
+        <span id="ms-doc-hint" class="ms-doc-hint muted" aria-live="polite"></span>
+        <span class="ms-spacer"></span>
+        <button id="ms-doc-ok" type="submit" class="primary">Create</button><button id="ms-doc-cancel" type="button" title="Esc">Cancel</button>
+      </div>
+    </form>
     <div id="ms-empty" class="ms-empty" hidden>
       <p>No snippets or documents yet. They turn verified notes into writing, at two levels. <b>Snippets</b> are the building blocks: atomic LaTeX resting on the notes they state, written once and reused, so a definition reads the same everywhere. <b>Documents</b> (a paper, a thesis chapter) are built with them: each holds copies of snippets, adapted to its narrative as you like, and text of its own; a copy whose snippet changes is flagged for review, never rewritten.</p>
       <p>Both are yours to write: Claude proposes snippets from verified notes and where to place them, comments and suggests, and writes only where you unlock it.</p>

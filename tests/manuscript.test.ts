@@ -69,6 +69,10 @@ describe('starting', () => {
     expect(doc).not.toContain('\\rftsnippet')
     expect(await newDocument(io, l, 'thesis-ch3', 'report')).toBe('Added the document thesis-ch3 (vault/documents/thesis-ch3/main.tex).')
     expect(fs.read('vault/documents/thesis-ch3/main.tex')).toContain('\\chapter{demo}')
+    // a title typed in the tree view: plain text, its LaTeX special characters escaped
+    await newDocument(io, l, 'mix', 'report', '  Mixup & CutMix: 100% of_the {gap}  ')
+    expect(fs.read('vault/documents/mix/main.tex')).toContain('\\title{Mixup \\& CutMix: 100\\% of\\_the \\{gap\\}}')
+    expect(fs.read('vault/documents/mix/main.tex')).toContain('\\chapter{Mixup \\& CutMix: 100\\% of\\_the \\{gap\\}}')
     await expect(newDocument(io, l, 'paper')).rejects.toThrow('there is already a document paper')
     await expect(newDocument(io, l, 'My Paper')).rejects.toThrow('lowercase letters, digits and dashes')
     const fresh = await load(io, l.config)

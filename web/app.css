@@ -886,3 +886,15 @@ main:has(#drawer:not([hidden])) #manuscript { right: min(var(--drawer-w), 92vw);
 .ms-diff-text { margin: 2px 0 0; padding: 6px; max-height: 160px; overflow: auto; white-space: pre-wrap; border: 1px solid var(--line); border-radius: 6px;
   background: var(--bg); font: 11.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .ms-place { display: inline-flex; align-items: center; gap: 4px; }
+/* a new document: its kind and title, then its name (its folder), checked as it is typed */
+.ms-doc-form { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.ms-doc-form[hidden] { display: none; }
+.ms-doc-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ms-doc-form input { font: inherit; font-size: 12px; padding: 4px 7px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+#ms-doc-title { flex: 1 1 280px; min-width: 200px; }
+.ms-doc-name { display: inline-flex; align-items: center; gap: 6px; }
+#ms-doc-name { width: 16ch; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+#ms-doc-name[aria-invalid="true"] { border-color: var(--p-high); }
+.ms-doc-kinds { display: inline-flex; }
+.ms-doc-kinds button[aria-checked="true"] { font-weight: 600; background: var(--bg); border-color: var(--accent); color: var(--accent); }
+.ms-doc-hint { font-size: 11.5px; }

@@ -459,6 +459,10 @@ export async function markReviewed(io: Io, loaded: Loaded, ref: string, date: st
 
 // ---------------------------------------------------------------- documents
 
+/** Plain text as LaTeX prints it: its special characters escaped (a title typed in the tree view). */
+export const texText = (s: string) =>
+  s.replace(/[\\&%$#_{}~^]/g, c => ({ '\\': '\\textbackslash{}', '~': '\\textasciitilde{}', '^': '\\textasciicircum{}' } as Record<string, string>)[c] ?? `\\${c}`)
+
 /** A new document's main.tex: `article` (a paper) or `report` (a thesis chapter). */
 export function documentTemplate(title: string, kind: 'article' | 'report'): string {
   return `\\documentclass[11pt]{${kind}}
@@ -495,7 +499,7 @@ export async function newDocument(io: Io, loaded: Loaded, name: string, kind: 'a
   if (await io.exists(join(vault, path))) throw new ManuscriptError(`there is already a document ${doc} (${vault}/${path})`)
   const started = !(await io.exists(join(vault, SNIPPETS_REGISTRY)))
   await ensureRegistries(io, loaded)
-  await io.write(join(vault, path), documentTemplate(title?.trim() || loaded.config.project, kind))
+  await io.write(join(vault, path), documentTemplate(texText(title?.trim().replace(/\s+/g, ' ') || loaded.config.project), kind))
   return started
     ? `Started snippets (${vault}/${SNIPPETS_DIR}/) and documents (${vault}/${DOCUMENTS_DIR}/), both locked (you write them; Claude proposes snippets from verified notes and where to place them, comments and suggests), with the document ${doc} (${vault}/${path}).`
     : `Added the document ${doc} (${vault}/${path}).`

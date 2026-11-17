@@ -1577,6 +1577,7 @@ class ManuscriptTest(unittest.TestCase):
         self.assertEqual((status, got["id"]), (200, "S02"))
         self.assertEqual(self.asked[-1], ("RFT_MANUSCRIPT", {"action": "place", "name": "paper", "id": "S02", "after": "S01"}))
         for bad, code in (({"action": "new", "kind": "result"}, 400), ({"action": "drop"}, 400), ({"action": "document", "name": "My Paper"}, 400),
+                          ({"action": "document", "name": "notes", "title": "two\nlines"}, 400), ({"action": "document", "name": "notes", "title": 3}, 400),
                           ({"action": "reviewed", "id": "S42"}, 404), ({"action": "document", "name": "paper"}, 409),
                           ({"action": "place", "name": "paper", "id": "S01"}, 409), ({"action": "take", "name": "thesis", "id": "S02"}, 404),
                           ({"action": "place", "name": "book", "id": "S01"}, 404)):

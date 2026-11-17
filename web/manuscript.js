@@ -84,6 +84,20 @@
     return ms && ms.snippets ? ms.snippets.filter(s => (s.basis || []).includes(id)).map(s => s.id) : []
   }
 
+  /** A document's name made from its title: lowercase letters, digits and dashes, accents dropped, at most 40 characters. */
+  function slugOf(title) {
+    return String(title || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '')
+  }
+
+  /** Why a name will not do for a new document (taken: the names there are), or '' when it will. */
+  function docNameProblem(name, taken) {
+    if (!name) return 'Give it a name: it is its folder, documents/<name>/'
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) return 'Lowercase letters, digits and dashes only, starting with a letter or digit'
+    if ((taken || []).includes(name)) return `There is already a document ${name}`
+    return ''
+  }
+
   /** An error of the compile in a line: where (a snippet's id or the file) and what. */
   function errorText(e) {
     return `${e.snippet || e.file}${e.line ? `:${e.line}` : ''}: ${e.message}${e.context ? ` (${e.context})` : ''}`
@@ -717,17 +731,71 @@
       $('ms-new-basis').value = ''
       await openSnippet(got.id)
     })
-    $('ms-new-doc').addEventListener('click', async () => {
-      const name = (prompt('The new document\'s name (lowercase letters, digits and dashes), then a space and "report" for a thesis chapter:', '') || '').trim()
-      if (!name) return
-      const [n, kind] = name.split(/\s+/)
-      const got = await ask({ action: 'document', name: n, kind: kind === 'report' ? 'report' : 'article' }, 'add the document')
-      if (got) { doc = n; store.set('msDoc', doc); await setLevel('documents', true) }
+    // ---------------------------------------------------------------- a new document
+
+    const docForm = $('ms-doc-form'), docTitle = $('ms-doc-title'), docName = $('ms-doc-name'), docHint = $('ms-doc-hint'), docOk = $('ms-doc-ok')
+    let docKind = 'article'
+    let nameTouched = false // once the user types a name, the title no longer makes it
+
+    function renderDocForm() {
+      for (const b of docForm.querySelectorAll('[data-doc-kind]')) b.setAttribute('aria-checked', String(b.dataset.docKind === docKind))
+      const name = docName.value.trim()
+      const problem = docNameProblem(name, ms && ms.exists ? ms.documents.map(d => d.name) : [])
+      docName.setAttribute('aria-invalid', String(!!problem && (nameTouched || !!name)))
+      docHint.textContent = problem && (nameTouched || name) ? problem
+        : `documents/${name || '<name>'}/main.tex · ${docKind === 'report' ? 'a \\chapter' : '\\section headings'}, the project's template`
+      docHint.classList.toggle('ms-flag-text', !!problem && (nameTouched || !!name))
+      docOk.disabled = !!problem
+    }
+
+    function openDocForm(prefill) {
+      docForm.hidden = false
+      $('ms-new-form').hidden = true
+      docKind = 'article'
+      docTitle.value = ''
+      docName.value = prefill || ''
+      nameTouched = !!prefill
+      renderDocForm()
+      docTitle.focus()
+    }
+
+    const closeDocForm = () => { docForm.hidden = true }
+
+    for (const b of docForm.querySelectorAll('[data-doc-kind]')) {
+      b.addEventListener('click', () => {
+        docKind = b.dataset.docKind
+        // a thesis chapter's default name follows its kind, until the user names it
+        if (!nameTouched && !docTitle.value.trim()) docName.value = docKind === 'report' ? 'thesis-ch1' : ''
+        renderDocForm()
+      })
+    }
+    docTitle.addEventListener('input', () => { if (!nameTouched) docName.value = slugOf(docTitle.value); renderDocForm() })
+    docName.addEventListener('input', () => {
+      nameTouched = docName.value.trim() !== ''
+      // typed as it goes: lowercase, spaces as dashes
+      const at = docName.selectionStart
+      docName.value = docName.value.toLowerCase().replace(/[\s_]+/g, '-')
+      docName.setSelectionRange(at, at)
+      renderDocForm()
     })
-    $('ms-start').addEventListener('click', async () => {
-      const got = await ask({ action: 'document', name: 'paper', kind: 'article' }, 'start')
-      if (got) { doc = 'paper'; await setLevel('documents', true) }
+    docForm.addEventListener('keydown', ev => { if (ev.key === 'Escape') { ev.preventDefault(); closeDocForm() } })
+    $('ms-doc-cancel').addEventListener('click', closeDocForm)
+    docForm.addEventListener('submit', async ev => {
+      ev.preventDefault()
+      const name = docName.value.trim()
+      if (docNameProblem(name, ms && ms.exists ? ms.documents.map(d => d.name) : [])) { nameTouched = true; renderDocForm(); docName.focus(); return }
+      docOk.disabled = true
+      const title = docTitle.value.trim()
+      const got = await ask({ action: 'document', name, kind: docKind, ...(title ? { title } : {}) }, ms && ms.exists ? 'create the document' : 'start')
+      docOk.disabled = false
+      if (!got) return
+      closeDocForm()
+      doc = name
+      store.set('msDoc', doc)
+      await setLevel('documents', true)
     })
+    $('ms-new-doc').addEventListener('click', () => (docForm.hidden ? openDocForm() : closeDocForm()))
+    $('ms-start').addEventListener('click', () => openDocForm('paper'))
     docSel.addEventListener('change', async () => {
       if (dirty && !confirm('Leave the unsaved changes?')) { docSel.value = doc; return }
       dirty = false
@@ -760,5 +828,5 @@
     return { show, writtenIn: id => writtenIn(ms, id), openSnippet: id => { void show().then(() => openSnippet(id)) }, get summary() { return ms }, stop: () => clearInterval(timer) }
   }
 
-  root.RftManuscript = { CONTEXT, KINDS, anchorOf, contentOf, byKind, stateOf, usedWords, outlineOf, writtenIn, errorText, mount }
+  root.RftManuscript = { CONTEXT, KINDS, anchorOf, contentOf, byKind, stateOf, usedWords, outlineOf, writtenIn, slugOf, docNameProblem, errorText, mount }
 })(typeof window !== 'undefined' ? window : globalThis)
