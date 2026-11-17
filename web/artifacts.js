@@ -9,7 +9,7 @@
 
   const NOTE = /^#([EDRT]\d+)$/
   /** The order the experiments with no result are counted in. */
-  const STATUSES = ['running', 'planned', 'idea', 'done', 'dropped', 'discussed', 'moved']
+  const STATUSES = ['running', 'planned', 'idea', 'done', 'review', 'verified', 'dropped', 'discussed', 'moved']
 
   const conceptsOf = tree => (Array.isArray(tree.concepts) ? tree.concepts : Object.values(tree.concepts || {}))
 

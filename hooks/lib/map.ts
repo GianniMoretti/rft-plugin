@@ -5,7 +5,7 @@
 
 import type { Concept, Io, Loaded, RftNode, Tree } from './vault'
 import { artifactLine, artifactMarks } from './artifacts'
-import { LEGEND, MARK, ROOT_CONCEPT, bodyOf, conceptOrder, conceptPath, counts, countsLine, front, join, load, ownNotes, resolveConcept, resolveId, setField, statusSummary, unquote, unquoteJson } from './vault'
+import { LEGEND, MARK, ROOT_CONCEPT, bodyOf, conceptOrder, conceptPath, counts, countsLine, fnv1a, front, join, load, ownNotes, resolveConcept, resolveId, setField, statusSummary, unquote, unquoteJson } from './vault'
 
 export const MAP_DIR = 'map'
 /** Above this many notes the session starts from the project map instead of the list of titles. */
@@ -60,13 +60,7 @@ export { ownNotes, resolveConcept } from './vault'
 
 /** FNV-1a over what a digest is written from: each own note's id, status, title and summary. */
 export function fingerprint(tree: Tree, conceptId: string): string {
-  const text = ownNotes(tree, conceptId).map(n => `${n.id}|${n.status}|${n.title}|${n.summary ?? ''}${n.supersededBy ? `|>${n.supersededBy}` : ''}`).sort().join('\n')
-  let h = 0x811c9dc5
-  for (let i = 0; i < text.length; i++) {
-    h ^= text.charCodeAt(i)
-    h = Math.imul(h, 0x01000193) >>> 0
-  }
-  return h.toString(16).padStart(8, '0')
+  return fnv1a(ownNotes(tree, conceptId).map(n => `${n.id}|${n.status}|${n.title}|${n.summary ?? ''}${n.supersededBy ? `|>${n.supersededBy}` : ''}`).sort().join('\n'))
 }
 
 // ---------------------------------------------------------------- digests

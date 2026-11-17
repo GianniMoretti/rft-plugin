@@ -165,6 +165,31 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual((got["state"], got["recorded"], got["why"]), ("differs", False, "locked"))
         self.assertNotIn(rft_results.BLOCK_BEGIN, self.text())
 
+    def test_a_verified_note_whose_run_differs_or_fails_goes_to_review(self):
+        verified = '\nverified: "2026-11-16 a1b2c3d4"\nlocked: true'
+        self.write("Gap 4.1 at 1k and 0.8 at 10k, over 3 seeds.\n", verified)
+        self.path.write_text(self.text().replace("status: running", "status: verified").replace(", running]", ", verified]"))
+        # reproduced: still verified, still locked
+        got = rft_results.apply(self.vault, "E02", outcome(), "2026-11-17")
+        self.assertEqual(got["state"], "ok")
+        self.assertNotIn("review", got)
+        self.assertIn("status: verified", self.text())
+        # differs: review, unlocked, and why
+        got = rft_results.apply(self.vault, "E02", outcome(results={"gap_1k": 4.6, "gap_10k": 0.8, "seeds": 3}), "2026-11-18")
+        self.assertEqual((got["state"], got["review"]), ("differs", True))
+        t = self.text()
+        self.assertIn("status: review", t)
+        self.assertIn("tags: [demo, experiment, review]", t)
+        self.assertNotIn("locked:", t)
+        self.assertIn("## History\n- 2026-11-18: to review, its notebook's run differs from its Result\n", t)
+        self.assertLess(t.index("## History"), t.index("## Children in the tree"))
+        self.assertIn("Gap 4.1 at 1k", t)  # its Result as it was
+        # failed, on a verified note: the same
+        self.path.write_text(t.replace("status: review", "status: verified"))
+        got = rft_results.apply(self.vault, "E02", {"ok": False, "seconds": 0.4, "error": "KeyError"}, "2026-11-19")
+        self.assertTrue(got["review"])
+        self.assertIn("- 2026-11-19: to review, its notebook's run failed\n", self.text())
+
     def test_a_failed_run_and_a_run_with_no_results(self):
         self.write("")
         got = rft_results.apply(self.vault, "E02", {"ok": False, "seconds": 0.4, "error": "Traceback…\nKeyError: 'x'", "commit": "a1b2c3d4e5", "dirty": True}, "2026-11-16")

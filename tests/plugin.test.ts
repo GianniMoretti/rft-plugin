@@ -516,6 +516,26 @@ describe('web view', () => {
     expect(asked).toHaveLength(1)
   })
 
+  test('the tree view verifies a note through the session: verified, locked and stamped; dismissed and sent back to review the same way', async ($, on) => {
+    mock.clock(on)
+    const files = demoFiles()
+    const path = `vault/experiments/${E01}.md`
+    files[path] = files[path]!.replace('status: done\n', 'status: done\nsuggested_verified: "Reran it"\n')
+    const w = world(on, files)
+    const srv = fakeServer(on)
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    await $.command.run(RUN(''))
+    srv.print(`RFT_VERIFY ${JSON.stringify({ id: 'E01', action: 'verify' })}\n`)
+    await until(() => w.fs.read(path).includes('status: verified'))
+    expect(w.fs.read(path)).toMatch(/\nverified: "\d{4}-\d{2}-\d{2} [0-9a-f]{8}"\n/)
+    expect(isLocked(w.fs.read(path))).toBe(true)
+    expect(w.fs.read(path)).not.toContain('suggested_verified')
+    srv.print(`RFT_VERIFY ${JSON.stringify({ id: 'E01', action: 'review' })}\n`)
+    await until(() => w.fs.read(path).includes('status: review'))
+    expect(isLocked(w.fs.read(path))).toBe(false)
+    expect(w.fs.read(path)).toContain('to review, by the user')
+  })
+
   test('/rft outside an RFT project starts nothing', async ($, on) => {
     mock.clock(on)
     world(on, {})

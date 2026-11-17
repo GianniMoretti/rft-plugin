@@ -29,6 +29,7 @@ import { graphReport } from './lib/graph'
 import { candidates, candidatesReport } from './lib/rebalance'
 import { nextReport, supersede } from './lib/knowledge'
 import { changesPriority, priorityText, suggestPriority } from './lib/priority'
+import { changesVerified, dismissVerified, keepVerified, toReview, verifiedText, verifyNote } from './lib/verify'
 import { addDeadline, changesDates, checkDeadline, datesText, deadlineQuestion, deadlinesLine, suggestDates, suggestDeadline } from './lib/schedule'
 import { RECALL_HINT, searchesVault } from './lib/recall'
 import { eagerTools, featuresInUse } from './lib/tools'
@@ -182,12 +183,12 @@ const TOOLS = {
   },
   rft_set_status: {
     description:
-      'Change the status of a node (frontmatter, tag and the Status line) and optionally append a note: for an experiment to its Result section, for a reference to its Relevance section, for a direction or a theory note to its Status section (say why it was dropped or where it was moved). Regenerates the index and canvas.',
+      'Change the status of a node (frontmatter, tag and the Status line) and optionally append a note: for an experiment to its Result section, for a reference to its Relevance section, for a direction or a theory note to its Status section (say why it was dropped or where it was moved). Regenerates the index and canvas. verified only suggests it (the user verifies, in the tree view; note: what was checked and how); review takes a verified note back (note: why).',
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string', description: 'Id (e.g. E12) or full name of the note.' },
-        status: { type: 'string', enum: ['planned', 'running', 'done', 'idea', 'dropped', 'discussed', 'moved'] },
+        status: { type: 'string', enum: ['planned', 'running', 'done', 'review', 'verified', 'idea', 'dropped', 'discussed', 'moved'] },
         note: { type: 'string', description: 'Optional text to append (real results, or the reason).' },
         summary: { type: 'string', description: 'The note\'s one-line summary, updated with what it found (the key number) or why it was dropped.' },
       },
@@ -363,7 +364,7 @@ const TOOLS = {
       properties: {
         query: { type: 'string', description: 'Words to look for, e.g. "label smoothing calibration".' },
         type: { type: 'string', enum: NODE_TYPES },
-        status: { type: 'string', enum: ['planned', 'running', 'done', 'idea', 'dropped', 'discussed', 'moved'] },
+        status: { type: 'string', enum: ['planned', 'running', 'done', 'review', 'verified', 'idea', 'dropped', 'discussed', 'moved'] },
         concept: { type: 'string', description: 'A concept, by name or start note id: its notes and its sub-concepts\'.' },
         tag: { type: 'string', description: 'A topical tag.' },
         limit: { type: 'number', description: 'How many notes at most (default 10).' },
@@ -570,6 +571,10 @@ async function refresh($: EngineInterface, force = false): Promise<RftSnapshot |
   if (!force && prev?.isActive && !prev.error && prev.signature === (await signatureOf(io, config.vault))) return prev
   try {
     const loaded = await loadActive(io)
+    // a verified note whose claim changed goes to review; one verified by hand is stamped
+    try {
+      for (const line of await keepVerified(io, loaded, today())) $.ui.toast(`rft: ${line}`)
+    } catch { /* tried again at the next change */ }
     const next: RftSnapshot = {
       isActive: true, vault, project: config.project, nodes: loaded.tree.nodes,
       roots: loaded.tree.roots, concepts: loaded.tree.concepts ?? {}, signature: loaded.signature, problems: loaded.problems, error: null,
@@ -774,6 +779,7 @@ const notebookEnv = async ($: EngineInterface, h: Here): Promise<NotebookEnv> =>
 const UNLOCK_ASK = {
   move: { doing: 'Moving it', yes: 'Move and unlock', anyway: 'Move it anyway?', kept: 'it was not moved' },
   supersede: { doing: 'Marking it as superseded', yes: 'Mark and unlock', anyway: 'Mark it anyway?', kept: 'it was not marked' },
+  review: { doing: 'Setting it to review', yes: 'Review and unlock', anyway: 'Set it to review anyway?', kept: 'it stays verified' },
 } as const
 
 /**
@@ -858,7 +864,14 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
     case 'rft_tags':
       return tagsReport(loaded)
     case 'rft_set_status':
-      return setStatus(io, loaded, String(i.id ?? ''), String(i.status ?? ''), str(i.note), str(i.summary), today())
+      return unlocking($, unlock => setStatus(io, loaded, String(i.id ?? ''), String(i.status ?? ''), str(i.note), str(i.summary), today(), unlock))
+    case 'rft_verify': {
+      // the tree view's Verify, Dismiss and Back to review (never a tool of the model's: only FROM_VIEW reaches it)
+      const id = String(i.id ?? '')
+      if (i.action === 'dismiss') return dismissVerified(io, loaded, id)
+      if (i.action === 'review') return toReview(io, loaded, id, 'by the user', today(), true)
+      return verifyNote(io, loaded, id, today())
+    }
     case 'rft_suggest_dates':
       return suggestDates(io, loaded, String(i.id ?? ''), { start: i.start, est: i.est }, i.why)
     case 'rft_suggest_deadline':
@@ -1071,6 +1084,7 @@ const FROM_VIEW = [
   { line: 'RFT_ADD_NODE ', tool: 'rft_add_node', fields: ['type', 'parent', 'title'], what: 'add a note' },
   { line: 'RFT_SET_TYPE ', tool: 'rft_set_type', fields: ['id', 'type'], what: "change a note's type" },
   { line: 'RFT_MOVE_NODE ', tool: 'rft_move_node', fields: ['id', 'parent'], what: 'move a note' },
+  { line: 'RFT_VERIFY ', tool: 'rft_verify', fields: ['id', 'action'], what: 'verify a note' },
 ] as const
 
 /**
@@ -1607,6 +1621,41 @@ async function reproducedEdit($: EngineInterface, e: Record<string, unknown>): P
   return changesResultsBlock(before, after) ? resultsBlockEditText(n) : null
 }
 
+/** A `status: verified` or `verified:` line. */
+const VERIFIED_LINE = /(^|[^\w])(status\s*:\s*["']?verified|verified\s*:)/m
+
+/**
+ * Why Claude may not make this tool call, or null: it would verify a note, or change its stamp,
+ * the user's alone (an Edit or Write of a note in the vault that sets `status: verified` or
+ * changes `verified:`; a shell command that writes, holds such a line and names the vault or a note).
+ */
+async function verifiedEdit($: EngineInterface, e: Record<string, unknown>): Promise<string | null> {
+  const tool = String(e.tool)
+  if (!EDIT_TOOLS.has(tool) && tool !== 'Bash') return null
+  const s = await read($, snapshot)
+  if (!s?.isActive || !s.vault) return null
+  const vault = resolvePath(s.vault, '.')
+  if (tool === 'Bash') {
+    const cmd = String(e.command ?? '')
+    if (!VERIFIED_LINE.test(cmd)) return null
+    const t = await shellTouches($, cmd, vault, Object.values(s.nodes))
+    if (t.notes.length || t.inVault) return verifiedText(t.notes[0] ?? null)
+    if (!t.script) return null
+    const named = namedIn(cmd, Object.values(s.nodes))
+    const folder = vault.split('/').pop()
+    return named || cmd.includes(vault) || (folder && cmd.includes(`${folder}/`)) ? verifiedText(named) : null
+  }
+  const raw = e.file_path
+  if (typeof raw !== 'string' || !raw.endsWith('.md')) return null
+  const abs = resolvePath(resolvePath(await $.session.cwd(), '.'), raw)
+  if (!abs.startsWith(`${vault}/`)) return null
+  let before = ''
+  try { before = await $.fs.read(abs) } catch { /* a new file */ }
+  const after = afterCall(tool, e, before)
+  if (after === null || !changesVerified(before, after)) return null
+  return verifiedText(Object.values(s.nodes).find(x => join(vault, x.path) === abs) ?? null)
+}
+
 /**
  * The literature search: `subject` is a topic in words, a note id or a concept name; the
  * references go under that note, the concept's start note, or the note the topic belongs to.
@@ -1991,7 +2040,7 @@ export const register: Register = (on, options) => {
     }
     if (rules) {
       const call = e as unknown as Record<string, unknown>
-      const why = (await artifactEdit($, call)) ?? (await lockedEdit($, call)) ?? (await priorityEdit($, call)) ?? (await datesEdit($, call)) ?? (await reproducedEdit($, call))
+      const why = (await artifactEdit($, call)) ?? (await lockedEdit($, call)) ?? (await priorityEdit($, call)) ?? (await datesEdit($, call)) ?? (await reproducedEdit($, call)) ?? (await verifiedEdit($, call))
       if (why) return { deny: why }
     }
     const ran = await next(e)

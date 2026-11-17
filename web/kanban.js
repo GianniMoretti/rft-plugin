@@ -12,7 +12,7 @@
   /** The statuses of work still to do: only their notes count towards the limits. */
   const OPEN = ['idea', 'planned', 'running']
   /** The columns: the flow of the work, then the ones that start folded. */
-  const MAIN = ['idea', 'planned', 'running', 'done']
+  const MAIN = ['idea', 'planned', 'running', 'done', 'review', 'verified']
   const FOLDED = ['dropped', 'discussed', 'moved']
   /** The column of a status that is none of these (a typo, a status by hand): shown only when some note has one. */
   const OTHER = 'other'

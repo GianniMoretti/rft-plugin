@@ -940,6 +940,52 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.move({"id": "D01", "parent": "D00", "unlock": True})[0], 200)
         self.assertEqual(self.asked, [("RFT_MOVE_NODE", {"id": "D01", "parent": "D00", "unlock": True})])
 
+    def verifier(self, status="done", extra=""):
+        """E01 with `status` (and `extra` fields), and the session as the server sees it for a
+        verification: the note's status as the session writes it."""
+        p = self.vault / "experiments" / "E01 First run.md"
+        before = p.read_text()
+        self.addCleanup(p.write_text, before)
+        p.write_text(before.replace("status: running", f"status: {status}{extra}"))
+
+        def answer(request):
+            text = p.read_text()
+            if request["action"] == "verify":
+                text = text.replace(f"status: {status}", 'status: verified\nverified: "2026-11-17 a1b2c3d4"\nlocked: true')
+            elif request["action"] == "review":
+                text = text.replace("status: verified", "status: review").replace("locked: true\n", "")
+            text = text.replace('suggested_verified: "Reran it"\n', "")
+            p.write_text(text)
+
+        self.session(answer)
+
+    def verify(self, payload, **kw):
+        return self.write("POST", "/api/verify", payload, **kw)
+
+    def test_verify_asks_the_session_and_answers_once_verified(self):
+        self.verifier(extra='\nsuggested_verified: "Reran it"')
+        nodes = {n["id"]: n for n in json.loads(self.get("/api/tree")[2])["nodes"]}
+        self.assertEqual(nodes["E01"]["suggestedVerified"], "Reran it")
+        status, res = self.verify({"id": "E01", "action": "verify"})
+        self.assertEqual((status, res["locked"]), (200, True))
+        self.assertEqual(self.asked, [("RFT_VERIFY", {"id": "E01", "action": "verify"})])
+        nodes = {n["id"]: n for n in json.loads(self.get("/api/tree")[2])["nodes"]}
+        self.assertEqual((nodes["E01"]["status"], nodes["E01"]["verified"]), ("verified", {"date": "2026-11-17", "fingerprint": "a1b2c3d4"}))
+        self.assertNotIn("suggestedVerified", nodes["E01"])
+        # verified notes count as finished: an experiment with a result
+        self.assertTrue(nodes["E01"].get("hasResult"))
+        self.assertEqual(self.verify({"id": "E01", "action": "review"})[0], 200)
+        self.assertEqual(json.loads(self.get("/api/note?id=E01")[2])["locked"], False)
+
+    def test_verify_bad_requests_reach_no_session(self):
+        self.verifier(status="running")
+        for payload, status in [({"id": "E01"}, 400), ({"id": "E01", "action": "approve"}, 400), ({"id": "E01", "action": 1}, 400),
+                                ({"id": "E42", "action": "verify"}, 404), ({"id": "E01", "action": "verify"}, 400),
+                                ({"id": "E01", "action": "review"}, 400), ({"id": "E01", "action": "dismiss"}, 400)]:
+            self.assertEqual(self.verify(payload)[0], status, payload)
+        self.assertEqual(self.verify({"id": "E01", "action": "verify"}, key=None)[0], 403)
+        self.assertEqual(self.asked, [])
+
     def test_serves_a_reference_pdf_from_papers_only(self):
         papers = self.vault / "papers" / "Runs"
         papers.mkdir(parents=True)

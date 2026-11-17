@@ -64,7 +64,7 @@ main { position: relative; flex: 1; min-height: 0; }
 .tone.reference { --hue: var(--reference); }
 .tone.theory { --hue: var(--theory); }
 .tone.literature { --hue: var(--literature); }
-.tone.s-done { --i: 100%; }
+.tone.s-done, .tone.s-review, .tone.s-verified { --i: 100%; }
 .tone.s-running { --i: 74%; }
 .tone.s-planned { --i: 52%; }
 .tone.s-idea { --i: 32%; }
@@ -84,6 +84,10 @@ main { position: relative; flex: 1; min-height: 0; }
 .node.hl, .node.selected { --a: 1; }
 .link.tone:not(.dim) { opacity: var(--a); }
 .link.tone.hl { --a: 1; }
+/* a verified note: a ring in its own colour, close around the shape; dashed while in review */
+.node .vring { display: none; fill: none; pointer-events: none; stroke: color-mix(in oklab, var(--hue) 100%, var(--tone-base)); stroke-width: 1.5px; }
+.node.s-verified .vring, .node.s-review .vring { display: inline; }
+.node.s-review .vring { stroke-dasharray: 2.5 2; }
 /* the selected note and the search's matches: a thin ring around the shape, apart from it */
 .node .sel { display: none; fill: none; pointer-events: none; }
 .node.selected .sel { display: inline; stroke: var(--fg); stroke-width: 1.6px; }
@@ -444,6 +448,11 @@ select.prio option { color: var(--fg); font-weight: 400; }
 .suggest button { padding: 0 7px; font-size: 0.95em; }
 .drawer-priority { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 6px 0 2px; font-size: 0.9em; }
 .drawer-priority .suggest { margin-top: 0; flex: 1 1 100%; }
+.drawer-verify { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 6px 0 2px; font-size: 0.9em; }
+.drawer-verify .suggest { margin-top: 0; flex: 1 1 100%; }
+.drawer-verify button { padding: 1px 8px; }
+.verify-state { font-weight: 600; }
+.verify-state.s-review { color: var(--p-high); }
 
 /* the calendar: the deadlines above, then a timeline (a row per experiment, the deadlines as lines,
    the GPUs below) or a month; it makes room for the filters and the drawer, as the kanban does */

@@ -24,7 +24,7 @@ theory/), a deadline only in milestones/, and the scratchpad only as a plain fil
 top. It shows the experiment queue (GET api/queue: the GPUs, the jobs waiting and running, the
 history; rft_queue.py beside it) and takes the user's changes to it (POST api/queue: a job moved,
 cancelled or retried, the queue paused, the GPUs it may use); a job's output (GET api/queue/output)
-goes only to a request carrying the key. A write (PUT api/note, PUT api/scratchpad, POST api/node, api/type, api/comment, api/lock,
+goes only to a request carrying the key. A write (PUT api/note, PUT api/scratchpad, POST api/node, api/type, api/comment, api/lock, api/verify,
 api/priority, api/dates, api/milestone, api/queue) must also come from the page itself (its
 Origin) and carry the vault's key, which is in the address the server prints, so neither
 another web page nor another user of the machine can change a note. The key is kept in the
@@ -311,7 +311,7 @@ def result_of(text: str) -> str:
 def has_result(status: str, text: str) -> bool:
     """Whether an experiment has a result: done, or a Result that says something once it runs (a
     planned experiment or an idea has none, whatever its Result holds), as hasResultIn in hooks/lib/vault.ts."""
-    return status == "done" or (status not in ("planned", "idea") and result_of(text) != "")
+    return status in FINISHED or (status not in ("planned", "idea") and result_of(text) != "")
 
 
 def experiment_key(n: dict, text: str) -> str:
@@ -368,7 +368,9 @@ def natural_key(name: str):
     return (m.group(1), int(m.group(2)), m.group(3)) if m else (name, 0, "")
 
 
-STATUSES = {"planned", "running", "done", "idea", "dropped", "discussed", "moved"}
+STATUSES = {"planned", "running", "done", "review", "verified", "idea", "dropped", "discussed", "moved"}
+# done, and the two a done note goes on to: verified (the user checked its claim) and review (it may no longer hold)
+FINISHED = ("done", "review", "verified")
 
 
 def parse_tags(value: str | None) -> list[str]:
@@ -399,6 +401,16 @@ def unquote(value: str | None) -> str:
 
 
 REPRODUCED_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}) (ok|differs|failed|unchecked)(?: @([0-9a-f]{4,40}(?:\+dirty)?))?(?: in (\d+(?:\.\d+)?) s)?$")
+
+
+VERIFIED_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}) ([0-9a-f]{8})$")
+
+
+def parse_verified(value: str | None) -> dict | None:
+    """A note's verification stamp (`verified: <date> <fingerprint>`, written when the user verifies
+    it), as parseVerified in hooks/lib/vault.ts reads it: {date, fingerprint}; None when it is not one."""
+    m = VERIFIED_RE.match(unquote(value))
+    return {"date": m.group(1), "fingerprint": m.group(2)} if m else None
 
 
 def parse_reproduced(value: str | None) -> dict | None:
@@ -659,6 +671,12 @@ class Vault:
                 reproduced = parse_reproduced(fm.get("reproduced"))
                 if reproduced:
                     nodes[nid]["reproduced"] = reproduced
+                verified = parse_verified(fm.get("verified"))
+                if verified:
+                    nodes[nid]["verified"] = verified
+                suggested_verified = unquote_json(fm.get("suggested_verified"))
+                if suggested_verified:
+                    nodes[nid]["suggestedVerified"] = suggested_verified
                 # the dates, as hooks/lib/vault.ts reads them: values that are none are left out
                 plan = {"due": unquote(fm.get("due")) if due_ok(fm.get("due")) else None,
                         "start": day_of(fm.get("start")), "est": est_of(fm.get("est")),
@@ -1435,6 +1453,45 @@ class Vault:
                               "it may still change (is the session that ran /rft still open?)"}
 
 
+    def verify(self, nid: str, action: str, ask) -> tuple[int, dict]:
+        """The user verifies a note (`verify`: verified, locked and stamped with a fingerprint of
+        its claim), dismisses Claude's suggestion to (`dismiss`), or sends a verified note back to
+        review (`review`, unlocked). Done by the session, as add_node is, so the stamp is computed
+        in one place (hooks/lib/verify.ts); the answer comes once the note shows it."""
+        if action not in ("verify", "dismiss", "review"):
+            return 400, {"error": "action must be verify, dismiss or review"}
+        with self._ask_lock:
+            n = next((n for n in self.tree()["nodes"] if n["id"] == nid), None)
+            if n is None:
+                return 404, {"error": "no such note"}
+            if action == "verify" and n["status"] == "verified":
+                return 400, {"error": "the note is verified already"}
+            if action == "verify" and n["status"] not in ("done", "review"):
+                return 400, {"error": f"the note is {n['status']}: only a done note, or one in review, is verified"}
+            if action == "review" and n["status"] != "verified":
+                return 400, {"error": "only a verified note goes back to review"}
+            if action == "dismiss" and not n.get("suggestedVerified"):
+                return 400, {"error": "Claude suggested no verification for this note"}
+            try:
+                ask("RFT_VERIFY", {"id": nid, "action": action})
+            except (OSError, ValueError):
+                return 503, {"error": "the Claude Code session that ran /rft is gone"}
+
+            def found(nodes):
+                m = next((m for m in nodes if m["id"] == nid), None)
+                if m is None:
+                    return None
+                if action == "verify":
+                    return m if m["status"] == "verified" and m.get("verified") else None
+                if action == "review":
+                    return m if m["status"] == "review" else None
+                return m if not m.get("suggestedVerified") else None
+
+            if self._wait(found):
+                return 200, self.note(nid)
+        return 504, {"error": f"the Claude Code session did not answer within {NODE_WAIT_S:g} s; "
+                              "it may still (is the session that ran /rft still open?)"}
+
     def move_node(self, nid: str, parent: str, ask, unlock: bool = False) -> tuple[int, dict]:
         """Moves a note and its subtree under `parent`, done by the session as for add_node; the
         answer comes once the note's parent is the new one and the notes are quiet. `unlock`: the
@@ -1844,6 +1901,14 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 if "priority" not in req or (req["priority"] is not None and req["priority"] not in PRIORITIES):
                     return self._json(400, bad)
                 return self._json(*vault.set_priority(req["id"], req["priority"]))
+            if route == "/api/verify":
+                got = self._write_request("/api/verify", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                _, req = got
+                if not all(isinstance(req.get(k), str) for k in ("id", "action")):
+                    return self._json(400, {"error": "expected {id, action: verify, dismiss or review}"})
+                return self._json(*vault.verify(req["id"], req["action"], ask))
             if route == "/api/move":
                 got = self._write_request("/api/move", MAX_NODE_BYTES)
                 if got is None:

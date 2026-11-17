@@ -11,9 +11,9 @@
 (function () {
   'use strict'
 
-  const STATUSES = ['done', 'running', 'planned', 'idea', 'dropped', 'discussed', 'moved']
-  const MARK = { done: '✓', running: '…', planned: '→', idea: '?', dropped: '✗', discussed: '·', moved: '↗' }
-  const LABEL = { done: 'done', running: 'running', planned: 'planned', idea: 'idea', dropped: 'dropped', discussed: 'discussed, not pursued', moved: 'moved' }
+  const STATUSES = ['verified', 'review', 'done', 'running', 'planned', 'idea', 'dropped', 'discussed', 'moved']
+  const MARK = { verified: '✔', review: '↺', done: '✓', running: '…', planned: '→', idea: '?', dropped: '✗', discussed: '·', moved: '↗' }
+  const LABEL = { verified: 'verified', review: 'review: verified, changed since', done: 'done', running: 'running', planned: 'planned', idea: 'idea', dropped: 'dropped', discussed: 'discussed, not pursued', moved: 'moved' }
   const R = 7 // node radius
   const TYPES = ['direction', 'experiment', 'reference', 'theory']
   // the note that starts a concept is a star: its points this far out, its notches this share of that
@@ -295,6 +295,7 @@
     const mark = nodeIn.append('g').attr('class', 'mark')
     mark.append('circle').attr('class', 'halo')
     mark.append('circle').attr('class', 'sel')
+    mark.append('circle').attr('class', 'vring')
     mark.append('path').attr('class', 'dot')
     mark.append('path').attr('class', 'core')
     nodeIn.append('text').attr('class', 'label')
@@ -308,6 +309,8 @@
     all.attr('class', n => nodeClass(n.data))
     all.select('path.dot').attr('d', n => shapeOf(n.data.id))
     all.select('circle.sel').attr('r', n => (stars.has(n.data.id) ? STAR_R : R) + 4)
+    // a verified note's ring, dashed while it is in review
+    all.select('circle.vring').attr('r', n => (stars.has(n.data.id) ? STAR_R : R) + 2.2)
     all.select('circle.halo')
       .attr('display', n => (glowOf(n.data) ? null : 'none'))
       .attr('r', n => (glowOf(n.data) ? (stars.has(n.data.id) ? STAR_R * 0.8 : R) + HALO[glowOf(n.data)] : 0))
@@ -513,6 +516,7 @@
     renderCode(document.getElementById('drawer-code'), n.concept)
     document.getElementById('drawer-meta').textContent = `${n.type} · ${MARK[n.status] || ''} ${n.status}${n.date ? ' · ' + n.date : ''}${n.tags && n.tags.length ? ' · #' + n.tags.join(' #') : ''}`
     renderDrawerPriority(n)
+    renderDrawerVerify(n)
     renderDrawerDates(n)
     markRows()
     syncNotebook(n)
@@ -2109,7 +2113,7 @@
   // date; the priority is the user's alone, set here or in the drawer, and the answer to Claude's
   // suggested one
   const kbCols = document.getElementById('kb-cols')
-  const COLUMN_LABEL = { ...LABEL, other: 'another status' }
+  const COLUMN_LABEL = { ...LABEL, review: 'review', other: 'another status' }
   const PRIORITY_LABEL = { urgent: 'Urgent', high: 'High', medium: 'Medium', low: 'Low' }
 
   /** A priority menu in `box` the user is in (focused, not waiting for its write), or null. */
@@ -2322,6 +2326,105 @@
    * follows once the note is written. Changes made in a row each go through (the server writes
    * them one at a time).
    */
+  // ---------------------------------------------------------------- verification
+
+  /**
+   * Why a note should not be verified yet, as hooks/lib/verify.ts verifyBlockers says it (the
+   * user may verify it anyway, after a warning); none when it can be.
+   */
+  function verifyWarnings(n) {
+    const out = []
+    if (n.supersededBy) out.push(`it is superseded by ${n.supersededBy}`)
+    if (n.type === 'experiment' && n.notebook && (!n.reproduced || n.reproduced.state !== 'ok')) {
+      out.push(n.reproduced ? `its notebook's last run ${n.reproduced.state === 'unchecked' ? 'checked nothing' : n.reproduced.state} (${n.reproduced.date})` : 'its notebook has not run')
+    }
+    if (n.type === 'direction') {
+      const under = id => (byId.get(id)?.children || []).some(k => byId.get(k)?.status === 'verified' || under(k))
+      if (!under(n.id)) out.push('no verified note under it confirms it')
+    }
+    return out
+  }
+
+  /**
+   * The drawer's verification row: a verified note's stamp and Back to review; Verify on a note that
+   * is done or in review; Claude's suggestion to verify, with Accept and Dismiss. Only the user
+   * verifies, and verifying locks the note.
+   */
+  function renderDrawerVerify(n) {
+    const box = document.getElementById('drawer-verify')
+    box.replaceChildren()
+    const can = n && ['done', 'review', 'verified'].includes(n.status)
+    box.hidden = !can && !(n && n.suggestedVerified)
+    if (box.hidden) return
+    const button = (text, title, action) => {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.textContent = text
+      b.title = title
+      b.disabled = Boolean(EMBED)
+      b.addEventListener('click', () => verify(n, action, b))
+      return b
+    }
+    const state = document.createElement('span')
+    state.className = `verify-state s-${n.status}`
+    if (n.status === 'verified') {
+      state.textContent = `✔ Verified${n.verified ? ` on ${n.verified.date}` : ''}`
+      state.title = 'You checked what this note claims; it is locked, so Claude only suggests changes to it. A change to its claim sends it back to review.'
+      box.append(state, button('Back to review', 'Its claim may no longer hold: review it again (this unlocks it)', 'review'))
+    } else if (n.status === 'review') {
+      state.textContent = `↺ In review${n.verified ? `, verified on ${n.verified.date}` : ''}`
+      state.title = 'It was verified, and its claim changed since or was overturned: check it again, then verify it, or give it another status'
+      box.append(state)
+      if (!n.suggestedVerified) box.append(button('Verify', 'You checked its claim again: verify it, which locks it', 'verify'))
+    } else if (can && !n.suggestedVerified) {
+      box.append(button('Verify', 'You checked what this note claims: verify it, which locks it. Only verified notes go into the manuscript.', 'verify'))
+    }
+    if (n.suggestedVerified && n.status !== 'verified') {
+      const s = document.createElement('div')
+      s.className = 'suggest'
+      s.innerHTML = `<span>Claude suggests <b>verifying it</b>: <span class="suggest-why">${escH(n.suggestedVerified)}</span></span>`
+      s.title = n.suggestedVerified
+      if (!EMBED) {
+        const bar = document.createElement('span')
+        bar.className = 'suggest-bar'
+        if (can) bar.append(button('Accept', 'Verify it, which locks it', 'verify'))
+        bar.append(button('Dismiss', 'Drop the suggestion', 'dismiss'))
+        s.appendChild(bar)
+      }
+      box.appendChild(s)
+    }
+  }
+
+  /** Verifies a note, dismisses Claude's suggestion to, or sends it back to review: done by the session that ran /rft. */
+  async function verify(n, action, control) {
+    if (EMBED) return
+    if (!editKey()) {
+      notify('To verify notes, open the address /rft printed (it ends in ?token=…) once: this browser then remembers its key.')
+      return
+    }
+    if (action === 'verify') {
+      const warn = verifyWarnings(n)
+      if (warn.length && !confirm(`${n.id} may not be ready to verify: ${warn.join('; ')}.\n\nVerify it anyway?`)) return
+    }
+    if (control) control.disabled = true
+    try {
+      const res = await fetch('api/verify', {
+        method: 'POST',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'X-RFT-Token': editKey() },
+        body: JSON.stringify({ id: n.id, action }),
+      })
+      const reply = await res.json().catch(() => ({}))
+      if (!res.ok) notify(`${action === 'dismiss' ? 'Not dismissed' : action === 'review' ? 'Not sent to review' : 'Not verified'}: ${reply.error || `the server answered ${res.status}`}`)
+    } catch (e) {
+      notify('The server is not answering.')
+    } finally {
+      await poll()
+      if (selected && byId.has(selected)) renderDrawerVerify(byId.get(selected))
+      if (control) control.disabled = false
+    }
+  }
+
   async function setPriority(id, priority, control, dismiss = false) {
     if (EMBED) return
     const redraw = () => { drawKanban(); if (selected && byId.has(selected)) renderDrawerPriority(byId.get(selected)) }

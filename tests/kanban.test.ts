@@ -38,7 +38,7 @@ describe('kanban', () => {
     expect(ids(K.order(notes, 'date'))).toEqual(['D05', 'D09', 'D04', 'E10', 'E04', 'E03', 'E01', 'D02'])
   })
 
-  test('the columns: the four of the flow, the three folded ones, one for a status none of them', () => {
+  test('the columns: the six of the flow, the three folded ones, one for a status none of them', () => {
     const notes = [
       note('D01', 'idea', '2026-01-01'), note('E01', 'planned', '2026-01-01'), note('E02', 'running', '2026-01-02'),
       note('E03', 'done', '2026-01-03'), note('E04', 'done', '2026-01-04', 'low'), note('D02', 'dropped', '2026-01-01'),
@@ -47,12 +47,12 @@ describe('kanban', () => {
     const shape = (cs: Column[]) => cs.map(c => [c.status, c.folded, ids(c.notes)])
     expect(shape(K.columns(notes))).toEqual([
       ['idea', false, ['D01']], ['planned', false, ['E01']], ['running', false, ['E02']], ['done', false, ['E04', 'E03']],
-      ['dropped', true, ['D02']], ['discussed', true, ['D03']], ['moved', true, ['D04']],
+      ['review', false, []], ['verified', false, []], ['dropped', true, ['D02']], ['discussed', true, ['D03']], ['moved', true, ['D04']],
     ])
     expect(shape(K.columns(notes, { order: 'date' }))[3]).toEqual(['done', false, ['E04', 'E03']])
     expect(shape(K.columns([note('E05', 'done', '2026-02-01'), ...notes], { order: 'date' }))[3]).toEqual(['done', false, ['E05', 'E04', 'E03']])
     // a status the filters hide has no column; an empty one stays
-    expect(K.columns(notes, { hiddenStatuses: ['done', 'moved'] }).map(c => c.status)).toEqual(['idea', 'planned', 'running', 'dropped', 'discussed'])
+    expect(K.columns(notes, { hiddenStatuses: ['done', 'moved'] }).map(c => c.status)).toEqual(['idea', 'planned', 'running', 'review', 'verified', 'dropped', 'discussed'])
     expect(shape(K.columns([note('E01', 'planned', '2026-01-01')]))[0]).toEqual(['idea', false, []])
     // a status of none of the columns: a column of its own, last
     const odd = K.columns([...notes, note('E09', 'paused', '2026-01-01'), note('E10', '', '2026-01-01')])

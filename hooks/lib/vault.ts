@@ -65,15 +65,23 @@ export const ID_RE = new RegExp(`^([${NODE_TYPES.map(t => TYPES[t].prefix).join(
 export const orList = (items: string[]) =>
   items.length > 1 ? `${items.slice(0, -1).join(', ')} or ${items[items.length - 1]}` : items.join('')
 
-export const STATUSES = ['planned', 'running', 'done', 'idea', 'dropped', 'discussed', 'moved'] as const
+export const STATUSES = ['planned', 'running', 'done', 'review', 'verified', 'idea', 'dropped', 'discussed', 'moved'] as const
 export type Status = (typeof STATUSES)[number]
 
 export const MARK: Record<string, string> = {
-  done: '✓', running: '…', planned: '→', idea: '?', dropped: '✗', discussed: '·', moved: '↗',
+  done: '✓', review: '↺', verified: '✔', running: '…', planned: '→', idea: '?', dropped: '✗', discussed: '·', moved: '↗',
 }
 
 export const LEGEND =
-  '✓ done · … running · → planned · ? idea · ✗ dropped · · discussed, not pursued · ↗ moved'
+  '✔ verified · ↺ review · ✓ done · … running · → planned · ? idea · ✗ dropped · · discussed, not pursued · ↗ moved'
+
+/**
+ * The statuses of a note whose work is finished: done, and the two a done note can go on to.
+ * `verified`: the user checked its claim (only they set it; it locks the note); `review`: it was
+ * verified, and its claim may no longer hold (see verify.ts).
+ */
+export const FINISHED_STATUSES: readonly string[] = ['done', 'review', 'verified']
+export const isFinished = (status: string) => FINISHED_STATUSES.includes(status)
 
 /**
  * A note's priority, highest first: `priority:` in its frontmatter, set by the user alone (the
@@ -147,6 +155,30 @@ export type RftNode = {
   notebook?: string
   /** The notebook's last run (`reproduced:`, written by rft_run_notebook). */
   reproduced?: Reproduced
+  /** When the user last verified it, and the fingerprint of what it claimed then (`verified:`). */
+  verified?: Verified
+  /** Why Claude suggests verifying it (`suggested_verified:`), until the user verifies it or dismisses that. */
+  suggestedVerified?: string
+}
+
+/** A note's verification stamp, as `verified:` holds it: `2026-11-17 a1b2c3d4`. */
+export type Verified = { date: string; fingerprint: string }
+
+const VERIFIED_RE = /^(\d{4}-\d{2}-\d{2}) ([0-9a-f]{8})$/
+
+export function parseVerified(value: string | undefined): Verified | null {
+  const m = VERIFIED_RE.exec(unquote(value))
+  return m ? { date: m[1]!, fingerprint: m[2]! } : null
+}
+
+/** FNV-1a of a text, as 8 hex digits. */
+export function fnv1a(text: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h.toString(16).padStart(8, '0')
 }
 
 /** How an experiment notebook's last run went: its RESULTS all in the note's Result, one not, an error, or nothing to check. */
@@ -554,6 +586,10 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
       if (notebook) nodes[id]!.notebook = notebook
       const reproduced = parseReproduced(fm.reproduced)
       if (reproduced) nodes[id]!.reproduced = reproduced
+      const verified = parseVerified(fm.verified)
+      if (verified) nodes[id]!.verified = verified
+      const suggestedVerified = unquoteJson(fm.suggested_verified)
+      if (suggestedVerified) nodes[id]!.suggestedVerified = suggestedVerified
       if (fmType === 'experiment' && hasResultIn(nodes[id]!.status, text)) nodes[id]!.hasResult = true
       afterRef[id] = linksIn(fm.after)
       texts[id] = text
@@ -849,7 +885,7 @@ export const reposLine = (repos: string[]) => `[${repos.map(p => JSON.stringify(
  * numbers, figures and tables; rft_add_node, rft_next and rft_validate say so.
  */
 export const lacksNotebook = (tree: Tree, n: RftNode) =>
-  n.type === 'experiment' && !n.notebook && !n.supersededBy && ['planned', 'running', 'done'].includes(n.status) && codeRepos(tree.concepts, n.concept).length > 0
+  n.type === 'experiment' && !n.notebook && !n.supersededBy && ['planned', 'running', ...FINISHED_STATUSES].includes(n.status) && codeRepos(tree.concepts, n.concept).length > 0
 
 export function codeRepos(concepts: Record<string, Concept> | undefined, id: string): CodeRepo[] {
   const out: CodeRepo[] = []
@@ -908,12 +944,15 @@ function sectionAt(lines: { line: string; isHeading: boolean }[], title: string)
   return { start, end: next < 0 ? lines.length : next }
 }
 
-/** The text of a note's `## Result` section, trimmed; '' when it has none or it is empty. As `result_of` in server/rft_server.py. */
-export function resultOf(text: string): string {
+/** The text of a note's `## <title>` section, trimmed; '' when it has none or it is empty. */
+export function sectionText(text: string, title: string): string {
   const lines = bodyLines(bodyOf(text))
-  const at = sectionAt(lines, 'Result')
+  const at = sectionAt(lines, title)
   return at ? lines.slice(at.start + 1, at.end).map(l => l.line).join('\n').trim() : ''
 }
+
+/** The text of a note's `## Result` section, trimmed; '' when it has none or it is empty. As `result_of` in server/rft_server.py. */
+export const resultOf = (text: string) => sectionText(text, 'Result')
 
 /**
  * Whether an experiment has a result: it is done, or its Result says something while it runs or
@@ -921,7 +960,7 @@ export function resultOf(text: string): string {
  * has_result in server/rft_server.py.
  */
 export const hasResultIn = (status: string, text: string) =>
-  status === 'done' || (status !== 'planned' && status !== 'idea' && resultOf(text) !== '')
+  isFinished(status) || (status !== 'planned' && status !== 'idea' && resultOf(text) !== '')
 
 /** A note's `## Code` section, read back; null when it has none. */
 export function codeSection(text: string): CodeSection | null {
@@ -1254,6 +1293,7 @@ export async function validate(io: Io, loaded: Loaded, opts: { root?: string; ho
       if (!cname) errors.push(`${n.id}: \`concept:\` is empty (give the concept a name, or remove the field)`)
       else if (/[\^#|[\]]/.test(cname)) errors.push(`${n.id}: concept name "${cname}" contains ^ # | [ or ]`)
     } else if (fm.concept_summary !== undefined) warnings.push(`${n.id}: concept_summary without concept`)
+    if (n.status === 'verified' && !n.verified) warnings.push(`${n.id}: verified with no stamp (\`verified: <date> <fingerprint>\`): the session stamps and locks it at its next look at the vault`)
     if (fm.superseded_by !== undefined && !n.supersededBy) warnings.push(`${n.id}: superseded_by names no note of the tree (rft_supersede sets or clears it)`)
     if (fm.priority !== undefined && !n.priority) warnings.push(`${n.id}: priority "${unquote(fm.priority)}" is not ${orList([...PRIORITIES])} (the user sets it in the tree view)`)
     if (fm.suggested_priority !== undefined && !n.suggestedPriority) warnings.push(`${n.id}: suggested_priority "${unquote(fm.suggested_priority)}" is not ${orList([...PRIORITIES])} (rft_suggest_priority writes it)`)

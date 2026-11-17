@@ -17,6 +17,9 @@ reports, and may hand back FIGURES and TABLES. `apply` takes that run to the vau
   takes in with <rft-table src="<id>_<name>"></rft-table> (filled in here, and when the artifact
   is written: hooks/lib/artifacts.ts).
 - **Stamped**: the note's `reproduced:` line, the run's date, state, commit and time.
+- **Sent to review**: a verified note (`status: verified`, the user's check) whose run differs or
+  failed no longer holds as verified: its status becomes `review`, it is unlocked, and its History
+  says why (as reviewText in hooks/lib/verify.ts).
 
 A concept can have a notebook too, on the note that starts it (`apply_concept`): it reads
 EXPERIMENTS, the RESULTS its experiments' notebooks saved (results/<id>.json names the concepts
@@ -144,6 +147,42 @@ def set_field(text: str, key: str, value: str, after: str | None = None) -> str:
                 break
         head.insert(pos, line)
     return join_note(head, body)
+
+
+STATUS_WORDS = ("planned", "running", "done", "review", "verified", "idea", "dropped", "discussed", "moved")
+
+
+def remove_field(text: str, key: str) -> str:
+    head, body = split_note(text)
+    return text if head is None else join_note([l for l in head if not l.startswith(key + ":")], body)
+
+
+def with_status(text: str, status: str) -> str:
+    """The note's status set: `status:`, the status among its tags, the **Status:** line (as withStatus in hooks/lib/vault.ts)."""
+    out = set_field(text, "status", status)
+    tags = field(out, "tags")
+    if tags:
+        items = [t.strip() for t in tags.strip("[]").split(",") if t.strip()]
+        kept = [t for t in items if t not in STATUS_WORDS]
+        if len(kept) != len(items):
+            out = set_field(out, "tags", "[" + ", ".join(kept + [status]) + "]")
+    return re.sub(r"(\*\*Status:\*\*\s*)[a-z]+", lambda m: m.group(1) + status, out, count=1)
+
+
+def with_history(text: str, line: str) -> str:
+    """A dated line under `## History`, made before "Children in the tree" when missing (as withHistory in hooks/lib/vault.ts)."""
+    heading = "## History"
+    at = text.find(f"\n{heading}\n")
+    if at < 0:
+        kids = text.find("\n## Children in the tree")
+        if kids < 0:
+            return text.rstrip("\n") + f"\n\n{heading}\n{line}\n"
+        return text[:kids].rstrip("\n") + f"\n\n{heading}\n{line}\n" + text[kids:]
+    start = at + len(heading) + 2
+    nxt = text.find("\n## ", start - 1)
+    end = len(text) if nxt < 0 else nxt
+    sec = text[start:end].rstrip()
+    return text[:start] + (sec + "\n" if sec else "") + line + "\n" + text[end:]
 
 
 def _headings(lines: list[str]) -> list[int]:
@@ -454,6 +493,11 @@ def apply(vault, exp: str, outcome: dict, date: str, record: bool = False, runs:
         out["saved"], out["notes"] = save(vault, exp, outcome, date, runs_of(vault, exp, runs))
     stamp = reproduced_line(date, state, outcome.get("commit"), outcome.get("dirty"), outcome.get("seconds"))
     text = set_field(text, "reproduced", json.dumps(stamp), after="notebook")
+    if field(text, "status") == "verified" and state in ("differs", "failed"):
+        # the user's check no longer holds: review, unlocked, and why
+        why = "its notebook's run failed" if state == "failed" else "its notebook's run differs from its Result"
+        text = with_history(remove_field(with_status(text, "review"), "locked"), f"- {date}: to review, {why}")
+        out["review"] = True
     write_atomic(path, text)
     out["reproduced"] = stamp
     return out

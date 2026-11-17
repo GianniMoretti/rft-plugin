@@ -2,7 +2,7 @@
 // every turn, so only the tools a session uses most are there; the rest wait behind ToolSearch
 // (the model sees their names and loads a schema when it needs one). A group of feature tools
 // joins the prompt when the vault uses that feature: dates when there are deadlines or dated
-// notes, priorities when a note has one, rft_suggest when a note is locked, comments when a note has a thread,
+// notes, priorities when a note has one, the verification rule when a note is verified, in review or suggested for it, rft_suggest when a note is locked, comments when a note has a thread,
 // the artifact tools once the vault has a concept artifact, the notebook tools once an experiment has a notebook,
 // the queue tools once it has an experiment queue (`.queue/queue.json`).
 // The rules for these features enter the session's rules on the same condition (ops.ts rulesText).
@@ -18,6 +18,7 @@ export const CORE_TOOLS = [
 export const FEATURE_TOOLS = {
   dates: ['rft_suggest_dates', 'rft_add_deadline', 'rft_suggest_deadline'],
   priorities: ['rft_suggest_priority'],
+  verify: [],
   locks: ['rft_suggest'],
   comments: ['rft_comments', 'rft_comment', 'rft_suggest'],
   artifacts: ['rft_artifact', 'rft_set_artifact'],
@@ -34,6 +35,7 @@ export function featuresInUse(loaded: Loaded, threads: boolean, queue = false): 
   if ((loaded.milestones ?? []).length || nodes.some(n => n.due || n.start)) out.add('dates')
   if (nodes.some(n => n.priority || n.suggestedPriority)) out.add('priorities')
   if (nodes.some(n => n.locked)) out.add('locks')
+  if (nodes.some(n => n.status === 'verified' || n.status === 'review' || n.suggestedVerified)) out.add('verify')
   if (threads) out.add('comments')
   if (loaded.hasArtifacts) out.add('artifacts')
   if (nodes.some(n => n.notebook)) out.add('notebooks')

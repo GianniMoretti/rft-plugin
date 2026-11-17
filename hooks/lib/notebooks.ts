@@ -44,6 +44,8 @@ export type ApplyOutcome = RunOutcome & {
   /** RESULTS written into the Result's table. */
   recorded?: boolean
   locked?: boolean
+  /** The note was verified, and the run sent it to review (unlocked): it differs or failed. */
+  review?: boolean
   /** Why a run is unchecked: "no RESULTS", "no number in RESULTS", "locked". */
   why?: string
   checks?: Check[]
@@ -274,6 +276,7 @@ export async function runNotebook(io: Io, loaded: Loaded, env: NotebookEnv, ref:
       ? 'It is locked, so a run does not write its Result: fix the notebook, or ask the user to correct the Result or unlock it.'
       : 'Fix the notebook, or, if its numbers are right, run it again with record: true, which writes them in the Result\'s table.'))
   }
+  if (r.review) lines.push(`${n.name} was verified: it is in review now, unlocked, for the user to check again.`)
   const saved = savedText(r.saved)
   if (saved) lines.push(saved)
   if (r.notes?.length) lines.push(`Not kept: ${r.notes.join('; ')}.`)

@@ -40,12 +40,12 @@ export const commentsPath = (vault: string, id: string) => join(vault, COMMENTS_
 export const isLocked = (text: string) => ['true', 'yes'].includes(unquote(front(text).locked).toLowerCase())
 
 /**
- * A change that writes a line into a locked note's History (a move, a supersede mark): made only
+ * A change that writes a line into a locked note's History (a move, a supersede mark, review): made only
  * unlocked, once the user agrees; thrown, before anything is written, while they have not.
  */
 export class LockedChange extends Error {
-  constructor(readonly node: { id: string; name: string }, readonly change: 'move' | 'supersede') {
-    super(`${node.name} is locked: to ${change === 'move' ? 'move it' : 'mark it as superseded'}, the user must agree to unlock it`)
+  constructor(readonly node: { id: string; name: string }, readonly change: 'move' | 'supersede' | 'review') {
+    super(`${node.name} is locked: to ${change === 'move' ? 'move it' : change === 'supersede' ? 'mark it as superseded' : 'set it to review'}, the user must agree to unlock it`)
   }
 }
 

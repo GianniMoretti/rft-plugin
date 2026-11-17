@@ -10,7 +10,7 @@ import { readDigests, resolveConcept } from './map'
 import { scheduleReport } from './schedule'
 import { artifactMarks, describeState } from './artifacts'
 import type { Io, Loaded, RftNode } from './vault'
-import { MARK, OPEN_STATUSES, PRIORITIES, conceptOrder, conceptPath, join, load, removeField, resolveId, setField, withHistory, lacksNotebook } from './vault'
+import { MARK, OPEN_STATUSES, PRIORITIES, conceptOrder, conceptPath, join, load, removeField, resolveId, setField, sync, withHistory, withStatus, lacksNotebook } from './vault'
 
 export class KnowledgeError extends Error {}
 
@@ -45,11 +45,16 @@ export async function supersede(io: Io, loaded: Loaded, ref: string, by: string 
     if (at === id) throw new KnowledgeError(`${newer} is already superseded, through the chain, by ${id}`)
   }
   const m = tree.nodes[newer]!
-  const out = withHistory(setField(writable(), 'superseded_by', `"[[${m.name}]]"`, 'summary'), `- ${date}: superseded by [[${m.name}]]${reason}`)
+  let out = withHistory(setField(writable(), 'superseded_by', `"[[${m.name}]]"`, 'summary'), `- ${date}: superseded by [[${m.name}]]${reason}`)
+  // a verified claim that is overturned goes back to the user: review, unlocked
+  const wasVerified = n.status === 'verified'
+  if (wasVerified) out = removeField(withStatus(out, n, 'review'), 'locked')
   await io.write(join(config.vault, n.path), out)
   Object.assign(loaded, await load(io, config))
+  if (wasVerified) await sync(io, loaded)
   return `${n.name} is marked as superseded by ${m.name}: its result is no longer to be built on. ` +
-    `Update the digest of its concept (rft_set_digest) so the current result is the one it states${n.summary ? '' : ', and give it a summary'}.${unlocked}`
+    `Update the digest of its concept (rft_set_digest) so the current result is the one it states${n.summary ? '' : ', and give it a summary'}.${unlocked}` +
+    (wasVerified ? ` It was verified: it is in review now, for the user to look at again.` : '')
 }
 
 /** The note that holds now, following a chain of superseded results. */
@@ -122,6 +127,15 @@ export async function nextReport(io: Io, loaded: Loaded, today: string, ref?: st
   const tail = waiting.length
     ? ['', `Suggested priorities waiting for the user (the tree view's kanban or note drawer): ${waiting.map(n => `${n.id} ${n.suggestedPriority}`).join(', ')}.`]
     : []
+  // verification: the notes whose verified claim may no longer hold, and Claude's suggestions, both waiting for the user
+  const review = Object.values(tree.nodes).filter(n => inScope(n) && n.status === 'review')
+  const toVerify = Object.values(tree.nodes).filter(n => inScope(n) && n.suggestedVerified && n.status !== 'verified')
+  if (review.length || toVerify.length) {
+    tail.push(...(tail.length ? [] : ['']), [
+      review.length ? `In review, for the user to check again and verify (the note's drawer): ${review.map(n => n.id).join(', ')}.` : '',
+      toVerify.length ? `Verifications you suggested, waiting for the user: ${toVerify.map(n => n.id).join(', ')}.` : '',
+    ].filter(Boolean).join(' '))
+  }
   const sched = scheduleReport(loaded, today)
   tail.push(...(sched.tail.length && !tail.length ? [''] : []), ...sched.tail)
   // in a vault with artifacts: the concepts whose artifact is out of date, or missing while they have results
