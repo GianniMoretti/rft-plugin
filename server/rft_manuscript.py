@@ -1,10 +1,12 @@
-"""The manuscript as the tree view's server reads it (docs/design/manuscript.md), as
-hooks/lib/manuscript.ts, snippets.ts and verify.ts have it: the registry (manuscript.json), the
-snippets with their header, what each rests on (its `% basis:` line and the notes its \\rftnum,
-\\rftfig, \\rfttable and \\cite name), and its state: stub, written, review (a basis note changed
-since the stamp, in review, superseded or dropped), with the basis notes not verified. The stamps
-are written by the session (hooks/lib/manuscript.ts), never here; the server writes the lock and
-the snippets' and documents' text the user edits. Standard library only.
+"""Snippets and documents as the tree view's server reads them (docs/design/manuscript.md), as
+hooks/lib/manuscript.ts, snippets.ts and verify.ts have them. Snippets (vault/snippets/): each with
+its header, what it rests on (its `% basis:` line and the notes its \\rftnum, \\rftfig, \\rfttable
+and \\cite name), its state (stub, written, review: a basis note changed since the stamp, in
+review, superseded or dropped; the basis notes not verified), and the documents using it.
+Documents (vault/documents/<name>/main.tex): their copies of snippets, each with its state (review:
+its snippet changed since it was taken; adapted; gone). The stamps and the copies are written by the
+session (hooks/lib/manuscript.ts), never here; the server writes the locks and the text the user
+edits. Standard library only.
 """
 from __future__ import annotations
 
@@ -12,13 +14,15 @@ import json
 import re
 from pathlib import Path
 
-MANUSCRIPT = "manuscript"
+SNIPPETS = "snippets"
+DOCUMENTS = "documents"
 SNIPPET_ID = re.compile(r"^S\d+$")
 DOC_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 HEAD_RE = re.compile(r"^%\s*rft-snippet\s+(S\d+)\s*·\s*([\w-]+)\s*·\s*(.*?)\s*$")
 BASIS_RE = re.compile(r"^%\s*basis:\s*(.*?)\s*$")
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
-SNIPPET_LINE = re.compile(r"\\rftsnippet\{(S\d+)\}")
+BEGIN_RE = re.compile(r"^%\s*rft-begin\s+(S\d+)\s+([0-9a-f]{8})\s*$")
+END_RE = re.compile(r"^%\s*rft-end\s+(S\d+)\s*$")
 
 # the sections that hold what a note of each type claims, as SUBSTANCE in hooks/lib/verify.ts
 SUBSTANCE = {"experiment": ["Result"], "theory": ["Statement", "Explanation"], "reference": ["Source", "Key results"], "direction": ["Idea"]}
@@ -75,23 +79,42 @@ def substance_fingerprint(kind: str, text: str) -> str:
 
 # ---------------------------------------------------------------- the files
 
-def manuscript_dir(vault: Path) -> Path:
-    return Path(vault) / MANUSCRIPT
+def snippets_dir(vault: Path) -> Path:
+    return Path(vault) / SNIPPETS
+
+
+def documents_dir(vault: Path) -> Path:
+    return Path(vault) / DOCUMENTS
+
+
+def _json(path: Path) -> dict:
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        d = {}
+    return d if isinstance(d, dict) else {}
 
 
 def read_registry(vault: Path) -> dict:
-    try:
-        d = json.loads((manuscript_dir(vault) / "manuscript.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        d = {}
-    d = d if isinstance(d, dict) else {}
+    """The snippets' registry (snippets/snippets.json): the lock, the next id, each snippet's stamp."""
+    d = _json(snippets_dir(vault) / "snippets.json")
     return {"locked": d.get("locked") is not False, "next": d.get("next") if isinstance(d.get("next"), int) and d["next"] > 0 else 1,
             "snippets": d.get("snippets") if isinstance(d.get("snippets"), dict) else {},
             "unlocked": [x for x in d.get("unlocked") or [] if isinstance(x, str)]}
 
 
+def read_docs_registry(vault: Path) -> dict:
+    """The documents' registry (documents/documents.json): the lock."""
+    d = _json(documents_dir(vault) / "documents.json")
+    return {"locked": d.get("locked") is not False, "unlocked": [x for x in d.get("unlocked") or [] if isinstance(x, str)]}
+
+
 def snippet_locked(reg: dict, sid: str) -> bool:
     return bool(reg["locked"]) and sid not in reg["unlocked"]
+
+
+def document_locked(reg: dict, name: str) -> bool:
+    return bool(reg["locked"]) and name not in reg["unlocked"]
 
 
 def header(text: str) -> dict | None:
@@ -133,22 +156,38 @@ def is_stub(text: str) -> bool:
     return not rest.strip()
 
 
-def documents(vault: Path) -> list[dict]:
-    d = manuscript_dir(vault) / "documents"
-    out = []
-    if d.is_dir():
-        for sub in sorted(p for p in d.iterdir() if p.is_dir() and DOC_RE.match(p.name)):
-            main = sub / "main.tex"
-            if not main.is_file():
-                continue
-            text = main.read_text(encoding="utf-8", errors="replace")
-            order = [m.group(1) for m in SNIPPET_LINE.finditer(text) if not re.search(r"(^|[^\\])%", text[text.rfind("\n", 0, m.start()) + 1:m.start()])]
-            out.append({"name": sub.name, "path": f"documents/{sub.name}/main.tex", "order": order})
+def content_of(snippet_text: str) -> str:
+    """What a snippet gives a document: its text below the header, blank lines at either end left out (contentOf in snippets.ts)."""
+    return re.sub(r"^(\s*\n)+", "", body_after_header(snippet_text)).rstrip()
+
+
+def content_fingerprint(content: str) -> str:
+    """A content's fingerprint: its text without comments, whitespace collapsed (contentFingerprint in snippets.ts)."""
+    return fnv(re.sub(r"\s+", " ", uncommented(content)).strip())
+
+
+def parse_blocks(text: str) -> list[dict]:
+    """The copies of snippets a document holds, in order (parseBlocks in snippets.ts): id, stamp, begin and end lines, content."""
+    lines = text.replace("\r\n", "\n").split("\n")
+    out, i = [], 0
+    while i < len(lines):
+        m = BEGIN_RE.match(lines[i])
+        if m:
+            end = next((j for j in range(i + 1, len(lines)) if (e := END_RE.match(lines[j])) and e.group(1) == m.group(1)), None)
+            if end is not None:
+                out.append({"id": m.group(1), "stamp": m.group(2), "begin": i, "end": end, "content": "\n".join(lines[i + 1:end])})
+                i = end
+        i += 1
     return out
 
 
+def document_names(vault: Path) -> list[str]:
+    d = documents_dir(vault)
+    return sorted(p.name for p in d.iterdir() if p.is_dir() and DOC_RE.match(p.name) and (p / "main.tex").is_file()) if d.is_dir() else []
+
+
 def snippet_files(vault: Path) -> list[Path]:
-    d = manuscript_dir(vault) / "snippets"
+    d = snippets_dir(vault)
     files = [p for p in d.glob("S*.tex") if SNIPPET_ID.match(p.stem)] if d.is_dir() else []
     return sorted(files, key=lambda p: int(p.stem[1:]))
 
@@ -172,16 +211,19 @@ def summary(vault: Path, tree: dict, read) -> dict:
     """The manuscript as the page shows it: its lock, its documents, each snippet with its state.
     `tree`: the server's tree; `read(id)`: a note's text."""
     vault = Path(vault)
-    if not (manuscript_dir(vault) / "manuscript.json").is_file():
+    if not (snippets_dir(vault) / "snippets.json").is_file() and not (documents_dir(vault) / "documents.json").is_file():
         return {"exists": False}
     reg = read_registry(vault)
+    dreg = read_docs_registry(vault)
     nodes = {n["id"]: n for n in tree["nodes"]}
     names = {n["name"]: n["id"] for n in tree["nodes"]}
     cites = cite_index(nodes, read)
     resolve = lambda ref: ref if ref in nodes else names.get(ref) or (ref.split(" ")[0] if ref.split(" ")[0] in nodes else None)  # noqa: E731
     snippets = []
+    contents: dict[str, str] = {}
     for f in snippet_files(vault):
         text = f.read_text(encoding="utf-8", errors="replace")
+        contents[f.stem] = content_fingerprint(content_of(text))
         h = header(text) or {"id": f.stem, "kind": "", "title": "", "basis": []}
         u = uses_in(body_after_header(text))
         ids, missing = [], []
@@ -211,5 +253,21 @@ def summary(vault: Path, tree: dict, read) -> dict:
                 unverified.append(nid)
         snippets.append({"id": f.stem, "kind": h["kind"], "title": h["title"], "declared": h["basis"], "basis": ids,
                          "missing": missing, "review": review, "unverified": unverified, "stub": is_stub(text),
-                         "locked": snippet_locked(reg, f.stem)})
-    return {"exists": True, "locked": reg["locked"], "unlocked": reg["unlocked"], "documents": documents(vault), "snippets": snippets}
+                         "locked": snippet_locked(reg, f.stem), "usedIn": []})
+    by_id = {s["id"]: s for s in snippets}
+    docs = []
+    for name in document_names(vault):
+        text = (documents_dir(vault) / name / "main.tex").read_text(encoding="utf-8", errors="replace")
+        copies = []
+        for b in parse_blocks(text):
+            s = by_id.get(b["id"])
+            state = "gone" if s is None else "review" if contents[b["id"]] != b["stamp"] \
+                else "adapted" if content_fingerprint(b["content"]) != b["stamp"] else "sync"
+            copies.append({"id": b["id"], "state": state, "line": b["begin"] + 1, "snippetReview": bool(s and s["review"])})
+            if s is not None:
+                s["usedIn"].append({"doc": name, "state": state})
+        held = {c["id"] for c in copies}
+        refs = list(dict.fromkeys(m for m in re.findall(r"\\(?:ref|cref|Cref|autoref|eqref|nameref)\{(S\d+)\}", uncommented(text)) if m not in held))
+        docs.append({"name": name, "path": f"{DOCUMENTS}/{name}/main.tex", "locked": document_locked(dreg, name), "copies": copies, "refsMissing": refs})
+    return {"exists": True, "locked": reg["locked"], "unlocked": reg["unlocked"], "docsLocked": dreg["locked"], "docsUnlocked": dreg["unlocked"],
+            "documents": docs, "snippets": snippets}

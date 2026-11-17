@@ -30,8 +30,8 @@ import { candidates, candidatesReport } from './lib/rebalance'
 import { nextReport, supersede } from './lib/knowledge'
 import { changesPriority, priorityText, suggestPriority } from './lib/priority'
 import { changesVerified, dismissVerified, keepVerified, toReview, verifiedText, verifyNote } from './lib/verify'
-import { markReviewed, manuscriptReport, manuscriptWarnings, newDocument, readManuscript, setSnippet } from './lib/manuscript'
-import { GENERATED, KINDS, MANUSCRIPT_DIR, isSnippetLocked, readRegistry } from './lib/snippets'
+import { markReviewed, manuscriptReport, manuscriptWarnings, migrateManuscript, newDocument, readManuscript, reviewCopy, setDocument, setSnippet } from './lib/manuscript'
+import { BLOCKS_FILE, DOCUMENTS_DIR, GENERATED, KINDS, SNIPPETS_DIR, isDocumentLocked, isSnippetLocked, readDocsRegistry, readRegistry } from './lib/snippets'
 import { addDeadline, changesDates, checkDeadline, datesText, deadlineQuestion, deadlinesLine, suggestDates, suggestDeadline } from './lib/schedule'
 import { RECALL_HINT, searchesVault } from './lib/recall'
 import { eagerTools, featuresInUse } from './lib/tools'
@@ -319,15 +319,15 @@ const TOOLS = {
   },
   rft_manuscript: {
     description:
-      'The manuscript (vault manuscript/: LaTeX snippets S.., each resting on verified notes, assembled by documents): each document\'s snippets in order with their state (stub, written, review, unverified basis), those in no document, and the verified notes still to write. With a snippet id: its basis notes with what their notebooks saved (as \\rftnum, \\rftfig, \\rfttable), and its file.',
+      'Snippets and documents. Snippets (vault snippets/: LaTeX building blocks S.., each resting on verified notes), each with its state (stub, written, review, unverified basis) and the documents using it; documents (vault documents/, built from copies of snippets), each copy\'s state (to review when its snippet changed since, adapted); the verified notes still to write. With a snippet id: its notes with what their notebooks saved (as \\rftnum, \\rftfig, \\rfttable). With a document: its outline.',
     inputSchema: {
       type: 'object',
-      properties: { ref: { type: 'string', description: 'A document\'s name, or a snippet id (S04).' } },
+      properties: { ref: { type: 'string', description: 'A snippet id (S04), or a document\'s name.' } },
     },
   },
   rft_set_snippet: {
     description:
-      'Write in the manuscript. Without id: a new snippet resting on verified notes (basis); while the manuscript is locked, a stub only (kind, title, basis, outline: what it should say), which the user writes. document (and after) places it. With id: its text or edits, only once the user unlocked it. Numbers, figures and tables only through \\rftnum{E05}{key}, \\rftfig{E08}{name}, \\rfttable{E08}{name}; citations \\cite{R07}. Stamped with its basis, so a change to those notes puts it in review.',
+      'A snippet, the building block. Without id: a new one resting on verified notes (basis); while snippets are locked, a stub only (kind, title, basis, outline: what it should say), which the user writes. With id: its text or edits, only once the user unlocked it. Numbers, figures and tables only through \\rftnum{E05}{key}, \\rftfig{E08}{name}, \\rfttable{E08}{name}; citations \\cite{R07}. Stamped with its basis, so a change to those notes puts it in review. It enters a document only through rft_set_document.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -338,9 +338,22 @@ const TOOLS = {
         outline: { type: 'array', items: { type: 'string' }, description: 'A stub\'s lines for the user: the claim, the numbers and the macros that give them, the caveats.' },
         text: { type: 'string', description: 'The LaTeX, when the snippet is unlocked.' },
         edits: { type: 'array', items: { type: 'object', properties: { old_str: { type: 'string' }, new_str: { type: 'string' } }, required: ['old_str', 'new_str'] } },
-        document: { type: 'string', description: 'The document to place it in.' },
-        after: { type: 'string', description: 'The snippet it goes after in that document (default: last).' },
       },
+    },
+  },
+  rft_set_document: {
+    description:
+      'A document\'s structure, only as the user agreed: place a copy of a snippet (its text now, stamped; the copy is then the document\'s, and goes to review when the snippet changes), move a copy, or remove one. Propose placements as a table first.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'The document.' },
+        place: { type: 'string', description: 'A snippet to copy in (S04).' },
+        move: { type: 'string', description: 'A copy to move (S04).' },
+        remove: { type: 'string', description: 'A copy to take out (S04).' },
+        after: { type: 'string', description: 'Where: after a copy (S03) or a heading\'s title; default: before the bibliography.' },
+      },
+      required: ['name'],
     },
   },
   rft_set_artifact: {
@@ -731,7 +744,7 @@ async function registerCommands($: EngineInterface): Promise<void> {
   await attempt('rft-next', () => $.command.register({ name: 'rft-next', description: 'What is still open, by concept: running and planned experiments, unexplored directions, open questions', argumentHint: '[concept]' }))
   await attempt('rft-jobs', () => $.command.register({ name: 'rft-jobs', description: 'The experiment queue: GPUs, jobs running and waiting, the ones that ended (no model turn)', argumentHint: '[job or experiment]' }))
   await attempt('rft-summarize', () => $.command.register({ name: 'rft-summarize', description: 'Ask Claude to write the missing one-line note summaries and concept digests (the project map)', argumentHint: '[concept]' }))
-  await attempt('rft-manuscript', () => $.command.register({ name: 'rft-manuscript', description: 'Start the manuscript (LaTeX snippets resting on verified notes), add a document to it, or ask Claude to propose what to write next', argumentHint: '[document] | new <name> [article|report]' }))
+  await attempt('rft-manuscript', () => $.command.register({ name: 'rft-manuscript', description: 'Start snippets (LaTeX building blocks resting on verified notes) and documents (built from copies of them), add a document, or ask Claude what to write next and where to place it', argumentHint: '[document] | new <name> [article|report]' }))
   await attempt('rft-artifact', () => $.command.register({ name: 'rft-artifact', description: "Ask Claude to write a concept's artifact, the page of its experiments' results (no concept: every one missing or out of date)", argumentHint: '[concept]' }))
   await attempt('rft-update', () => $.command.register({ name: 'rft-update', description: 'Bring a vault made by an older version up to this one: shows what it adds; apply writes it. notebooks: run every notebook again in the queue and list what is still to write (--write: ask Claude to write it)', argumentHint: '[apply] [--sections] | notebooks [--write] [concept]' }))
   await attempt('rft-view', () => $.command.register({ name: 'rft-view', description: 'Write a standalone HTML view of the tree to <vault>/tree.html' }))
@@ -898,7 +911,11 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       // the Manuscript tab's + Snippet, Reviewed and + Document (never a tool of the model's: only FROM_VIEW reaches it)
       if (i.action === 'reviewed') return markReviewed(io, loaded, String(i.id ?? ''), today())
       if (i.action === 'document') return newDocument(io, loaded, String(i.name ?? ''), i.kind === 'report' ? 'report' : 'article')
-      return setSnippet(io, loaded, { kind: i.kind, title: i.title, basis: strings(i.basis), document: str(i.document) }, today(), { byUser: true })
+      if (i.action === 'place' || i.action === 'move' || i.action === 'remove') {
+        return setDocument(io, loaded, { name: String(i.name ?? ''), [i.action]: String(i.id ?? ''), after: str(i.after) })
+      }
+      if (i.action === 'take' || i.action === 'keep') return reviewCopy(io, loaded, String(i.name ?? ''), String(i.id ?? ''), i.action)
+      return setSnippet(io, loaded, { kind: i.kind, title: i.title, basis: strings(i.basis) }, today(), { byUser: true })
     }
     case 'rft_verify': {
       // the tree view's Verify, Dismiss and Back to review (never a tool of the model's: only FROM_VIEW reaches it)
@@ -987,8 +1004,10 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
     case 'rft_set_snippet':
       return setSnippet(io, loaded, {
         id: str(i.id), kind: i.kind, title: i.title, basis: i.basis === undefined ? undefined : strings(i.basis), outline: i.outline,
-        text: i.text, edits: i.edits, document: str(i.document), after: str(i.after),
+        text: i.text, edits: i.edits,
       }, today())
+    case 'rft_set_document':
+      return setDocument(io, loaded, { name: str(i.name), place: str(i.place), move: str(i.move), remove: str(i.remove), after: str(i.after) })
     case 'rft_tree':
       return treeReport(loaded, { root: str(i.root), depth: typeof i.depth === 'number' ? i.depth : undefined, vault: shownVault(h, loaded.config) })
     case 'rft_validate': {
@@ -1127,7 +1146,7 @@ const FROM_VIEW = [
   { line: 'RFT_SET_TYPE ', tool: 'rft_set_type', fields: ['id', 'type'], what: "change a note's type" },
   { line: 'RFT_MOVE_NODE ', tool: 'rft_move_node', fields: ['id', 'parent'], what: 'move a note' },
   { line: 'RFT_VERIFY ', tool: 'rft_verify', fields: ['id', 'action'], what: 'verify a note' },
-  { line: 'RFT_MANUSCRIPT ', tool: 'rft_manuscript_view', fields: ['action', 'id', 'kind', 'title', 'basis', 'document', 'name'], what: 'change the manuscript' },
+  { line: 'RFT_MANUSCRIPT ', tool: 'rft_manuscript_view', fields: ['action', 'id', 'kind', 'title', 'basis', 'name', 'after'], what: 'change the snippets or documents' },
 ] as const
 
 /**
@@ -1665,18 +1684,22 @@ async function reproducedEdit($: EngineInterface, e: Record<string, unknown>): P
 
 /** /rft-manuscript's request: proposals as a table, nothing written until the user picks. */
 const manuscriptPrompt = (doc?: string) =>
-  `Propose what to write in the manuscript${doc ? `'s document ${doc}` : ''}. Call rft_manuscript${doc ? ` ${doc}` : ''}; for the verified notes still to write (and the snippets in review), give me a table: kind, title, basis, what it would say in one line, where it goes${doc ? '' : ' (which document)'}. ` +
-  'Write nothing until I pick. Then create the ones I pick with rft_set_snippet: while the manuscript is locked as stubs (outline: the claim, the numbers and the macros that give them, the caveats), placed in the document, for me to write.'
+  `Propose what to write next. Call rft_manuscript${doc ? ` and rft_manuscript ${doc}` : ''}. Give me two tables. Snippets: for the verified notes still to write (and the snippets in review), kind, title, basis, what it would say in one line. ` +
+  `Placements: which snippets (existing or proposed) go where in ${doc ? `the document ${doc}` : 'which document'} (after which copy or heading), and why there. ` +
+  'Write nothing until I pick. Then create the snippets I pick with rft_set_snippet (while snippets are locked, as stubs: outline the claim, the numbers and the macros that give them, the caveats), and place the copies I pick with rft_set_document.'
 
-const MANUSCRIPT_GENERATED = `The plugin writes the manuscript's ${GENERATED.join(', ')}: snippets go through rft_set_snippet (rft_manuscript shows them), the rest is generated when a document compiles.`
-const manuscriptLocked = (id?: string) =>
-  `The manuscript is locked: ${id ? `${id} is` : 'its snippets and documents are'} the user's to write. Propose a snippet as a stub with rft_set_snippet (document places it), and comment or suggest on the user's text with rft_comment / rft_suggest {id: "${id ?? 'S..'}", quote, …}; they accept or reject it.`
+const MANUSCRIPT_GENERATED = `The plugin writes ${GENERATED.join(', ')} and each document's ${BLOCKS_FILE}: snippets go through rft_set_snippet, placements through rft_set_document, the rest is generated when a document compiles.`
+const snippetLockedText = (id?: string) =>
+  `The snippets are locked: ${id ? `${id} is` : 'they are'} the user's to write. Propose a snippet as a stub with rft_set_snippet, and comment or suggest on the user's text with rft_comment / rft_suggest {id: "${id ?? 'S..'}", quote, …}; they accept or reject it.`
+const documentLockedText = (name: string) =>
+  `The document ${name} is locked: its text is the user's. Place, move or remove a copy of a snippet with rft_set_document once the user agrees; comment or suggest on its text with rft_comment / rft_suggest {id: "${name}", quote, …}.`
 
 /**
- * Why Claude may not make this tool call, or null: it would write the manuscript by hand where it is
- * not Claude's to (an Edit or Write in vault/manuscript/, a shell command that writes there): the
- * generated files and the registry always, a new snippet's file (rft_set_snippet numbers and stamps
- * it), and while the manuscript is locked its snippets (but the ones unlocked alone) and documents.
+ * Why Claude may not make this tool call, or null: it would write snippets or documents by hand
+ * where it is not Claude's to (an Edit or Write in vault/snippets/ or vault/documents/, a shell
+ * command that writes there): the registries, the generated files and the copies' records always,
+ * a new snippet's file (rft_set_snippet numbers and stamps it), a locked snippet, and a locked
+ * document's text.
  */
 async function manuscriptEdit($: EngineInterface, e: Record<string, unknown>): Promise<string | null> {
   const tool = String(e.tool)
@@ -1684,31 +1707,41 @@ async function manuscriptEdit($: EngineInterface, e: Record<string, unknown>): P
   const s = await read($, snapshot)
   if (!s?.isActive || !s.vault) return null
   const vault = resolvePath(s.vault, '.')
-  const dir = `${vault}/${MANUSCRIPT_DIR}/`
+  const dirs = [SNIPPETS_DIR, DOCUMENTS_DIR].map(d => `${vault}/${d}/`)
   let files: string[] = []
   if (tool === 'Bash') {
     const cmd = String(e.command ?? '')
     const w = shellWrites(cmd, resolvePath(await $.session.cwd(), '.'))
-    files = w.files.filter(f => f.startsWith(dir))
-    if (!files.length && w.script && (cmd.includes(dir) || cmd.includes(`${vault.split('/').pop()}/${MANUSCRIPT_DIR}/`))) files = [dir]
+    files = w.files.filter(f => dirs.some(d => f.startsWith(d)))
+    const top = vault.split('/').pop()
+    if (!files.length && w.script) files = dirs.filter((d, k) => cmd.includes(d) || cmd.includes(`${top}/${[SNIPPETS_DIR, DOCUMENTS_DIR][k]}/`))
   } else {
     const raw = e.file_path ?? e.notebook_path
     if (typeof raw !== 'string') return null
     const abs = resolvePath(resolvePath(await $.session.cwd(), '.'), raw)
-    if (abs.startsWith(dir)) files = [abs]
+    if (dirs.some(d => abs.startsWith(d))) files = [abs]
   }
   if (!files.length) return null
-  const reg = await readRegistry({ read: (p: string) => $.fs.read(p) } as never, vault)
+  const io = { read: (p: string) => $.fs.read(p) } as never
+  const reg = await readRegistry(io, vault)
+  const docs = await readDocsRegistry(io, vault)
   for (const f of files) {
-    const rel = f.slice(dir.length)
-    if (GENERATED.some(g => rel === g || rel.startsWith(`${g}/`))) return MANUSCRIPT_GENERATED
-    const m = /^snippets\/(S\d+)\.tex$/.exec(rel)
+    const rel = f.slice(vault.length + 1)
+    if (GENERATED.some(g => rel === g || rel.startsWith(`${g}/`)) || rel.endsWith(`/${BLOCKS_FILE}`)) return MANUSCRIPT_GENERATED
+    const m = new RegExp(`^${SNIPPETS_DIR}/(S\\d+)\\.tex$`).exec(rel)
     if (m) {
       let exists = true
       try { await $.fs.read(f) } catch { exists = false }
-      if (!exists) return `A new snippet is made with rft_set_snippet, which numbers it, writes its header and stamps it with its basis: not by hand.`
-      if (isSnippetLocked(reg, m[1]!)) return manuscriptLocked(m[1])
-    } else if (reg.locked) return manuscriptLocked()
+      if (!exists) return 'A new snippet is made with rft_set_snippet, which numbers it, writes its header and stamps it with its basis: not by hand.'
+      if (isSnippetLocked(reg, m[1]!)) return snippetLockedText(m[1])
+      continue
+    }
+    const d = new RegExp(`^${DOCUMENTS_DIR}/([a-z0-9][a-z0-9-]*)/`).exec(rel)
+    if (d) {
+      if (isDocumentLocked(docs, d[1]!)) return documentLockedText(d[1]!)
+      continue
+    }
+    if (rel.startsWith(`${SNIPPETS_DIR}/`) ? reg.locked : docs.locked) return rel.startsWith(`${SNIPPETS_DIR}/`) ? snippetLockedText() : MANUSCRIPT_GENERATED
   }
   return null
 }
@@ -2085,18 +2118,21 @@ export const register: Register = (on, options) => {
       const io = (await mustHere($)).io
       const loaded = await loadActive(io)
       const args = e.args.trim().split(/\s+/).filter(Boolean)
+      // a vault started before the two levels: brought to them first
+      const migrated = await migrateManuscript(io, loaded)
+      if (migrated) { await refresh($, true); return { text: migrated } }
       const ms = await readManuscript(io, loaded)
       if (args[0] === 'new' || !ms) {
         const [name = 'paper', kind = 'article'] = args[0] === 'new' ? args.slice(1) : args
         if (kind !== 'article' && kind !== 'report') return { text: 'A document is an article (a paper) or a report (a thesis chapter): /rft-manuscript new <name> [article|report].' }
         const made = await newDocument(io, loaded, name, kind)
         await refresh($, true)
-        return { text: `${made} The tree view's Manuscript tab shows it; /rft-manuscript asks Claude what to write from the verified notes.` }
+        return { text: `${made} The tree view's Manuscript tab shows both levels; /rft-manuscript asks Claude what to write from the verified notes, and where to place it.` }
       }
       const doc = args[0]
-      if (doc && !ms.documents.some(d => d.name === doc)) return { text: `"${doc}" is no document of the manuscript (${ms.documents.map(d => d.name).join(', ') || 'none yet'}); /rft-manuscript new ${doc} makes it.` }
+      if (doc && !ms.documents.some(d => d.name === doc)) return { text: `"${doc}" is no document (${ms.documents.map(d => d.name).join(', ') || 'none yet'}); /rft-manuscript new ${doc} makes it.` }
       pendingPrompts.push(manuscriptPrompt(doc))
-      return { text: `Asked Claude to propose what to write${doc ? ` in ${doc}` : ''}: a table to choose from; nothing is written until you pick.` }
+      return { text: `Asked Claude to propose snippets to write and where to place them${doc ? ` in ${doc}` : ''}: tables to choose from; nothing is written until you pick.` }
     } catch (err) {
       return { text: message(err) }
     }

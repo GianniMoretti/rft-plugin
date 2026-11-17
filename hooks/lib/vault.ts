@@ -269,9 +269,10 @@ export const MILESTONE_RE = /^M(\d+)$/
 export const ICS = 'rft.ics'
 /** The concepts' artifacts: one HTML page each, whose first line is this header. */
 export const ARTIFACTS_DIR = 'artifacts'
-/** The manuscript (docs/design/manuscript.md): its folder in the vault, and its registry, whose presence turns it on. */
-export const MANUSCRIPT_DIR = 'manuscript'
-export const MANUSCRIPT_REGISTRY = `${MANUSCRIPT_DIR}/manuscript.json`
+/** Snippets and documents (docs/design/manuscript.md): a folder each; the snippets' registry turns them on. */
+export const SNIPPETS_DIR = 'snippets'
+export const DOCUMENTS_DIR = 'documents'
+export const MANUSCRIPT_REGISTRY = `${SNIPPETS_DIR}/snippets.json`
 export const ARTIFACT_HEAD = /^<!-- rft-artifact (\{.*\}) -->[ \t]*(?:\r?\n|$)/
 
 export const join = (...parts: string[]) =>
@@ -525,7 +526,7 @@ export type Loaded = {
   milestones: Milestone[]
   /** The vault holds at least one concept artifact (`artifacts/*.html` with its header). */
   hasArtifacts?: boolean
-  /** The vault has a manuscript (`manuscript/manuscript.json`). */
+  /** The vault has snippets and documents (`snippets/snippets.json`). */
   hasManuscript?: boolean
 }
 

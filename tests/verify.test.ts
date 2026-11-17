@@ -8,6 +8,7 @@ import { LockedChange, isLocked } from '../hooks/lib/comments'
 import { nextReport, supersede } from '../hooks/lib/knowledge'
 import { addNode, setStatus } from '../hooks/lib/ops'
 import { changesVerified, dismissVerified, keepVerified, substanceFingerprint, substanceOf, toReview, verifyBlockers, verifyNote } from '../hooks/lib/verify'
+import { contentFingerprint } from '../hooks/lib/snippets'
 import { front, load, readConfig, validate } from '../hooks/lib/vault'
 import { CWD, E01, E02, MemoryFs, demoFiles, world } from './fixture'
 
@@ -48,6 +49,9 @@ describe('the same fingerprint as the server', () => {
     expect(substanceFingerprint('experiment', e)).toBe('58942782')
     const t = '---\nid: T01\n---\n## Statement\nA gap $g = a - b$.\n\n## Builds on\nE05.\n\n## Explanation\n“Proof” — by ε.\n'
     expect(substanceFingerprint('theory', t)).toBe('1a85e809')
+    // and a snippet's content, as a copy in a document is stamped with it (server/rft_manuscript.py content_fingerprint)
+    expect(contentFingerprint('\\paragraph{One}\nText one.')).toBe('a25f30cc')
+    expect(contentFingerprint('\\paragraph{One}  % a comment\nText   one.\n')).toBe('a25f30cc')
   })
 })
 

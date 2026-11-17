@@ -26,6 +26,7 @@ sys.path.insert(0, str(ROOT / "server"))
 sys.path.insert(0, str(ROOT / "bench"))
 import lifecycle  # noqa: E402
 import rft_latex  # noqa: E402
+import rft_manuscript  # noqa: E402
 import rft_notebook  # noqa: E402
 import rft_queue  # noqa: E402
 import rft_results  # noqa: E402
@@ -33,8 +34,8 @@ import rft_results  # noqa: E402
 HAS_UV = bool(shutil.which("uv")) and not os.environ.get("RFT_SKIP_UV")
 HAS_TEX = bool(shutil.which("latexmk") and shutil.which("pdftotext"))
 
-# the manuscript: a document as /rft-manuscript writes it (documentTemplate in hooks/lib/manuscript.ts),
-# and a snippet that takes E08's numbers and table by name
+# a snippet that takes E08's numbers and table by name, and a document as /rft-manuscript writes it
+# (documentTemplate in hooks/lib/manuscript.ts) holding a copy of it
 DOCUMENT = r"""\documentclass[11pt]{article}
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
@@ -46,7 +47,7 @@ DOCUMENT = r"""\documentclass[11pt]{article}
 \title{demo}
 \begin{document}
 \maketitle
-\rftsnippet{S01}
+%(copy)s
 \end{document}
 """
 SNIPPET = r"""% rft-snippet S01 · result · A schedule with no stopping rule
@@ -208,11 +209,12 @@ class PipelineTest(unittest.TestCase):
         # the manuscript: a snippet that names E08's numbers and table compiles, and its PDF holds
         # exactly what the run saved, the per-seed accuracies included: no one typed them
         if HAS_TEX:
-            ms = self.vault / "manuscript"
-            (ms / "documents" / "paper").mkdir(parents=True)
-            (ms / "documents" / "paper" / "main.tex").write_text(DOCUMENT)
-            (ms / "snippets").mkdir()
-            (ms / "snippets" / "S01.tex").write_text(SNIPPET)
+            (self.vault / "snippets").mkdir()
+            (self.vault / "snippets" / "S01.tex").write_text(SNIPPET)
+            content = rft_manuscript.content_of(SNIPPET)
+            copy = f"% rft-begin S01 {rft_manuscript.content_fingerprint(content)}\n{content}\n% rft-end S01"
+            (self.vault / "documents" / "paper").mkdir(parents=True)
+            (self.vault / "documents" / "paper" / "main.tex").write_text(DOCUMENT % {"copy": copy})
             built = rft_latex.compile_doc(self.vault, "paper")
             self.assertTrue(built["ok"], built)
             self.assertEqual(built["warnings"], [])

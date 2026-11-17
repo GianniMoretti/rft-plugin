@@ -7,8 +7,8 @@
 // A locked note (`locked: true`) is the user's: Claude only suggests changes to it.
 
 import type { Io, Loaded, RftNode } from './vault'
-import { bodyOf, front, join, resolveId, unquote } from './vault'
-import { isSnippetId, isSnippetLocked, readRegistry, readSnippet } from './snippets'
+import { bodyOf, compareNames, front, join, resolveId, unquote } from './vault'
+import { documentRel, isDocumentLocked, isDocumentName, isSnippetId, isSnippetLocked, readDocsRegistry, readRegistry, readSnippet } from './snippets'
 
 export const COMMENTS_DIR = '.comments'
 /** The characters kept on each side of a quote, to find it again. */
@@ -145,23 +145,30 @@ const noteOf = (loaded: Loaded, ref: string): RftNode => {
 }
 
 /**
- * What a discussion is about: a note of the tree, or a snippet of the manuscript (S..): its text,
- * whether it is the user's alone (a locked note; a snippet of a locked manuscript), and its file
+ * What a discussion is about: a note of the tree, a snippet (S..), or a document (by its name): its
+ * text, whether it is the user's alone (a locked note; a locked snippet or document), and its file
  * (relative to the vault).
  */
-export type Subject = { id: string; name: string; text: string; locked: boolean; path: string; isSnippet: boolean }
+export type Subject = { id: string; name: string; text: string; locked: boolean; path: string; what: 'note' | 'snippet' | 'document' }
 
 export async function subjectOf(io: Io, loaded: Loaded, ref: string): Promise<Subject> {
+  const vault = loaded.config.vault
   if (isSnippetId(ref)) {
     const id = ref.trim().toUpperCase()
-    const s = await readSnippet(io, loaded.config.vault, id)
-    if (!s) throw new CommentError(`"${ref}" is no snippet of the manuscript`)
-    const r = await readRegistry(io, loaded.config.vault)
-    return { id, name: `${id}${s.title ? ` ${s.title}` : ''}`, text: s.text, locked: isSnippetLocked(r, id), path: s.path, isSnippet: true }
+    const s = await readSnippet(io, vault, id)
+    if (!s) throw new CommentError(`"${ref}" is no snippet`)
+    const r = await readRegistry(io, vault)
+    return { id, name: `${id}${s.title ? ` ${s.title}` : ''}`, text: s.text, locked: isSnippetLocked(r, id), path: s.path, what: 'snippet' }
+  }
+  const doc = ref.trim()
+  if (isDocumentName(doc) && !resolveId(loaded.tree, doc)) {
+    let text: string
+    try { text = (await io.read(join(vault, documentRel(doc)))).replace(/\r\n/g, '\n') } catch { throw new CommentError(`"${ref}" is no note, snippet or document`) }
+    return { id: doc, name: `the document ${doc}`, text, locked: isDocumentLocked(await readDocsRegistry(io, vault), doc), path: documentRel(doc), what: 'document' }
   }
   const n = noteOf(loaded, ref)
   const text = loaded.texts[n.id] ?? ''
-  return { id: n.id, name: n.name, text, locked: isLocked(text), path: n.path, isSnippet: false }
+  return { id: n.id, name: n.name, text, locked: isLocked(text), path: n.path, what: 'note' }
 }
 
 const textArg = (v: unknown, what: string): string => {
@@ -222,10 +229,11 @@ export async function commentsReport(io: Io, loaded: Loaded, ref?: string): Prom
   }
   // the manuscript's snippets
   const files = await io.list(join(vault, COMMENTS_DIR)).catch(() => [])
-  for (const f of files.filter(f => /^S\d+\.json$/.test(f.name)).sort((a, b) => Number(a.name.slice(1, -5)) - Number(b.name.slice(1, -5)))) {
+  for (const f of files.filter(f => f.name.endsWith('.json') && !resolveId(loaded.tree, f.name.slice(0, -5))).sort((a, b) => compareNames(a.name, b.name))) {
     const id = f.name.slice(0, -5)
+    if (!isSnippetId(id) && !isDocumentName(id)) continue
     const open = (await readComments(io, vault, id)).threads.filter(t => t.state === 'open')
-    if (open.length) rows.push(`- ${id} (manuscript snippet): ${open.map(t => `${t.id} ${t.kind}${t.asked ? ' (asked)' : ''}`).join(', ')}`)
+    if (open.length) rows.push(`- ${id} (${isSnippetId(id) ? 'snippet' : 'document'}): ${open.map(t => `${t.id} ${t.kind}${t.asked ? ' (asked)' : ''}`).join(', ')}`)
   }
   return rows.length ? `Notes with open threads (rft_comments with an id shows them):\n${rows.join('\n')}` : 'No open comments or suggestions in the tree.'
 }
@@ -303,13 +311,15 @@ export function askText(n: Subject, c: Comments, thread: string, path: string): 
   if (!t) throw new CommentError(`${id} has no thread ${thread}`)
   const locked = n.locked
   const ref = `{id: "${id}", thread: "${t.id}"`
-  const what = n.isSnippet ? 'snippet' : 'note'
-  const reads = n.isSnippet ? 'the snippet, and the notes it rests on (rft_manuscript ' + id + ')' : 'the note, and its code, results or references when the question is about them'
+  const what = n.what
+  const reads = n.what === 'snippet' ? `the snippet, and the notes it rests on (rft_manuscript ${id})`
+    : n.what === 'document' ? `the document, and the snippets its copies come from (rft_manuscript ${id})`
+      : 'the note, and its code, results or references when the question is about them'
   const todo = t.kind === 'comment'
     ? `It is a comment: a discussion of this part of the ${what} before any edit. Read what it needs (${reads}), then reply with rft_comment ${ref}, text}. Do not edit the ${what}. When a change looks right, say so in the reply, or propose it with rft_suggest {id: "${id}", quote, replacement}.`
     : locked
       ? `${id} is locked: do not edit it. Write the new text for the quoted part with rft_suggest ${ref}, replacement, text: why}; the user accepts or rejects it in the tree view. A change needed elsewhere in the ${what} is one more rft_suggest {id: "${id}", quote, replacement}. When the suggestion is unclear or looks wrong, reply with rft_comment ${ref}, text} instead.`
-      : `Make the change in the ${what} yourself${n.isSnippet ? ` (rft_set_snippet {id: "${id}", edits})` : ''}: edit the quoted part as ${t.replacement == null ? 'the instruction says' : `the replacement has it (adapting it only where the ${what} needs it)`}, and only what that needs. Then close the thread with rft_comment ${ref}, applied: true, text: what you changed}. When the suggestion is unclear or looks wrong, reply with rft_comment ${ref}, text} instead and leave the ${what} as it is.`
+      : `Make the change in the ${what} yourself${n.what === 'snippet' ? ` (rft_set_snippet {id: "${id}", edits})` : ''}: edit the quoted part as ${t.replacement == null ? 'the instruction says' : `the replacement has it (adapting it only where the ${what} needs it)`}, and only what that needs. Then close the thread with rft_comment ${ref}, applied: true, text: what you changed}. When the suggestion is unclear or looks wrong, reply with rft_comment ${ref}, text} instead and leave the ${what} as it is.`
   return [
     `The user asks you, from the tree view, to answer thread ${t.id} on ${n.name} (${path}). Answer in the thread with the rft tools; in the chat, one short line at most.`,
     '',
@@ -331,7 +341,7 @@ export function subagentAskText(n: Subject, c: Comments, thread: string, path: s
     ? 'It is a comment: a discussion of this part of the note. Your final message is your reply in the thread, as the user will read it (markdown, short).'
     : `It is a suggestion. Your final message is the new text for the quoted part, between <replacement> and </replacement>, ${t.replacement == null ? 'written as the instruction says' : 'from the proposed replacement, adapted only where the note needs it'}, then one line on why; the user accepts or rejects it in the tree view. When the suggestion is unclear or looks wrong, write no replacement: your final message is then your reply.`
   return [
-    `Answer thread ${t.id} on ${n.name} (${path}). Read what it needs (the ${n.isSnippet ? 'snippet, a part of the manuscript in LaTeX, and the notes it rests on' : 'note, and its code, results or references when the question is about them'}) and nothing more.`,
+    `Answer thread ${t.id} on ${n.name} (${path}). Read what it needs (the ${n.what === 'snippet' ? 'snippet, a LaTeX building block, and the notes it rests on' : n.what === 'document' ? 'document, in LaTeX, and the snippets its copies come from' : 'note, and its code, results or references when the question is about them'}) and nothing more.`,
     '',
     threadText(bodyOf(n.text), t, true),
     '',

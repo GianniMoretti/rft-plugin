@@ -119,7 +119,7 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   others are listed by name and loaded when Claude needs one, which keeps every turn cheaper. The
   date, priority, comment, artifact, queue and manuscript tools join the first group in a vault that
   uses those features (it has deadlines or dated notes, priorities, comment threads or locked
-  notes, a concept artifact, an experiment queue, or a manuscript).
+  notes, a concept artifact, an experiment queue, or snippets and documents).
 
   | tool | does |
   |---|---|
@@ -134,8 +134,9 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_set_digest` | writes a concept's digest in the vault's `map/` folder: state, key results, dead ends, open questions; the map says when it is out of date |
 | `rft_artifact` | what a concept's artifact is written from: each experiment with a result (in full when new or changed since the page was written), the ones without, its sub-concepts, and how to write the page |
 | `rft_set_artifact` | writes a concept's artifact in `vault/artifacts/`, whole (`html`) or with `edits` (old → new, all or none), stamped with the results it was written from; names the results left off the page, links to no note, superseded results cited alone, and files the view would block |
-  | `rft_manuscript` | the manuscript: each document's snippets in order with their state (stub, written, review) and the notes they rest on, those in no document, and the verified notes still to write; one snippet with the numbers, figures and tables its notes saved, as the macros that print them |
-| `rft_set_snippet` | a new snippet resting on verified notes, placed in a document: a stub (its outline, for you to write) while the manuscript is locked; once you unlock it, a snippet's text or edits. Its macros are checked against what the notebooks saved, and it is stamped with its notes |
+  | `rft_manuscript` | snippets and documents: each snippet with its state (stub, written, review), the notes it rests on and the documents using it; each document's copies with theirs (to review, adapted); the verified notes still to write. One snippet with the numbers, figures and tables its notes saved, as the macros that print them; one document's outline |
+| `rft_set_snippet` | a new snippet, a building block resting on verified notes: a stub (its outline, for you to write) while snippets are locked; once you unlock one, its text or edits. Its macros are checked against what the notebooks saved, and it is stamped with its notes |
+| `rft_set_document` | a placement you agreed to: a copy of a snippet placed in a document (after a copy or a heading), moved, or removed |
 | `rft_supersede` | marks a note whose result a newer one overturns (`superseded_by:` and a History line); the map, search, graph and tree view show it as superseded, so the old number is not built on |
   | `rft_next` | what is still open: the deadlines first (nearest first, with what puts them at risk) and the GPU clashes, your priorities, then by concept the experiments running, planned and never run, directions with nothing tried under them (with their age, the higher priorities first), the digests' open questions, and the priorities Claude suggested that wait for you |
   | `rft_suggest_priority` | suggests a priority for a note, with a one-line reason (`suggested_priority:`); you accept or dismiss it in the tree view. Claude never sets a priority itself (see Priorities) |
@@ -750,57 +751,84 @@ so you can run it and read the note side by side.
 - It needs `uv` on `PATH`. A vault where no experiment has a notebook sees none of this: the two
   tools wait behind ToolSearch, and their rules are left out.
 
-### The manuscript
+### Snippets and documents
 
-Research ends in writing: a paper, a thesis, an article. The **manuscript** turns verified notes
-into LaTeX, one **snippet** at a time, each resting on the notes it states, and **documents** (a
-paper, a thesis chapter) assemble them. It is yours to write: Claude proposes snippets from
-verified notes, comments and suggests, and writes only once you unlock it. The design is in
-[`docs/design/manuscript.md`](docs/design/manuscript.md).
+Research ends in writing: a paper, a thesis, an article. Verified notes become writing at **two
+levels**, so a finding is consolidated once and a definition reads the same in every document. The
+design is in [`docs/design/manuscript.md`](docs/design/manuscript.md).
+
+- **Snippets are the building blocks**: atomic LaTeX (a definition, a theorem, a result, a method,
+  related work), each resting on the notes it states, written once and reused.
+- **Documents are what is built with them** (a paper, a thesis chapter). A snippet enters a
+  document as a **copy of its text**, at the place you approve, kept referenced to the snippet. In
+  the document you may adapt the copy to the narrative, and the document has text of its own
+  (transitions, an abstract, its structure). When the snippet changes, its copies are **flagged for
+  review**, never rewritten: you take the new text, or keep yours.
 
 ```
-vault/manuscript/
-  manuscript.json             the lock, each snippet's stamp, the next id (the plugin's)
-  snippets/S04.tex            one snippet
-  documents/paper/main.tex    a document: its preamble, then \rftsnippet{S04} lines in order
-  rft.sty, rft-numbers.tex, refs.bib, .build/   generated when a document compiles
+vault/snippets/
+  snippets.json               the lock, each snippet's stamp of its notes, the next id (the plugin's)
+  S04.tex                     one snippet
+vault/documents/
+  documents.json              the documents' lock (the plugin's)
+  paper/main.tex              a document: its own text, and copies of snippets
+  paper/.blocks.json          the snippet text each copy was taken from (the plugin's)
+  rft.sty, rft-numbers.tex, refs.bib, .build/   generated when a document or a snippet compiles
 ```
 
-- **Start it** with `/rft-manuscript` (a first document, `paper`; `/rft-manuscript new
-  thesis-ch3 report` adds a thesis chapter) or **Start a manuscript** in the tree view's
-  **Manuscript** tab. Until then its tools wait behind ToolSearch and its rule is left out.
-- **Only verified notes go in.** Claude proposes snippets from verified notes only (see Statuses):
-  `/rft-manuscript [document]` asks it for a table of proposals (kind, title, the notes it rests on,
-  what it would say); nothing is written until you pick. A picked one becomes a **stub**: its two
-  header lines (`% rft-snippet S04 · result · CutMix at 1k images`, `% basis: E05, E02`), the
-  outline as comments, and the kind's environment (`definition`, `theorem`, … a `\paragraph`, a
-  `figure` or `table` float), for you to fill. You may rest a snippet of your own on any note; one
-  not verified is flagged until it is.
+```latex
+% rft-snippet S04 · result · CutMix at 1k images      (a snippet's first two lines)
+% basis: E05, E02
+
+% rft-begin S04 3f2a1c9d                              (a copy in a document: the snippet's
+…the snippet's text, as taken or adapted…            fingerprint when it was taken)
+% rft-end S04
+```
+
+- **Start** with `/rft-manuscript` (both levels and a first document, `paper`; `/rft-manuscript new
+  thesis-ch3 report` adds a thesis chapter) or **Start** in the tree view's **Manuscript** tab.
+  Until then the tools wait behind ToolSearch and their rule is left out. A vault that used the first
+  layout (`vault/manuscript/`) is brought over by `/rft-manuscript`, each `\rftsnippet` line made a
+  copy.
+- **Only verified notes go in.** Claude proposes snippets from verified notes only (see Statuses),
+  and where to place them: `/rft-manuscript [document]` asks it for two tables, snippets to write
+  and placements; nothing is written until you pick. A picked snippet is a **stub**: its two header
+  lines, its outline as comments, the kind's environment (`definition`, `theorem`, … a
+  `\paragraph`, a `figure` or `table` float), for you to fill. You may rest a snippet of your own on
+  any note; one not verified is flagged until it is.
 - **Nothing is typed twice.** `\rftnum{E05}{acc.1k}` prints a number of the experiment's saved
   RESULTS (`results/E05.json`, by path), `\rftfig[width=.8\linewidth]{E08}{loss}` its figure (a
   notebook's run saves each matplotlib figure as PDF beside its SVG), `\rfttable{E08}{by_seed}` its
-  table (saved as a booktabs tabular beside its HTML). `\cite{R07}` cites a reference note, and
-  each paper of a literature note is cited by the key of its ```` ```bibtex ```` block; `refs.bib`
-  is made from those blocks (a reference with none gets a `@misc` from its title and link). A
-  name that is not there prints **??** and is a LaTeX warning.
-- **In step with the tree.** Each snippet is stamped with what its notes claimed when it was
-  written. When one of them changes, goes to review, is superseded or dropped, the snippet is in
-  **review**, with why; **Reviewed** takes its stamp anew. A note's drawer lists the snippets
-  resting on it (**Written in**).
-- **Locked by default**, as a locked note is: Claude's Edit, Write and shell writes to the
-  manuscript are refused; it proposes stubs, and comments and suggests on your text when you ask.
-  The padlock in the tab unlocks the whole manuscript, or one snippet, for Claude to write too.
-  The generated files are refused to everyone's hand.
-- **The Manuscript tab**: the document's snippets in order (and those in no document) with their
-  state, the open one in an editor (CodeMirror, with LaTeX highlighting), and the document's PDF
-  beside it. **Save** writes it (a file changed meanwhile asks first), **Compile** or Ctrl/Cmd+S
-  compiles it with latexmk on the server (shell escape off, stopped after 2 minutes), and its
-  errors list each with its snippet and line, a click away; a failed compile keeps the last good
-  PDF. The notes a snippet rests on are chips that open them in the drawer. Select text and choose
-  **Comment** or **Suggest** to discuss it as a note's text, with **Ask Claude**, **Accept** and the
-  rest. `?view=manuscript&snippet=S04` opens one. It needs `latexmk` on `PATH` to compile (TeX
-  Live); without it the tab says so. The PDF goes only to the page carrying the key. `/rft-view`
-  leaves the tab out.
+  table (saved as a booktabs tabular beside its HTML). `\cite{R07}` cites a reference note, and each
+  paper of a literature note is cited by the key of its ```` ```bibtex ```` block; `refs.bib` is
+  made from those blocks. A name that is not there prints **??** and is a LaTeX warning. The macros
+  stay live in a copy too.
+- **Changes go up one level at a time.** A note that changes, goes to review, is superseded or
+  dropped puts the snippets resting on it in **review**; **Reviewed** takes their stamp anew. A
+  snippet whose text changes puts its copies in **review** in every document holding one; a copy
+  that differs from its snippet is marked **adapted** (shown, not flagged). A note's drawer lists
+  the snippets resting on it (**Written in**); a snippet lists the documents using it (**Used in**).
+- **Locked by default**, both levels, as a locked note is: Claude's Edit, Write and shell writes to
+  snippets and documents are refused; it proposes stubs and placements, and comments and suggests on
+  your text when you ask (on a snippet or a document, as on a note). The padlocks unlock the
+  snippets, or one of them, and the documents, or one of them, for Claude to write too. The
+  registries, `.blocks.json` and the generated files are the plugin's alone.
+- **The Manuscript tab**, two views:
+  - **Snippets**: the library by kind, each with its state, how many documents use it and its open
+    threads; **+ Snippet**; the open snippet in the editor (CodeMirror, LaTeX mode), its notes as
+    chips that open them in the drawer, **Used in** with each document (a click goes to the copy),
+    **Place in** a document; **Compile snippet** shows it alone, in a minimal article.
+  - **Documents**: the document menu and **+ Document**; its outline (headings and copies, each copy
+    with its state); **Place** a snippet from the library after a copy or a heading; the copy the
+    cursor is in, with **Move after**, **Remove**, and in review the snippet **then and now** with
+    **Take the new text** and **Keep mine**; the editor on `main.tex`, copies shaded by state;
+    **Compile** shows its PDF beside it, its errors a click away; a failed compile keeps the last
+    good PDF.
+  - **Save** writes the file (a file changed meanwhile asks first); Ctrl/Cmd+S saves and compiles.
+    Select text and choose **Comment** or **Suggest** to discuss it, with **Ask Claude**, **Accept**
+    and the rest. `?view=manuscript&snippet=S04` or `&doc=paper` opens one. Compiling needs
+    `latexmk` on `PATH` (TeX Live), shell escape off, and the page's key; the PDF goes only to the
+    page carrying it. `/rft-view` leaves the tab out.
 
 ### Commands
 
@@ -818,7 +846,7 @@ vault/manuscript/
 | `/rft-next [concept]` | print what is still open, by concept: running and planned experiments, unexplored directions, open questions (no model turn) |
 | `/rft-jobs [job or experiment]` | print the experiment queue: the GPUs, the jobs running and waiting, the last ones that ended (a job: with the end of its output), and the address of the monitor (no model turn) |
 | `/rft-summarize [concept]` | ask Claude to write the missing note summaries and concept digests of an existing tree, concept by concept (a one-off job) |
-| `/rft-manuscript [document] \| new <name> [article\|report]` | start the manuscript (a first document, `paper`), add a document (`report`: a thesis chapter), or ask Claude to propose what to write next from the verified notes, as a table; nothing is written until you pick |
+| `/rft-manuscript [document] \| new <name> [article\|report]` | start snippets and documents (a first document, `paper`), add a document (`report`: a thesis chapter), or ask Claude what to write next from the verified notes and where to place it, as tables; nothing is written until you pick |
 | `/rft-artifact [concept]` | ask Claude to write a concept's artifact, or, with no concept, every one missing or out of date |
 | `/rft-update [apply] [--sections]` | bring a vault made by an older version up to this one: list what it lacks (the folders and templates of newer note types, the config's format); `apply` writes it and refreshes the derived files. Notes are never changed, except that `--sections` adds the sections their type has gained, as empty headings, to unlocked notes. A session on an older vault starts with a toast pointing here (no model turn) |
 | `/rft-update notebooks [--write] [concept]` | bring an older vault's notebooks up to what the plugin does now: every notebook runs again in the queue (one job, no GPU, in check mode, no model turn), so each saves its numbers, figures and tables; and a list, by concept with code, of what is still to write (experiments with a result and no notebook, a missing concept notebook, an artifact's hand-drawn charts and typed tables). `--write` asks Claude to write it, concept by concept (a long one-off job; name a concept for one line of research) |
@@ -839,7 +867,7 @@ and it runs. The terminal's typeahead lists them.
   <fingerprint>`) with what it claims: an experiment's Result, a theory note's Statement and
   Explanation, a reference's Source and Key results, a direction's Idea. An experiment with a
   notebook is ready once its run reproduced it; a direction once a note under it is verified.
-  Only verified notes go into a manuscript (docs/design/manuscript.md).
+  Only verified notes become snippets (see Snippets and documents).
 - `review` ↺: a verified note whose claim may no longer hold. It goes there by itself, unlocked
   and with a History line, when what it claims changes (an accepted suggestion, an edit), when it
   is superseded, or when its notebook's run differs or fails; Claude sets one there when it finds
@@ -900,8 +928,9 @@ session with the plugin loaded from this folder.
 - `hooks/lib/priority.ts`: priorities, their limits and Claude's suggested ones.
 - `hooks/lib/verify.ts`: verified notes: a note's substance and its fingerprint, Claude's
   suggestion, the user's verification, and review when the claim changes.
-- `hooks/lib/snippets.ts` and `hooks/lib/manuscript.ts`: the manuscript: its files and registry,
-  what a snippet rests on and its state, `rft_manuscript`, `rft_set_snippet` and the documents.
+- `hooks/lib/snippets.ts` and `hooks/lib/manuscript.ts`: snippets and documents: their files,
+  registries and copies, what a snippet rests on and its state, a copy's state, `rft_manuscript`,
+  `rft_set_snippet`, `rft_set_document`.
 - `hooks/lib/tools.ts`: which tools sit in the prompt from the start; `hooks/lib/shell.ts` the
   files a shell command writes (the guards' input); `hooks/lib/answers.ts` the subagents that
   answer threads; `hooks/lib/update.ts` `/rft-update` and the vault's format.
@@ -917,8 +946,8 @@ session with the plugin loaded from this folder.
 - `server/rft_server.py`: the local server (Python standard library); `server/rft_notebook.py` an
   experiment's notebook: the vault's link followed, the run in its repo's uv environment (its
   `RESULTS`, `FIGURES` and `TABLES`), the marimo editors the tree view frames;
-  `server/rft_latex.py` the manuscript's generated LaTeX and its compile; `server/rft_manuscript.py`
-  the manuscript as the page reads it;
+  `server/rft_latex.py` the generated LaTeX and the compile of a document or a snippet;
+  `server/rft_manuscript.py` snippets and documents as the page reads them;
   `server/rft_results.py` what a run leaves in the vault (the Result's table, the check, the saved
   numbers, figures and tables, the artifacts' tables, the stamp); `server/rft_queue.py` the
   experiment queue: its runner, the run records, the notebook run after an experiment's jobs, its

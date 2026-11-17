@@ -1417,15 +1417,16 @@ class ArtifactTest(unittest.TestCase):
 
 
 class ManuscriptTest(unittest.TestCase):
-    """The manuscript as the page sees it: its snippets with their state, a snippet or document read
-    and written (a version kept, a conflict refused), the lock, a compile and its PDF (with the key
-    only), comments on a snippet, and what the session makes for the page (new, reviewed, document)."""
+    """Snippets and documents as the page sees them: the snippets with their state and the documents
+    using them, each document's copies with theirs, a snippet or document read and written (a conflict
+    refused), the two locks, a compile and its PDF (with the key only), a snippet compiled alone,
+    comments on a snippet and a document, and what the session makes for the page."""
 
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
         vault = Path(cls.tmp.name) / "vault"
-        for d in ("directions", "experiments", "references", "results", "manuscript/snippets", "manuscript/documents/paper"):
+        for d in ("directions", "experiments", "references", "results", "snippets", "documents/paper", "documents/thesis"):
             (vault / d).mkdir(parents=True)
         (vault / "directions" / "D00 Root question.md").write_text(note("D00", "direction", "done", "", "Root question"))
         cls.e05 = vault / "experiments" / "E05 Mixup.md"
@@ -1434,14 +1435,19 @@ class ManuscriptTest(unittest.TestCase):
         (vault / "references" / "R01 Mixup paper.md").write_text(note("R01", "reference", "verified", "D00 Root question", "Mixup paper").replace(
             "Text of R01.", "## Source\n```bibtex\n@article{zhang2018mixup,\n  title={mixup},\n  year={2018}\n}\n```\n"))
         (vault / "results" / "E05.json").write_text(json.dumps({"results": {"gap": 0.3, "seeds": 3}}))
-        ms = vault / "manuscript"
-        (ms / "documents" / "paper" / "main.tex").write_text(
-            "\\documentclass{article}\n\\usepackage{amsthm}\n\\usepackage[numbers]{natbib}\n\\usepackage{rft}\n\\begin{document}\n"
-            "\\rftsnippet{S01}\n% \\rftsnippet{S09}\n\\rftsnippet{S02}\n\\bibliographystyle{plainnat}\n\\bibliography{refs}\n\\end{document}\n")
-        (ms / "snippets" / "S01.tex").write_text("% rft-snippet S01 · result · CutMix\n% basis: E05\n\\paragraph{CutMix}\nThe gap closes by \\rftnum{E05}{gap} \\cite{zhang2018mixup}.\n")
-        (ms / "snippets" / "S02.tex").write_text("% rft-snippet S02 · discussion · Next\n% basis: E06\n\\paragraph{Next}\n% your text\n")
+        s1 = "% rft-snippet S01 · result · CutMix\n% basis: E05\n\\paragraph{CutMix}\nThe gap closes by \\rftnum{E05}{gap} \\cite{zhang2018mixup}.\n"
+        s2 = "% rft-snippet S02 · discussion · Next\n% basis: E06\n\\paragraph{Next}\n% your text\n"
+        (vault / "snippets" / "S01.tex").write_text(s1)
+        (vault / "snippets" / "S02.tex").write_text(s2)
+        copy = lambda sid, text, content=None: (lambda c: f"% rft-begin {sid} {rft_manuscript.content_fingerprint(rft_manuscript.content_of(text))}\n{c}\n% rft-end {sid}")(content or rft_manuscript.content_of(text))  # noqa: E731
+        head = "\\documentclass{article}\n\\usepackage{amsthm}\n\\usepackage[numbers]{natbib}\n\\usepackage{rft}\n\\begin{document}\n"
+        tail = "\\bibliographystyle{plainnat}\n\\bibliography{refs}\n\\end{document}\n"
+        (vault / "documents" / "paper" / "main.tex").write_text(head + "\\section{Results}\n" + copy("S01", s1) + "\nSee \\ref{S07}.\n" + tail)
+        (vault / "documents" / "thesis" / "main.tex").write_text(head + copy("S01", s1, "\\paragraph{CutMix}\nIn our words, the gap closes by \\rftnum{E05}{gap}.") + "\n" + tail)
+        (vault / "documents" / "paper" / ".blocks.json").write_text(json.dumps({"S01": rft_manuscript.content_of(s1)}))
         fp = rft_manuscript.substance_fingerprint("experiment", cls.e05.read_text())
-        (ms / "manuscript.json").write_text(json.dumps({"locked": True, "next": 3, "snippets": {"S01": {"stamp": {"E05": fp}}}, "unlocked": []}))
+        (vault / "snippets" / "snippets.json").write_text(json.dumps({"locked": True, "next": 3, "snippets": {"S01": {"stamp": {"E05": fp}}}, "unlocked": []}))
+        (vault / "documents" / "documents.json").write_text(json.dumps({"locked": True, "unlocked": []}))
         cls.vault = vault
         cls.asked = []
 
@@ -1471,26 +1477,40 @@ class ManuscriptTest(unittest.TestCase):
         before = path.read_bytes()
         self.addCleanup(path.write_bytes, before)
 
-    def test_the_same_fingerprint_as_the_plugin(self):
+    def test_the_same_fingerprints_as_the_plugin(self):
         # the values hooks/lib/verify.ts gives (tests/verify.test.ts)
         e = "---\nid: E05\n---\n# E05 · X\n\n## Result\nCutMix  closes the gap: 0.3 ± 0.5 points.\n<!-- rft-results a -->\n| acc | 71.3 |\n\n## Code\nx\n"
         self.assertEqual(rft_manuscript.substance_fingerprint("experiment", e), "58942782")
         t = "---\nid: T01\n---\n## Statement\nA gap $g = a - b$.\n\n## Builds on\nE05.\n\n## Explanation\n“Proof” — by ε.\n"
         self.assertEqual(rft_manuscript.substance_fingerprint("theory", t), "1a85e809")
+        # and a snippet's content, as hooks/lib/snippets.ts takes it (tests/manuscript-view.test.ts)
+        self.assertEqual(rft_manuscript.content_fingerprint("\\paragraph{One}  % a comment\nText   one.\n"), rft_manuscript.content_fingerprint("\\paragraph{One}\nText one."))
+        self.assertEqual(rft_manuscript.content_fingerprint("\\paragraph{One}\nText one."), "a25f30cc")
 
-    def test_the_snippets_with_their_state(self):
+    def test_the_snippets_and_the_documents_with_their_states(self):
         m = self.ms()
-        self.assertEqual((m["exists"], m["locked"], m["documents"][0]["name"], m["documents"][0]["order"]), (True, True, "paper", ["S01", "S02"]))
+        self.assertEqual((m["exists"], m["locked"], m["docsLocked"]), (True, True, True))
         s1, s2 = m["snippets"]
         self.assertEqual((s1["kind"], s1["title"], s1["basis"], s1["review"], s1["stub"], s1["locked"]), ("result", "CutMix", ["E05", "R01"], [], False, True))
-        self.assertEqual((s2["stub"], s2["unverified"]), (True, ["E06"]))
-        # E05's Result changes: S01 in review
+        self.assertEqual(s1["usedIn"], [{"doc": "paper", "state": "sync"}, {"doc": "thesis", "state": "adapted"}])
+        self.assertEqual((s2["stub"], s2["unverified"], s2["usedIn"]), (True, ["E06"], []))
+        paper, thesis = m["documents"]
+        self.assertEqual((paper["name"], paper["copies"], paper["refsMissing"]), ("paper", [{"id": "S01", "state": "sync", "line": 7, "snippetReview": False}], ["S07"]))
+        self.assertEqual(thesis["copies"][0]["state"], "adapted")
+        # S01 changes: both copies to review, their text as it was
+        s1p = self.vault / "snippets" / "S01.tex"
+        self.keep(s1p)
+        s1p.write_text(s1p.read_text().replace("closes", "shrinks"))
+        self.assertEqual([d["copies"][0]["state"] for d in self.ms()["documents"]], ["review", "review"])
+        # E05's Result changes: S01 in review, and its copies say their snippet is
+        s1p.write_text(s1p.read_text().replace("shrinks", "closes"))
         self.keep(self.e05)
         self.e05.write_text(self.e05.read_text().replace("0.3 ± 0.5", "0.4 ± 0.5"))
-        self.assertEqual(self.ms()["snippets"][0]["review"], ["E05 changed"])
+        m = self.ms()
+        self.assertEqual((m["snippets"][0]["review"], m["documents"][0]["copies"][0]["snippetReview"]), (["E05 changed"], True))
 
     def test_a_file_read_and_written_and_a_conflict_refused(self):
-        path = self.vault / "manuscript" / "snippets" / "S02.tex"
+        path = self.vault / "snippets" / "S02.tex"
         self.keep(path)
         f = json.loads(self.get("/api/manuscript/file?path=snippets/S02.tex")[2])
         self.assertTrue(f["locked"])
@@ -1500,51 +1520,71 @@ class ManuscriptTest(unittest.TestCase):
         self.assertEqual(path.read_text(), text)
         status, got = self.write("PUT", "/api/manuscript/file", {"path": "snippets/S02.tex", "text": "x", "version": f["version"]})
         self.assertEqual((status, got["text"]), (409, text))
-        for bad in ("snippets/S09.tex", "../secret.tex", "documents/../x/main.tex", "rft.sty", "manuscript.json"):
+        d = json.loads(self.get("/api/manuscript/file?path=documents/paper/main.tex")[2])
+        self.assertEqual((d["locked"], list(d["taken"])), (True, ["S01"]))  # what each copy was taken from: the review's "then"
+        for bad in ("snippets/S09.tex", "../secret.tex", "documents/../x/main.tex", "documents/rft.sty", "snippets/snippets.json", "documents/paper/.blocks.json"):
             self.assertEqual(self.get(f"/api/manuscript/file?path={quote(bad)}")[0], 404, bad)
             self.assertEqual(self.write("PUT", "/api/manuscript/file", {"path": bad, "text": "x", "force": True})[0], 404, bad)
         self.assertEqual(self.write("PUT", "/api/manuscript/file", {"path": "snippets/S02.tex", "text": "x", "force": True}, key=None)[0], 403)
 
-    def test_the_lock(self):
-        reg = self.vault / "manuscript" / "manuscript.json"
-        self.keep(reg)
-        status, m = self.write("POST", "/api/manuscript/lock", {"locked": False, "id": "S01"})
+    def test_the_two_locks(self):
+        for reg in (self.vault / "snippets" / "snippets.json", self.vault / "documents" / "documents.json"):
+            self.keep(reg)
+        status, m = self.write("POST", "/api/manuscript/lock", {"level": "snippets", "locked": False, "id": "S01"})
         self.assertEqual((status, m["unlocked"], m["snippets"][0]["locked"]), (200, ["S01"], False))
-        status, m = self.write("POST", "/api/manuscript/lock", {"locked": False})
-        self.assertEqual((m["locked"], m["snippets"][1]["locked"]), (False, False))
-        self.assertEqual(self.write("POST", "/api/manuscript/lock", {"locked": True, "id": "S42"})[0], 404)
-        self.assertEqual(self.write("POST", "/api/manuscript/lock", {"locked": "no"})[0], 400)
+        status, m = self.write("POST", "/api/manuscript/lock", {"level": "documents", "locked": False, "id": "thesis"})
+        self.assertEqual([d["locked"] for d in m["documents"]], [True, False])
+        status, m = self.write("POST", "/api/manuscript/lock", {"level": "documents", "locked": False})
+        self.assertEqual((m["docsLocked"], m["documents"][0]["locked"]), (False, False))
+        self.assertEqual(self.write("POST", "/api/manuscript/lock", {"level": "snippets", "locked": True, "id": "S42"})[0], 404)
+        self.assertEqual(self.write("POST", "/api/manuscript/lock", {"level": "documents", "locked": True, "id": "book"})[0], 404)
+        self.assertEqual(self.write("POST", "/api/manuscript/lock", {"locked": False})[0], 400)
 
-    def test_comments_on_a_snippet(self):
-        self.addCleanup(lambda: (self.vault / ".comments" / "S01.json").unlink(missing_ok=True))
+    def test_comments_on_a_snippet_and_a_document(self):
+        self.addCleanup(lambda: [(self.vault / ".comments" / f).unlink(missing_ok=True) for f in ("S01.json", "paper.json")])
         n = json.loads(self.get("/api/note?id=S01")[2])
         self.assertEqual((n["name"], n["locked"]), ("S01 CutMix", True))
         status, got = self.write("POST", "/api/comment", {"id": "S01", "action": "new", "kind": "comment", "quote": "closes", "prefix": "The gap ", "suffix": " by", "text": "By how much?"})
         self.assertEqual((status, got["threads"][0]["quote"]), (200, "closes"))
-        self.assertEqual(self.ms()["snippets"][0]["threads"], 1)
-        # the lock of a note is not the manuscript's
+        d = json.loads(self.get("/api/note?id=paper")[2])
+        self.assertEqual((d["name"], d["locked"]), ("the document paper", True))
+        status, got = self.write("POST", "/api/comment", {"id": "paper", "action": "new", "kind": "comment", "quote": "See", "prefix": "", "suffix": "", "text": "Which?"})
+        self.assertEqual(status, 200)
+        m = self.ms()
+        self.assertEqual((m["snippets"][0]["threads"], m["documents"][0]["threads"]), (1, 1))
+        # the lock of a note is not theirs
         self.assertEqual(self.write("POST", "/api/lock", {"id": "S01", "locked": False})[0], 404)
+        self.assertEqual(self.write("POST", "/api/lock", {"id": "paper", "locked": False})[0], 404)
 
     def test_what_the_session_makes_for_the_page(self):
+        doc = self.vault / "documents" / "paper" / "main.tex"
+        self.keep(doc)
+
         def answer(request):
             if request["action"] == "new":
-                p = self.vault / "manuscript" / "snippets" / "S03.tex"
+                p = self.vault / "snippets" / "S03.tex"
                 p.write_text("% rft-snippet S03 · result · Mine\n% basis: E05\n")
                 self.addCleanup(p.unlink)
+            if request["action"] == "place":
+                doc.write_text(doc.read_text() + "% rft-begin S02 00000000\n% rft-end S02\n")
 
         type(self).answer = answer
         self.addCleanup(setattr, type(self), "answer", None)
-        status, got = self.write("POST", "/api/manuscript/ask", {"action": "new", "kind": "result", "title": "Mine", "basis": ["E05"], "document": "paper"})
+        status, got = self.write("POST", "/api/manuscript/ask", {"action": "new", "kind": "result", "title": "Mine", "basis": ["E05"]})
         self.assertEqual((status, got["id"]), (200, "S03"))
-        self.assertEqual(self.asked[-1], ("RFT_MANUSCRIPT", {"action": "new", "kind": "result", "title": "Mine", "basis": ["E05"], "document": "paper"}))
-        for bad in ({"action": "new", "kind": "result"}, {"action": "drop"}, {"action": "document", "name": "My Paper"}):
-            self.assertEqual(self.write("POST", "/api/manuscript/ask", bad)[0], 400, bad)
-        self.assertEqual(self.write("POST", "/api/manuscript/ask", {"action": "reviewed", "id": "S42"})[0], 404)
-        self.assertEqual(self.write("POST", "/api/manuscript/ask", {"action": "document", "name": "paper"})[0], 409)
+        self.assertEqual(self.asked[-1], ("RFT_MANUSCRIPT", {"action": "new", "kind": "result", "title": "Mine", "basis": ["E05"]}))
+        status, got = self.write("POST", "/api/manuscript/ask", {"action": "place", "name": "paper", "id": "S02", "after": "S01"})
+        self.assertEqual((status, got["id"]), (200, "S02"))
+        self.assertEqual(self.asked[-1], ("RFT_MANUSCRIPT", {"action": "place", "name": "paper", "id": "S02", "after": "S01"}))
+        for bad, code in (({"action": "new", "kind": "result"}, 400), ({"action": "drop"}, 400), ({"action": "document", "name": "My Paper"}, 400),
+                          ({"action": "reviewed", "id": "S42"}, 404), ({"action": "document", "name": "paper"}, 409),
+                          ({"action": "place", "name": "paper", "id": "S01"}, 409), ({"action": "take", "name": "thesis", "id": "S02"}, 404),
+                          ({"action": "place", "name": "book", "id": "S01"}, 404)):
+            self.assertEqual(self.write("POST", "/api/manuscript/ask", bad)[0], code, bad)
 
     @unittest.skipUnless(shutil.which("latexmk") and shutil.which("pdftotext"), "latexmk or pdftotext is not on PATH")
     def test_a_compile_and_its_pdf_with_the_key_only(self):
-        self.addCleanup(shutil.rmtree, self.vault / "manuscript" / ".build", True)
+        self.addCleanup(shutil.rmtree, self.vault / "documents" / ".build", True)
         status, r = self.write("POST", "/api/manuscript/compile", {"doc": "paper"})
         self.assertEqual(status, 200)
         self.assertTrue(r["ok"], r)
@@ -1553,7 +1593,13 @@ class ManuscriptTest(unittest.TestCase):
         status, ctype, body = self.get("/api/manuscript/pdf?doc=paper", headers=[("X-RFT-Token", KEY)])
         self.assertEqual((status, ctype, body[:4]), (200, "application/pdf", b"%PDF"))
         self.assertIn("built", self.ms()["documents"][0])
+        # a snippet alone
+        status, r = self.write("POST", "/api/manuscript/compile", {"snippet": "S01"})
+        self.assertTrue(r["ok"], r)
+        status, _, body = self.get("/api/manuscript/pdf?snippet=S01", headers=[("X-RFT-Token", KEY)])
+        self.assertEqual((status, body[:4]), (200, b"%PDF"))
         self.assertEqual(self.write("POST", "/api/manuscript/compile", {"doc": "../x"})[0], 404)
+        self.assertEqual(self.write("POST", "/api/manuscript/compile", {"snippet": "S99"})[0], 404)
         self.assertEqual(self.write("POST", "/api/manuscript/compile", {"doc": "paper"}, key=None)[0], 403)
 
 

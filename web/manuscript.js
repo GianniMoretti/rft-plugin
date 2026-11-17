@@ -1,38 +1,82 @@
-// The tree view's Manuscript tab (docs/design/manuscript.md): the documents and their LaTeX
-// snippets, each resting on notes of the tree; one open in an editor (CodeMirror 5, vendored), the
-// document's PDF beside it, compiled by the server (latexmk), with its errors. A snippet's basis
-// opens its notes in the drawer, its state says when one changed (review), and its text is
-// discussed as a note's is: comments and suggestions on a selection, answered by Claude when asked.
-// The lock is Claude's: while the manuscript is locked Claude only proposes stubs and suggests; the
-// user writes whatever the lock. Loaded by the page before app.js, which mounts it (the standalone
-// page leaves it out); its pure parts are tested from tests/manuscript-view.test.ts.
+// The tree view's Manuscript tab (docs/design/manuscript.md): two levels, two views.
+// Snippets: the building blocks, each resting on notes of the tree, written once and reused; the
+// library by kind, one open in an editor (CodeMirror 5, vendored) with its notes and the documents
+// using it, compiled alone beside it. Documents: what is built with them; a document's outline (its
+// headings and its copies of snippets, each with its state), copies placed from the library, moved
+// or removed, a copy whose snippet changed shown then and now (take the new text, or keep yours),
+// the editor on the document and its PDF beside it. Both are discussed as a note is (comments and
+// suggestions on a selection, Ask Claude). The locks are Claude's: the user writes whatever they
+// say. Loaded by the page before app.js, which mounts it (the standalone page leaves it out); its
+// pure parts are tested from tests/manuscript-view.test.ts.
 (function (root) {
   'use strict'
 
   /** The characters kept on each side of a quote, to find it again (CONTEXT in hooks/lib/comments.ts). */
   const CONTEXT = 40
   const KINDS = ['definition', 'theorem', 'lemma', 'proposition', 'corollary', 'proof', 'method', 'result', 'related-work', 'motivation', 'discussion', 'figure', 'table']
+  const HEAD_RE = /^%\s*rft-snippet\s+(S\d+)\s*·\s*([\w-]+)\s*·\s*(.*?)\s*$/
+  const BASIS_RE = /^%\s*basis:\s*(.*?)\s*$/
+  const BEGIN_RE = /^%\s*rft-begin\s+(S\d+)\s+([0-9a-f]{8})\s*$/
+  const END_RE = /^%\s*rft-end\s+(S\d+)\s*$/
+  const HEADING_RE = /^\s*\\(part|chapter|section|subsection|subsubsection)\*?\{(.*)\}\s*$/
 
   /** The quote of a selection and the text around it, as a thread is anchored. */
   function anchorOf(text, start, end) {
     return { quote: text.slice(start, end), prefix: text.slice(Math.max(0, start - CONTEXT), start), suffix: text.slice(end, end + CONTEXT) }
   }
 
-  /** A document's snippets in its order (a line naming no snippet kept, marked absent), then the snippets in no document. */
-  function listOf(ms, doc) {
-    const snippets = (ms && ms.snippets) || []
-    const docs = (ms && ms.documents) || []
-    const byId = new Map(snippets.map(s => [s.id, s]))
-    const d = docs.find(x => x.name === doc)
-    const placed = d ? d.order.map(id => byId.get(id) || { id, absent: true }) : []
-    const anywhere = new Set(docs.flatMap(x => x.order))
-    return { placed, loose: snippets.filter(s => !anywhere.has(s.id)) }
+  /** What a snippet gives a document: its text below its two header lines, blank lines at either end left out (contentOf in hooks/lib/snippets.ts). */
+  function contentOf(snippetText) {
+    const lines = snippetText.replace(/\r\n/g, '\n').split('\n')
+    const skip = HEAD_RE.test(lines[0] || '') ? (BASIS_RE.test(lines[1] || '') ? 2 : 1) : 0
+    return lines.slice(skip).join('\n').replace(/^(\s*\n)+/, '').replace(/\s+$/, '')
+  }
+
+  /** The library by kind, in the order of KINDS (a kind none of them names last). */
+  function byKind(snippets) {
+    const groups = new Map()
+    for (const s of snippets || []) {
+      const k = KINDS.includes(s.kind) ? s.kind : 'other'
+      if (!groups.has(k)) groups.set(k, [])
+      groups.get(k).push(s)
+    }
+    return [...KINDS, 'other'].filter(k => groups.has(k)).map(k => ({ kind: k, snippets: groups.get(k) }))
   }
 
   /** A snippet's state in a word, and why: review (a basis note changed), stub (nothing written yet), written. */
   function stateOf(s) {
     if (s.review && s.review.length) return { word: 'review', why: s.review.join(', ') }
     return { word: s.stub ? 'stub' : 'written', why: '' }
+  }
+
+  /** Where a snippet is used, in words: `paper, thesis (adapted)`. */
+  function usedWords(s) {
+    const u = (s && s.usedIn) || []
+    return u.length ? u.map(x => `${x.doc}${x.state === 'sync' ? '' : x.state === 'review' ? ' (to review)' : ` (${x.state})`}`).join(', ') : ''
+  }
+
+  /**
+   * A document's outline from its text: its headings and its copies (each with the state the
+   * server gave it), in order, with their lines (0-based).
+   */
+  function outlineOf(text, copies) {
+    const states = new Map((copies || []).map(c => [c.id, c]))
+    const lines = (text || '').replace(/\r\n/g, '\n').split('\n')
+    const out = []
+    for (let i = 0; i < lines.length; i++) {
+      const b = BEGIN_RE.exec(lines[i])
+      if (b) {
+        const end = lines.findIndex((l, j) => j > i && (END_RE.exec(l) || [])[1] === b[1])
+        if (end < 0) continue
+        const c = states.get(b[1]) || {}
+        out.push({ type: 'copy', id: b[1], line: i, end, state: c.state || 'sync', snippetReview: !!c.snippetReview })
+        i = end
+        continue
+      }
+      const h = HEADING_RE.exec(lines[i])
+      if (h) out.push({ type: 'heading', level: h[1], title: h[2], line: i })
+    }
+    return out
   }
 
   /** The snippets resting on a note. */
@@ -49,19 +93,23 @@
     const $ = id => document.getElementById(id)
     const section = $('manuscript')
     if (!section) return null
-    const docSel = $('ms-doc'), listEl = $('ms-list'), headEl = $('ms-head'), threadsEl = $('ms-threads'), emptyEl = $('ms-empty')
+    const listEl = $('ms-list'), headEl = $('ms-head'), threadsEl = $('ms-threads'), emptyEl = $('ms-empty'), body = $('ms-body')
     const pdfFrame = $('ms-pdf-frame'), pdfNote = $('ms-pdf-note'), errorsEl = $('ms-errors'), statusEl = $('ms-status')
-    const lockBtn = $('ms-lock'), compileBtn = $('ms-compile'), body = $('ms-body')
+    const docSel = $('ms-doc'), lockBtn = $('ms-lock'), compileBtn = $('ms-compile')
     let ms = null // api/manuscript
+    let level = store.get('msLevel', 'snippets') === 'documents' ? 'documents' : 'snippets'
     let doc = store.get('msDoc', '')
-    let file = null // { path, sid, version, text (as read) }
-    let note = null // the open snippet as api/note gives it: its threads
+    let sid = store.get('msSnippet', '') // the snippet open in the Snippets view
+    let file = null // { path, version, text (as read), taken (a document's: each copy's snippet text when taken) }
+    let note = null // the open snippet or document as api/note gives it: its threads
     let dirty = false
     let loading = false
     let pdfUrl = null
     let compiling = false
     let composing = null // { kind, anchor }
     let marks = []
+    let copyLines = [] // the editor's line classes on the copies
+    let focusCopy = null // the copy shown in the document's head
     const canWrite = () => !!key()
 
     const cm = root.CodeMirror ? root.CodeMirror($('ms-cm'), {
@@ -70,7 +118,14 @@
     }) : null
     if (cm) {
       cm.on('change', () => { if (!loading) { dirty = true; renderStatus() } })
-      cm.on('cursorActivity', () => renderSelectionButtons())
+      cm.on('cursorActivity', () => {
+        renderSelectionButtons()
+        if (level === 'documents' && !dirty) {
+          const line = cm.getCursor().line
+          const c = outline().find(o => o.type === 'copy' && line >= o.line && line <= o.end)
+          if ((c && c.id) !== (focusCopy && focusCopy.id)) { focusCopy = c || null; renderList(); renderHead() }
+        }
+      })
     }
 
     function el(tag, props, ...kids) {
@@ -94,6 +149,11 @@
     }
 
     const needKey = what => { notify(`To ${what}, open the address /rft printed (it ends in ?token=…) once: this browser then remembers its key.`) }
+    const theDoc = () => (ms && ms.documents.find(d => d.name === doc)) || null
+    const theSnippet = id => (ms && ms.snippets.find(s => s.id === (id || sid))) || null
+    const subject = () => (level === 'snippets' ? (file && sid) : doc) || null
+    const pathOf = () => (level === 'snippets' ? (sid ? `snippets/${sid}.tex` : '') : doc ? `documents/${doc}/main.tex` : '')
+    const outline = () => (level === 'documents' && file ? outlineOf(cm ? cm.getValue() : file.text, (theDoc() || {}).copies) : [])
 
     // ---------------------------------------------------------------- reading
 
@@ -110,7 +170,7 @@
         try {
           const f = await api(`api/manuscript/file?path=${encodeURIComponent(file.path)}`)
           if (f.ok && f.data.version !== file.version) await openFile(file.path, true)
-          else if (file.sid) await loadThreads()
+          else await loadThreads()
         } catch { /* the next tick */ }
       }
     }
@@ -120,18 +180,24 @@
       emptyEl.hidden = !!exists
       body.hidden = !exists
       for (const b of section.querySelectorAll('.ms-needs')) b.hidden = !exists
+      for (const b of section.querySelectorAll('[data-ms-level]')) b.setAttribute('aria-pressed', String(b.dataset.msLevel === level))
+      for (const b of section.querySelectorAll('.ms-docs-only')) b.hidden = !exists || level !== 'documents'
+      for (const b of section.querySelectorAll('.ms-snippets-only')) b.hidden = !exists || level !== 'snippets'
       if (!exists) return
       const names = ms.documents.map(d => d.name)
       if (!names.includes(doc)) doc = names[0] || ''
       docSel.replaceChildren(...names.map(n => el('option', { value: n, text: n, selected: n === doc })))
-      lockBtn.setAttribute('aria-pressed', String(ms.locked))
-      lockBtn.querySelector('.lock-open').classList.toggle('on', !ms.locked)
-      lockBtn.querySelector('.lock-closed').classList.toggle('on', ms.locked)
-      lockBtn.title = ms.locked
-        ? 'Locked: you write the manuscript; Claude proposes stubs, comments and suggests (click: let Claude write it too)'
-        : 'Unlocked: Claude may write the snippets\' text too (click: lock it, yours to write)'
-      compileBtn.disabled = !doc || !ms.latexmk
-      compileBtn.title = ms.latexmk ? `Compile ${doc} with latexmk (Ctrl/Cmd+S saves and compiles)` : 'latexmk is not on PATH: install a TeX distribution (TeX Live) to compile'
+      const locked = level === 'snippets' ? ms.locked : ms.docsLocked
+      lockBtn.setAttribute('aria-pressed', String(locked))
+      lockBtn.querySelector('.lock-open').classList.toggle('on', !locked)
+      lockBtn.querySelector('.lock-closed').classList.toggle('on', locked)
+      lockBtn.title = level === 'snippets'
+        ? (locked ? 'Snippets locked: you write them; Claude proposes stubs, comments and suggests (click: let Claude write them too)' : 'Snippets unlocked: Claude may write their text too (click: lock them)')
+        : (locked ? 'Documents locked: their text is yours; Claude places copies you agree to, comments and suggests (click: let Claude edit their text too)' : 'Documents unlocked: Claude may edit their text too (click: lock them)')
+      compileBtn.disabled = !ms.latexmk || (level === 'snippets' ? !sid : !doc)
+      compileBtn.textContent = level === 'snippets' ? 'Compile snippet' : 'Compile'
+      compileBtn.title = !ms.latexmk ? 'latexmk is not on PATH: install a TeX distribution (TeX Live) to compile'
+        : level === 'snippets' ? 'Compile this snippet alone, in a minimal article (Ctrl/Cmd+S saves and compiles)' : `Compile ${doc} with latexmk (Ctrl/Cmd+S saves and compiles)`
       renderList()
       renderHead()
     }
@@ -141,22 +207,42 @@
       return el('span', { class: `ms-state ms-${st.word}`, text: st.word, title: st.why || (st.word === 'stub' ? 'Nothing written yet: its outline says what to write' : 'Written') })
     }
 
+    function copyBadge(c) {
+      const word = c.state === 'sync' ? 'as snippet' : c.state === 'review' ? 'review' : c.state
+      const title = c.state === 'review' ? 'Its snippet changed since this copy was taken: take the new text, or keep yours'
+        : c.state === 'adapted' ? 'Adapted to this document: it differs from its snippet, which has not changed since'
+          : c.state === 'gone' ? 'No such snippet any more' : 'As its snippet'
+      return el('span', { class: `ms-state ms-copy-${c.state}`, text: word, title })
+    }
+
     function renderList() {
-      const { placed, loose } = listOf(ms, doc)
-      const item = s => s.absent
-        ? el('li', { class: 'ms-item missing', title: 'Its \\rftsnippet line names no snippet' }, el('span', { class: 'ms-id', text: s.id }), ' no such snippet')
-        : el('li', {
-          class: `ms-item${file && file.sid === s.id ? ' open' : ''}`, title: `${s.id} ${s.kind}: ${s.title}`,
-          onclick: () => openFile(`snippets/${s.id}.tex`),
+      if (level === 'snippets') {
+        const item = s => el('li', {
+          class: `ms-item${s.id === sid && file ? ' open' : ''}`, title: `${s.id} ${s.kind}: ${s.title}${s.usedIn.length ? `\nUsed in ${usedWords(s)}` : '\nIn no document'}`,
+          onclick: () => openSnippet(s.id),
         }, el('span', { class: 'ms-id', text: s.id }), el('span', { class: 'ms-title', text: s.title || '(no header)' }),
         stateBadge(s), s.unverified && s.unverified.length ? el('span', { class: 'ms-flag', text: '!', title: `Rests on notes not verified: ${s.unverified.join(', ')}` }) : null,
+        s.usedIn.length ? el('span', { class: 'ms-used', text: `×${s.usedIn.length}`, title: `Used in ${usedWords(s)}` }) : null,
         s.threads ? el('span', { class: 'ms-threads-n', text: String(s.threads), title: `${s.threads} open thread(s)` }) : null)
-      const docItem = doc ? el('li', {
-        class: `ms-item ms-doc-item${file && file.path === `documents/${doc}/main.tex` ? ' open' : ''}`, title: 'The document: its preamble and the order of its snippets',
-        onclick: () => openFile(`documents/${doc}/main.tex`),
-      }, el('span', { class: 'ms-id', text: 'main.tex' }), el('span', { class: 'ms-title', text: doc })) : null
-      listEl.replaceChildren(el('ul', {}, docItem, placed.map(item)))
-      if (loose.length) listEl.append(el('div', { class: 'ms-sub muted', text: 'In no document' }), el('ul', {}, loose.map(item)))
+        const groups = byKind(ms.snippets)
+        listEl.replaceChildren(...(groups.length ? groups.flatMap(g => [el('div', { class: 'ms-sub muted', text: g.kind }), el('ul', {}, g.snippets.map(item))])
+          : [el('p', { class: 'muted ms-pad', text: 'No snippets yet: + Snippet, or ask Claude with /rft-manuscript.' })]))
+        return
+      }
+      const d = theDoc()
+      if (!d) { listEl.replaceChildren(el('p', { class: 'muted ms-pad', text: 'No document yet: + Document.' })); return }
+      const items = outline()
+      const go = line => () => { if (cm) { cm.setCursor({ line, ch: 0 }); cm.scrollIntoView({ line, ch: 0 }, 80); cm.focus() } }
+      listEl.replaceChildren(el('ul', {},
+        el('li', { class: 'ms-item ms-doc-item', title: 'The document: its preamble, its text, its copies', onclick: go(0) },
+          el('span', { class: 'ms-id', text: 'main.tex' }), el('span', { class: 'ms-title', text: d.name }),
+          d.threads ? el('span', { class: 'ms-threads-n', text: String(d.threads), title: `${d.threads} open thread(s)` }) : null),
+        items.map(o => o.type === 'heading'
+          ? el('li', { class: `ms-item ms-heading ms-h-${o.level}`, onclick: go(o.line) }, el('span', { class: 'ms-title', text: `§ ${o.title}` }))
+          : el('li', { class: `ms-item ms-copy${focusCopy && focusCopy.id === o.id ? ' open' : ''}`, title: `A copy of ${o.id}`, onclick: () => { focusCopy = o; go(o.line + 1)(); renderList(); renderHead() } },
+            el('span', { class: 'ms-id', text: o.id }), el('span', { class: 'ms-title', text: (theSnippet(o.id) || {}).title || '' }), copyBadge(o),
+            o.snippetReview ? el('span', { class: 'ms-flag', text: '!', title: 'Its snippet is in review: its notes changed' }) : null))))
+      if (d.refsMissing && d.refsMissing.length) listEl.append(el('p', { class: 'ms-flag-text ms-pad', text: `Refers to ${d.refsMissing.join(', ')}, which it holds no copy of.` }))
     }
 
     function chip(id) {
@@ -171,37 +257,112 @@
     function renderHead() {
       headEl.replaceChildren()
       if (!file) {
-        headEl.append(el('span', { class: 'muted', text: 'Open a snippet or the document on the left.' }))
+        headEl.append(el('span', { class: 'muted', text: level === 'snippets' ? 'Open a snippet on the left.' : 'No document open.' }))
         return
       }
-      const s = file.sid && ms && ms.snippets.find(x => x.id === file.sid)
       const saveBtn = el('button', { type: 'button', class: 'primary', text: 'Save', title: 'Save (Ctrl/Cmd+S also compiles)', onclick: () => save(false) })
-      if (!s) {
-        headEl.append(el('strong', { text: file.path }), el('span', { class: 'ms-spacer' }), saveBtn)
-        return
+      if (level === 'snippets') {
+        const s = theSnippet()
+        if (!s) { headEl.append(el('strong', { text: file.path }), el('span', { class: 'ms-spacer' }), saveBtn); return }
+        const st = stateOf(s)
+        headEl.append(
+          el('div', { class: 'ms-head-row' },
+            el('strong', { text: `${s.id} · ${s.kind} · ${s.title}` }), stateBadge(s),
+            st.word === 'review' ? el('span', { class: 'muted', text: st.why }) : null,
+            st.word === 'review' ? el('button', { type: 'button', text: 'Reviewed', title: 'Its text still holds against its notes as they are now: take its stamp anew', onclick: () => ask({ action: 'reviewed', id: s.id }, 'mark it reviewed') }) : null,
+            ms.locked ? el('button', {
+              type: 'button', class: `icon-btn ms-lock-one${s.locked ? '' : ' open'}`, text: s.locked ? '🔒' : '🔓',
+              title: s.locked ? 'Yours to write: Claude only suggests (click: let Claude write this snippet)' : 'Claude may write this snippet (click: yours again)',
+              onclick: () => setLock('snippets', !s.locked, s.id),
+            }) : null,
+            el('span', { class: 'ms-spacer' }), selButton('comment'), selButton('suggestion'), saveBtn),
+          el('div', { class: 'ms-head-row ms-basis' },
+            el('span', { class: 'muted', text: 'Rests on' }),
+            s.basis.length ? s.basis.map(chip) : el('span', { class: 'muted', text: 'no note: give it a % basis: line' }),
+            s.unverified.length ? el('span', { class: 'ms-flag-text', text: `not verified: ${s.unverified.join(', ')}` }) : null,
+            s.missing.length ? el('span', { class: 'ms-flag-text', text: `no such note: ${s.missing.join(', ')}` }) : null),
+          el('div', { class: 'ms-head-row' },
+            el('span', { class: 'muted', text: 'Used in' }),
+            s.usedIn.length ? s.usedIn.map(u => el('button', {
+              type: 'button', class: `ms-chip ms-copy-${u.state}`, text: `${u.doc}${u.state === 'sync' ? '' : u.state === 'review' ? ' (to review)' : ` (${u.state})`}`,
+              title: `Go to its copy in ${u.doc}`, onclick: () => showCopy(u.doc, s.id),
+            })) : el('span', { class: 'muted', text: 'no document yet' }),
+            ms.documents.length ? placeForm(s.id) : null),
+        )
+      } else {
+        const d = theDoc()
+        headEl.append(el('div', { class: 'ms-head-row' },
+          el('strong', { text: `${doc}` }), el('span', { class: 'muted', text: `${d ? d.copies.length : 0} cop${d && d.copies.length === 1 ? 'y' : 'ies'} of snippets` }),
+          d ? el('button', {
+            type: 'button', class: `icon-btn ms-lock-one${d.locked ? '' : ' open'}`, text: d.locked ? '🔒' : '🔓',
+            title: d.locked ? 'Its text is yours: Claude places copies you agree to and suggests (click: let Claude edit it)' : 'Claude may edit its text (click: yours again)',
+            onclick: () => setLock('documents', !d.locked, d.name),
+          }) : null,
+          el('span', { class: 'ms-spacer' }), selButton('comment'), selButton('suggestion'), saveBtn))
+        const extra = focusCopy ? copyPanel(focusCopy) : placeRow()
+        if (extra) headEl.append(extra)
       }
-      const st = stateOf(s)
-      const row1 = el('div', { class: 'ms-head-row' },
-        el('strong', { text: `${s.id} · ${s.kind} · ${s.title}` }), stateBadge(s),
-        st.word === 'review' ? el('span', { class: 'muted', text: st.why }) : null,
-        st.word === 'review' ? el('button', { type: 'button', text: 'Reviewed', title: 'Its text still holds against its notes as they are now: take its stamp anew', onclick: () => reviewed(s.id) }) : null,
-        ms.locked ? el('button', {
-          type: 'button', class: `icon-btn ms-lock-one${s.locked ? '' : ' open'}`, text: s.locked ? '🔒' : '🔓',
-          title: s.locked ? 'Yours to write: Claude only suggests (click: let Claude write this snippet)' : 'Claude may write this snippet (click: yours again)',
-          onclick: () => setLock(!s.locked, s.id),
-        }) : null,
-        el('span', { class: 'ms-spacer' }), $c('comment'), $c('suggestion'), saveBtn)
-      const row2 = el('div', { class: 'ms-head-row ms-basis' },
-        el('span', { class: 'muted', text: 'Rests on' }),
-        s.basis.length ? s.basis.map(chip) : el('span', { class: 'muted', text: 'no note: give it a % basis: line' }),
-        s.unverified.length ? el('span', { class: 'ms-flag-text', text: `not verified: ${s.unverified.join(', ')}` }) : null,
-        s.missing.length ? el('span', { class: 'ms-flag-text', text: `no such note: ${s.missing.join(', ')}` }) : null)
-      headEl.append(row1, row2)
       renderSelectionButtons()
     }
 
+    /** Place this snippet in a document: the document, Place (before its bibliography; move it after). */
+    function placeForm(id) {
+      const docs = ms.documents.filter(d => !d.copies.some(c => c.id === id))
+      if (!docs.length) return null
+      const sel = el('select', { 'aria-label': 'Document' }, docs.map(d => el('option', { value: d.name, text: d.name, selected: d.name === doc })))
+      return el('span', { class: 'ms-place' }, el('span', { class: 'muted', text: '· Place in' }), sel,
+        el('button', { type: 'button', text: 'Place', title: 'Copy it into that document, before its bibliography (move it there afterwards)', onclick: () => place(sel.value, id) }))
+    }
+
+    /** A document's row for placing a snippet from the library: which, after what. */
+    function placeRow() {
+      const d = theDoc()
+      if (!d) return null
+      const free = ms.snippets.filter(s => !d.copies.some(c => c.id === s.id))
+      if (!free.length) return el('div', { class: 'ms-head-row muted', text: 'Every snippet has a copy here.' })
+      const which = el('select', { 'aria-label': 'Snippet' }, free.map(s => el('option', { value: s.id, text: `${s.id} ${s.title}` })))
+      const after = afterSelect()
+      return el('div', { class: 'ms-head-row' }, el('span', { class: 'muted', text: 'Place' }), which, el('span', { class: 'muted', text: 'after' }), after,
+        el('button', { type: 'button', text: 'Place', title: 'Copy the snippet\'s text here, referenced to it', onclick: () => place(doc, which.value, after.value) }))
+    }
+
+    /** Where in the document: the end, after a heading, or after a copy. */
+    function afterSelect(skip) {
+      return el('select', { 'aria-label': 'Where' }, el('option', { value: '', text: 'the end' }),
+        outline().filter(o => !(o.type === 'copy' && o.id === skip)).map(o => el('option', { value: o.type === 'copy' ? o.id : o.title, text: o.type === 'copy' ? o.id : `§ ${o.title}` })))
+    }
+
+    /** The copy the cursor is in: its state, its snippet then and now when in review, take or keep, move, remove. */
+    function copyPanel(c) {
+      const s = theSnippet(c.id)
+      const after = afterSelect(c.id)
+      const box = el('div', { class: `ms-copy-panel ms-copy-${c.state}` },
+        el('div', { class: 'ms-head-row' },
+          el('strong', { text: `Copy of ${c.id}` }), s ? el('span', { class: 'muted', text: s.title }) : null, copyBadge(c),
+          c.snippetReview ? el('span', { class: 'ms-flag-text', text: 'its snippet is in review: its notes changed' }) : null,
+          s ? el('button', { type: 'button', text: 'Open the snippet', onclick: () => openSnippet(c.id) }) : null,
+          el('span', { class: 'ms-spacer' }),
+          el('span', { class: 'muted', text: 'Move after' }), after,
+          el('button', { type: 'button', text: 'Move', onclick: () => ask({ action: 'move', name: doc, id: c.id, ...(after.value ? { after: after.value } : {}) }, 'move the copy') }),
+          el('button', { type: 'button', text: 'Remove', title: 'Take the copy out of this document (the snippet stays)', onclick: () => { if (confirm(`Take the copy of ${c.id} out of ${doc}? The snippet stays.`)) void ask({ action: 'remove', name: doc, id: c.id }, 'remove the copy') } }),
+          el('button', { type: 'button', class: 'icon-btn', text: '✕', title: 'Close', onclick: () => { focusCopy = null; renderList(); renderHead() } })))
+      if (c.state === 'review' && s) {
+        const then = (file.taken || {})[c.id]
+        const now = el('pre', { class: 'ms-diff-text', text: '…' })
+        api(`api/manuscript/file?path=${encodeURIComponent(`snippets/${c.id}.tex`)}`).then(r => { now.textContent = r.ok ? contentOf(r.data.text) : '(not read)' }).catch(() => {})
+        box.append(
+          el('div', { class: 'ms-diff' },
+            el('div', {}, el('div', { class: 'muted', text: 'The snippet when taken' }), el('pre', { class: 'ms-diff-text', text: then != null ? then : '(not recorded)' })),
+            el('div', {}, el('div', { class: 'muted', text: 'The snippet now' }), now)),
+          el('div', { class: 'ms-head-row' },
+            el('button', { type: 'button', class: 'primary', text: 'Take the new text', title: 'Replace this copy with the snippet\'s text now (what you adapted here is lost)', onclick: () => { if (confirm(`Replace the copy of ${c.id} in ${doc} with the snippet's text now? What you adapted here is lost.`)) void ask({ action: 'take', name: doc, id: c.id }, 'take the new text') } }),
+            el('button', { type: 'button', text: 'Keep mine', title: 'Keep this copy as it is: it answers to the snippet as it is now', onclick: () => ask({ action: 'keep', name: doc, id: c.id }, 'keep the copy') })))
+      }
+      return box
+    }
+
     /** The Comment or Suggest button: on the text selected in the editor. */
-    function $c(kind) {
+    function selButton(kind) {
       return el('button', {
         type: 'button', class: 'ms-sel-btn', 'data-kind': kind, text: kind === 'comment' ? 'Comment' : 'Suggest',
         title: kind === 'comment' ? 'A question or remark on the selected text' : 'New text for the selected text, or what should change in words',
@@ -210,10 +371,10 @@
     }
 
     function renderSelectionButtons() {
-      const on = !!(cm && file && file.sid && cm.somethingSelected() && !dirty)
+      const on = !!(cm && file && cm.somethingSelected() && !dirty)
       for (const b of headEl.querySelectorAll('.ms-sel-btn')) {
         b.disabled = !on
-        if (dirty && file && file.sid) b.title = 'Save first: a thread is anchored on the text as saved'
+        if (dirty) b.title = 'Save first: a thread is anchored on the text as saved'
       }
     }
 
@@ -221,13 +382,26 @@
       statusEl.textContent = text != null ? text : dirty ? 'Unsaved changes' : ''
     }
 
-    async function openFile(path, keepPlace = false) {
+    function markCopies() {
       if (!cm) return
-      if (dirty && !keepPlace && !confirm('Leave the unsaved changes?')) return
+      for (const [h, cls] of copyLines) cm.removeLineClass(h, 'background', cls)
+      copyLines = []
+      if (level !== 'documents') return
+      for (const o of outline()) {
+        if (o.type !== 'copy') continue
+        for (let i = o.line; i <= o.end; i++) {
+          const cls = `ms-copy-line ms-copy-line-${o.state}${i === o.line ? ' ms-copy-first' : ''}${i === o.end ? ' ms-copy-last' : ''}`
+          copyLines.push([cm.addLineClass(i, 'background', cls), cls])
+        }
+      }
+    }
+
+    async function openFile(path, keepPlace = false) {
+      if (!cm || !path) return false
+      if (dirty && !keepPlace && !confirm('Leave the unsaved changes?')) return false
       let r
-      try { r = await api(`api/manuscript/file?path=${encodeURIComponent(path)}`) } catch { notify('The server is not answering.'); return }
-      if (!r.ok) { notify(r.data.error || `Not opened (${r.status})`); return }
-      const sid = (/^snippets\/(S\d+)\.tex$/.exec(path) || [])[1] || null
+      try { r = await api(`api/manuscript/file?path=${encodeURIComponent(path)}`) } catch { notify('The server is not answering.'); return false }
+      if (!r.ok) { notify(r.data.error || `Not opened (${r.status})`); return false }
       const cursor = keepPlace ? cm.getCursor() : null
       const scroll = keepPlace ? cm.getScrollInfo() : null
       loading = true
@@ -235,19 +409,59 @@
       cm.clearHistory()
       loading = false
       if (cursor) { cm.setCursor(cursor); cm.scrollTo(scroll.left, scroll.top) }
-      file = { path, sid, version: r.data.version, text: r.data.text }
-      store.set('msFile', path)
+      file = { path, version: r.data.version, text: r.data.text, taken: r.data.taken || {} }
       dirty = false
       composing = null
       renderStatus()
+      markCopies()
       if (ms) { renderList(); renderHead() }
       await loadThreads()
       setTimeout(() => cm.refresh(), 0)
+      return true
+    }
+
+    async function openSnippet(id) {
+      if (level !== 'snippets' && !(await setLevel('snippets'))) return
+      if (dirty && !confirm('Leave the unsaved changes?')) return
+      dirty = false
+      sid = id
+      store.set('msSnippet', sid)
+      focusCopy = null
+      await openFile(`snippets/${id}.tex`)
+      await loadPdf()
+    }
+
+    async function showCopy(name, id) {
+      if (dirty && !confirm('Leave the unsaved changes?')) return
+      dirty = false
+      doc = name
+      store.set('msDoc', doc)
+      await setLevel('documents', true)
+      const c = outline().find(o => o.type === 'copy' && o.id === id)
+      if (c && cm) { focusCopy = c; cm.setCursor({ line: c.line + 1, ch: 0 }); cm.scrollIntoView({ line: c.line, ch: 0 }, 80); renderList(); renderHead() }
+    }
+
+    /** Switches the view; false when the user keeps unsaved changes. */
+    async function setLevel(next, force = false) {
+      if (next === level && !force && file) return true
+      if (dirty && !confirm('Leave the unsaved changes?')) return false
+      dirty = false
+      level = next
+      store.set('msLevel', level)
+      file = null
+      focusCopy = null
+      render()
+      renderErrors({})
+      const path = pathOf()
+      if (path) await openFile(path)
+      else if (cm) { loading = true; cm.setValue(''); loading = false; markCopies(); threadsEl.hidden = true }
+      await loadPdf()
+      return true
     }
 
     async function save(andCompile) {
       if (!file || !cm) return
-      if (!canWrite()) { needKey('save the manuscript'); return }
+      if (!canWrite()) { needKey('save'); return }
       if (dirty) {
         let r = await api('api/manuscript/file', { method: 'PUT', body: { path: file.path, text: cm.getValue(), version: file.version } })
         if (r.status === 409) {
@@ -263,6 +477,7 @@
         file.text = r.data.text
         dirty = false
         renderStatus('Saved')
+        markCopies()
         await refresh()
       }
       if (andCompile) await compile()
@@ -270,14 +485,17 @@
 
     // ---------------------------------------------------------------- the PDF
 
+    const what = () => (level === 'snippets' ? (sid ? { snippet: sid } : null) : doc ? { doc } : null)
+
     async function compile() {
-      if (!doc || compiling) return
-      if (!canWrite()) { needKey('compile the manuscript'); return }
+      const w = what()
+      if (!w || compiling) return
+      if (!canWrite()) { needKey('compile'); return }
       compiling = true
       compileBtn.disabled = true
-      renderStatus(`Compiling ${doc}…`)
+      renderStatus(`Compiling ${w.snippet || w.doc}…`)
       try {
-        const r = await api('api/manuscript/compile', { method: 'POST', body: { doc } })
+        const r = await api('api/manuscript/compile', { method: 'POST', body: w })
         const c = r.data || {}
         renderErrors(c)
         renderStatus(c.ok ? `Compiled in ${c.seconds} s` : c.error ? 'Not compiled' : `Errors (${(c.errors || []).length}): the last good PDF stays`)
@@ -287,7 +505,7 @@
         renderStatus('The server is not answering.')
       } finally {
         compiling = false
-        compileBtn.disabled = !doc || !(ms && ms.latexmk)
+        compileBtn.disabled = !what() || !(ms && ms.latexmk)
         await refresh()
       }
     }
@@ -301,8 +519,7 @@
         errorsEl.append(el('button', {
           type: 'button', class: 'ms-err', text: errorText(e), title: 'Go to it',
           onclick: async () => {
-            const path = e.snippet ? `snippets/${e.snippet}.tex` : e.file
-            if (!file || file.path !== path) await openFile(path)
+            if (e.snippet && level === 'snippets' && e.snippet !== sid) await openSnippet(e.snippet)
             if (e.line && cm) { cm.setCursor({ line: e.line - 1, ch: 0 }); cm.focus() }
           },
         }))
@@ -312,14 +529,15 @@
     }
 
     async function loadPdf() {
-      if (!doc) return
-      const d = ms && ms.documents.find(x => x.name === doc)
+      const w = what()
+      if (!w) { pdfFrame.hidden = true; pdfNote.hidden = false; pdfNote.textContent = level === 'snippets' ? 'Open a snippet: Compile snippet shows it alone.' : 'No document yet.'; return }
       if (!canWrite()) { pdfNote.textContent = 'The PDF is shown to the page carrying the key: open the address /rft printed once.'; pdfNote.hidden = false; return }
       try {
-        const res = await fetch(`api/manuscript/pdf?doc=${encodeURIComponent(doc)}`, { cache: 'no-store', headers: { 'X-RFT-Token': key() } })
+        const q = w.snippet ? `snippet=${encodeURIComponent(w.snippet)}` : `doc=${encodeURIComponent(w.doc)}`
+        const res = await fetch(`api/manuscript/pdf?${q}`, { cache: 'no-store', headers: { 'X-RFT-Token': key() } })
         if (!res.ok) {
           pdfFrame.hidden = true
-          pdfNote.textContent = d && !d.built ? `${doc} has not been compiled yet: Compile.` : 'No PDF yet.'
+          pdfNote.textContent = `${w.snippet || w.doc} has not been compiled yet: ${w.snippet ? 'Compile snippet' : 'Compile'}.`
           pdfNote.hidden = false
           return
         }
@@ -336,9 +554,10 @@
 
     async function loadThreads() {
       clearMarks()
-      if (!file || !file.sid) { note = null; threadsEl.replaceChildren(); threadsEl.hidden = true; return }
+      const id = subject()
+      if (!file || !id) { note = null; threadsEl.replaceChildren(); threadsEl.hidden = true; return }
       try {
-        const r = await api(`api/note?id=${encodeURIComponent(file.sid)}`)
+        const r = await api(`api/note?id=${encodeURIComponent(id)}`)
         note = r.ok ? r.data : null
       } catch { note = null }
       renderThreads()
@@ -363,24 +582,23 @@
       if (composing) threadsEl.append(composer())
       for (const t of open) threadsEl.append(threadEl(t))
       const closed = threads.filter(t => t.state !== 'open')
-      if (closed.length) {
-        threadsEl.append(el('details', { class: 'ms-history' }, el('summary', { text: `History (${closed.length})` }), closed.map(t => threadEl(t))))
-      }
+      if (closed.length) threadsEl.append(el('details', { class: 'ms-history' }, el('summary', { text: `History (${closed.length})` }), closed.map(t => threadEl(t))))
       threadsEl.hidden = !threadsEl.childNodes.length
     }
 
     function threadEl(t) {
       const isOpen = t.state === 'open'
+      const id = subject()
       const reply = el('textarea', { rows: 1, placeholder: 'Reply…', 'aria-label': 'Reply' })
       const act = (action, extra = {}) => async () => {
-        if (!canWrite()) { needKey('discuss the manuscript'); return }
+        if (!canWrite()) { needKey('discuss it'); return }
         const text = reply.value.trim()
         if (text && action !== 'reply') {
-          const r = await api('api/comment', { method: 'POST', body: { id: file.sid, action: 'reply', thread: t.id, text } })
+          const r = await api('api/comment', { method: 'POST', body: { id, action: 'reply', thread: t.id, text } })
           if (!r.ok) { notify(r.data.error || 'Not sent'); return }
         }
         if (action !== 'reply' || text) {
-          const r = await api('api/comment', { method: 'POST', body: { id: file.sid, action, thread: t.id, ...(action === 'reply' ? { text } : {}), ...extra } })
+          const r = await api('api/comment', { method: 'POST', body: { id, action, thread: t.id, ...(action === 'reply' ? { text } : {}), ...extra } })
           if (!r.ok) notify(r.data.error || `Not done (${r.status})`)
           else note = r.data
         }
@@ -401,13 +619,13 @@
           el('button', { type: 'button', text: 'Reply', onclick: act('reply') }),
           el('button', { type: 'button', text: 'Ask Claude', title: 'Claude answers in the thread (a comment: a reply; a suggestion: its new text, for you to accept)', onclick: act('ask') }),
           t.kind === 'comment' ? el('button', { type: 'button', text: 'Resolve', onclick: act('resolve') }) : null,
-          t.kind === 'suggestion' ? el('button', { type: 'button', text: 'Accept', disabled: t.replacement == null || !t.exact, title: 'Write its replacement into the snippet', onclick: act('accept') }) : null,
+          t.kind === 'suggestion' ? el('button', { type: 'button', text: 'Accept', disabled: t.replacement == null || !t.exact, title: 'Write its replacement into the text', onclick: act('accept') }) : null,
           t.kind === 'suggestion' ? el('button', { type: 'button', text: 'Reject', onclick: act('reject') }) : null)
           : el('div', { class: 'ms-thread-act' }, el('button', { type: 'button', text: 'Reopen', onclick: act('reopen') })))
     }
 
     function compose(kind) {
-      if (!cm || !file || !file.sid || !cm.somethingSelected()) return
+      if (!cm || !file || !subject() || !cm.somethingSelected()) return
       const text = cm.getValue()
       const start = cm.indexFromPos(cm.getCursor('from')), end = cm.indexFromPos(cm.getCursor('to'))
       composing = { kind, anchor: anchorOf(text, start, end) }
@@ -418,19 +636,19 @@
 
     function composer() {
       const c = composing
+      const id = subject()
       const msg = el('textarea', { rows: 2, placeholder: c.kind === 'comment' ? 'Your comment' : 'Why, or what should change (optional when you write the new text)' })
       const repl = c.kind === 'suggestion' ? el('textarea', { rows: 3, class: 'ms-repl-box', 'aria-label': 'New text' }) : null
       if (repl) repl.value = c.anchor.quote
-      const post = ask => async () => {
-        if (!canWrite()) { needKey('discuss the manuscript'); return }
-        const body = { id: file.sid, action: 'new', kind: c.kind, ...c.anchor, text: msg.value.trim(), ...(repl ? { replacement: repl.value } : {}) }
-        const r = await api('api/comment', { method: 'POST', body })
+      const post = askClaude => async () => {
+        if (!canWrite()) { needKey('discuss it'); return }
+        const r = await api('api/comment', { method: 'POST', body: { id, action: 'new', kind: c.kind, ...c.anchor, text: msg.value.trim(), ...(repl ? { replacement: repl.value } : {}) } })
         if (!r.ok) { notify(r.data.error || `Not posted (${r.status})`); return }
         composing = null
         note = r.data
-        if (ask) {
+        if (askClaude) {
           const t = note.threads[note.threads.length - 1]
-          const a = await api('api/comment', { method: 'POST', body: { id: file.sid, action: 'ask', thread: t.id } })
+          const a = await api('api/comment', { method: 'POST', body: { id, action: 'ask', thread: t.id } })
           if (a.ok) note = a.data
         }
         renderThreads()
@@ -446,24 +664,30 @@
 
     // ---------------------------------------------------------------- what the session makes
 
-    async function ask(body, what) {
-      if (!canWrite()) { needKey(what); return null }
-      renderStatus(`${what[0].toUpperCase()}${what.slice(1)}…`)
+    async function ask(body, whatFor) {
+      if (!canWrite()) { needKey(whatFor); return null }
+      if (dirty && level === 'documents' && ['take', 'keep', 'place', 'move', 'remove'].includes(body.action)) {
+        if (confirm('The document has unsaved changes: save them first? (Cancel: drop them)')) await save(false)
+        else dirty = false
+      }
+      renderStatus(`${whatFor[0].toUpperCase()}${whatFor.slice(1)}…`)
       const r = await api('api/manuscript/ask', { method: 'POST', body })
       renderStatus('')
-      if (!r.ok) { notify(r.data.error || `Could not ${what} (${r.status})`); return null }
+      if (!r.ok) { notify(r.data.error || `Could not ${whatFor} (${r.status})`); return null }
       ms = r.data
+      if (level === 'documents' && file) await openFile(file.path, true)
       render()
       return r.data
     }
 
-    async function reviewed(id) {
-      if (await ask({ action: 'reviewed', id }, 'mark it reviewed')) renderHead()
+    async function place(name, id, after) {
+      const got = await ask({ action: 'place', name, id, ...(after ? { after } : {}) }, 'place the copy')
+      if (got) await showCopy(name, id)
     }
 
-    async function setLock(locked, id) {
+    async function setLock(which, locked, one) {
       if (!canWrite()) { needKey('change the lock'); return }
-      const r = await api('api/manuscript/lock', { method: 'POST', body: id ? { locked, id } : { locked } })
+      const r = await api('api/manuscript/lock', { method: 'POST', body: { level: which, locked, ...(one ? { id: one } : {}) } })
       if (!r.ok) { notify(r.data.error || 'Not changed'); return }
       ms = r.data
       render()
@@ -480,58 +704,61 @@
       if (!form.hidden) $('ms-new-title').focus()
     }
 
+    for (const b of section.querySelectorAll('[data-ms-level]')) b.addEventListener('click', () => void setLevel(b.dataset.msLevel))
     $('ms-new').addEventListener('click', newSnippetForm)
     $('ms-new-cancel').addEventListener('click', () => { $('ms-new-form').hidden = true })
     $('ms-new-form').addEventListener('submit', async ev => {
       ev.preventDefault()
       const basis = $('ms-new-basis').value.split(/[,\s]+/).map(x => x.trim().toUpperCase()).filter(Boolean)
-      const got = await ask({ action: 'new', kind: $('ms-new-kind').value, title: $('ms-new-title').value.trim(), basis, document: doc || undefined }, 'add the snippet')
+      const got = await ask({ action: 'new', kind: $('ms-new-kind').value, title: $('ms-new-title').value.trim(), basis }, 'add the snippet')
       if (!got) return
       $('ms-new-form').hidden = true
       $('ms-new-title').value = ''
       $('ms-new-basis').value = ''
-      await openFile(`snippets/${got.id}.tex`)
+      await openSnippet(got.id)
     })
     $('ms-new-doc').addEventListener('click', async () => {
       const name = (prompt('The new document\'s name (lowercase letters, digits and dashes), then a space and "report" for a thesis chapter:', '') || '').trim()
       if (!name) return
       const [n, kind] = name.split(/\s+/)
       const got = await ask({ action: 'document', name: n, kind: kind === 'report' ? 'report' : 'article' }, 'add the document')
-      if (got) { doc = n; store.set('msDoc', doc); render(); await openFile(`documents/${doc}/main.tex`) }
+      if (got) { doc = n; store.set('msDoc', doc); await setLevel('documents', true) }
     })
     $('ms-start').addEventListener('click', async () => {
-      const got = await ask({ action: 'document', name: 'paper', kind: 'article' }, 'start the manuscript')
-      if (got) { doc = 'paper'; render(); await openFile('documents/paper/main.tex') }
+      const got = await ask({ action: 'document', name: 'paper', kind: 'article' }, 'start')
+      if (got) { doc = 'paper'; await setLevel('documents', true) }
     })
     docSel.addEventListener('change', async () => {
+      if (dirty && !confirm('Leave the unsaved changes?')) { docSel.value = doc; return }
+      dirty = false
       doc = docSel.value
       store.set('msDoc', doc)
-      renderList()
-      renderErrors({})
-      await loadPdf()
+      await setLevel('documents', true)
     })
-    lockBtn.addEventListener('click', () => ms && setLock(!ms.locked))
+    lockBtn.addEventListener('click', () => ms && setLock(level, !(level === 'snippets' ? ms.locked : ms.docsLocked)))
     compileBtn.addEventListener('click', () => save(true))
 
     let timer = 0
+    let shown = false
     async function show() {
       await refresh()
-      if (!file && ms && ms.exists) {
-        // ?snippet=S04 in the address opens it; else the file open last
-        const asked = new URLSearchParams(location.search).get('snippet')
-        const last = asked && /^S\d+$/i.test(asked) ? `snippets/${asked.toUpperCase()}.tex` : store.get('msFile', '')
-        const path = last && (last.startsWith('documents/') || ms.snippets.some(s => `snippets/${s.id}.tex` === last)) ? last : doc ? `documents/${doc}/main.tex` : ''
-        if (path) await openFile(path, true)
+      if (!shown && ms && ms.exists) {
+        shown = true
+        // ?snippet=S04 or ?doc=paper in the address opens it; else what was open last
+        const q = new URLSearchParams(location.search)
+        const asked = (q.get('snippet') || '').toUpperCase()
+        if (/^S\d+$/.test(asked) && ms.snippets.some(s => s.id === asked)) { sid = asked; level = 'snippets' }
+        else if (q.get('doc') && ms.documents.some(d => d.name === q.get('doc'))) { doc = q.get('doc'); level = 'documents' }
+        if (level === 'snippets' && !ms.snippets.some(s => s.id === sid)) sid = (ms.snippets[0] || {}).id || ''
+        await setLevel(level, true)
       }
       if (cm) setTimeout(() => cm.refresh(), 0)
-      await loadPdf()
     }
-    clearInterval(timer)
     // the summary follows the vault on every page (the drawer's Written in reads it); the tab redraws only when shown
     timer = setInterval(() => { void refresh() }, every)
     void refresh()
-    return { show, writtenIn: id => writtenIn(ms, id), openSnippet: id => openFile(`snippets/${id}.tex`), get summary() { return ms } }
+    return { show, writtenIn: id => writtenIn(ms, id), openSnippet: id => { void show().then(() => openSnippet(id)) }, get summary() { return ms }, stop: () => clearInterval(timer) }
   }
 
-  root.RftManuscript = { CONTEXT, KINDS, anchorOf, listOf, stateOf, writtenIn, errorText, mount }
+  root.RftManuscript = { CONTEXT, KINDS, anchorOf, contentOf, byKind, stateOf, usedWords, outlineOf, writtenIn, errorText, mount }
 })(typeof window !== 'undefined' ? window : globalThis)
