@@ -59,6 +59,7 @@ import re
 import secrets
 import shutil
 import signal
+import socket
 import stat
 import sys
 import threading
@@ -119,10 +120,18 @@ RESCAN_S = 5.0  # a name not found looks through the folders again at most this 
 MAX_SCAN_FILES = 2_000_000  # the most files a search by name looks through
 SKIP_DIRS = {"node_modules", "__pycache__"}  # with every dot folder: never searched by name
 PAGE_CSP = ("default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; "
-            "connect-src 'self'; frame-src 'self' blob: http://127.0.0.1:*; frame-ancestors 'self'")
-# frame-src: the page's own frames (the artifacts), the manuscript's PDF (fetched with the key, shown
-# from a blob: address only the page itself can make), and the marimo editors of the experiments'
-# notebooks, each on a port of its own on this machine (rft_notebook.Editors)
+            "connect-src 'self'; frame-src 'self' blob:; frame-ancestors 'self'")
+# frame-src: the page's own frames (the artifacts, and the marimo editors of the experiments'
+# notebooks, which this server passes on under notebook/<name>/), and the manuscript's PDF (fetched
+# with the key, shown from a blob: address only the page itself can make)
+# where the notebooks' editors answer, through this server (rft_notebook.Editors): its own port, the
+# only one a browser on another machine (an SSH tunnel to it) may reach
+NOTEBOOK_PREFIX = f"/{rft_notebook.EDITOR_PATH}/"
+NOTEBOOK_GONE = ("<!doctype html><meta charset=utf-8><meta name=color-scheme content='light dark'>"
+                 "<title>The notebook's editor stopped</title><body style='font:14px/1.5 sans-serif;margin:2em'>"
+                 "<p>This notebook's editor is not running: it stops once nobody has had it open for "
+                 f"{rft_notebook.EDITOR_IDLE_MINUTES // 60} hours, and with the tree view's server.</p>"
+                 "<p>Close the notebook pane and open it again to start it.</p>").encode()
 # a concept's artifact: a page of Claude's, served as a document of its own in a sandbox (an opaque
 # origin: it reads no storage and makes no write as the page), its scripts inline, nothing from
 # elsewhere; `{here}` is the server's own address, for its images and the page that frames it
@@ -1904,10 +1913,75 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             name = host.rsplit(":", 1)[0] if not host.startswith("[") else host.split("]")[0] + "]"
             return name in LOOPBACK_HOSTS
 
+        def _proxy(self):
+            """A request under notebook/<name>/: passed on as it came to the marimo editor of that name
+            (rft_notebook.Editors, which serves under that path), and its answer back as it went; a
+            websocket's bytes both ways until either end closes. The editor checks its own key (in the
+            address, then its cookie), so the page reaches it through this port alone."""
+            head_only = self.command == "HEAD"
+            if not self._host_ok():
+                return self._send(403, b"forbidden host", "text/plain", head_only)
+            name = self.path[len(NOTEBOOK_PREFIX):].split("/", 1)[0].split("?", 1)[0]
+            port = editors.port_of(name) if name else None
+            if port is None:
+                return self._send(502, NOTEBOOK_GONE, "text/html; charset=utf-8", head_only)
+            hop = {t.strip().lower() for t in (self.headers.get("Connection") or "").split(",")}
+            upgrade = "upgrade" in hop and bool(self.headers.get("Upgrade"))
+            lines = [f"{self.command} {self.path} HTTP/1.1"]
+            for k, v in self.headers.items():
+                if "\r" in v or "\n" in v:
+                    return self._send(400, b"bad header", "text/plain", head_only)
+                if k.lower() in ("connection", "keep-alive", "proxy-connection") or (k.lower() == "upgrade" and not upgrade):
+                    continue
+                lines.append(f"{k}: {v}")
+            # one request a connection (this server answers HTTP/1.0), a websocket for as long as it lasts
+            lines.append("Connection: Upgrade" if upgrade else "Connection: close")
+            try:
+                up = socket.create_connection(("127.0.0.1", port), timeout=10)
+            except OSError:
+                return self._send(502, NOTEBOOK_GONE, "text/html; charset=utf-8", head_only)
+            self.close_connection = True
+            try:
+                up.settimeout(None)
+                up.sendall(("\r\n".join(lines) + "\r\n\r\n").encode("latin-1"))
+            except (OSError, UnicodeEncodeError):
+                up.close()
+                return
+
+            def inward():  # what the browser sends after the head: a body, a websocket's frames
+                try:
+                    while data := self.rfile.read1(65536):
+                        up.sendall(data)
+                    up.shutdown(socket.SHUT_WR)
+                except (OSError, ValueError):
+                    pass
+            threading.Thread(target=inward, daemon=True).start()
+            try:
+                while data := up.recv(65536):
+                    self.wfile.write(data)
+            except (OSError, ValueError):
+                pass
+            finally:
+                up.close()
+                try:
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+        def _proxy_only(self):
+            """DELETE, PATCH, OPTIONS: an editor's under notebook/; read-only elsewhere."""
+            if self.path.startswith(NOTEBOOK_PREFIX):
+                return self._proxy()
+            self._refuse()
+
+        do_DELETE = do_PATCH = do_OPTIONS = _proxy_only
+
         def do_HEAD(self):
             self.do_GET(head_only=True)
 
         def do_GET(self, head_only: bool = False):
+            if self.path.startswith(NOTEBOOK_PREFIX):
+                return self._proxy()
             if not self._host_ok():
                 return self._send(403, b"forbidden host", "text/plain", head_only)
             url = urlsplit(self.path)
@@ -1997,6 +2071,8 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
         def do_PUT(self):
             """PUT api/note?id=<id> {"body": "...", "version": "<as read>"} or {"body": "...", "force": true};
             PUT api/scratchpad {"text": "...", "version": "<as read>" or null} or {"text": "...", "force": true}."""
+            if self.path.startswith(NOTEBOOK_PREFIX):
+                return self._proxy()
             if urlsplit(self.path).path == "/api/manuscript/file":
                 got = self._write_request("/api/manuscript/file", MAX_NOTE_BYTES)
                 if got is None:
@@ -2042,7 +2118,9 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             (Claude's suggested dates only); POST api/milestone {"title", "due", "needs"?: [ids]} (a new
             deadline), {"id": "M..", "due"?, "needs"?, "status"?} or {"id", "accept" | "dismiss": true}.
             POST api/notebook {"id": "<id>"}: the address of the experiment's notebook in its repo's
-            marimo editor ({"url"}), the editor started first if need be."""
+            marimo editor ({"url"}, under notebook/ on this server), the editor started first if need be."""
+            if self.path.startswith(NOTEBOOK_PREFIX):
+                return self._proxy()
             route = urlsplit(self.path).path
             if route == "/api/queue":
                 got = self._write_request("/api/queue", MAX_NODE_BYTES)
@@ -2170,8 +2248,6 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             if not all(isinstance(req.get(k), str) for k in ("parent", "type", "title")):
                 return self._json(400, {"error": "expected {parent, type, title}"})
             return self._json(*vault.add_node(req["parent"], req["type"], req["title"].strip(), ask))
-
-        do_DELETE = do_PATCH = _refuse
 
     return Handler
 

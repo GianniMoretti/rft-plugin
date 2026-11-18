@@ -1,7 +1,7 @@
 """Tests of experiment notebooks on the Python side: server/rft_notebook.py (the vault's link
 followed to the notebook in its repo, the run in the repo's uv environment, the marimo editors the
 tree view frames) and the server's part (the notebook and its last run in api/tree, POST
-api/notebook, the page's policy).
+api/notebook, the editors reached through the server's own port, the page's policy).
 
 The tests marked `uv` run marimo for real in a throwaway uv project, and are skipped when uv is
 not on PATH (RFT_SKIP_UV=1 skips them too). They are the check that does not depend on the code's
@@ -9,10 +9,12 @@ own judgment: the notebook must give back the numbers it was written to reproduc
 
     python3 -m unittest discover -s tests -p "test_*.py"
 """
+import base64
 import http.client
 import json
 import math
 import os
+import re
 import shutil
 import socket
 import sys
@@ -168,36 +170,209 @@ class UvRunTest(unittest.TestCase):
         self.addCleanup(editors.stop_all)
         url = editors.open(nb)
         u = urlsplit(url)
-        self.assertEqual(u.hostname, "127.0.0.1")
+        # an address relative to the server's: the page reaches the editor through its own port
+        self.assertEqual((u.scheme, u.netloc), ("", ""))
+        name = re.fullmatch(r"notebook/([0-9a-f]{16})/", u.path).group(1)
         self.assertIn("file=notebooks/E02_baseline.py", u.query)
         self.assertIn("access_token=", u.query)
         self.assertEqual(editors.open(nb), url)  # the same server, the same key
-        c = http.client.HTTPConnection("127.0.0.1", u.port, timeout=10)
-        c.request("GET", "/")
+        port = editors.port_of(name)
+        self.assertIsNotNone(port)
+        self.assertIsNone(editors.port_of("0" * 16))
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        c.request("GET", f"/{u.path}")
         r = c.getresponse()
         r.read()
         self.assertIn(r.status, (302, 303, 401, 403))  # nothing without the key
-        c.request("GET", f"/?{u.query}")
+        c.request("GET", f"/{url}")
         r = c.getresponse()
         r.read()
         self.assertIn("set-cookie", {k.lower() for k, _ in r.getheaders()})
         c.close()
         editors.stop_all()
         time.sleep(0.5)
+        self.assertIsNone(editors.port_of(name))
         with self.assertRaises(OSError):
-            socket.create_connection(("127.0.0.1", u.port), timeout=2).close()
+            socket.create_connection(("127.0.0.1", port), timeout=2).close()
+
+
+def ws_open(port: int, path: str, cookie: str | None = None):
+    """A websocket opened to `path` on 127.0.0.1:`port`, as a browser does: the socket, the answer's head, the bytes after it."""
+    s = socket.create_connection(("127.0.0.1", port), timeout=60)
+    key = base64.b64encode(os.urandom(16)).decode()
+    s.sendall((f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://127.0.0.1:{port}\r\n"
+               f"Connection: keep-alive, Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: {key}\r\n"
+               + (f"Cookie: {cookie}\r\n" if cookie else "") + "\r\n").encode())
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        chunk = s.recv(65536)
+        if not chunk:
+            break
+        buf += chunk
+    head, _, rest = buf.partition(b"\r\n\r\n")
+    return s, head.decode("latin-1"), rest
+
+
+def ws_frame(s: socket.socket, rest: bytes):
+    """The server's next websocket frame (unmasked): its opcode, its payload, the bytes after it."""
+    def need(n):
+        nonlocal rest
+        while len(rest) < n:
+            chunk = s.recv(65536)
+            if not chunk:
+                raise EOFError("the websocket closed")
+            rest += chunk
+        out, rest = rest[:n], rest[n:]
+        return out
+    b0, b1 = need(2)
+    n = b1 & 0x7F
+    if n == 126:
+        n = int.from_bytes(need(2), "big")
+    elif n == 127:
+        n = int.from_bytes(need(8), "big")
+    payload = need(n)
+    return b0 & 0x0F, payload, rest
+
+
+def cookie_of(headers) -> str:
+    return "; ".join(v.split(";", 1)[0] for k, v in headers if k.lower() == "set-cookie")
+
+
+@unittest.skipUnless(HAS_UV, "uv is not on PATH")
+class EditorThroughServerTest(unittest.TestCase):
+    """The marimo editor as the page meets it: through the server's own port and nothing else, as a
+    browser on another machine reaches it through an SSH tunnel to that port."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name).resolve()
+        vault = base / "vault"
+        (vault / "directions").mkdir(parents=True)
+        (vault / "experiments").mkdir()
+        (vault / "directions" / "D00 Root.md").write_text(note("D00", "direction", "done", "", "Root"))
+        (vault / "experiments" / "E02 Baseline.md").write_text(note(
+            "E02", "experiment", "done", "D00 Root", "Baseline", 'notebook: "notebooks/E02.py"\n'))
+        uv_project(base / "toy")
+        rft_notebook.link("../../toy/notebooks/E02_baseline.py", vault / "notebooks" / "E02.py")
+        self.editors = rft_notebook.Editors()
+        self.addCleanup(self.editors.stop_all)
+        handler = rft_server.make_handler(rft_server.Vault(vault, "demo"), WEB, KEY, editors=self.editors)
+        server = rft_server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        server.daemon_threads = True
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self.port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    def get(self, path, cookie=None):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=60)
+        c.request("GET", path, headers={"Cookie": cookie} if cookie else {})
+        r = c.getresponse()
+        body = r.read()
+        c.close()
+        return r.status, r.getheaders(), body
+
+    def open_notebook(self) -> str:
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=180)
+        data = json.dumps({"id": "E02"}).encode()
+        c.request("POST", "/api/notebook", body=data, headers={
+            "Content-Type": "application/json", "Origin": f"http://127.0.0.1:{self.port}", "X-RFT-Token": KEY})
+        r = c.getresponse()
+        got = json.loads(r.read())
+        c.close()
+        self.assertEqual(r.status, 200, got)
+        return got["url"]
+
+    def test_the_notebook_runs_through_the_servers_port_alone(self):
+        url = self.open_notebook()
+        name = urlsplit(url).path.split("/")[1]
+        # the key in the address: marimo sets its cookie and sends the page on, on this port
+        status, headers, _ = self.get(f"/{url}")
+        self.assertIn(status, (302, 303, 307))
+        cookie = cookie_of(headers)
+        self.assertTrue(cookie)
+        location = dict((k.lower(), v) for k, v in headers)["location"]
+        self.assertTrue(location.startswith(f"/notebook/{name}/"), location)
+        status, _, html = self.get(location, cookie)
+        self.assertEqual(status, 200)
+        self.assertIn(b"marimo", html)
+        # its script, by the relative address the page names it
+        script = re.search(rb'src="\./(assets/[^"]+\.js)"', html).group(1).decode()
+        status, _, js = self.get(f"/notebook/{name}/{script}", cookie)
+        self.assertEqual(status, 200)
+        self.assertGreater(len(js), 10_000)
+        # the kernel's websocket: open, and the kernel ready, through this port
+        s, head, rest = ws_open(self.port, f"/notebook/{name}/ws?session_id=s-test&file=notebooks/E02_baseline.py", cookie)
+        self.addCleanup(s.close)
+        self.assertTrue(head.startswith("HTTP/1.1 101"), head)
+        op, payload, rest = ws_frame(s, rest)
+        self.assertEqual(op, 1)
+        self.assertEqual(json.loads(payload)["op"], "kernel-ready")
+        # stopped (hours unused): its address says how to start it again, and the page's next ask starts a new one
+        self.editors.stop_all()
+        status, _, body = self.get(f"/notebook/{name}/", cookie)
+        self.assertEqual(status, 502)
+        self.assertIn(b"open it again", body)
+        again = self.open_notebook()
+        self.assertNotEqual(urlsplit(again).path, urlsplit(url).path)
+
+
+class FakeEditor:
+    """A stand-in for a marimo editor on a port of its own: it answers a request with what reached it
+    (its head and body, as JSON), and a websocket by echoing its bytes."""
+
+    def __init__(self):
+        self.sock = socket.create_server(("127.0.0.1", 0))
+        self.port = self.sock.getsockname()[1]
+        self.heads = []
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self):
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            threading.Thread(target=self._serve, args=(conn,), daemon=True).start()
+
+    def _serve(self, conn):
+        with conn:
+            buf = b""
+            while b"\r\n\r\n" not in buf:
+                chunk = conn.recv(65536)
+                if not chunk:
+                    return
+                buf += chunk
+            head, _, body = buf.partition(b"\r\n\r\n")
+            self.heads.append(head.decode("latin-1"))
+            if b"\r\nupgrade: websocket" in head.lower():
+                conn.sendall(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n" + body)
+                while data := conn.recv(65536):
+                    conn.sendall(data)
+                return
+            m = re.search(rb"\r\ncontent-length: *(\d+)", head, re.I)
+            while m and len(body) < int(m.group(1)):
+                body += conn.recv(65536)
+            reply = json.dumps({"head": head.decode("latin-1"), "body": body.decode()}).encode()
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nSet-Cookie: s=1; Path=/notebook/abc\r\n"
+                         b"Content-Length: %d\r\nConnection: close\r\n\r\n" % len(reply) + reply)
 
 
 class FakeEditors:
     def __init__(self):
         self.opened = []
         self.fail = None
+        self.editor = FakeEditor()
 
     def open(self, path):
         self.opened.append(Path(path))
         if self.fail:
             raise rft_notebook.NotebookError(self.fail)
-        return "http://127.0.0.1:9/?file=notebooks/E02_baseline.py&access_token=abc"
+        return "notebook/abc/?file=notebooks/E02_baseline.py&access_token=abc"
+
+    def port_of(self, name):
+        return self.editor.port if name == "abc" else None
 
 
 def note(nid, kind, status, parent, title, extra=""):
@@ -265,7 +440,7 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.editors.opened, [])
         status, _, got = self.request("POST", "/api/notebook", {"id": "E02"})
         self.assertEqual(status, 200)
-        self.assertEqual(got["url"], "http://127.0.0.1:9/?file=notebooks/E02_baseline.py&access_token=abc")
+        self.assertEqual(got["url"], "notebook/abc/?file=notebooks/E02_baseline.py&access_token=abc")
         self.assertEqual(self.editors.opened[-1], self.vault / "notebooks" / "E02.py")
 
     def test_no_notebook_no_note_and_a_link_out_of_the_vault_are_refused(self):
@@ -283,12 +458,72 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(status, 502)
         self.assertIn("uv is not on PATH", got["error"])
 
-    def test_the_page_may_frame_the_local_editors_only(self):
+    def test_the_page_frames_its_own_server_only(self):
         _, hdrs, _ = self.request("GET", "/")
         csp = {k.lower(): v for k, v in hdrs.items()}["content-security-policy"]
-        # and the manuscript's PDF, from a blob: address only the page itself can make
-        self.assertIn("frame-src 'self' blob: http://127.0.0.1:*;", csp)
+        # the editors come through the server's own port; the manuscript's PDF, from a blob: address only the page itself can make
+        self.assertIn("frame-src 'self' blob:;", csp)
+        self.assertNotIn("127.0.0.1:*", csp)
         self.assertNotIn("https:", csp)
+
+    def raw(self, data: bytes) -> bytes:
+        s = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        s.sendall(data)
+        out = b""
+        while chunk := s.recv(65536):
+            out += chunk
+        s.close()
+        return out
+
+    def test_a_request_to_an_editor_goes_through_the_servers_port_as_it_came(self):
+        for method in ("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"):
+            body = b'{"cell": 1}' if method in ("POST", "PUT", "PATCH") else b""
+            out = self.raw(f"{method} /notebook/abc/api/kernel/run?x=1 HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\n"
+                           f"Cookie: s=1\r\nConnection: keep-alive\r\nContent-Type: application/json\r\n"
+                           f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
+            head, _, reply = out.partition(b"\r\n\r\n")
+            self.assertTrue(head.startswith(b"HTTP/1.1 200 OK"), (method, head))
+            self.assertIn(b"Set-Cookie: s=1; Path=/notebook/abc", head)
+            got = json.loads(reply)
+            lines = got["head"].split("\r\n")
+            self.assertEqual(lines[0], f"{method} /notebook/abc/api/kernel/run?x=1 HTTP/1.1")
+            # the browser's own Host (the editor's redirects come back here), one request a connection
+            self.assertIn(f"Host: 127.0.0.1:{self.port}", lines)
+            self.assertIn("Cookie: s=1", lines)
+            self.assertIn("Connection: close", lines)
+            self.assertNotIn("Connection: keep-alive", lines)
+            self.assertEqual(got["body"], body.decode())
+
+    def test_a_websocket_to_an_editor_goes_both_ways(self):
+        s, head, rest = ws_open(self.port, "/notebook/abc/ws?session_id=1")
+        self.addCleanup(s.close)
+        self.assertTrue(head.startswith("HTTP/1.1 101"), head)
+        sent = self.editors.editor.heads[-1].split("\r\n")
+        self.assertIn("Connection: Upgrade", sent)
+        self.assertIn("Upgrade: websocket", sent)
+        for msg in (b"ping", b"x" * 200_000):
+            s.sendall(msg)
+            got = rest
+            while len(got) < len(msg):
+                got += s.recv(65536)
+            rest = b""
+            self.assertEqual(got, msg)
+
+    def test_an_editor_that_is_not_running_says_how_to_start_it(self):
+        heads = len(self.editors.editor.heads)
+        for path in ("/notebook/0123456789abcdef/", "/notebook//", "/notebook/abc/../../api/tree"):
+            status, hdrs, body = self.request("GET", path)
+            if path.startswith("/notebook/abc/"):
+                continue  # passed on as it came: the editor answers for its own paths
+            self.assertEqual(status, 502, path)
+            self.assertIn(b"open it again", body)
+        self.assertLessEqual(len(self.editors.editor.heads), heads + 1)
+
+    def test_an_editor_is_reached_from_this_machine_only(self):
+        heads = len(self.editors.editor.heads)
+        out = self.raw(b"GET /notebook/abc/ HTTP/1.1\r\nHost: evil.example:80\r\n\r\n")
+        self.assertTrue(out.startswith(b"HTTP/1.0 403"), out[:40])
+        self.assertEqual(len(self.editors.editor.heads), heads)
 
 
 if __name__ == "__main__":

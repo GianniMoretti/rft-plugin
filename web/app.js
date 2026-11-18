@@ -1834,31 +1834,41 @@
     nbRun.textContent = A.reproducedText(n.reproduced)
     nbRun.className = `nb-run${n.reproduced && n.reproduced.state ? ` r-${n.reproduced.state}` : ''}`
     nbRun.title = n.reproduced ? 'The last run by rft_run_notebook, which checks RESULTS against the note\'s Result' : 'Claude runs it with rft_run_notebook'
-    let url = nbUrls.get(n.id)
-    if (!url) {
-      if (!editKey()) { showNbMsg('Open the address /rft printed: the notebook runs code, so it needs the key.'); return }
-      showNbMsg('Starting the notebook in its repo\'s environment… (the first time can take a minute)')
-      try {
-        const res = await fetch('api/notebook', {
-          method: 'POST',
-          cache: 'no-store',
-          headers: { 'Content-Type': 'application/json', 'X-RFT-Token': editKey() },
-          body: JSON.stringify({ id: n.id }),
-        })
-        const reply = await res.json().catch(() => ({}))
-        if (!res.ok || typeof reply.url !== 'string') throw new Error(reply.error || `the server answered ${res.status}`)
-        url = reply.url
-        nbUrls.set(n.id, url)
-      } catch (e) {
-        if (nbShown === n.id) showNbMsg(`The notebook did not open: ${e.message}`)
-        return
-      }
-      if (nbShown !== n.id) return
+    // the address asked every time, the one known shown meanwhile: the server answers it at once
+    // while the editor runs, and starts a new one, at a new address, once it stopped (hours unused)
+    const known = nbUrls.get(n.id)
+    if (!editKey()) {
+      if (known) showNbFrame(n, known)
+      else showNbMsg('Open the address /rft printed: the notebook runs code, so it needs the key.')
+      return
+    }
+    if (known) showNbFrame(n, known)
+    else showNbMsg('Starting the notebook in its repo\'s environment… (the first time can take a minute)')
+    let url
+    try {
+      const res = await fetch('api/notebook', {
+        method: 'POST',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'X-RFT-Token': editKey() },
+        body: JSON.stringify({ id: n.id }),
+      })
+      const reply = await res.json().catch(() => ({}))
+      if (!res.ok || typeof reply.url !== 'string') throw new Error(reply.error || `the server answered ${res.status}`)
+      url = reply.url
+      nbUrls.set(n.id, url)
+    } catch (e) {
+      if (nbShown === n.id) showNbMsg(`The notebook did not open: ${e.message}`)
+      return
     }
     nbMsg.hidden = true
     nbFrame.hidden = false
     nbTab.href = url
     openFrame(nbFrame, url, { title: `The notebook of ${n.id}`, allow: 'clipboard-read; clipboard-write' })
+    if (nbShown === n.id) showNbFrame(n, url)
+  }
+
+  /** The notebook framed: its editor, through this page's own server (notebook/<name>/), the one address a tunnel to it reaches. */
+  function showNbFrame(n, url) {
   }
 
   function showNbMsg(text) {

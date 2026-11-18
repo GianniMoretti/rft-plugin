@@ -17,7 +17,9 @@ traceback when a cell fails; and FIGURES (each an SVG: a matplotlib figure, or S
 TABLES (each a DataFrame, a list of rows as dicts, or a dict of columns), as SVG text and as
 columns and rows. The editors (`Editors`) are one `marimo edit` per repo, on 127.0.0.1
 with a key of their own, started when the tree view first opens a notebook of that repo and
-stopped with the server. Standard library only: marimo itself runs in the repo's environment
+stopped with the server; each serves under notebook/<name>/ and the page reaches it through the
+server's own port (rft_server passes those requests on), the only one a browser on another
+machine, through an SSH tunnel, may reach. Standard library only: marimo itself runs in the repo's environment
 (`uv run --with marimo`), so the repos need not list it.
 """
 import argparse
@@ -41,6 +43,7 @@ from urllib.parse import quote
 MARK = "RFT_NOTEBOOK "
 TAIL = 15  # lines of a traceback kept
 EDITOR_IDLE_MINUTES = 240  # an editor nobody has been connected to for this long stops itself
+EDITOR_PATH = "notebook"  # an editor's addresses on the server: notebook/<its name>/...
 
 
 class NotebookError(Exception):
@@ -311,16 +314,19 @@ def listening(port: int) -> bool:
 
 
 class Editors:
-    """The marimo editors the tree view frames: one per repo, started on first use, stopped with `stop_all`."""
+    """The marimo editors the tree view frames: one per repo, started on first use, stopped with
+    `stop_all`. Each serves under /notebook/<name>/ (a name of its own, new at each start), which
+    the server passes on to its port (`port_of`)."""
 
     def __init__(self, uv: str = "uv", wait: float = 120.0):
         self.uv = uv
         self.wait = wait
         self.lock = threading.Lock()
-        self.running: dict[Path, tuple[subprocess.Popen, int, str]] = {}
+        self.running: dict[Path, tuple[subprocess.Popen, int, str, str]] = {}  # repo → process, port, key, name
 
     def open(self, path: Path) -> str:
-        """The address of the notebook in its repo's editor, the editor started first if need be."""
+        """The address of the notebook in its repo's editor, relative to the server's own (the page's),
+        the editor started first if need be: a new one, at a new address, when the last one stopped."""
         real, root = resolve(path)
         with self.lock:
             got = self.running.get(root)
@@ -329,18 +335,26 @@ class Editors:
             if not got:
                 got = self._start(root)
                 self.running[root] = got
-        _, port, token = got
+        _, _, token, name = got
         rel = real.relative_to(root).as_posix()
-        return f"http://127.0.0.1:{port}/?file={quote(rel)}&access_token={quote(token)}"
+        return f"{EDITOR_PATH}/{name}/?file={quote(rel)}&access_token={quote(token)}"
 
-    def _start(self, root: Path) -> tuple[subprocess.Popen, int, str]:
+    def port_of(self, name: str) -> int | None:
+        """The port of the running editor called `name`; None when there is none (it stopped)."""
+        with self.lock:
+            for proc, port, _, n in self.running.values():
+                if n == name and proc.poll() is None:
+                    return port
+        return None
+
+    def _start(self, root: Path) -> tuple[subprocess.Popen, int, str, str]:
         exe = shutil.which(self.uv)
         if not exe:
             raise NotebookError(f"{self.uv} is not on PATH: the notebooks run in their repo's uv environment (https://docs.astral.sh/uv/)")
-        port, token = free_port(), secrets.token_urlsafe(18)
+        port, token, name = free_port(), secrets.token_urlsafe(18), secrets.token_hex(8)
         cmd = [exe, "run", "--project", str(root), "--with", "marimo", "marimo", "edit", str(root), "--headless",
                "--host", "127.0.0.1", "--port", str(port), "--token-password-file", "-", "--skip-update-check",
-               "--watch", "--timeout", str(EDITOR_IDLE_MINUTES)]
+               "--watch", "--timeout", str(EDITOR_IDLE_MINUTES), "--base-url", f"/{EDITOR_PATH}/{name}"]
         log = tempfile.TemporaryFile()
         proc = subprocess.Popen(cmd, cwd=root, stdin=subprocess.PIPE, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         try:
@@ -353,7 +367,7 @@ class Editors:
             time.sleep(0.2)
         if proc.poll() is None and listening(port):
             log.close()
-            return proc, port, token
+            return proc, port, token, name
         stop(proc)
         log.seek(0)
         said = tail(log.read().decode("utf-8", "replace"), 8)
@@ -362,7 +376,7 @@ class Editors:
 
     def stop_all(self) -> None:
         with self.lock:
-            procs = [p for p, _, _ in self.running.values()]
+            procs = [p for p, _, _, _ in self.running.values()]
             self.running.clear()
         for p in procs:
             stop(p)

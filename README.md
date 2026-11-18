@@ -723,7 +723,9 @@ so you can run it and read the note side by side.
   editor, with its last run above it. Nothing runs until you press run. The server starts one
   editor per repo the first time one of its notebooks is opened (that can take a minute the
   first time uv builds the environment), on `127.0.0.1` with a key of its own, and stops it with
-  itself. Opening one runs code, so it needs the page's key, as an edit does. ✕ closes the pane
+  itself, or once nobody has had it open for 4 hours (opening the pane again starts a new one).
+  The page reaches the editor through the tree view's own port (under `/notebook/…`), so the one
+  `ssh -L` forward above is enough on a remote machine. Opening one runs code, so it needs the page's key, as an edit does. ✕ closes the pane
   and the note's notebook button opens it again; drag its right edge to resize it; ↗ opens it in a
   tab of its own.
 - **A concept's notebook**, on the note that starts it (Claude writes it with `rft_set_notebook <its id>`), makes the
