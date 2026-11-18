@@ -614,15 +614,22 @@
     })
     document.addEventListener('visibilitychange', () => { if (!document.hidden && view) load() })
 
-    // the button only once the server is known to keep a queue; `?jobs` in the address opens it
-    load().then(found => {
-      if (!found) return
-      btn.hidden = false
-      const asked = new URLSearchParams(location.search).get('jobs')
-      if (asked === 'history') tab = 'history'
-      if (asked !== null || store.get('jobsOpen', false)) setOpen(true)
-      else schedule()
-    })
+    // the button only once the server keeps a queue (this machine paired with it: /rft-machine add),
+    // looked for again every `idle` ms until then, so pairing shows it with no reload; `?jobs` opens it
+    function find() {
+      load().then(found => {
+        if (!found) {
+          timer = setTimeout(find, idle)
+          return
+        }
+        btn.hidden = false
+        const asked = new URLSearchParams(location.search).get('jobs')
+        if (asked === 'history') tab = 'history'
+        if (asked !== null || store.get('jobsOpen', false)) setOpen(true)
+        else schedule()
+      })
+    }
+    find()
   }
 
   root.RftQueue = { duration, moveOp, gpuState, endWord, notebookWord, progressParts, cleanLine, newLog, feedLog, logText, badge, when, mount }

@@ -173,7 +173,7 @@ export async function notebookGaps(io: Io, loaded: Loaded, scope?: Concept): Pro
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 
 /** The report of /rft-update notebooks: what runs again, and what is still to write, by concept. */
-export function gapsText(g: NotebookGaps, queued: string | null, scope?: Concept): string {
+export function gapsText(g: NotebookGaps, queued: string | null, scope?: Concept, queueOff = false): string {
   const out: string[] = []
   const where = scope ? ` in "${scope.name}"` : ''
   const all = g.experiments.length + g.concepts.length
@@ -181,6 +181,7 @@ export function gapsText(g: NotebookGaps, queued: string | null, scope?: Concept
   if (queued) {
     out.push(`${queued}: all ${all} run again, one after another, the experiments' then the concepts', in check mode (a Result's numbers are checked, never written over), each saving its numbers, figures and tables and filling the artifacts' tables. The queue's monitor shows how far it is; its end names the ones that differ or failed.`)
   } else if (!all) out.push('Nothing to run again: no experiment or concept has a notebook yet.')
+  else if (queueOff) out.push(`Not run again: that goes through the experiment queue, which is off until this machine is paired with it (/rft-machine add); meanwhile Claude runs one at a time with rft_run_notebook.`)
   if (g.byConcept.length) {
     out.push('', 'Still to write, by concept (/rft-update notebooks --write [concept] asks Claude, concept by concept):')
     for (const c of g.byConcept) {

@@ -24,7 +24,8 @@ theory/), a deadline only in milestones/, and the scratchpad only as a plain fil
 top. It shows the experiment queue (GET api/queue: the GPUs, the jobs waiting and running, the
 history; rft_queue.py beside it) and takes the user's changes to it (POST api/queue: a job moved,
 cancelled or retried, the queue paused, the GPUs it may use); a job's output (GET api/queue/output)
-goes only to a request carrying the key. A write (PUT api/note, PUT api/scratchpad, POST api/node, api/type, api/comment, api/lock, api/verify,
+goes only to a request carrying the key; all three answer 404 until this machine is paired with
+the queue (rft_queue.py machine add), so the page shows no monitor. A write (PUT api/note, PUT api/scratchpad, POST api/node, api/type, api/comment, api/lock, api/verify,
 api/priority, api/dates, api/milestone, api/queue) must also come from the page itself (its
 Origin) and carry the vault's key, which is in the address the server prints, so neither
 another web page nor another user of the machine can change a note. The key is kept in the
@@ -2020,6 +2021,9 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 if pdf is None:
                     return self._json(404, {"error": "not compiled yet"}, head_only)
                 return self._send(200, pdf.read_bytes(), "application/pdf", head_only)
+            # no queue until this machine is paired with it (rft_queue.Queue.pair): the page shows no monitor
+            if route.startswith("/api/queue") and not vault.queue.paired():
+                return self._json(404, {"error": NOT_PAIRED}, head_only)
             if route == "/api/queue":
                 return self._json(*queue_snapshot(vault.queue), head_only)
             # a job's output: api/queue/output (api/queue/log for older pages, though ad and tracker
@@ -2126,6 +2130,8 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 got = self._write_request("/api/queue", MAX_NODE_BYTES)
                 if got is None:
                     return
+                if not vault.queue.paired():
+                    return self._json(404, {"error": NOT_PAIRED})
                 return self._json(*queue_change(vault.queue, got[1]))
             if route == "/api/notebook":
                 got = self._write_request("/api/notebook", MAX_NODE_BYTES)
@@ -2266,6 +2272,8 @@ def queue_snapshot(q) -> tuple[int, dict]:
             pass
     return 200, snap
 
+
+NOT_PAIRED = "no machine is paired with this vault's experiment queue, so there is no queue: /rft-machine add pairs this one"
 
 QUEUE_OPS = ('expected {op: "move", id, before?: "top" or a job id or null}, {op: "cancel", id}, {op: "retry", id}, '
              '{op: "pause", paused: true or false} or {op: "gpus", allowed: [GPU indices] or null}')

@@ -186,7 +186,7 @@ describe('queue: in a session', () => {
   test('rft_queue queues through the runner and answers in a line; the tools are in the prompt once there is a queue', async ($, on) => {
     mock.clock(on)
     const calls: string[][] = []
-    const w = world(on, files({ 'vault/.queue/queue.json': JSON.stringify({ version: 1, seq: 0, paused: false, jobs: [] }) }), {
+    const w = world(on, files({ 'vault/.queue/machine.json': JSON.stringify({ version: 1, host: 'lab-pc', runs_dir: '/data/rft-runs' }), 'vault/.queue/queue.json': JSON.stringify({ version: 1, seq: 0, paused: false, jobs: [] }) }), {
       process: argv => {
         if (!PY.test(argv[1] ?? '')) return undefined
         calls.push([...argv])
@@ -222,7 +222,7 @@ describe('queue: in a session', () => {
     mock.clock(on)
     const calls: string[][] = []
     const waiting = [{ id: 'q4', exp: 'E05', gpus: 1 }, { id: 'q3', exp: 'E03', gpus: 2 }, { id: 'q5', exp: 'E04', gpus: 1 }]
-    const w = world(on, files({ 'vault/.queue/queue.json': JSON.stringify({ version: 1, seq: 5, paused: false, jobs: [] }) }), {
+    const w = world(on, files({ 'vault/.queue/machine.json': JSON.stringify({ version: 1, host: 'lab-pc', runs_dir: '/data/rft-runs' }), 'vault/.queue/queue.json': JSON.stringify({ version: 1, seq: 5, paused: false, jobs: [] }) }), {
       process: argv => {
         if (!PY.test(argv[1] ?? '')) return undefined
         calls.push([...argv])
@@ -253,7 +253,7 @@ describe('queue: in a session', () => {
   test('rft_job also retries a job that ended, and pauses and resumes the queue, each in a line', async ($, on) => {
     mock.clock(on)
     const calls: string[][] = []
-    world(on, files({ 'vault/.queue/queue.json': JSON.stringify({ version: 1, seq: 5, paused: false, jobs: [] }) }), {
+    world(on, files({ 'vault/.queue/machine.json': JSON.stringify({ version: 1, host: 'lab-pc', runs_dir: '/data/rft-runs' }), 'vault/.queue/queue.json': JSON.stringify({ version: 1, seq: 5, paused: false, jobs: [] }) }), {
       process: argv => {
         if (!PY.test(argv[1] ?? '')) return undefined
         calls.push([...argv])
@@ -276,18 +276,20 @@ describe('queue: in a session', () => {
     expect((await $.tool.call({ tool: 'mcp__rft__rft_job', action: 'stop', id: 'q1' } as never)).isError).toBe(true)
   })
 
-  test('without a queue the tools wait behind ToolSearch', async ($, on) => {
+  test('on a paired machine with no job yet the queue tools are in the prompt', async ($, on) => {
     mock.clock(on)
-    const w = world(on, files())
+    const w = world(on, files({ 'vault/.queue/machine.json': JSON.stringify({ version: 1, host: 'lab-pc' }) }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.deferred).toContain('rft_queue')
-    expect(w.deferred).toContain('rft_jobs')
+    for (const t of ['rft_queue', 'rft_jobs', 'rft_job']) {
+      expect(w.tools).toContain(t)
+      expect(w.deferred).not.toContain(t)
+    }
   })
 
   test('a job that starts sets its planned experiment running; one that ends is toasted and flagged', async ($, on) => {
     const clock = mock.clock(on)
     const running = job('q1', 'E03', 'running', { gpu_ids: [0], started: NOW })
-    const w = world(on, files({ 'vault/.queue/queue.json': JSON.stringify({ version: 1, seq: 1, paused: false, jobs: [running] }) }))
+    const w = world(on, files({ 'vault/.queue/machine.json': JSON.stringify({ version: 1, host: 'lab-pc', runs_dir: '/data/rft-runs' }), 'vault/.queue/queue.json': JSON.stringify({ version: 1, seq: 1, paused: false, jobs: [running] }) }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
     await clock.advance(5000)
     expect(w.fs.read(`vault/experiments/${E03}.md`)).toContain('status: running')

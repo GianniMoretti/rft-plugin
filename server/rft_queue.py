@@ -38,10 +38,18 @@ has been empty a while; queueing a job, opening the tree view or a new session s
   notebook's run (kind "notebook", no GPU): rft_notebook.py apply --record runs it and writes its
   RESULTS in the note's Result, saves its figures and tables, and stamps the note, so a result is
   recorded with no session open and no model turn. How it went is kept on that job (`outcome`).
-- **Files**, in the vault's .queue/ (a dot folder Obsidian leaves alone): queue.json, the jobs
-  waiting and running in their order (rewritten whole, under `lock`); history.jsonl, one line per
-  job that ended (appended); logs/ and run/, which its .gitignore keeps out of git.
+- **The machine**: there is no queue until a machine is paired with the vault's (`machine add`,
+  which /rft-machine add and Claude's rft_machine run): machine.json names it (its host name, its
+  GPUs, the root of its runs' output folders, its conda and uv). A machine with no NVIDIA GPU is
+  not paired. Until then no job is queued and no runner starts; the queue runs only on the
+  machine named there, so a vault synced to another machine leaves its queue alone.
+- **Files**, in the vault's .queue/ (a dot folder Obsidian leaves alone): machine.json; queue.json,
+  the jobs waiting and running in their order (rewritten whole, under `lock`); history.jsonl, one
+  line per job that ended (appended); logs/ and run/. Its .gitignore keeps all of it out of git:
+  the queue belongs to the machine it runs on, and a clone elsewhere pairs its own.
 
+    python3 rft_queue.py machine probe|status --vault V [--runs-hint DIR]
+    python3 rft_queue.py machine add --vault V [--runs DIR] [--keep 0,1]
     python3 rft_queue.py add --vault V --job '{"exp": "E14", "cmd": "...", "cwd": "/abs", "gpus": 1}' [--top]
     python3 rft_queue.py status|ensure --vault V
     python3 rft_queue.py cancel|retry --vault V --id q7
@@ -62,8 +70,10 @@ import fcntl
 import hashlib
 import json
 import os
+import platform
 import re
 import shlex
+import shutil
 import signal
 import socket
 import subprocess
@@ -74,12 +84,19 @@ from pathlib import Path
 QUEUE_DIR = ".queue"
 STATE = "queue.json"
 HISTORY = "history.jsonl"
+MACHINE = "machine.json"  # the machine the queue runs on; no queue without it
 LOCK = "lock"
 RUNNER_LOCK = "runner.lock"
 RUNNER_LOG = "runner.log"
 LOGS = "logs"
 RUN = "run"
-GITIGNORE = "logs/\nrun/\nlock\nrunner.lock\nrunner.log\n*.tmp\n"
+# all of .queue/ stays out of git: the queue, its history and its pairing belong to one machine
+GITIGNORE = "# this machine's experiment queue: its pairing, jobs, history and logs stay on it\n*\n"
+OLD_GITIGNORE = "logs/\nrun/\nlock\nrunner.lock\nrunner.log\n*.tmp\n"  # what an older plugin wrote, replaced
+RUNS_NAME = "rft-runs"  # the runs' output folders' root suggested on a disk
+CONDA_DIRS = ("anaconda3", "miniconda3", "miniforge3", "mambaforge", "miniforge", "micromamba")
+# where no run's outputs go: system folders, and the mounts of snaps and boot partitions
+SKIP_MOUNTS = ("/boot", "/efi", "/snap", "/proc", "/sys", "/dev", "/var/lib/docker", "/var/snap")
 FREE_MIB = 1000  # a GPU holding this much memory, with no job of the queue on it, is in use elsewhere
 EVERY_S = 3.0  # how often the runner looks
 IDLE_S = 60.0  # how long the queue stays empty before the runner stops
@@ -125,6 +142,10 @@ class QueueError(Exception):
 
 class NotFound(QueueError):
     """No such job."""
+
+
+class NotPaired(QueueError):
+    """No machine is paired with the vault's queue, or another machine is."""
 
 
 # ---------------------------------------------------------------- processes and GPUs
@@ -241,6 +262,134 @@ def _ordinal(n: int) -> str:
 
 def _gpu_list(ids: list[int]) -> str:
     return f"GPU{'s' if len(ids) != 1 else ''} {', '.join(map(str, ids))}"
+
+
+# ---------------------------------------------------------------- the machine
+
+def _under(path: str, mount: str) -> bool:
+    return mount == "/" or path == mount or path.startswith(mount.rstrip("/") + "/")
+
+
+def output_folders(run=subprocess.run) -> list[dict]:
+    """Where the runs' outputs may go: one folder per disk the user can write to, the most room
+    first; on the disk of the user's home, ~/rft-runs, else rft-runs at the disk's top (or in the
+    user's folder there). Each: {"mount", "path", "free", "total"} (bytes). Read from `df`."""
+    try:
+        r = run(["df", "-P", "-k"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if r.returncode not in (0, 1):  # 1: some mount could not be read, the others are listed
+        return []
+    mounts = []
+    for line in r.stdout.splitlines()[1:]:
+        f = line.split()
+        if len(f) < 6 or not f[1].isdigit() or not f[3].isdigit():
+            continue
+        dev, mount = f[0], " ".join(f[5:])
+        if not (dev.startswith("/dev/") or ":" in dev or dev.startswith("//")) or dev.startswith("/dev/loop"):
+            continue  # a disk, or a network share; not a memory, snap or system filesystem
+        if mount != "/" and (mount.startswith(SKIP_MOUNTS) or (mount.startswith("/run/") and not mount.startswith("/run/media/"))):
+            continue
+        mounts.append((dev, mount, int(f[1]) * 1024, int(f[3]) * 1024))
+    home = str(Path.home())
+    user = os.environ.get("USER") or Path.home().name
+    home_mount = max((m for _, m, _, _ in mounts if _under(home, m)), key=len, default=None)
+    out, seen = [], set()
+    for dev, mount, total, free in mounts:
+        if dev in seen:  # the same disk mounted twice
+            continue
+        if mount == home_mount:
+            path = Path(home) / RUNS_NAME
+        elif os.access(mount, os.W_OK):
+            path = Path(mount) / RUNS_NAME
+        elif os.access(Path(mount) / user, os.W_OK):
+            path = Path(mount) / user / RUNS_NAME
+        else:
+            continue
+        seen.add(dev)
+        out.append({"mount": mount, "path": str(path), "free": free, "total": total})
+    out.sort(key=lambda d: -d["free"])
+    return out
+
+
+def conda_of(home: Path | None = None) -> dict | None:
+    """Where conda is, to activate an env in a job's command (`source <root>/bin/activate <env>`),
+    and its envs' names; None without it. Read from the files, no conda run."""
+    home = home or Path.home()
+    roots = []
+    exe = os.environ.get("CONDA_EXE") or shutil.which("conda")
+    if exe:
+        roots.append(Path(exe).resolve().parent.parent)
+    roots += [home / d for d in CONDA_DIRS] + [Path("/opt/conda")]
+    for root in roots:
+        if not (root / "bin" / "activate").is_file():
+            continue
+        envs = set()
+        for d in (root / "envs", home / ".conda" / "envs"):
+            with contextlib.suppress(OSError):
+                envs.update(p.name for p in d.iterdir() if (p / "conda-meta").is_dir())
+        return {"root": str(root), "envs": ["base", *sorted(envs)]}
+    return None
+
+
+def probe_machine(run=subprocess.run, runs_hint: str | None = None, home: Path | None = None) -> dict:
+    """What pairing this machine with the queue needs to know of it, read without a model: its host
+    name and system, its NVIDIA GPUs (nvidia-smi), driver and CUDA, the disks a run's outputs may
+    go on (the most room first), conda and uv; `runs_dir`, the outputs' root to suggest (`runs_hint`,
+    the config's, first); `eligible`, and `why_not` when it is not (no bash, no NVIDIA GPU)."""
+    info: dict = {"host": socket.gethostname(), "os": f"{platform.system()} {platform.release()}".strip(),
+                  "python": platform.python_version(), "bash": shutil.which("bash"), "git": shutil.which("git"),
+                  "uv": shutil.which("uv"), "conda": conda_of(home)}
+    try:
+        gpus, err = probe_gpus(run), None
+        if not gpus:
+            err = "nvidia-smi lists no GPU"
+    except QueueError as e:
+        gpus, err = [], str(e)
+    info["gpus"] = [{"index": g["index"], "name": g["name"], "mem_total": g["mem_total"]} for g in gpus]
+    info["gpu_error"] = err
+    if gpus:
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            head = run(["nvidia-smi"], capture_output=True, text=True, timeout=10).stdout
+            for key, name in (("driver", "Driver Version"), ("cuda", "CUDA Version")):
+                m = re.search(rf"{name}:\s*([\w.]+)", head or "")
+                if m:
+                    info[key] = m.group(1)
+    info["disks"] = output_folders(run)
+    hint = os.path.expanduser(runs_hint) if runs_hint else None
+    info["runs_dir"] = hint or (info["disks"][0]["path"] if info["disks"] else None)
+    why = "bash is not on PATH" if not info["bash"] else f"no NVIDIA GPU here ({err})" if err else None
+    info["eligible"], info["why_not"] = why is None, why
+    return info
+
+
+def machine_of(vault) -> dict | None:
+    """The machine the vault's queue is paired with (its machine.json), or None."""
+    try:
+        m = json.loads((Path(vault) / QUEUE_DIR / MACHINE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return m if isinstance(m, dict) and isinstance(m.get("host"), str) and m["host"] else None
+
+
+def paired_of(vault) -> dict | None:
+    """The vault's machine when it is this one; None when no machine, or another, is paired."""
+    m = machine_of(vault)
+    return m if m and m["host"] == socket.gethostname() else None
+
+
+def require_paired(vault) -> dict:
+    """This machine's record, or NotPaired saying why there is no queue here and how to have one."""
+    m = machine_of(vault)
+    if m is None:
+        raise NotPaired("no machine is paired with this vault's experiment queue, so there is no queue: "
+                        "/rft-machine add pairs this one")
+    here = socket.gethostname()
+    if m["host"] != here:
+        raise NotPaired(f"this vault's experiment queue is paired with {m['host']}, not with this machine ({here}): "
+                        f"a queue runs on one machine. If {m['host']} is gone or was renamed, delete "
+                        f"{QUEUE_DIR}/{MACHINE} in the vault, then /rft-machine add pairs this one")
+    return m
 
 
 # ---------------------------------------------------------------- the code a job runs
@@ -448,8 +597,73 @@ class Queue:
         (self.dir / LOGS).mkdir(parents=True, exist_ok=True)
         (self.dir / RUN).mkdir(exist_ok=True)
         ignore = self.dir / ".gitignore"
-        if not ignore.exists():
+        try:
+            old = ignore.read_text()
+        except FileNotFoundError:
+            old = None
+        if old is None or old == OLD_GITIGNORE:  # an older one let queue.json and history.jsonl into git
             ignore.write_text(GITIGNORE)
+
+    def machine(self) -> dict | None:
+        """The machine this vault's queue is paired with, or None (machine_of)."""
+        return machine_of(self.root)
+
+    def paired(self) -> dict | None:
+        """This machine's record when the queue is paired with it (paired_of)."""
+        return paired_of(self.root)
+
+    def pair(self, runs: str | None = None, keep=None, info: dict | None = None) -> dict:
+        """Pairs this machine with the vault's queue, which turns the queue on: machine.json written,
+        the runs' outputs root made (`runs`, else the one probe_machine suggests), the GPUs in `keep`
+        kept out of the queue. {"already": True, "machine"} when it is paired already (nothing
+        changes); refused for a machine with no NVIDIA GPU, or when another machine is paired."""
+        m = self.machine()
+        if m and m["host"] == socket.gethostname():
+            return {"already": True, "machine": m}
+        if m:
+            require_paired(self.root)
+        info = info if info is not None else probe_machine(runs_hint=runs)
+        if not info["eligible"]:
+            raise QueueError(f"this machine cannot run the experiment queue: {info['why_not']}. The queue stays off")
+        runs = os.path.expanduser(str(runs or info.get("runs_dir") or "").strip())
+        if not runs or not os.path.isabs(runs):
+            raise QueueError(f'the root of the runs\' outputs is an absolute path, not "{runs}"')
+        try:
+            Path(runs).mkdir(parents=True, exist_ok=True)
+        except OSError as err:
+            raise QueueError(f"{runs} could not be made for the runs' outputs: {err.strerror or err}") from None
+        if not os.access(runs, os.W_OK):
+            raise QueueError(f"{runs} is not writable: the runs' outputs go there")
+        indices = [g["index"] for g in info["gpus"]]
+        try:
+            kept = sorted({int(i) for i in (keep or [])})
+        except (TypeError, ValueError):
+            raise QueueError("keep is a list of GPU indices") from None
+        bad = [i for i in kept if i not in indices]
+        if bad:
+            raise QueueError(f"no GPU {bad[0]} here: this machine has {_gpu_list(indices)}")
+        if indices and len(kept) == len(indices):
+            raise QueueError("every GPU kept out: the queue could never start a job that needs one")
+        rec = {"version": 1, "host": socket.gethostname(), "added": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+               "runs_dir": str(Path(runs)), "os": info.get("os"), "gpus": info["gpus"],
+               **{k: info[k] for k in ("driver", "cuda", "conda", "uv") if info.get(k)}}
+        with self.change() as st:
+            st["allowed"] = [i for i in indices if i not in kept] if kept else None
+            tmp = self.dir / f"{MACHINE}.{os.getpid()}.tmp"
+            tmp.write_text(json.dumps(rec, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+            os.replace(tmp, self.dir / MACHINE)
+        return {"added": True, "machine": rec, "allowed": st["allowed"]}
+
+    def machine_status(self, history: int = 10) -> dict:
+        """The pairing and, on a paired machine, the queue (snapshot) and the room left for the runs' outputs."""
+        m = self.machine()
+        out: dict = {"host": socket.gethostname(), "machine": m, "paired": bool(m and m["host"] == socket.gethostname())}
+        if out["paired"]:
+            out["queue"] = self.snapshot(history)
+            with contextlib.suppress(OSError):
+                du = shutil.disk_usage(m.get("runs_dir") or self.root)
+                out["runs_free"], out["runs_total"] = du.free, du.total
+        return out
 
     def read(self) -> dict:
         """The queue as it is on disk (written whole, so never half): the jobs waiting and running."""
@@ -525,9 +739,12 @@ class Queue:
         """Queues a job for experiment `exp`, last (or first, `top`); the job, with its place in line.
         `runs`: the root of its output folders (absolute), which keeps them by repo
         (<runs>/<repo>/<exp>/<id>, <repo> the name of its repo's folder, or of its own outside
-        git); else `runs/` at the top of its repo or folder (<repo>/runs/<exp>/<id>). `kind`: "run", or "notebook" for the run of an experiment's notebook (no output
-        folder of its own)."""
+        git); else the paired machine's (machine.json's runs_dir); else `runs/` at the top of its
+        repo or folder (<repo>/runs/<exp>/<id>). `kind`: "run", or "notebook" for the run of an
+        experiment's notebook (no output folder of its own)."""
         exp, cmd, label = str(exp or "").strip(), str(cmd or ""), str(label or "").strip()
+        if not runs and kind != "notebook":
+            runs = (self.paired() or {}).get("runs_dir")
         if not (NOTE_RE if kind == "notebook" else EXP_RE).match(exp):
             raise QueueError(f'a job runs an experiment: "{exp}" is not an experiment id like E14')
         if not cmd.strip():
@@ -948,9 +1165,10 @@ def runner_alive(vault) -> bool:
 
 
 def ensure_runner(vault, idle: float = IDLE_S, every: float = EVERY_S) -> bool:
-    """Starts a runner for the vault's queue unless one runs; whether it started one. The runner
-    detaches from whoever asked (a session of its own, its parent gone), so it outlives them."""
-    if runner_alive(vault):
+    """Starts a runner for the vault's queue unless one runs, or the queue is not paired with this
+    machine; whether it started one. The runner detaches from whoever asked (a session of its own,
+    its parent gone), so it outlives them."""
+    if runner_alive(vault) or not paired_of(vault):
         return False
     argv = [sys.executable, str(Path(__file__).resolve()), "runner", "--vault", str(Path(vault).resolve()),
             "--idle", str(idle), "--every", str(every)]
@@ -961,8 +1179,11 @@ def ensure_runner(vault, idle: float = IDLE_S, every: float = EVERY_S) -> bool:
 
 
 def run_runner(vault, idle: float = IDLE_S, every: float = EVERY_S):
-    """The runner's loop: a tick every `every` seconds until nothing has waited or run for `idle`."""
+    """The runner's loop: a tick every `every` seconds until nothing has waited or run for `idle`.
+    None on a machine the queue is not paired with."""
     q = Queue(vault, wake=lambda: None)
+    if not q.paired():
+        return
     q._ensure_dir()
     lock = open(q.dir / RUNNER_LOCK, "a+")
     try:
@@ -1033,6 +1254,11 @@ def main(argv=None) -> int:
     p = sub.add_parser("runner", parents=[common])
     p.add_argument("--idle", type=float, default=IDLE_S)
     p.add_argument("--every", type=float, default=EVERY_S)
+    p = sub.add_parser("machine", parents=[common], help="pair this machine with the queue (add), or say what it is (probe, status)")
+    p.add_argument("action", choices=("probe", "add", "status"))
+    p.add_argument("--runs", default=None, help="add: the root of the runs' outputs (absolute; default: the disk with the most room)")
+    p.add_argument("--runs-hint", default=None, help="probe: the root to suggest (the config's runsDir)")
+    p.add_argument("--keep", default="", help="add: the GPUs to keep out of the queue, e.g. 0,1")
     a = ap.parse_args(argv)
 
     if a.cmd == "runner":
@@ -1040,7 +1266,21 @@ def main(argv=None) -> int:
         return 0
     q = Queue(a.vault, wake=(lambda: None) if a.no_runner else None)
     try:
-        if a.cmd == "add":
+        if a.cmd in ("add", "retry"):
+            require_paired(a.vault)  # no queue on a machine that is not paired: nothing is queued
+        if a.cmd == "machine":
+            if a.action == "probe":
+                out = probe_machine(runs_hint=a.runs_hint)
+            elif a.action == "status":
+                out = q.machine_status()
+            else:
+                try:
+                    keep = [int(x) for x in a.keep.split(",") if x.strip()]
+                except ValueError:
+                    raise QueueError("--keep is GPU indices, e.g. 0,1") from None
+                out = q.pair(a.runs, keep)
+                out["status"] = q.machine_status()
+        elif a.cmd == "add":
             try:
                 spec = json.loads(a.job)
             except ValueError:
@@ -1067,7 +1307,8 @@ def main(argv=None) -> int:
         elif a.cmd == "ensure":
             st = q.read()
             busy = any(j["state"] == RUNNING or (j["state"] == WAITING and not st["paused"]) for j in st["jobs"])
-            out = {"started": bool(busy and not a.no_runner and ensure_runner(a.vault)), "runner": runner_alive(a.vault)}
+            out = {"started": bool(busy and not a.no_runner and ensure_runner(a.vault)), "runner": runner_alive(a.vault),
+                   "paired": bool(q.paired())}
         else:  # log
             out = {"id": a.id, "text": q.log(a.id, a.lines)}
     except QueueError as err:

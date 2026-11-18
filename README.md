@@ -119,7 +119,9 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   others are listed by name and loaded when Claude needs one, which keeps every turn cheaper. The
   date, priority, comment, artifact, queue and manuscript tools join the first group in a vault that
   uses those features (it has deadlines or dated notes, priorities, comment threads or locked
-  notes, a concept artifact, an experiment queue, or snippets and documents).
+  notes, a concept artifact, this machine paired with the experiment queue, or snippets and
+  documents). The queue's three tools are not there at all until a machine is paired (see The
+  experiment queue): only `rft_machine`, which pairs it.
 
   | tool | does |
   |---|---|
@@ -160,7 +162,8 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_comments` | a note's comments and suggestions, or the notes with open threads |
   | `rft_comment` | replies in a thread (or closes a suggestion it made in the note), or starts a comment on a quote |
   | `rft_suggest` | proposes new text for a quote, or the text an open suggestion asks for; you accept or reject it |
-  | `rft_queue` | queues a run of an experiment on this machine's GPUs (command, folder, GPUs, a label); it starts once its GPUs are free, in your order (see The experiment queue) |
+  | `rft_machine` | pairs this machine with the experiment queue, which turns the queue on: `probe` reads the machine with no model (its NVIDIA GPUs, the disks for the runs' outputs, conda and uv), `add` pairs it with the outputs' root and the GPUs you keep out, `status` says how it stands (see The experiment queue) |
+  | `rft_queue` | queues a run of an experiment on this machine's GPUs (command, folder, GPUs, a label); it starts once its GPUs are free, in your order (see The experiment queue). Only on a paired machine |
   | `rft_jobs` | the queue in a few lines: the GPUs, the jobs running and waiting (with why each waits), the last ones that ended, the results still to record; one job with its run record (the code it ran, its outputs, the end of its traceback) and the end of its output |
   | `rft_job` | changes the queue when you ask: moves one waiting job to the top, the end, or before another (answering the new order in one line), cancels one, retries one that ended, pauses or resumes the queue |
 
@@ -386,8 +389,28 @@ that change them are refused.
 
 ### The experiment queue
 
-Claude runs an experiment on this machine's GPUs by queueing it (`rft_queue`), not by launching it
-in the background: a job is a command, the folder it runs in and how many GPUs it takes, for one
+**There is no queue until a machine is paired with it.** Until then nothing of it shows: no queue
+tool or rule for Claude, no runner, no monitor in the tree view, and the tree works as before.
+`/rft-machine add` pairs the machine the session runs on (only this machine for now):
+
+1. It checks the machine at no model turn (`rft_queue.py machine probe`, under a second): its
+   NVIDIA GPUs (`nvidia-smi`, with driver and CUDA), the disks a run's outputs may go on (from
+   `df`, the most room first, system and snap filesystems left out), conda (its root and envs,
+   read from its files) and uv. A machine with no NVIDIA GPU stops there: it says so and the queue
+   stays off.
+2. Claude then asks two questions, nothing more (it does not explore the machine): where the runs'
+   outputs go (the disk with the most room suggested, or the config's `runsDir` if it has one) and
+   which GPUs to keep out of the queue for your own work (none by default). It pairs the machine
+   with `rft_machine add`: `vault/.queue/machine.json` names it (host name, GPUs, outputs' root,
+   conda and uv), the outputs' root is made, and the queue is on, its tools in the session from
+   the next turn and its monitor in the tree view within seconds.
+3. On a machine already paired, `/rft-machine add` changes nothing: it says the local machine is
+   already loaded and prints its status (GPUs, the outputs' root and the room left, conda and uv,
+   the jobs). `/rft-machine` alone prints the same.
+
+Once it is on, **every run of an experiment goes through the queue** (`rft_queue`, with no GPU
+for a run that needs none), never into the background with Bash, so you and Claude see every run
+and what it holds: a job is a command, the folder it runs in and how many GPUs it takes, for one
 experiment note. A **runner**, a small process of its own (`server/rft_queue.py`, Python standard
 library), starts each job as soon as enough GPUs are free and records how it ended. It is apart
 from any session: a run goes on after the session that queued it ends, and the runner stops by
@@ -422,10 +445,11 @@ session brings it back).
   runner started with, not your interactive shell's, so its command activates its conda or venv
   itself. A job whose process is gone without an exit code (killed, or the machine restarted) is
   recorded as lost.
-- **Its outputs** go to `$RFT_OUT`, a folder of its own: `<runsDir>/<repo>/<experiment>/<job>`
-  with the config's `runsDir` (`<repo>` the name of the job's repo folder, or of its own folder
-  outside git), else `<repo>/runs/<experiment>/<job>`, at the top of the job's git repo (the runner
-  gives a `runs/` it makes a `.gitignore`, so the outputs stay out of git).
+- **Its outputs** go to `$RFT_OUT`, a folder of its own: `<runs>/<repo>/<experiment>/<job>` with
+  the outputs' root chosen when the machine was paired (`<repo>` the name of the job's repo
+  folder, or of its own folder outside git), else `<repo>/runs/<experiment>/<job>`, at the top of
+  the job's git repo (the runner gives a `runs/` it makes a `.gitignore`, so the outputs stay out
+  of git).
 - **How far it is**: each running job's row shows its stage, one tqdm bar (the outermost still
   running: its label, a meter, n/total, % and time left, and its postfix such as `loss=0.31`) and
   its last line of text, read from what the job writes anyway: the end of its log, and
@@ -455,11 +479,18 @@ session brings it back).
   to be interpreted), and Claude reads the job's record (`rft_jobs <job>`) only then, not by
   polling.
 - `/rft-jobs` prints the queue in the terminal, at no model turn.
-- **Files**, in the vault's `.queue/` (a dot folder Obsidian leaves alone): `queue.json`, the jobs
-  waiting and running in their order; `history.jsonl`, one line per job that ended. Its
-  `.gitignore` keeps the logs out of git.
-- Only this machine's NVIDIA GPUs for now (nvidia-smi); clusters (SLURM over SSH) would be further
-  tabs beside this machine's.
+- **Files**, in the vault's `.queue/` (a dot folder Obsidian leaves alone): `machine.json`, the
+  machine it is paired with; `queue.json`, the jobs waiting and running in their order;
+  `history.jsonl`, one line per job that ended. Its `.gitignore` keeps all of it out of git: the
+  queue belongs to the machine it runs on, so a clone of the vault on another machine has no queue
+  until that machine is paired. A vault synced as a folder to another machine (not through git)
+  shares `.queue/`: there the queue stays with the machine it names, which alone runs it, and the
+  other is told so; to move the queue to a new machine (or after a rename), delete
+  `.queue/machine.json` and pair it. A vault made before pairing existed keeps its jobs and
+  history, and the session says `/rft-machine add` turns its queue on again; if your vault is in
+  git and holds `.queue/queue.json` or `history.jsonl` from then, `git rm --cached` them once.
+- Only this machine's NVIDIA GPUs for now (nvidia-smi); another machine over SSH, or a cluster
+  (SLURM), would be further tabs beside this machine's.
 
 #### Writing a job the monitor can read
 
@@ -847,12 +878,13 @@ vault/documents/
 | `/rft-literature <topic, id or concept>` | ask Claude for a literature search: one literature note with every key paper read, under the note or concept it is about, then a synthesis, the directions it suggests and the papers worth a note of their own (added only once you choose) |
 | `/rft-rebalance [concept or id] [--full]` | ask Claude to propose moving branches under the line of research they belong to, as a table of moves; only the ones you confirm are made, each keeping its origin. The plugin first finds the candidates (notes whose words and references sit closer to another concept than to their own) and Claude judges only those; `--full` has Claude review the whole tree instead |
 | `/rft-next [concept]` | print what is still open, by concept: running and planned experiments, unexplored directions, open questions (no model turn) |
+| `/rft-machine [add\|status]` | pair this machine with the experiment queue: `add` checks it at no model turn (its NVIDIA GPUs, the disks with the most room, conda and uv), then Claude asks where the runs' outputs go and which GPUs to keep for your own work, and turns the queue on; on a machine with no NVIDIA GPU the queue stays off, and on one already paired it only says so, with its status. `status` (the default) says how it stands. Only this machine for now |
 | `/rft-jobs [job or experiment]` | print the experiment queue: the GPUs, the jobs running and waiting, the last ones that ended (a job: with the end of its output), and the address of the monitor (no model turn) |
 | `/rft-summarize [concept]` | ask Claude to write the missing note summaries and concept digests of an existing tree, concept by concept (a one-off job) |
 | `/rft-manuscript [document] \| new <name> [article\|report]` | start snippets and documents (a first document, `paper`), add a document (`report`: a thesis chapter), or ask Claude what to write next from the verified notes and where to place it, as tables; nothing is written until you pick |
 | `/rft-artifact [concept]` | ask Claude to write a concept's artifact, or, with no concept, every one missing or out of date |
 | `/rft-update [apply] [--sections]` | bring a vault made by an older version up to this one: list what it lacks (the folders and templates of newer note types, the config's format); `apply` writes it and refreshes the derived files. Notes are never changed, except that `--sections` adds the sections their type has gained, as empty headings, to unlocked notes. A session on an older vault starts with a toast pointing here (no model turn) |
-| `/rft-update notebooks [--write] [concept]` | bring an older vault's notebooks up to what the plugin does now: every notebook runs again in the queue (one job, no GPU, in check mode, no model turn), so each saves its numbers, figures and tables; and a list, by concept with code, of what is still to write (experiments with a result and no notebook, a missing concept notebook, an artifact's hand-drawn charts and typed tables). `--write` asks Claude to write it, concept by concept (a long one-off job; name a concept for one line of research) |
+| `/rft-update notebooks [--write] [concept]` | bring an older vault's notebooks up to what the plugin does now: every notebook runs again in the queue (one job, no GPU, in check mode, no model turn; with no machine paired it says so and runs nothing), so each saves its numbers, figures and tables; and a list, by concept with code, of what is still to write (experiments with a result and no notebook, a missing concept notebook, an artifact's hand-drawn charts and typed tables). `--write` asks Claude to write it, concept by concept (a long one-off job; name a concept for one line of research) |
 | `/rft-view` | write `vault/tree.html`: the same tree view as one standalone file, every note inside (images as placeholders), to open anywhere or share |
 
 The plugin registers these commands when a session starts, so the desktop app's slash-command
@@ -896,9 +928,10 @@ tree view's port (0: a free one), handy for a standing `ssh -L` forward. `requir
 (set by `/rft-init` on a new vault, off on an adopted one) makes `rft_validate` warn about
 experiments and directions in work that name no reference. `gpus` is how many GPUs the
 experiments share: the Calendar and `rft_next` report the days the planned and running ones need
-more. `runsDir` is where the queue's runs keep their outputs, by repo
-(`<runsDir>/<repo>/<experiment>/<job>`; absolute, `~/…`, or from the tree's folder), e.g. a data
-drive; without it, `runs/` at the top of each job's repo (`<repo>/runs/<experiment>/<job>`). A config that holds
+more. `runsDir` is the outputs' root `/rft-machine add` suggests (absolute, `~/…`, or from the
+tree's folder), e.g. a data drive; once a machine is paired, its own root (in
+`.queue/machine.json`, chosen then) is where the queue's runs keep their outputs, by repo
+(`<root>/<repo>/<experiment>/<job>`). A config that holds
 only `tree` is a link to a tree in another folder (see above). The code a concept runs on is
 linked in its note, not in the config (see Code repos).
 
@@ -955,7 +988,8 @@ session with the plugin loaded from this folder.
   numbers, figures and tables, the artifacts' tables, the stamp); `server/rft_queue.py` the
   experiment queue: its runner, the run records, the notebook run after an experiment's jobs, its
   command line (what the queue tools call) and what `api/queue` reads and changes.
-  `hooks/lib/queue.ts`: the queue as Claude and the session see it.
+  `hooks/lib/queue.ts`: the queue as Claude and the session see it; `hooks/lib/machine.ts` the
+  machine it runs on (no queue until one is paired).
 - `skills/rft-manual/SKILL.md`: the manual; `tests/`: the mod's tests on an in-memory vault, the
   outline pane on every surface, and the server's tests; `tests/test_pipeline.py` the end-to-end
   check, with no model: an experiment of the demo queued, run, its notebook run after its jobs,

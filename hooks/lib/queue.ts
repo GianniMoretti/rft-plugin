@@ -297,7 +297,8 @@ export function addedText(r: { job: Job & { place?: number }; outlook?: string }
     `${j.out ? `Its folder for outputs is ${j.out} ($RFT_OUT in its environment). ` : ''}Its log goes to ${vault}/${QUEUE_DIR}/logs/${j.id}.log. The plugin sets ${j.exp} running when it starts and tells the user when it ends: do not poll rft_jobs to wait for it.`
 }
 
-const gpuLine = (v: QueueView) => {
+/** The GPUs in a line: each with what holds it (a job of the queue, the user's work, nothing). */
+export const gpuLine = (v: QueueView) => {
   if (v.gpu_error) return `GPUs: ${v.gpu_error}`
   if (!v.gpus?.length) return null
   return `GPUs: ${v.gpus.map(g => {

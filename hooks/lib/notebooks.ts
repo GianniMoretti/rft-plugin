@@ -71,6 +71,8 @@ export type NotebookEnv = {
   link: (target: string, at: string) => Promise<void>
   /** Runs experiment `exp`'s notebook, for `timeoutS` seconds at most, and takes the run to the vault (server/rft_results.py). */
   apply: (vault: string, exp: string, opts: { timeoutS: number; record: boolean }) => Promise<ApplyOutcome>
+  /** The experiment queue, when this machine is paired with it: the root of its runs' outputs (machine.json's runs_dir). Absent: no queue, so no runner runs the notebook after the runs. */
+  queue?: { runsDir?: string }
 }
 
 class NotebookError extends Error {}
@@ -193,8 +195,10 @@ export async function setNotebook(io: Io, loaded: Loaded, env: NotebookEnv, ref:
   } else {
     target = join(repo, NOTEBOOKS_DIR, notebookFile(concept ? { id: n.id, title: concept.name } : n))
     if ((await io.exists(target)) && input.replace !== true) throw new NotebookError(`${target} exists: change it with Edit (it is plain Python), or pass replace: true to write it anew from cells`)
-    // where the queue's runner keeps the runs of this repo (server/rft_queue.py): <runsDir>/<repo>, else the repo's own runs/
-    const root = config.runsDir ? join(repoAbs(env.root, config.runsDir, env.home), repo.split('/').filter(Boolean).pop() ?? '') : 'runs'
+    // where the queue's runner keeps the runs of this repo (server/rft_queue.py): <runs_dir>/<repo> (the
+    // paired machine's, else the config's runsDir), else the repo's own runs/
+    const runsDir = env.queue?.runsDir ?? (config.runsDir ? repoAbs(env.root, config.runsDir, env.home) : undefined)
+    const root = runsDir ? join(runsDir, repo.split('/').filter(Boolean).pop() ?? '') : 'runs'
     code = concept
       ? notebookSource(`${n.id} · ${concept.name}`, cells, undefined, { id: concept.id, resultsDir: relativePath(repo, join(vaultAbs(env, loaded), 'results')) })
       : notebookSource(`${n.id} · ${n.title}`, cells, { exp: n.id, root })
@@ -213,7 +217,7 @@ export async function setNotebook(io: Io, loaded: Loaded, env: NotebookEnv, ref:
       `It reads EXPERIMENTS and runs again whenever one of its experiments' notebooks records new numbers; rft_run_notebook ${n.id} runs it now. Its FIGURES and TABLES go on the artifact by name (rft_artifact lists them). Change it with Edit (plain Python).`
   }
   let out = `${n.name}: notebook ${how}, linked from the vault as ${config.vault}/${rel} and from the note (notebook:). ` +
-    `${n.status === 'planned' || n.status === 'running' ? `The queue's runner runs it when ${n.id}'s jobs end and writes RESULTS in its Result; rft_run_notebook ${n.id} runs it now` : `Run it with rft_run_notebook ${n.id}`}; change it with Edit (plain Python).`
+    `${env.queue && (n.status === 'planned' || n.status === 'running') ? `The queue's runner runs it when ${n.id}'s jobs end and writes RESULTS in its Result; rft_run_notebook ${n.id} runs it now` : `Run it with rft_run_notebook ${n.id}${n.status === 'planned' || n.status === 'running' ? ' once its runs end' : ''}`}; change it with Edit (plain Python).`
   if (!setsResults(code)) out += ' No cell sets RESULTS: put the numbers the note reports in a dict RESULTS, so the run can write them in its Result.'
   return out
 }

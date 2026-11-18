@@ -12,12 +12,14 @@ import json
 import os
 import shlex
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
@@ -42,6 +44,13 @@ class FakeGpus:
 
     def __call__(self):
         return [dict(g) for g in self.gpus]
+
+
+def pair(vault, **record):
+    """The vault's queue paired with this machine, as `machine add` leaves it (no probe of the GPUs)."""
+    d = Path(vault) / rft_queue.QUEUE_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    (d / rft_queue.MACHINE).write_text(json.dumps({"version": 1, "host": socket.gethostname(), **record}))
 
 
 def wait_until(check, tick=None, timeout=10.0):
@@ -498,6 +507,162 @@ class ProbeTest(unittest.TestCase):
         self.assertEqual((gpus[1]["util"], gpus[1]["temp"]), (97, 70))
 
 
+class MachineTest(unittest.TestCase):
+    """No queue until a machine is paired with it: the probe reads the machine with no model, a
+    machine with no NVIDIA GPU is not paired, pairing writes machine.json and makes the outputs'
+    root, and a queue paired with another machine is left alone."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.vault = self.root / "vault"
+        self.vault.mkdir()
+        # three disks as `df` lists them (the big one as a folder here), and what it leaves out
+        self.big, self.small = self.root / "data2", self.root / "data"
+        self.big.mkdir()
+        self.small.mkdir()
+        self.df = "\n".join([
+            "Filesystem 1024-blocks Used Available Capacity Mounted on",
+            "/dev/nvme0n1p2 959218776 861000000 98218776 90% /",
+            f"/dev/sdb2 15501389348 7684442120 7816947228 50% {self.big}",
+            f"/dev/sda1 15501593116 14326000000 1175593116 93% {self.small}",
+            f"/dev/sdb2 15501389348 7684442120 7816947228 50% {self.big}/again",  # the same disk mounted twice
+            "tmpfs 3270000 2000 3268000 1% /run",
+            "/dev/loop3 75776 75776 0 100% /snap/core/123",
+            "/dev/nvme0n1p1 523248 6220 517028 2% /boot/efi",
+        ]) + "\n"
+        self.smi = {
+            "--query-gpu": "0, GPU-a, NVIDIA GeForce RTX 5080, 37, 16303, 3, 41\n1, GPU-b, NVIDIA GeForce RTX 5080, 9000, 16303, 97, 70\n",
+            "--query-compute-apps": "",
+        }
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_fake(self, gpus=True):
+        def run(argv, **kw):
+            if argv[0] == "df":
+                return subprocess.CompletedProcess(argv, 0, self.df, "")
+            if not gpus:
+                raise FileNotFoundError("nvidia-smi")
+            if len(argv) == 1:
+                return subprocess.CompletedProcess(argv, 0, "| NVIDIA-SMI 580.1   Driver Version: 580.1   CUDA Version: 13.0 |\n", "")
+            key = next(a.split("=")[0] for a in argv if a.startswith("--query"))
+            return subprocess.CompletedProcess(argv, 0, self.smi[key], "")
+        return run
+
+    def test_the_probe_reads_the_gpus_and_the_disks_and_suggests_the_one_with_most_room(self):
+        info = rft_queue.probe_machine(self.run_fake())
+        self.assertTrue(info["eligible"])
+        self.assertIsNone(info["why_not"])
+        self.assertEqual(info["gpus"], [{"index": 0, "name": "NVIDIA GeForce RTX 5080", "mem_total": 16303},
+                                        {"index": 1, "name": "NVIDIA GeForce RTX 5080", "mem_total": 16303}])
+        self.assertEqual((info["driver"], info["cuda"]), ("580.1", "13.0"))
+        # the most room first; the home's disk gets ~/rft-runs; memory, snap and boot filesystems and a second mount left out
+        self.assertEqual([d["path"] for d in info["disks"]],
+                         [str(self.big / "rft-runs"), str(self.small / "rft-runs"), str(Path.home() / "rft-runs")])
+        self.assertEqual(info["disks"][0]["free"], 7816947228 * 1024)
+        self.assertEqual(info["runs_dir"], str(self.big / "rft-runs"))
+        # the config's runsDir, when there is one, is the one to suggest
+        self.assertEqual(rft_queue.probe_machine(self.run_fake(), runs_hint="/data/runs")["runs_dir"], "/data/runs")
+
+    def test_a_machine_with_no_nvidia_gpu_cannot_be_paired_and_the_queue_stays_off(self):
+        info = rft_queue.probe_machine(self.run_fake(gpus=False))
+        self.assertFalse(info["eligible"])
+        self.assertIn("no NVIDIA GPU here", info["why_not"])
+        q = rft_queue.Queue(self.vault, wake=lambda: None)
+        with self.assertRaises(rft_queue.QueueError) as err:
+            q.pair(str(self.big / "runs"), info=info)
+        self.assertIn("cannot run the experiment queue: no NVIDIA GPU here", str(err.exception))
+        self.assertIsNone(q.machine())
+
+    def test_conda_is_found_from_its_files(self):
+        home = self.root / "home"
+        (home / "miniconda3" / "bin").mkdir(parents=True)
+        (home / "miniconda3" / "bin" / "activate").write_text("")
+        for env in ("train", "eval"):
+            (home / "miniconda3" / "envs" / env / "conda-meta").mkdir(parents=True)
+        with unittest.mock.patch.dict(os.environ, {"CONDA_EXE": "", "PATH": str(self.root / "nowhere")}):
+            self.assertEqual(rft_queue.conda_of(home), {"root": str(home / "miniconda3"), "envs": ["base", "eval", "train"]})
+            self.assertIsNone(rft_queue.conda_of(self.root / "empty"))
+
+    def test_pairing_writes_the_machine_makes_the_outputs_root_and_keeps_gpus_out(self):
+        q = rft_queue.Queue(self.vault, wake=lambda: None)
+        info = rft_queue.probe_machine(self.run_fake())
+        runs = self.big / "rft-runs"
+        got = q.pair(str(runs), keep=[1], info=info)
+        self.assertTrue(got["added"])
+        self.assertTrue(runs.is_dir())
+        m = json.loads((self.vault / ".queue" / "machine.json").read_text())
+        self.assertEqual((m["host"], m["runs_dir"], [g["index"] for g in m["gpus"]], m["cuda"]), (socket.gethostname(), str(runs), [0, 1], "13.0"))
+        self.assertEqual(q.read()["allowed"], [0])
+        self.assertEqual(q.paired()["host"], socket.gethostname())
+        # paired already: nothing changes
+        again = q.pair(str(self.small / "elsewhere"), keep=[], info=info)
+        self.assertTrue(again["already"])
+        self.assertEqual(q.read()["allowed"], [0])
+        self.assertFalse((self.small / "elsewhere").exists())
+        # a run naming no outputs root goes under the machine's, by repo
+        work = self.root / "code"
+        work.mkdir()
+        self.assertEqual(q.add("E14", "true", str(work))["out"], str(runs / "code" / "E14" / "q1"))
+        status = q.machine_status()
+        self.assertTrue(status["paired"])
+        self.assertEqual([j["id"] for j in status["queue"]["jobs"]], ["q1"])
+        self.assertGreater(status["runs_free"], 0)
+
+    def test_what_pairing_refuses(self):
+        q = rft_queue.Queue(self.vault, wake=lambda: None)
+        info = rft_queue.probe_machine(self.run_fake())
+        for runs, keep, said in ((str(self.big / "r"), [5], "no GPU 5 here: this machine has GPUs 0, 1"),
+                                 (str(self.big / "r"), [0, 1], "every GPU kept out"),
+                                 ("relative/runs", [], "is an absolute path")):
+            with self.assertRaises(rft_queue.QueueError) as err:
+                q.pair(runs, keep=keep, info=info)
+            self.assertIn(said, str(err.exception))
+        self.assertIsNone(q.machine())
+
+    def test_a_queue_paired_with_another_machine_is_left_alone(self):
+        (self.vault / ".queue").mkdir()
+        (self.vault / ".queue" / "machine.json").write_text(json.dumps({"version": 1, "host": "lab-pc-elsewhere"}))
+        q = rft_queue.Queue(self.vault, probe=FakeGpus(2), wake=lambda: None)
+        q.add("E14", "true", str(self.root), gpus=0)
+        self.assertIsNone(q.paired())
+        self.assertFalse(rft_queue.ensure_runner(self.vault))
+        with self.assertRaises(rft_queue.NotPaired) as err:
+            q.pair(str(self.big / "r"), info=rft_queue.probe_machine(self.run_fake()))
+        self.assertIn("paired with lab-pc-elsewhere, not with this machine", str(err.exception))
+        self.assertIn("delete .queue/machine.json", str(err.exception))
+        self.assertFalse(q.machine_status()["paired"])
+
+    def test_the_command_line_queues_nothing_until_the_machine_is_paired(self):
+        run = lambda *a: subprocess.run([sys.executable, str(QUEUE), *a, "--vault", str(self.vault), "--no-runner"],
+                                        capture_output=True, text=True, timeout=30)
+        job = json.dumps({"exp": "E14", "cmd": "true", "cwd": str(self.root), "gpus": 0})
+        out = run("add", "--job", job)
+        self.assertEqual(out.returncode, 2)
+        self.assertIn("no machine is paired with this vault's experiment queue, so there is no queue: /rft-machine add pairs this one",
+                      json.loads(out.stdout)["error"])
+        self.assertFalse(json.loads(run("ensure").stdout)["paired"])
+        st = json.loads(run("machine", "status").stdout)
+        self.assertEqual((st["paired"], st["machine"]), (False, None))
+        pair(self.vault, runs_dir=str(self.big / "rft-runs"))
+        added = json.loads(run("add", "--job", job).stdout)["job"]
+        self.assertTrue(added["out"].startswith(str(self.big / "rft-runs") + "/"))
+
+    def test_the_queue_folder_stays_out_of_git(self):
+        q = rft_queue.Queue(self.vault, wake=lambda: None)
+        q.pause(True)
+        ignore = self.vault / ".queue" / ".gitignore"
+        self.assertIn("\n*\n", ignore.read_text())
+        ignore.write_text(rft_queue.OLD_GITIGNORE)  # an older plugin let queue.json and history.jsonl into git
+        q.pause(False)
+        self.assertEqual(ignore.read_text(), rft_queue.GITIGNORE)
+        ignore.write_text("logs/\nmine\n")  # one the user changed is theirs
+        q.pause(True)
+        self.assertEqual(ignore.read_text(), "logs/\nmine\n")
+
+
 class RunnerTest(unittest.TestCase):
     """The runner is a process of its own, apart from the session: it starts the jobs and stops
     once the queue has been empty a while."""
@@ -507,6 +672,8 @@ class RunnerTest(unittest.TestCase):
             vault = Path(tmp)
             q = rft_queue.Queue(vault, wake=lambda: None)
             q.add("E14", "echo from-the-runner", tmp, gpus=0)
+            self.assertFalse(rft_queue.ensure_runner(vault, idle=1.0, every=0.2))  # no runner on a machine not paired
+            pair(vault)
             self.assertFalse(rft_queue.runner_alive(vault))
             self.assertTrue(rft_queue.ensure_runner(vault, idle=1.0, every=0.2))
             self.assertTrue(wait_until(lambda: rft_queue.runner_alive(vault)))
@@ -517,6 +684,7 @@ class RunnerTest(unittest.TestCase):
 
     def test_the_command_line(self):
         with tempfile.TemporaryDirectory() as tmp:
+            pair(tmp)
             run = lambda *a: subprocess.run([sys.executable, str(QUEUE), *a, "--vault", tmp, "--no-runner"],
                                             capture_output=True, text=True, timeout=30)
             out = run("add", "--job", json.dumps({"exp": "E14", "cmd": "true", "cwd": tmp, "gpus": 1, "label": "seed 0"}))
@@ -535,6 +703,7 @@ class RunnerTest(unittest.TestCase):
     def test_the_command_line_moves_one_job_and_answers_the_new_order(self):
         """rft_move_job: example 1 (E17 before E16), to the top, to the end; the order comes back."""
         with tempfile.TemporaryDirectory() as tmp:
+            pair(tmp)
             run = lambda *a: subprocess.run([sys.executable, str(QUEUE), *a, "--vault", tmp, "--no-runner"],
                                             capture_output=True, text=True, timeout=30)
             self.assertEqual(run("pause").returncode, 0)
@@ -579,6 +748,7 @@ class ServerQueueTest(unittest.TestCase):
         self.qdir = tempfile.TemporaryDirectory()
         self.probe = FakeGpus(2)
         self.q = self.v.queue = rft_queue.Queue(self.qdir.name, probe=self.probe, wake=lambda: None)
+        pair(self.qdir.name)
 
     def tearDown(self):
         self.qdir.cleanup()
@@ -594,6 +764,15 @@ class ServerQueueTest(unittest.TestCase):
         out = r.read()
         c.close()
         return r.status, json.loads(out) if out[:1] in (b"{", b"[") else out
+
+    def test_no_queue_and_no_monitor_until_the_machine_is_paired(self):
+        (Path(self.qdir.name) / ".queue" / "machine.json").unlink()
+        status, got = self.call("GET", "/api/queue")
+        self.assertEqual(status, 404)
+        self.assertIn("/rft-machine add", got["error"])
+        self.assertEqual(self.call("POST", "/api/queue", {"op": "pause", "paused": True})[0], 404)
+        self.assertEqual(self.call("GET", "/api/queue/output?id=q1")[0], 404)
+        self.assertFalse(self.q.read()["paused"])
 
     def test_get_and_change_the_queue(self):
         self.q.pause(True)

@@ -20,7 +20,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { RftSnapshot } from '../types'
 import { COMMENTS_DIR, LockedChange, answerThread, askText, comment as addComment, commentsReport, isLocked, readComments, subagentAskText, subjectOf, suggest as addSuggestion } from './lib/comments'
 import type { CodeEnv, Git } from './lib/ops'
-import { addNode, codeReport, conceptsReport, exportHtml, initVault, loadActive, lockedText, moveNode, rulesText, setCode, setConcept, setRefs, setRepos, setStatus, setTags, setType, tagsReport, today, treeReport } from './lib/ops'
+import { QUEUE_RULE, addNode, codeReport, conceptsReport, exportHtml, initVault, loadActive, lockedText, moveNode, rulesText, setCode, setConcept, setRefs, setRepos, setStatus, setTags, setType, tagsReport, today, treeReport } from './lib/ops'
 import { ASSET_PATHS } from './lib/page'
 import type { Config, Io, Loaded, NodeType, Tree } from './lib/vault'
 import { OPEN_HOSTS, jobNote, planPapers, withEntryPdf } from './lib/papers'
@@ -34,7 +34,7 @@ import { markReviewed, manuscriptReport, manuscriptWarnings, migrateManuscript, 
 import { BLOCKS_FILE, DOCUMENTS_DIR, GENERATED, KINDS, SNIPPETS_DIR, isDocumentLocked, isSnippetLocked, readDocsRegistry, readRegistry } from './lib/snippets'
 import { addDeadline, changesDates, checkDeadline, datesText, deadlineQuestion, deadlinesLine, suggestDates, suggestDeadline } from './lib/schedule'
 import { RECALL_HINT, searchesVault } from './lib/recall'
-import { eagerTools, featuresInUse } from './lib/tools'
+import { FEATURE_TOOLS, eagerTools, featuresInUse } from './lib/tools'
 import { matches, shellWrites } from './lib/shell'
 import { Answers, type ThreadJob } from './lib/answers'
 import { applyUpdate, behindLine, gapsText, notebookGaps, planText, planUpdate } from './lib/update'
@@ -43,6 +43,8 @@ import { SMALL_TREE, mapGaps, mapReport, mapWarnings, projectMap, readDigests, r
 import { ARTIFACTS_DIR, artifactMarks, artifactReport, artifactWarnings, artifactsToWrite, setArtifact } from './lib/artifacts'
 import type { ApplyOutcome, NotebookEnv } from './lib/notebooks'
 import { MAX_TIMEOUT_S, REPRODUCED_LINE, changesReproduced, changesResultsBlock, reproducedEditText, resultsBlockEditText, runNotebook, setNotebook } from './lib/notebooks'
+import { MACHINE_FILE, machinePrompt, probeText, readMachine, statusText } from './lib/machine'
+import type { MachineStatus, Probe } from './lib/machine'
 import { QUEUE_CLI, QUEUE_FILE, addedText, cancelledText, jobEvents, jobsNext, jobsReport, movedText, queueLine, readQueue, retriedText, toStart } from './lib/queue'
 import type { Job, QueueView } from './lib/queue'
 import { CONFIG_PATH, LEGEND, MARK, NODE_TYPES, bodyOf, isLiterature, counts, countsLine, isAbsolute, join, locate, readConfig, lacksNotebook, repoAbs, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
@@ -158,7 +160,7 @@ const TOOLS = {
   },
   rft_set_notebook: {
     description:
-      'Give an experiment its marimo notebook, or a concept its own (on the note that starts it: the figures and tables comparing its experiments, from EXPERIMENTS, their saved RESULTS by id; it runs again after each of them). An experiment\'s makes the numbers of its Result: from its runs\' saved outputs after an expensive run, from scratch for a short one. Write it when the experiment is planned: the queue\'s runner runs it when the experiment\'s jobs end and writes RESULTS in its Result, at no model turn. Pass cells (plain Python, one string per cell; the tool writes marimo\'s format, with mo imported and a first cell setting RUNS: the queue\'s runs of the experiment that ended well, each a dict with out, its output folder ($RFT_OUT), label and commit) and it is written in the concept\'s first repo as notebooks/<id>_<title>.py; or file, a notebook already in the repo. Either way it is linked from the vault (notebooks/<id>.py) and the note (notebook:). It runs in the repo\'s uv environment with the repo\'s root as working folder and the notebook\'s folder first on sys.path. Set RESULTS, a dict of the numbers the note reports, rounded as it should report them; and for the concept\'s artifact, FIGURES ({name: matplotlib figure or SVG text}) and TABLES ({name: DataFrame, list of row dicts or dict of columns}). Import shared plotting code (style, palette, helpers) from one module in the repo\'s notebooks/ folder rather than repeating it. Change it later with Edit (plain Python), not with this tool.',
+      'Give an experiment its marimo notebook, or a concept its own (on the note that starts it: the figures and tables comparing its experiments, from EXPERIMENTS, their saved RESULTS by id; it runs again after each of them). An experiment\'s makes the numbers of its Result: from its runs\' saved outputs after an expensive run, from scratch for a short one. Write it when the experiment is planned: once its runs end it writes RESULTS in its Result (on a machine paired with the experiment queue, the queue\'s runner runs it then, at no model turn; else rft_run_notebook). Pass cells (plain Python, one string per cell; the tool writes marimo\'s format, with mo imported and a first cell setting RUNS: the queue\'s runs of the experiment that ended well, each a dict with out, its output folder ($RFT_OUT), label and commit) and it is written in the concept\'s first repo as notebooks/<id>_<title>.py; or file, a notebook already in the repo. Either way it is linked from the vault (notebooks/<id>.py) and the note (notebook:). It runs in the repo\'s uv environment with the repo\'s root as working folder and the notebook\'s folder first on sys.path. Set RESULTS, a dict of the numbers the note reports, rounded as it should report them; and for the concept\'s artifact, FIGURES ({name: matplotlib figure or SVG text}) and TABLES ({name: DataFrame, list of row dicts or dict of columns}). Import shared plotting code (style, palette, helpers) from one module in the repo\'s notebooks/ folder rather than repeating it. Change it later with Edit (plain Python), not with this tool.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -581,7 +583,23 @@ const TOOLS = {
       required: ['action'],
     },
   },
+  rft_machine: {
+    description:
+      'Pair this machine with the experiment queue, which turns the queue on (until then there is none: no rft_queue, runner or monitor), or say how it stands. Only when the user asks to set up the queue or /rft-machine add asked you; never inspect the machine by hand for it. probe: what the plugin reads of the machine with no model (its NVIDIA GPUs, the disks for the runs\' outputs, the most room first, conda and uv); a machine with no NVIDIA GPU cannot be paired. add: pairs it, with runs_dir (where the runs\' outputs go) and keep_out (the GPUs the user keeps for their own work): ask the user both first, suggesting the probe\'s outputs folder and no GPU kept out; it answers what is on and the queue\'s rules. status: the pairing, the GPUs, the room left and the queue, in a few lines. Only this machine can be paired for now.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['probe', 'add', 'status'] },
+        runs_dir: { type: 'string', description: 'add: the root of the runs\' outputs (absolute, or ~/…); default: the one probe suggests.' },
+        keep_out: { type: 'array', items: { type: 'integer' }, description: 'add: the indices of the GPUs kept out of the queue for the user\'s own work; default none.' },
+      },
+      required: ['action'],
+    },
+  },
 } as const
+
+/** The queue's tools: registered only on a machine paired with the queue (rft_machine add). */
+const QUEUE_TOOLS: ReadonlySet<string> = new Set(FEATURE_TOOLS.queue)
 
 // Module state: reset on a reload, when `session.start` runs again and sets it anew.
 // The rules for the system prompt are fixed at activation so the prompt cache holds.
@@ -655,8 +673,12 @@ async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> 
     try {
       loaded = await loadActive(h.io)
       const threads = (await h.io.list(join(config.vault, COMMENTS_DIR)).catch(() => [])).some(f => f.name.endsWith('.json'))
-      const queue = await h.io.exists(join(config.vault, QUEUE_FILE)).catch(() => false)
-      features = featuresInUse(loaded, threads, queue)
+      // no queue until this machine is paired with it (.queue/machine.json): no queue tool, rule or runner
+      const machine = await readMachine(h.io, config.vault)
+      features = featuresInUse(loaded, threads, machine !== null)
+      if (!machine && await h.io.exists(join(config.vault, QUEUE_FILE)).catch(() => false)) {
+        $.ui.toast('rft: the experiment queue is off until this machine is paired with it: /rft-machine add (its jobs and history are kept)')
+      }
     } catch { /* the core tools only */ }
     // a vault an older version made: one toast, nothing changed until /rft-update apply
     const line = behindLine(config)
@@ -679,7 +701,7 @@ async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> 
     // the queue: what runs, and the jobs that ended with their result not recorded yet; a
     // planned experiment whose job runs is set running; a queue with work gets its runner back
     // (the machine restarted, or it stopped)
-    try {
+    if (features.has('queue')) try {
       queueSeen = null
       const v = await watchQueue($, true)
       const line = v && loaded ? queueLine(v, await loadActive(h.io), await nowS($)) : null
@@ -692,6 +714,7 @@ async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> 
   const eager = eagerTools(features)
   // each registration on its own, so one refusal leaves the rest working
   for (const [name, spec] of Object.entries(TOOLS)) {
+    if (QUEUE_TOOLS.has(name) && !features.has('queue')) continue
     const isDeferred = !eager.has(name)
     if (registeredTools.get(name) === isDeferred) continue
     try {
@@ -742,6 +765,7 @@ async function registerCommands($: EngineInterface): Promise<void> {
   await attempt('rft-literature', () => $.command.register({ name: 'rft-literature', description: 'Ask Claude for a literature search on a topic, a note or a concept, ending in reference notes', argumentHint: '<topic, note id or concept>' }))
   await attempt('rft-rebalance', () => $.command.register({ name: 'rft-rebalance', description: 'Ask Claude to propose moving branches under the line of research they belong to; nothing moves until you confirm', argumentHint: '[concept or note id] [--full]' }))
   await attempt('rft-next', () => $.command.register({ name: 'rft-next', description: 'What is still open, by concept: running and planned experiments, unexplored directions, open questions', argumentHint: '[concept]' }))
+  await attempt('rft-machine', () => $.command.register({ name: 'rft-machine', description: 'Pair this machine with the experiment queue (add: checked at no model turn, then Claude asks you where outputs go and which GPUs to keep, and turns the queue on), or show how it stands', argumentHint: '[add|status]' }))
   await attempt('rft-jobs', () => $.command.register({ name: 'rft-jobs', description: 'The experiment queue: GPUs, jobs running and waiting, the ones that ended (no model turn)', argumentHint: '[job or experiment]' }))
   await attempt('rft-summarize', () => $.command.register({ name: 'rft-summarize', description: 'Ask Claude to write the missing one-line note summaries and concept digests (the project map)', argumentHint: '[concept]' }))
   await attempt('rft-manuscript', () => $.command.register({ name: 'rft-manuscript', description: 'Start snippets (LaTeX building blocks resting on verified notes) and documents (built from copies of them), add a document, or ask Claude what to write next and where to place it', argumentHint: '[document] | new <name> [article|report]' }))
@@ -810,6 +834,7 @@ async function notebookHelper($: EngineInterface, args: string[], timeoutMs: num
 /** How the notebook tools link and run notebooks: through server/rft_notebook.py. */
 const notebookEnv = async ($: EngineInterface, h: Here): Promise<NotebookEnv> => ({
   root: h.root, home: await homeOf($), date: today(),
+  queue: await queueOf(h),
   link: async (target, at) => {
     const r = await notebookHelper($, ['link', target, at], 20000)
     if (r.ok !== true) throw new Error(`the vault's link to the notebook was not made: ${String(r.error ?? 'no answer')}`)
@@ -953,11 +978,10 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       const exp = resolveId(loaded.tree, String(i.exp ?? ''))
       const n = exp ? loaded.tree.nodes[exp] : undefined
       if (!n || n.type !== 'experiment') throw new Error(`"${String(i.exp ?? '')}" is not an experiment of the tree: a job runs an experiment (E..), whose note comes first (rft_add_node)`)
-      const runsDir = str(loaded.config.runsDir)
+      // its outputs go under the paired machine's runs_dir (machine.json), which the runner gives a job naming none
       const spec = {
         exp: n.id, cmd: String(i.cmd ?? ''), cwd: resolvePath(h.cwd, str(i.cwd) ?? '.'),
         gpus: typeof i.gpus === 'number' ? i.gpus : n.gpus ?? 1, label: str(i.label) ?? '', by: 'claude',
-        ...(runsDir ? { runs: repoAbs(h.root, runsDir, await homeOf($)) } : {}),
       }
       const r = await queueCli($, h, loaded.config, ['add', '--job', JSON.stringify(spec), ...(i.top === true ? ['--top'] : [])])
       return addedText(r as { job: Job }, loaded, shownVault(h, loaded.config))
@@ -990,6 +1014,22 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       }
       const r = await queueCli($, h, loaded.config, ['cancel', '--id', id, '--why', str(i.why) ?? 'cancelled by Claude'])
       return cancelledText(r.job as Job, loaded, await nowS($))
+    }
+    case 'rft_machine': {
+      const action = String(i.action ?? '')
+      if (action === 'probe') {
+        const p = await machineProbe($, h, loaded.config)
+        return `${probeText(p)}${p.eligible ? '\n\nNext: ask the user where the runs\' outputs go and which GPUs to keep out of the queue, then rft_machine add.' : ''}`
+      }
+      if (action === 'status') return statusText(await machineStatus($, h, loaded.config))
+      if (action !== 'add') throw new Error(`action is probe, add or status (not "${action}")`)
+      const keep = Array.isArray(i.keep_out) ? i.keep_out.filter((x): x is number => Number.isInteger(x)) : []
+      const runs = await runsRoot($, h, loaded.config, str(i.runs_dir))
+      const r = await queueCli($, h, loaded.config, ['machine', 'add', ...(runs ? ['--runs', runs] : []), ...(keep.length ? ['--keep', keep.join(',')] : [])])
+      const st = r.status as MachineStatus
+      if (r.already) return statusText(st, { already: true })
+      await queueOn($)
+      return `${statusText(st)}\n\nThe experiment queue is on: the tree view shows its monitor, and from now on every run of an experiment goes through rft_queue (its tools load from your next turn). Its rule, for the rest of this session:\n${QUEUE_RULE}`
     }
     case 'rft_map':
       return mapReport(io, loaded, str(i.concept))
@@ -1330,11 +1370,51 @@ async function queueCli($: EngineInterface, h: Here, config: Config, args: strin
 /** rft_next with the queue's part after it. */
 async function withJobs(report: string, io: Io, loaded: Loaded, now: number): Promise<string> {
   try {
+    if (!(await readMachine(io, loaded.config.vault))) return report // no machine paired: no queue
     const part = jobsNext(await readQueue(io, loaded.config.vault), loaded, now)
     return part ? `${report}\n\n${part}` : report
   } catch {
     return report
   }
+}
+
+/** What the plugin reads of this machine for the queue (rft_queue.py machine probe), with no model. */
+async function machineProbe($: EngineInterface, h: Here, config: Config): Promise<Probe> {
+  const hint = await runsRoot($, h, config)
+  return await queueCli($, h, config, ['machine', 'probe', ...(hint ? ['--runs-hint', hint] : [])]) as unknown as Probe
+}
+
+/** The pairing, and on the paired machine its queue (rft_queue.py machine status). */
+const machineStatus = async ($: EngineInterface, h: Here, config: Config) =>
+  await queueCli($, h, config, ['machine', 'status']) as unknown as MachineStatus
+
+/** The experiment queue, when a machine is paired with it, for the notebook tools: the root of its runs' outputs. */
+async function queueOf(h: Here): Promise<NotebookEnv['queue']> {
+  const config = await readConfig(h.io)
+  const m = config ? await readMachine(h.io, config.vault) : null
+  return m ? { runsDir: m.runs_dir } : undefined
+}
+
+/** The root of the runs' outputs as given (`~/…`, or from the tree's folder), else the config's runsDir, made absolute. */
+async function runsRoot($: EngineInterface, h: Here, config: Config, given?: string): Promise<string | undefined> {
+  const path = given?.trim() || str(config.runsDir)
+  return path ? repoAbs(h.root, path, await homeOf($)) : undefined
+}
+
+/** The queue turned on in this session (rft_machine add): its tools in the prompt from the next turn, its files followed. */
+async function queueOn($: EngineInterface): Promise<void> {
+  for (const name of QUEUE_TOOLS) {
+    if (registeredTools.get(name) === false) continue
+    const spec = TOOLS[name as keyof typeof TOOLS]
+    try {
+      await $.tool.register({ name, description: spec.description, inputSchema: spec.inputSchema as Record<string, unknown>, isDeferred: false })
+      registeredTools.set(name, false)
+    } catch (err) {
+      $.ui.toast(`rft: could not set up tool ${name} (${message(err)})`)
+    }
+  }
+  queueSeen = null
+  try { await watchQueue($, true) } catch { /* at the next tick */ }
 }
 
 // the queue as last read (its queue.json, and what it said), to tell what changed since
@@ -1350,6 +1430,10 @@ async function watchQueue($: EngineInterface, first = false): Promise<QueueView 
   if (!h || 'problem' in h) return null
   const config = await readConfig(h.io)
   if (!config) return null
+  if (!(await h.io.exists(join(config.vault, MACHINE_FILE)))) {
+    queueSeen = null
+    return null
+  }
   let text: string
   try {
     text = await h.io.read(join(config.vault, QUEUE_FILE))
@@ -1809,7 +1893,8 @@ async function updateNotebooks($: EngineInterface, words: string[]): Promise<str
   }
   let queued: string | null = null
   const all = gaps.experiments.length + gaps.concepts.length
-  if (all) {
+  const off = !(await readMachine(h.io, loaded.config.vault))
+  if (all && !off) {
     const vault = resolvePath(h.root, vaultOf(h, loaded.config))
     const sq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
     const root = loaded.tree.roots[0] ?? 'D00'
@@ -1820,7 +1905,7 @@ async function updateNotebooks($: EngineInterface, words: string[]): Promise<str
     const r = await queueCli($, h, loaded.config, ['add', '--job', JSON.stringify(spec)])
     queued = `Queued ${(r.job as Job).id}`
   }
-  return gapsText(gaps, queued, c ?? undefined)
+  return gapsText(gaps, queued, c ?? undefined, off)
 }
 
 /** The request to write what /rft-update notebooks found missing, concept by concept. */
@@ -2059,11 +2144,35 @@ export const register: Register = (on, options) => {
     }
   })
 
+  // /rft-machine [add|status]: the pairing of this machine with the queue. add on a paired machine
+  // only says so, with its status; else the machine is checked (no model turn) and, when it can run
+  // the queue, Claude asks the user two questions and pairs it (rft_machine add)
+  on('command.run', { command: 'rft-machine' }, async ($, e) => {
+    try {
+      const h = await mustHere($)
+      const loaded = await loadActive(h.io)
+      const words = e.args.trim().toLowerCase().split(/\s+/).filter(Boolean)
+      const verb = words[0] ?? 'status'
+      if (verb === 'status') return { text: statusText(await machineStatus($, h, loaded.config)) }
+      if (verb !== 'add') return { text: 'Usage: /rft-machine [add|status]: add pairs this machine with the experiment queue, status says how it stands.' }
+      if (words.length > 1) return { text: `Only this machine (the one this session runs on) can be paired with the queue for now: /rft-machine add, with nothing after it.` }
+      const st = await machineStatus($, h, loaded.config)
+      if (st.machine) return { text: statusText(st, { already: true }) }
+      const p = await machineProbe($, h, loaded.config)
+      if (!p.eligible) return { text: probeText(p) }
+      pendingPrompts.push(machinePrompt(p))
+      return { text: `${probeText(p)}\n\nClaude will finish in a moment: it asks you where the runs' outputs go and which GPUs to keep for your own work, then turns the queue on.` }
+    } catch (err) {
+      return { text: message(err) }
+    }
+  })
+
   // /rft-jobs [job or experiment]: the queue as rft_jobs gives it, printed (no model turn)
   on('command.run', { command: 'rft-jobs' }, async ($, e) => {
     try {
       const h = await mustHere($)
       const loaded = await loadActive(h.io)
+      if (!(await readMachine(h.io, loaded.config.vault))) return { text: statusText({ host: '', machine: null, paired: false }) }
       const ref = e.args.trim() || undefined
       const v = await queueCli($, h, loaded.config, ['status', '--history', '10']) as unknown as QueueView
       const log = ref && /^q\d+$/i.test(ref) ? String((await queueCli($, h, loaded.config, ['log', '--id', ref.toLowerCase(), '--lines', '30'])).text ?? '') : undefined

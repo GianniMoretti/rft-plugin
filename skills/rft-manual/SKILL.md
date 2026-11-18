@@ -1,6 +1,6 @@
 ---
 name: rft-manual
-description: Operating manual of the Reasoning Flow Tree: experiment (E..), direction (D..), reference (R..) and theory (T..) notes recording a research project's reasoning, grouped into concepts (lines of research) with their code repositories. Use in a project with .rft/config.json whenever an experiment is planned, launched (GPU runs: rft_queue) or finished (a queued job ended), an experiment in a concept with code is planned (write its notebook: rft_set_notebook), an idea or question comes up (even a rejected one), a paper or review is read, a new field comes up (offer a literature search first), a definition or method is written down, an idea is dropped or moved, a branch belongs under another note (move it), a new line of research opens (propose a concept, ask for its code), work starts on an experiment whose concept links code, Claude is asked to answer a tree-view comment or suggestion, a note is locked, a note's priority comes up (suggest one, never set it), a result is final (suggest verifying it, never set verified), a verified note's claim may no longer hold (review), snippets or documents come up (stubs and placements from verified notes, the user writes and picks), or the user asks about the tree, its concepts, its code or what was tried (start from rft_map).
+description: Operating manual of the Reasoning Flow Tree: experiment (E..), direction (D..), reference (R..) and theory (T..) notes recording a research project's reasoning, grouped into concepts (lines of research) with their code repositories. Use in a project with .rft/config.json whenever an experiment is planned, launched (on a machine paired with the experiment queue: rft_queue; pairing it: rft_machine) or finished (a queued job ended), an experiment in a concept with code is planned (write its notebook: rft_set_notebook), an idea or question comes up (even a rejected one), a paper or review is read, a new field comes up (offer a literature search first), a definition or method is written down, an idea is dropped or moved, a branch belongs under another note (move it), a new line of research opens (propose a concept, ask for its code), work starts on an experiment whose concept links code, Claude is asked to answer a tree-view comment or suggestion, a note is locked, a note's priority comes up (suggest one, never set it), a result is final (suggest verifying it, never set verified), a verified note's claim may no longer hold (review), snippets or documents come up (stubs and placements from verified notes, the user writes and picks), or the user asks about the tree, its concepts, its code or what was tried (start from rft_map).
 ---
 
 # Reasoning Flow Tree (rft)
@@ -281,8 +281,9 @@ repo's own uv environment, from the repo's root.
   - `FIGURES`: `{name: matplotlib figure or SVG text}`, saved as `figures/<id>_<name>.svg`;
   - `TABLES`: `{name: DataFrame, list of row dicts, or dict of columns}`, saved as
     `tables/<id>_<name>.html` (the name is its caption).
-- **When its jobs end**, the queue's runner runs it (a job of its own, `notebook`, no GPU) and,
-  at no model turn: writes `RESULTS` in the note's Result as a table between two `rft-results`
+- **When its jobs end**, on a machine paired with the experiment queue, the queue's runner runs
+  it (a job of its own, `notebook`, no GPU; with no queue, run it with `rft_run_notebook` once
+  its runs end, which does the same) and, at no model turn: writes `RESULTS` in the note's Result as a table between two `rft-results`
   comment lines, with the notebook, commit and runs they come from; saves `RESULTS`
   (`results/<id>.json`), the figures and the tables; fills the tables into the artifacts that
   name them; and stamps the note (`reproduced:`). The session then says the numbers are in the
@@ -390,8 +391,24 @@ its own. A due date is a day, a local time, or a time in a zone:
 
 ## The experiment queue
 
-Runs on this machine's GPUs go through the queue, not into the background with Bash: a job is a
-command, the folder it runs in and how many GPUs it takes, for one experiment. A **runner** (a
+There is no queue until this machine is paired with it. Until then there is no `rft_queue`, no
+runner and no monitor: run an experiment as the user asks, and never set a queue up on your own.
+
+**Pairing** (only when the user asks to set up the queue, or `/rft-machine add` asked you): the
+plugin checks the machine itself (`rft_machine {action: "probe"}`, or the check `/rft-machine add`
+handed you): its NVIDIA GPUs, the disks for the runs' outputs (the most room first), conda and
+uv. Do not inspect the machine by hand for it. A machine with no NVIDIA GPU cannot be paired: say
+so, and the queue stays off. Otherwise ask the user, in one AskUserQuestion with two questions,
+where the runs' outputs go (the suggested folder first) and which GPUs to keep out of the queue
+for their own work (none by default), then `rft_machine {action: "add", runs_dir, keep_out}`.
+It answers what is on and the queue's rules; the queue tools load from the next turn. On a
+machine already paired it changes nothing and says so. `rft_machine {action: "status"}` says how
+it stands. Only the machine the session runs on can be paired for now.
+
+**Once it is on, every run of an experiment's code goes through the queue** (with `gpus: 0` for
+one that needs no GPU), never into the background with Bash (`&`, nohup, screen, tmux), nor in the
+foreground beyond a check of a few seconds: a job is a command, the folder it runs in and how many
+GPUs it takes, for one experiment. A **runner** (a
 process of its own, apart from any session) starts each job once enough GPUs are free and records
 how it ended, so a run outlives the session that queued it. Watching it costs no turn: the user
 follows the GPUs, the queue and the history in the tree view's monitor (the icon at the top left,
@@ -405,12 +422,12 @@ or `/rft-jobs`), where they also reorder, pause, cancel and retry jobs, and keep
 - **The command** runs as `bash -c <cmd>` in `cwd`, in a session of its own, with
   `CUDA_VISIBLE_DEVICES` set to its GPUs (numbered as nvidia-smi numbers them), `RFT_JOB`,
   `RFT_EXPERIMENT` and `RFT_OUT`. It has the session's environment only, not your shell's: activate its conda
-  or venv in the command (`source ~/miniconda3/bin/activate env && python train.py ...`) or give
-  the interpreter's full path. Check the command once by hand (a dry run, `--help`) before queueing
+  or venv in the command (`source <conda root>/bin/activate env && python train.py ...`; the
+  conda root and its envs are in `rft_machine status`) or give the interpreter's full path. Check the command once by hand (a dry run, `--help`) before queueing
   a long run. Its log goes to `<vault>/.queue/logs/<job>.log`.
-- **Its outputs** go to `$RFT_OUT`, a folder of its own: `<runsDir>/<repo>/<exp>/<job>` with
-  the config's `runsDir` (`<repo>` the name of the job's repo folder), else
-  `<repo>/runs/<exp>/<job>` (kept out of git). Have the
+- **Its outputs** go to `$RFT_OUT`, a folder of its own: `<root>/<repo>/<exp>/<job>` under the
+  outputs' root chosen when the machine was paired (`<repo>` the name of the job's repo folder),
+  else `<repo>/runs/<exp>/<job>` (kept out of git). Have the
   command write there (`--out "$RFT_OUT"`); the notebook finds it as `out` in `RUNS`.
 - **How far it is**: the monitor and `rft_jobs` show, for each running job, its stage, one tqdm
   bar (label, n/total, %, time left, postfix) and its last line, read from what it writes. To say
@@ -439,8 +456,8 @@ or `/rft-jobs`), where they also reorder, pause, cancel and retry jobs, and keep
   find their jobs (the session's list, or `rft_jobs` once), then one call,
   `{action: "move", id: "q4", before: "q3"}`.
 - `rft_next` lists what runs and waits, and the results to record.
-- The queue lives in `<vault>/.queue/` (`queue.json`, the history in `history.jsonl`); edit
-  neither by hand.
+- The queue lives in `<vault>/.queue/` (`machine.json`, the machine it is paired with;
+  `queue.json`; the history in `history.jsonl`), out of git; edit none of them by hand.
 
 ### Writing a job the monitor can read
 
@@ -498,9 +515,9 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
    `what` / `why` filled, its topical `tags`, and `refs`: the reference(s) whose setup it starts
    from (baseline, data, protocol). Do this *before* starting the run, not after.
    In a concept with code, call `rft_code` first and plan from the code as it is now; the note's
-   `## Code` section says how the run uses the code. A run on this machine's GPUs is then queued
-   with `rft_queue` (see The experiment queue), not started in the background: the plugin sets
-   the note running when its job starts. In a concept with code, write its notebook now
+   `## Code` section says how the run uses the code. On a machine paired with the experiment
+   queue, every run is then queued with `rft_queue` (see The experiment queue), not started in the
+   background: the plugin sets the note running when its job starts. In a concept with code, write its notebook now
    (`rft_set_notebook`), so its run records the result when the jobs end.
 2. **When it finishes or gives a partial result** (for a queued run: the user is told when its
    job ends, and the session start lists the jobs whose result is not recorded yet): when its
@@ -584,7 +601,8 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 | `rft_comments` | a note's comments and suggestions (open ones in full, the history in short), or the notes with open threads |
 | `rft_comment` | reply in a thread (`applied: true` closes a suggestion you made in an unlocked note), or start a comment on a `quote` |
 | `rft_suggest` | propose new text for a `quote`, or the replacement an open suggestion asks for; the user accepts it |
-| `rft_queue` | queue a run of an experiment on this machine's GPUs (exp, cmd, cwd, gpus, label); it starts once its GPUs are free, in the user's order |
+| `rft_machine` | pair this machine with the experiment queue, only when the user asks: `probe` (what the plugin reads of it, no model), `add` (runs_dir and keep_out, both asked of the user first; turns the queue on), `status` |
+| `rft_queue` | queue a run of an experiment on this machine's GPUs (exp, cmd, cwd, gpus, label); it starts once its GPUs are free, in the user's order. Only once the machine is paired |
 | `rft_jobs` | the queue in a few lines: GPUs, jobs running and waiting, the last ones that ended, results to record; one job with its run record (code, outputs, error) and `log` lines of its output |
 | `rft_job` | change the queue, only when the user asks: `move` a waiting job (answers the new order), `cancel`, `retry`, `pause`, `resume` |
 

@@ -7,7 +7,8 @@ code repo, at two stages of one experiment, so `bench.py` measures what Claude s
         "Mix-based augmentation" (D04); its git history is made by `launch`, since bench.py
         copies a project without its .git folders
     python3 bench/lifecycle.py launch --project DIR
-        the toy repo under git: the stage where an experiment is planned and queued
+        the toy repo under git and this machine paired with the vault's queue: the stage where an
+        experiment is planned and queued
     python3 bench/lifecycle.py record --project DIR --plugin PLUGIN
         E08 (three seeds of the toy run under D05) queued and run to its end by PLUGIN's own queue
         runner, and the concept's artifact written before it: the stage where its result is
@@ -30,6 +31,7 @@ import argparse
 import json
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -108,7 +110,14 @@ def base(out: Path) -> None:
     d04.write_text(re.sub(r"^(concept_summary: .*)$", rf'\1\nconcept_repos: ["{TOY}"]', text, count=1, flags=re.M))
 
 
+def pair(vault: Path) -> None:
+    """The vault's queue on: this machine paired with it, as /rft-machine add leaves it (the runs in their repo's runs/)."""
+    (vault / ".queue").mkdir(exist_ok=True)
+    (vault / ".queue" / "machine.json").write_text(json.dumps({"version": 1, "host": socket.gethostname()}))
+
+
 def launch(project: Path) -> None:
+    pair(project / "vault")
     toy = project / TOY
     if (toy / ".git").exists():
         return
@@ -182,6 +191,7 @@ def record(project: Path, plugin: Path, timeout: float = 600, concept_notebook: 
         git(toy, "add", "-A")
         git(toy, "-c", "user.name=bench", "-c", "user.email=bench@example.invalid", "commit", "-q", "-m", "E08's notebook")
     cli = plugin / "server" / "rft_queue.py"
+    pair(vault)
     for s in range(3):
         job = {"exp": "E08", "cmd": CMD.format(s=s), "cwd": str(toy.resolve()), "gpus": 0, "label": f"seed {s}"}
         subprocess.run([sys.executable, str(cli), "add", "--vault", str(vault), "--job", json.dumps(job)], check=True, capture_output=True)

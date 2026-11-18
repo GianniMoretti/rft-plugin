@@ -21,9 +21,14 @@ describe('tool list', () => {
     mock.clock(on)
     const w = world(on, demoFiles())
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.tools).toHaveLength(40)
+    // no machine paired with the experiment queue: its tools are not there at all, rft_machine waits to pair one
+    expect(w.tools).toHaveLength(38)
     expect(inPrompt(w)).toEqual([...CORE_TOOLS].sort())
-    for (const t of Object.values(FEATURE_TOOLS).flat()) expect(w.deferred).toContain(t)
+    for (const t of Object.values(FEATURE_TOOLS).flat()) {
+      if (FEATURE_TOOLS.queue.includes(t as never)) expect(w.tools).not.toContain(t)
+      else expect(w.deferred).toContain(t)
+    }
+    expect(w.deferred).toContain('rft_machine')
   })
 
   test('a deadline or a dated note brings the date tools into the prompt', async ($, on) => {

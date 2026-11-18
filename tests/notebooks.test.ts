@@ -413,6 +413,7 @@ describe('the notebook tools in a session', () => {
   test('/rft-update notebooks runs every notebook again in the queue, and lists by concept what is still to write', async ($, on) => {
     const clock = mock.clock(on)
     const files = project({ e02: 'notebook: "notebooks/E02.py"' })
+    files[at('.queue/machine.json')] = JSON.stringify({ version: 1, host: 'lab-pc' })
     // a second result in the concept, with no notebook; its artifact draws a chart and types a table
     files[at('experiments/E03 Seed sweep.md')] = files[PATH.E02]!.replace(/E02/g, 'E03').replace('Variant run', 'Seed sweep').replace(/notebook: .*\n/, '')
     files[PATH.D01] = files[PATH.D01]!.replace('children: [', 'children: ["[[E03 Seed sweep]]", ').replace('## Children in the tree\n', '## Children in the tree\n- [[E03 Seed sweep]]\n')
@@ -449,6 +450,22 @@ describe('the notebook tools in a session', () => {
     expect(prompts[0]).toContain('concept by concept: "Variants"')
     expect(prompts[0]).toContain('never record over the note\'s numbers')
     expect(String((await run('notebooks --write Nope')).text)).toContain('is not a concept')
+  })
+
+  test('/rft-update notebooks with no machine paired with the queue queues nothing and says how to run them', async ($, on) => {
+    mock.clock(on)
+    const calls: string[][] = []
+    world(on, project({ e02: 'notebook: "notebooks/E02.py"' }), {
+      cwd: ROOT,
+      process: argv => {
+        if (argv[1]?.endsWith('server/rft_queue.py')) calls.push([...argv])
+        return undefined
+      },
+    })
+    await $.session.start({ cwd: ROOT, source: 'startup' } as never)
+    const text = String((await $.command.run({ command: 'rft-update', args: 'notebooks', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } } as never)).text)
+    expect(calls).toEqual([])
+    expect(text).toContain('Not run again: that goes through the experiment queue, which is off until this machine is paired with it (/rft-machine add)')
   })
 
   test('rft_set_notebook writes the file and asks the helper for the link', async ($, on) => {

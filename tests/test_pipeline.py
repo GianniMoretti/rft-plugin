@@ -14,6 +14,7 @@ Skipped without uv (the notebook runs in the toy repo's uv environment) or with 
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -155,6 +156,9 @@ class PipelineTest(unittest.TestCase):
                 q.cancel(j["id"], "test over")
 
     def queue_and_wait(self):
+        # the queue on: this machine paired with it, as /rft-machine add leaves it (no outputs root of its own)
+        (self.vault / ".queue").mkdir(exist_ok=True)
+        (self.vault / ".queue" / "machine.json").write_text(json.dumps({"version": 1, "host": socket.gethostname()}))
         for s in SEEDS:
             job = {"exp": "E08", "cmd": f"python3 train.py --seed {s}", "cwd": str(self.toy), "gpus": 0, "label": f"seed {s}"}
             r = subprocess.run([sys.executable, str(ROOT / "server" / "rft_queue.py"), "add", "--vault", str(self.vault), "--job", json.dumps(job)],
