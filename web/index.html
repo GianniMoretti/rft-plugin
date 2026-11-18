@@ -91,12 +91,16 @@
       <span class="muted jobs-file" title="The queue and its history live in the vault's .queue/ folder; each job's output in .queue/logs/">.queue/</span>
     </div>
   </section>
-  <!-- the bottom-left corner: the scratchpad's button just above the legend; the open scratchpad takes the legend's place -->
+  <!-- the bottom-left corner: the scratchpad's button with the legend's faint ? beside it, and under them
+       whichever is open; the open scratchpad takes the legend's place -->
   <div id="corner">
+  <div class="corner-btns">
   <button id="pad-toggle" class="icon-btn" hidden aria-expanded="false" aria-controls="pad" title="Scratchpad: quick notes and to-dos" aria-label="Scratchpad: quick notes and to-dos">
     <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h14a1 1 0 0 1 1 1v10l-6 6H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 20v-5a1 1 0 0 1 1-1h5"/><path d="M8 8h8M8 11.5h5"/></svg>
     <span id="pad-badge" class="pad-badge" hidden></span>
   </button>
+  <button id="legend-toggle" class="legend-mark" aria-expanded="false" aria-controls="legend" title="Legend: what the colours, glows and shapes mean" aria-label="Legend">?</button>
+  </div>
   <section id="pad" hidden aria-label="Scratchpad">
     <div class="pad-head">
       <strong>Scratchpad</strong>
@@ -113,8 +117,7 @@
       <span class="pad-file muted" title="In the vault's top folder, beside 00 Index.md: plain markdown that Obsidian shows too, and not a note of the tree">Scratchpad.md</span>
     </div>
   </section>
-  <aside id="legend" aria-label="Legend and filter">
-    <button id="legend-toggle" class="legend-toggle" aria-expanded="true" title="Show or hide the legend">Legend <span class="caret">▾</span></button>
+  <aside id="legend" class="closed" aria-label="Legend and filter">
     <div id="legend-body">
     <div class="legend-title">Type <span class="muted">(the colour)</span></div>
     <div class="row"><span class="tdot tone direction s-done"></span>Direction (D..)</div>

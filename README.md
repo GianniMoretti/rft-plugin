@@ -301,8 +301,8 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
 - **A−** / **A+** set the size of the labels and the note text.
 - The sun / moon button switches between light and dark. Until it is used the view follows the
   system's theme; then it keeps the choice, for every project.
-- **The scratchpad** (the note icon just above the legend) holds quick notes and to-dos, saved
-  as you type to `Scratchpad.md` at the vault's top: plain markdown that Obsidian shows too, and
+- **The scratchpad** (the note icon at the bottom left, the legend's faint **?** beside it) holds
+  quick notes and to-dos, saved as you type to `Scratchpad.md` at the vault's top: plain markdown that Obsidian shows too, and
   not a note of the tree. A to-do is a list item with a box, `- [ ] …`: **Ctrl/Cmd+Enter** makes
   the line a to-do or ticks it, **Enter** continues a list (on an empty item it ends it), **+ To-do**
   adds one, and the icon shows how many are open. A change made meanwhile in Obsidian or by Claude
@@ -523,7 +523,8 @@ In the tree view, the concept button switches the overlay from off to **Regions*
   concept's start.
 - Concept colours are a palette of their own, apart from the status colours; a concept legend
   shows while the overlay is on. It lists the top-level concepts, each with an arrow that
-  unfolds its sub-concepts, and the whole legend folds to one line (**Legend ▸**).
+  unfolds its sub-concepts. The legend opens and closes from the faint **?** beside the
+  scratchpad's icon.
 - **Concepts** (at the top) shows a tree of the concepts: each sized by its notes, with a bar of their
   statuses, in the same layout as the reasoning tree (top-down, left-right or radial). Click one to
   open its artifact beside the tree; the artifact's **Show in tree** goes to its start note on the

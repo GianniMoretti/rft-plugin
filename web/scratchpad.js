@@ -104,7 +104,7 @@
   }
 
   /**
-   * The panel in the live page. The button over the legend opens it and shows how many to-dos
+   * The panel in the live page. The button beside the legend's ? opens it and shows how many to-dos
    * are open; the text saves itself a moment after typing stops, and a change made elsewhere
    * (Obsidian, Claude) comes in while nothing typed waits to be saved; one that crosses an
    * unsaved change asks which to keep. `key()`: the key for writes ('' : read-only); `store`:

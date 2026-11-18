@@ -110,10 +110,19 @@ main { position: relative; flex: 1; min-height: 0; }
   pointer-events: none; }
 .node.dim, .link.dim { opacity: 0.15; }
 .node.hl text.label { font-weight: 700; }
-/* the bottom-left corner: the scratchpad's button stacked just above the legend, whatever its height */
+/* the bottom-left corner: the scratchpad's button and the legend's ? side by side, stacked just above
+   the open legend or scratchpad, whatever its height */
 #corner { position: absolute; left: 10px; bottom: 10px; max-height: calc(100% - 20px); display: flex;
   flex-direction: column; align-items: flex-start; gap: 6px; pointer-events: none; }
 #corner > * { pointer-events: auto; }
+#corner > .corner-btns { display: flex; align-items: center; gap: 8px; pointer-events: none; }
+.corner-btns > * { pointer-events: auto; }
+/* the legend's button: a faint ? like a watermark, with no frame; firmer on hover and while the legend shows */
+.legend-mark { border: 0; background: none; padding: 0 4px; font: 700 15px/1 system-ui, sans-serif;
+  color: var(--muted); opacity: 0.45; transition: opacity 0.15s, color 0.15s; }
+.legend-mark:hover, .legend-mark:focus-visible { opacity: 0.9; }
+.legend-mark[aria-expanded="true"] { color: var(--accent); opacity: 0.8; }
+#corner:has(> #pad:not([hidden])) .legend-mark { color: var(--muted); opacity: 0.45; }
 #legend { padding: 8px 10px; border-radius: 8px; min-height: 0;
   background: var(--panel); border: 1px solid var(--line); font-size: 12px; max-width: 240px; }
 .legend-title { font-weight: 600; margin: 4px 0 2px; }
@@ -192,7 +201,7 @@ button.primary { border-color: var(--accent); color: var(--accent); }
 #note img:not([height]) { height: auto; }
 #tooltip { position: fixed; pointer-events: none; padding: 4px 8px; border-radius: 6px; font-size: calc(13px * var(--font-scale));
   background: var(--panel); border: 1px solid var(--line); max-width: 360px; z-index: 5; }
-@media (max-width: 640px) { #legend { display: none; } #search { min-width: 120px; flex: 1; } }
+@media (max-width: 640px) { #legend, #legend-toggle { display: none; } #search { min-width: 120px; flex: 1; } }
 #theme { display: inline-flex; align-items: center; padding: 3px 6px; }
 #theme svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 :root[data-theme="dark"] #theme .moon, :root:not([data-theme="dark"]) #theme .sun { display: none; }
@@ -232,9 +241,7 @@ button.linkish { border: 0; background: none; color: var(--accent); padding: 0; 
 #concept-legend .row { cursor: pointer; }
 #concept-legend .row.on { font-weight: 700; }
 #legend { overflow: auto; }
-.legend-toggle { border: 0; background: none; padding: 0; font: inherit; font-weight: 600; color: var(--fg); cursor: pointer; }
-#legend.closed .caret { display: inline-block; transform: rotate(-90deg); }
-#legend.closed #legend-body { display: none; }
+#legend.closed { display: none; }
 #concepts-list { max-height: 40vh; overflow: auto; }
 .fold { width: 1.1em; flex: none; text-align: center; color: var(--muted); cursor: pointer; }
 .fold:hover { color: var(--fg); }
@@ -375,9 +382,10 @@ details.history .thread { opacity: 0.85; }
 .drawer-origin a { cursor: pointer; color: var(--fg); }
 
 /* the pages: the tree's own controls and legend leave the kanban */
-body[data-page="kanban"] .tree-only, body[data-page="kanban"] #legend,
-body[data-page="calendar"] .tree-only, body[data-page="calendar"] #legend,
-body[data-page="manuscript"] .tree-only, body[data-page="manuscript"] #legend { display: none !important; }
+body[data-page="kanban"] .tree-only, body[data-page="kanban"] #legend, body[data-page="kanban"] #legend-toggle,
+body[data-page="calendar"] .tree-only, body[data-page="calendar"] #legend, body[data-page="calendar"] #legend-toggle,
+body[data-page="manuscript"] .tree-only, body[data-page="manuscript"] #legend,
+body[data-page="manuscript"] #legend-toggle { display: none !important; }
 /* the page switch: three joined buttons, the current one marked */
 .pages { gap: 0; }
 #bar .pages button { padding: 5px 9px; border-radius: 0; margin-left: -1px; }
@@ -609,7 +617,7 @@ a.cal-dl-name:hover { text-decoration: underline; }
   max-width: min(560px, calc(100vw - 32px)); padding: 10px 14px; border-radius: 8px;
   background: var(--panel); color: var(--fg); border: 1px solid var(--line);
   box-shadow: 0 4px 18px rgb(0 0 0 / 0.25); cursor: pointer; font-size: 0.92em; }
-/* the scratchpad: quick notes and to-dos (web/scratchpad.js); its button over the legend, with the
+/* the scratchpad: quick notes and to-dos (web/scratchpad.js); its button beside the legend's ?, with the
    number of open to-dos, and its panel under the button, in the legend's place while it is open */
 #pad-toggle { position: relative; padding: 6px; border-radius: 8px; background: var(--panel); color: var(--muted); }
 #pad-toggle:hover, #pad-toggle[aria-expanded="true"] { color: var(--accent); border-color: var(--accent); }

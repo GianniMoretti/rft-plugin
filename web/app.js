@@ -141,7 +141,7 @@
       const aw = Number(store.get('artifactWidth', null))
       if (aw > 0) mainEl.style.setProperty('--artifact-w', `${aw}px`)
       buildLegend()
-      setLegendOpen(store.get('legendOpen', true))
+      setLegendOpen(store.get('legendShown', false))
       showOrigins = Boolean(store.get('origins', false)) || q.get('origins') === 'on'
       syncOriginsButton()
       syncLayoutButtons()
@@ -1647,14 +1647,18 @@
     }
   }
 
+  // the legend opens from the faint ? beside the scratchpad's button; it starts closed
   const legend = document.getElementById('legend')
   function setLegendOpen(open) {
     legend.classList.toggle('closed', !open)
     document.getElementById('legend-toggle').setAttribute('aria-expanded', String(open))
   }
   document.getElementById('legend-toggle').addEventListener('click', () => {
-    const open = legend.classList.contains('closed')
-    store.set('legendOpen', open)
+    const pad = document.getElementById('pad')
+    // the open scratchpad stands in the legend's place: the ? closes it and shows the legend
+    const open = (pad && !pad.hidden) || legend.classList.contains('closed')
+    if (pad && !pad.hidden) document.getElementById('pad-close').click()
+    store.set('legendShown', open)
     setLegendOpen(open)
   })
 
@@ -1860,15 +1864,15 @@
       if (nbShown === n.id) showNbMsg(`The notebook did not open: ${e.message}`)
       return
     }
-    nbMsg.hidden = true
-    nbFrame.hidden = false
-    nbTab.href = url
-    openFrame(nbFrame, url, { title: `The notebook of ${n.id}`, allow: 'clipboard-read; clipboard-write' })
     if (nbShown === n.id) showNbFrame(n, url)
   }
 
   /** The notebook framed: its editor, through this page's own server (notebook/<name>/), the one address a tunnel to it reaches. */
   function showNbFrame(n, url) {
+    nbMsg.hidden = true
+    nbFrame.hidden = false
+    nbTab.href = url
+    openFrame(nbFrame, url, { title: `The notebook of ${n.id}`, allow: 'clipboard-read; clipboard-write' })
   }
 
   function showNbMsg(text) {
