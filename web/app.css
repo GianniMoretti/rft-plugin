@@ -392,6 +392,16 @@ body[data-page="manuscript"] #legend-toggle { display: none !important; }
 #bar .pages button:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
 #bar .pages button:last-child { border-radius: 0 6px 6px 0; }
 .pages button[aria-pressed="true"] { position: relative; font-weight: 600; background: var(--panel); }
+/* each page as its symbol alone (its name on hover), drawn as the favicon is: notes in their type's
+   colour at their status's strength (.tone), concepts as overlapping regions in their colours, links and frames grey */
+#bar .pages button { display: inline-flex; align-items: center; padding: 4px 10px; }
+.page-ico { width: 22px; height: 22px; flex: none; overflow: visible; }
+.page-ico .ln { fill: none; stroke: var(--muted); stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.page-ico .ln.text { stroke-width: 2.2; }
+.page-ico .tone { fill: color-mix(in oklab, var(--hue) var(--i), var(--tone-base)); }
+.page-ico .tone.ring { fill: none; stroke: var(--hue); stroke-width: 1.6; }
+.page-ico .region { opacity: 0.7; }
+.page-ico .due { fill: var(--accent); }
 /* the kanban: one column per status, a card per note; it makes room for the filters and the drawer */
 #kanban { position: absolute; inset: 0; display: flex; flex-direction: column; min-width: 0;
   font-size: calc(13px * var(--font-scale)); }

@@ -21,12 +21,24 @@
   <h1 id="title">Reasoning tree</h1>
   <span id="counts" class="muted"></span>
   <span id="live" class="live" title="Live: follows the vault"></span>
+  <!-- each page is its symbol alone, drawn as the favicon is (notes as solid shapes in the tree's colours, links and
+       frames grey); its name shows on hover, as the other icon buttons' do -->
   <div class="group pages" role="group" aria-label="Page">
-    <button data-show="tree" aria-pressed="true" title="The reasoning tree: every note under the one it came from">Tree</button>
-    <button data-show="concepts" aria-pressed="false" title="A tree whose nodes are the concepts">Concepts</button>
-    <button data-show="kanban" aria-pressed="false" title="The notes in one column per status, ordered by priority or date">Kanban</button>
-    <button data-show="calendar" aria-pressed="false" title="The deadlines and the runs: a timeline, or a month">Calendar</button>
-    <button data-show="manuscript" id="show-manuscript" aria-pressed="false" title="The manuscript: LaTeX snippets resting on verified notes, assembled into documents, and their PDF">Manuscript</button>
+    <button data-show="tree" aria-pressed="true" aria-label="Tree" title="Tree: the reasoning tree, every note under the one it came from">
+      <!-- the favicon: a direction, and an experiment and a reference under it -->
+      <svg class="page-ico" viewBox="0 0 32 32" aria-hidden="true"><path class="ln" d="M16 8C16 16 7 15 7 24M16 8C16 16 25 15 25 24"/><circle class="tone direction s-done" cx="16" cy="7.5" r="5"/><circle class="tone experiment s-done" cx="7" cy="24.5" r="5"/><circle class="tone reference s-done" cx="25" cy="24.5" r="5"/></svg></button>
+    <button data-show="concepts" aria-pressed="false" aria-label="Concepts" title="Concepts: a tree whose nodes are the concepts">
+      <!-- three concepts as overlapping regions (as the concept overlay draws them), in concept colours -->
+      <svg class="page-ico" viewBox="0 0 32 32" aria-hidden="true"><circle class="region" style="fill:#f783ac" cx="11" cy="12" r="8"/><circle class="region" style="fill:#3bc9db" cx="21" cy="12" r="8"/><circle class="region" style="fill:#91a7ff" cx="16" cy="21" r="8"/></svg></button>
+    <button data-show="kanban" aria-pressed="false" aria-label="Kanban" title="Kanban: the notes in one column per status, ordered by priority or date">
+      <!-- three columns of notes (idea, running, done), each the strength its status has in the tree -->
+      <svg class="page-ico" viewBox="0 0 32 32" aria-hidden="true"><rect class="tone experiment s-idea" x="1" y="3" width="9" height="6" rx="3"/><rect class="tone direction s-idea" x="1" y="11" width="9" height="6" rx="3"/><rect class="tone reference s-idea" x="1" y="19" width="9" height="6" rx="3"/><rect class="tone direction s-running" x="11.5" y="3" width="9" height="6" rx="3"/><rect class="tone experiment s-running" x="11.5" y="11" width="9" height="6" rx="3"/><rect class="tone reference s-done" x="22" y="3" width="9" height="6" rx="3"/><rect class="tone experiment s-done" x="22" y="11" width="9" height="6" rx="3"/><rect class="tone direction s-done" x="22" y="19" width="9" height="6" rx="3"/></svg></button>
+    <button data-show="calendar" aria-pressed="false" aria-label="Calendar" title="Calendar: the deadlines and the runs, a timeline or a month">
+      <!-- a month with a run's bar and a deadline's diamond, as the timeline draws them -->
+      <svg class="page-ico" viewBox="0 0 32 32" aria-hidden="true"><rect class="ln" x="4" y="6" width="24" height="22" rx="4"/><path class="ln" d="M11 3.5v5M21 3.5v5M4 12.5h24"/><rect class="tone experiment s-done" x="8" y="17" width="12" height="5.5" rx="2.75"/><rect class="due" x="21.2" y="17.2" width="5" height="5" transform="rotate(45 23.7 19.7)"/></svg></button>
+    <button data-show="manuscript" id="show-manuscript" aria-pressed="false" aria-label="Manuscript" title="Manuscript: LaTeX snippets resting on verified notes, assembled into documents, and their PDF">
+      <!-- a page resting on a verified note (ringed, as in the tree) -->
+      <svg class="page-ico" viewBox="0 0 32 32" aria-hidden="true"><path class="ln" d="M8 3h10l7 7v6M14 29H8a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3M18 3v7h7"/><path class="ln text" d="M10 15h8M10 20h5"/><circle class="tone direction s-done" cx="23" cy="24" r="4.2"/><circle class="tone direction ring" cx="23" cy="24" r="6.6"/></svg></button>
   </div>
   <div class="group tree-only" role="group" aria-label="View">
     <!-- each toggle shows the symbol of its state (or of what a click does); its tooltip names it -->
