@@ -155,6 +155,13 @@
       return e
     }
 
+    // the toolbar lock's own drawing, so a snippet's or document's lock looks like it
+    function lockIcon(locked) {
+      const svg = lockBtn.querySelector(locked ? '.lock-closed' : '.lock-open').cloneNode(true)
+      svg.classList.remove('on')
+      return svg
+    }
+
     async function api(path, opts = {}) {
       const headers = { ...(opts.body ? { 'Content-Type': 'application/json' } : {}), ...(key() ? { 'X-RFT-Token': key() } : {}) }
       const res = await fetch(path, { cache: 'no-store', ...opts, headers, body: opts.body ? JSON.stringify(opts.body) : undefined })
@@ -285,10 +292,10 @@
             st.word === 'review' ? el('span', { class: 'muted', text: st.why }) : null,
             st.word === 'review' ? el('button', { type: 'button', text: 'Reviewed', title: 'Its text still holds against its notes as they are now: take its stamp anew', onclick: () => ask({ action: 'reviewed', id: s.id }, 'mark it reviewed') }) : null,
             ms.locked ? el('button', {
-              type: 'button', class: `icon-btn ms-lock-one${s.locked ? '' : ' open'}`, text: s.locked ? '🔒' : '🔓',
+              type: 'button', class: 'icon-btn', 'aria-pressed': String(s.locked), 'aria-label': 'Lock this snippet',
               title: s.locked ? 'Yours to write: Claude only suggests (click: let Claude write this snippet)' : 'Claude may write this snippet (click: yours again)',
               onclick: () => setLock('snippets', !s.locked, s.id),
-            }) : null,
+            }, lockIcon(s.locked)) : null,
             el('span', { class: 'ms-spacer' }), selButton('comment'), selButton('suggestion'), saveBtn),
           el('div', { class: 'ms-head-row ms-basis' },
             el('span', { class: 'muted', text: 'Rests on' }),
@@ -308,10 +315,10 @@
         headEl.append(el('div', { class: 'ms-head-row' },
           el('strong', { text: `${doc}` }), el('span', { class: 'muted', text: `${d ? d.copies.length : 0} cop${d && d.copies.length === 1 ? 'y' : 'ies'} of snippets` }),
           d ? el('button', {
-            type: 'button', class: `icon-btn ms-lock-one${d.locked ? '' : ' open'}`, text: d.locked ? '🔒' : '🔓',
+            type: 'button', class: 'icon-btn', 'aria-pressed': String(d.locked), 'aria-label': 'Lock this document',
             title: d.locked ? 'Its text is yours: Claude places copies you agree to and suggests (click: let Claude edit it)' : 'Claude may edit its text (click: yours again)',
             onclick: () => setLock('documents', !d.locked, d.name),
-          }) : null,
+          }, lockIcon(d.locked)) : null,
           el('span', { class: 'ms-spacer' }), selButton('comment'), selButton('suggestion'), saveBtn))
         const extra = focusCopy ? copyPanel(focusCopy) : placeRow()
         if (extra) headEl.append(extra)
