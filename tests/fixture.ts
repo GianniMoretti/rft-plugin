@@ -7,7 +7,7 @@ import type { Io } from '../hooks/lib/vault'
 
 export const CWD = '/work/demo'
 
-const note = (id: string, type: string, status: string, parent: string, title: string, children: string[] = []) =>
+export const note = (id: string, type: string, status: string, parent: string, title: string, children: string[] = []) =>
   `---
 id: ${id}
 type: ${type}
@@ -37,9 +37,9 @@ export const E02 = 'E02 Variant run'
 
 /** Stand-ins for the web view's files, with the markers the static export inlines. */
 export const WEB_FILES: Record<string, string> = {
-  'web/index.html': '<!doctype html><html><head><script src="theme.js" data-rft-inline></script><link rel="stylesheet" href="app.css" data-rft-inline><link rel="stylesheet" href="vendor/katex.v0.16.22.min.css" data-rft-inline></head><body>' +
+  'web/index.html': '<!doctype html><html><head><script src="theme.js" data-rft-inline></script><link rel="stylesheet" href="app.css" data-rft-inline><link rel="stylesheet" href="vendor/katex.v0.16.22.min.css" data-rft-inline><link rel="stylesheet" href="vendor/codemirror.v5.65.16.min.css"></head><body>' +
     '<script src="vendor/d3.v7.9.0.min.js" data-rft-inline></script><script src="vendor/katex.v0.16.22.min.js" data-rft-inline></script><script src="filters.js" data-rft-inline></script><script src="kanban.js" data-rft-inline></script><script src="schedule.js" data-rft-inline></script>' +
-    '<script src="layout.js" data-rft-inline></script><script src="concepts.js" data-rft-inline></script><script src="markdown.js" data-rft-inline></script>' +
+    '<script src="layout.js" data-rft-inline></script><script src="concepts.js" data-rft-inline></script><script src="markdown.js" data-rft-inline></script><script src="scratchpad.js" data-rft-inline></script><script src="queue.js"></script><script src="vendor/codemirror.v5.65.16.min.js"></script><script src="manuscript.js"></script><script src="artifacts.js" data-rft-inline></script>' +
     '<script src="app.js" data-rft-inline></script></body></html>',
   'web/app.css': 'body { color: red }',
   'web/app.js': 'console.log(window.RFT_DATA.tree.nodes.length, "$&")',
@@ -52,6 +52,11 @@ export const WEB_FILES: Record<string, string> = {
   'web/layout.js': '/* layout */',
   'web/concepts.js': '/* concepts */',
   'web/markdown.js': '/* markdown */',
+  'web/scratchpad.js': '/* scratchpad */',
+  'web/artifacts.js': '/* artifacts */',
+  'web/latex.js': '/* latex */',
+  'web/frame.js': '/* frame */',
+  'web/frame.css': '/* frame css */',
   'web/theme.js': '/* theme */',
 }
 
@@ -133,8 +138,8 @@ export type World = { fs: MemoryFs; tools: string[]; deferred: string[]; opened:
 /** Answers everything the plugin asks of the session from memory. */
 /** `refuse` names commands the engine refuses to register, as it refuses a skill's name. */
 /** `cwd`: the session's folder, in a world keyed by absolute path (see `MemoryFs`). */
-/** `git`: answers `git -C <dir> <args>` (see `fakeGit`). */
-export function world(on: On, files: Record<string, string>, opts: { refuse?: string[]; surfaces?: string[]; cwd?: string; git?: GitAnswer } = {}): World {
+/** `git`: answers `git -C <dir> <args>` (see `fakeGit`); `process`: answers any other command it knows (undefined: the default). */
+export function world(on: On, files: Record<string, string>, opts: { refuse?: string[]; surfaces?: string[]; cwd?: string; git?: GitAnswer; process?: ProcessAnswer } = {}): World {
   const w: World = { fs: new MemoryFs(files, opts.cwd !== undefined), tools: [], deferred: [], opened: [], commands: [], seen: [], toasts: [] }
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.cwd', () => ({ value: opts.cwd ?? CWD }))
@@ -149,6 +154,8 @@ export function world(on: On, files: Record<string, string>, opts: { refuse?: st
       const r = opts.git(e.argv[2]!, e.argv.slice(3))
       return { value: { exitCode: r.ok ? 0 : 128, stdout: r.out, stderr: r.err } } as never
     }
+    const r = opts.process?.(e.argv)
+    if (r) return { value: r } as never
     return { value: { exitCode: 0, stdout: '', stderr: '' } } as never
   })
   on('command.register', (_$, e) => {
@@ -163,6 +170,9 @@ export function world(on: On, files: Record<string, string>, opts: { refuse?: st
   on('ui.open', (_$, e) => { w.opened.push(e.id); return { value: { isPlaced: true as const } } })
   return w
 }
+
+/** What a command answers through `$.process.run`, or undefined to leave it to the default. */
+export type ProcessAnswer = (argv: readonly string[]) => { exitCode: number; stdout: string; stderr: string } | undefined
 
 /** What `git -C <dir> <args>` answers. */
 export type GitAnswer = (dir: string, args: string[]) => { ok: boolean; out: string; err: string }

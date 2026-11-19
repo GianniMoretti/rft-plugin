@@ -1,6 +1,6 @@
-// The tree view's radial layout as a pure function over a d3 hierarchy, so the plugin's tests
-// can check it. Loaded by the page before app.js; it sets `globalThis.RftLayout` and touches
-// nothing else.
+// The tree view's radial layout as a pure function over a d3 hierarchy, and the arrow keys' walk
+// through the drawn tree, so the plugin's tests can check them. Loaded by the page before app.js;
+// it sets `globalThis.RftLayout` and touches nothing else.
 (function (root) {
   'use strict'
 
@@ -29,5 +29,26 @@
   /** An angle brought into [0, 2π). */
   const normalAngle = a => ((a % TAU) + TAU) % TAU
 
-  root.RftLayout = { radial, normalAngle }
+  /**
+   * Where an arrow key leads from note `id` in the drawn tree: `up` to its parent, `down` to a
+   * child (the one `last` remembers it was left for, else the first), `left` and `right` to the
+   * sibling before or after it, round from the last to the first and back. `kids(id)` gives a
+   * note's drawn children in order, `parentOf(id)` its drawn parent or null, and `roots` the drawn
+   * top level, the siblings of a note without a parent. Null when there is nowhere to go.
+   */
+  function step(dir, id, { roots, kids, parentOf, last }) {
+    if (dir === 'up') return parentOf(id) || null
+    if (dir === 'down') {
+      const ks = kids(id)
+      const back = last && last.get(id)
+      return ks.includes(back) ? back : ks[0] || null
+    }
+    const p = parentOf(id)
+    const sibs = p ? kids(p) : roots
+    const i = sibs.indexOf(id)
+    if (i < 0) return null
+    return sibs[(i + (dir === 'left' ? -1 : 1) + sibs.length) % sibs.length]
+  }
+
+  root.RftLayout = { radial, normalAngle, step }
 })(typeof globalThis !== 'undefined' ? globalThis : window)

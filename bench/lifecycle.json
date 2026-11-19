@@ -1,0 +1,12 @@
+[
+  {
+    "name": "launch",
+    "setup": ["python3", "{bench}/lifecycle.py", "launch", "--project", "{work}"],
+    "prompt": "Under D05, add an experiment that runs the toy training script in code/toy (python3 train.py --seed S --out runs/<the experiment's id>/seedS) for seeds 0, 1 and 2, with no GPU, and queue the three runs."
+  },
+  {
+    "name": "record",
+    "setup": ["python3", "{bench}/lifecycle.py", "record", "--project", "{work}", "--plugin", "{plugin}"],
+    "prompt": "E08's jobs have ended. Record its result."
+  }
+]

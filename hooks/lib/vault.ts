@@ -65,15 +65,23 @@ export const ID_RE = new RegExp(`^([${NODE_TYPES.map(t => TYPES[t].prefix).join(
 export const orList = (items: string[]) =>
   items.length > 1 ? `${items.slice(0, -1).join(', ')} or ${items[items.length - 1]}` : items.join('')
 
-export const STATUSES = ['planned', 'running', 'done', 'idea', 'dropped', 'discussed', 'moved'] as const
+export const STATUSES = ['planned', 'running', 'done', 'review', 'verified', 'idea', 'dropped', 'discussed', 'moved'] as const
 export type Status = (typeof STATUSES)[number]
 
 export const MARK: Record<string, string> = {
-  done: '✓', running: '…', planned: '→', idea: '?', dropped: '✗', discussed: '·', moved: '↗',
+  done: '✓', review: '↺', verified: '✔', running: '…', planned: '→', idea: '?', dropped: '✗', discussed: '·', moved: '↗',
 }
 
 export const LEGEND =
-  '✓ done · … running · → planned · ? idea · ✗ dropped · · discussed, not pursued · ↗ moved'
+  '✔ verified · ↺ review · ✓ done · … running · → planned · ? idea · ✗ dropped · · discussed, not pursued · ↗ moved'
+
+/**
+ * The statuses of a note whose work is finished: done, and the two a done note can go on to.
+ * `verified`: the user checked its claim (only they set it; it locks the note); `review`: it was
+ * verified, and its claim may no longer hold (see verify.ts).
+ */
+export const FINISHED_STATUSES: readonly string[] = ['done', 'review', 'verified']
+export const isFinished = (status: string) => FINISHED_STATUSES.includes(status)
 
 /**
  * A note's priority, highest first: `priority:` in its frontmatter, set by the user alone (the
@@ -118,6 +126,8 @@ export type RftNode = {
   summary?: string
   /** The note whose result overturns this one's (`superseded_by:`): do not build on this one. */
   supersededBy?: string
+  /** An experiment with a result: its `## Result` says something, or it is done. What a concept's artifact is written from. */
+  hasResult?: true
   /** Its priority (`priority:`), the user's alone; none until they give it one. */
   priority?: Priority
   /** The priority Claude suggests for it (`suggested_priority:`), until the user accepts or dismisses it. */
@@ -141,7 +151,41 @@ export type RftNode = {
   suggestedStart?: string
   suggestedEst?: number
   suggestedDatesWhy?: string
+  /** An experiment's marimo notebook (`notebook:`): a link in the vault's notebooks/ to the file in its concept's repo. */
+  notebook?: string
+  /** The notebook's last run (`reproduced:`, written by rft_run_notebook). */
+  reproduced?: Reproduced
+  /** When the user last verified it, and the fingerprint of what it claimed then (`verified:`). */
+  verified?: Verified
+  /** Why Claude suggests verifying it (`suggested_verified:`), until the user verifies it or dismisses that. */
+  suggestedVerified?: string
 }
+
+/** A note's verification stamp, as `verified:` holds it: `2026-11-17 a1b2c3d4`. */
+export type Verified = { date: string; fingerprint: string }
+
+const VERIFIED_RE = /^(\d{4}-\d{2}-\d{2}) ([0-9a-f]{8})$/
+
+export function parseVerified(value: string | undefined): Verified | null {
+  const m = VERIFIED_RE.exec(unquote(value))
+  return m ? { date: m[1]!, fingerprint: m[2]! } : null
+}
+
+/** FNV-1a of a text, as 8 hex digits. */
+export function fnv1a(text: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h.toString(16).padStart(8, '0')
+}
+
+/** How an experiment notebook's last run went: its RESULTS all in the note's Result, one not, an error, or nothing to check. */
+export type ReproState = 'ok' | 'differs' | 'failed' | 'unchecked'
+
+/** An experiment notebook's last run, as `reproduced:` holds it: `2026-11-15 ok @a1b2c3d4e5+dirty in 6.1 s`. */
+export type Reproduced = { date: string; state: ReproState; commit?: string; seconds?: number }
 
 export type Tree = {
   nodes: Record<string, RftNode>
@@ -200,6 +244,8 @@ export type Config = {
   requireSummaries?: boolean
   /** How many GPUs the experiments share: days on which planned and running ones need more are reported. */
   gpus?: number
+  /** Where the queue's runs keep their outputs, by repo (<runsDir>/<repo>/<exp>/<job>; absolute, ~/…, or from the tree's folder); absent: `runs/` at the top of each job's repo (<repo>/runs/<exp>/<job>). */
+  runsDir?: string
 }
 
 export type Io = {
@@ -221,6 +267,13 @@ export const MILESTONES = 'milestones'
 export const MILESTONE_RE = /^M(\d+)$/
 /** The calendar file of the deadlines and the planned runs, regenerated. */
 export const ICS = 'rft.ics'
+/** The concepts' artifacts: one HTML page each, whose first line is this header. */
+export const ARTIFACTS_DIR = 'artifacts'
+/** Snippets and documents (docs/design/manuscript.md): a folder each; the snippets' registry turns them on. */
+export const SNIPPETS_DIR = 'snippets'
+export const DOCUMENTS_DIR = 'documents'
+export const MANUSCRIPT_REGISTRY = `${SNIPPETS_DIR}/snippets.json`
+export const ARTIFACT_HEAD = /^<!-- rft-artifact (\{.*\}) -->[ \t]*(?:\r?\n|$)/
 
 export const join = (...parts: string[]) =>
   parts.filter(p => p !== '' && p !== '.').join('/').replace(/\/+/g, '/')
@@ -471,6 +524,10 @@ export type Loaded = {
   signature: string
   /** The deadlines in the vault's `milestones/`, by id. */
   milestones: Milestone[]
+  /** The vault holds at least one concept artifact (`artifacts/*.html` with its header). */
+  hasArtifacts?: boolean
+  /** The vault has snippets and documents (`snippets/snippets.json`). */
+  hasManuscript?: boolean
 }
 
 export async function signatureOf(io: Io, vault: string): Promise<string> {
@@ -481,6 +538,10 @@ export async function signatureOf(io: Io, vault: string): Promise<string> {
     for (const f of await io.list(dir)) {
       if (f.kind === 'file' && f.name.endsWith('.md')) parts.push(`${sub}/${f.name}:${f.mtimeMs}:${f.size}`)
     }
+  }
+  const dir = join(vault, ARTIFACTS_DIR)
+  if (await io.exists(dir)) {
+    for (const f of await io.list(dir)) if (f.kind === 'file' && f.name.endsWith('.html')) parts.push(`${ARTIFACTS_DIR}/${f.name}:${f.mtimeMs}:${f.size}`)
   }
   return parts.sort().join('|')
 }
@@ -527,6 +588,15 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
         if (why) nodes[id]!.suggestedWhy = why
       }
       readPlan(nodes[id]!, fm)
+      const notebook = unquote(fm.notebook)
+      if (notebook) nodes[id]!.notebook = notebook
+      const reproduced = parseReproduced(fm.reproduced)
+      if (reproduced) nodes[id]!.reproduced = reproduced
+      const verified = parseVerified(fm.verified)
+      if (verified) nodes[id]!.verified = verified
+      const suggestedVerified = unquoteJson(fm.suggested_verified)
+      if (suggestedVerified) nodes[id]!.suggestedVerified = suggestedVerified
+      if (fmType === 'experiment' && hasResultIn(nodes[id]!.status, text)) nodes[id]!.hasResult = true
       afterRef[id] = linksIn(fm.after)
       texts[id] = text
       parentRef[id] = linkTarget(fm.parent)
@@ -581,7 +651,20 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
   const tree: Tree = { nodes, roots }
   tree.concepts = computeConcepts(tree, config.project, conceptDeclarations(texts))
   const milestones = await loadMilestones(io, config.vault, byName, nodes)
-  return { config, tree, texts, problems, signature: await signatureOf(io, config.vault), milestones }
+  return { config, tree, texts, problems, signature: await signatureOf(io, config.vault), milestones, hasArtifacts: await hasArtifacts(io, config.vault), hasManuscript: await io.exists(join(config.vault, MANUSCRIPT_REGISTRY)).catch(() => false) }
+}
+
+/** Whether the vault holds a concept artifact: an html file in `artifacts/` that starts with the header. */
+async function hasArtifacts(io: Io, vault: string): Promise<boolean> {
+  const dir = join(vault, ARTIFACTS_DIR)
+  if (!(await io.exists(dir))) return false
+  for (const f of await io.list(dir)) {
+    if (f.kind !== 'file' || !f.name.endsWith('.html')) continue
+    try {
+      if (ARTIFACT_HEAD.test(await io.read(join(dir, f.name)))) return true
+    } catch { /* gone meanwhile */ }
+  }
+  return false
 }
 
 /** A whole number above 0, or undefined. */
@@ -639,6 +722,22 @@ export async function loadMilestones(io: Io, vault: string, byName: Record<strin
 // ---------------------------------------------------------------- concepts
 
 /** A frontmatter value without the quotes YAML allows around it. */
+const REPRODUCED_RE = /^(\d{4}-\d{2}-\d{2}) (ok|differs|failed|unchecked)(?: @([0-9a-f]{4,40}(?:\+dirty)?))?(?: in (\d+(?:\.\d+)?) s)?$/
+
+/** A `reproduced:` value read back; null when it is not one. As parse_reproduced in server/rft_server.py. */
+export function parseReproduced(value: string | undefined): Reproduced | null {
+  const m = REPRODUCED_RE.exec(unquote(value))
+  if (!m) return null
+  const out: Reproduced = { date: m[1]!, state: m[2] as ReproState }
+  if (m[3]) out.commit = m[3]
+  if (m[4]) out.seconds = Number(m[4])
+  return out
+}
+
+/** The `reproduced:` value of a run, unquoted. */
+export const reproducedLine = (r: Reproduced) =>
+  `${r.date} ${r.state}${r.commit ? ` @${r.commit}` : ''}${r.seconds != null ? ` in ${r.seconds} s` : ''}`
+
 export const unquote = (v: string | undefined) => (v ?? '').trim().replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1').trim()
 
 /** A value written with JSON.stringify (escapes and all), or any other quoted or bare one. */
@@ -710,6 +809,33 @@ export function computeConcepts(tree: Tree, project: string, decl: Record<string
 }
 
 /** The concept a note declares, if any (the root concept too, when the root note declares it). */
+/** A concept by its id (`root`), its start note's id or name, or its name. */
+export function resolveConcept(tree: Tree, ref: string): Concept | null {
+  const concepts = tree.concepts ?? {}
+  const r = ref.trim()
+  if (concepts[r]) return concepts[r]!
+  const id = resolveId(tree, r)
+  if (id) {
+    const c = Object.values(concepts).find(x => x.root === id)
+    if (c) return c
+  }
+  const low = r.toLowerCase()
+  return Object.values(concepts).find(c => c.name.toLowerCase() === low) ?? null
+}
+
+/** The concept's own notes (not its sub-concepts'), in tree order. */
+export function ownNotes(tree: Tree, conceptId: string): RftNode[] {
+  const out: RftNode[] = []
+  const visit = (id: string) => {
+    const n = tree.nodes[id]
+    if (!n) return
+    if (n.concept === conceptId) out.push(n)
+    n.children.forEach(visit)
+  }
+  tree.roots.forEach(visit)
+  return out
+}
+
 export function declaredConcept(concepts: Record<string, Concept> | undefined, id: string): Concept | undefined {
   return Object.values(concepts ?? {}).find(c => c.root === id)
 }
@@ -759,6 +885,14 @@ export const reposLine = (repos: string[]) => `[${repos.map(p => JSON.stringify(
  * The repos the notes of a concept work with, by priority: the concept's own, then those of each
  * concept above it, nearest first; a path once, at its highest place.
  */
+/**
+ * Whether an experiment should have a notebook and has none: its concept links code, and it is in
+ * work or has a result (not an idea, nor dropped, discussed or moved). The notebook makes its
+ * numbers, figures and tables; rft_add_node, rft_next and rft_validate say so.
+ */
+export const lacksNotebook = (tree: Tree, n: RftNode) =>
+  n.type === 'experiment' && !n.notebook && !n.supersededBy && ['planned', 'running', ...FINISHED_STATUSES].includes(n.status) && codeRepos(tree.concepts, n.concept).length > 0
+
 export function codeRepos(concepts: Record<string, Concept> | undefined, id: string): CodeRepo[] {
   const out: CodeRepo[] = []
   const seen = new Set<string>()
@@ -815,6 +949,24 @@ function sectionAt(lines: { line: string; isHeading: boolean }[], title: string)
   const next = lines.findIndex((l, i) => i > start && l.isHeading)
   return { start, end: next < 0 ? lines.length : next }
 }
+
+/** The text of a note's `## <title>` section, trimmed; '' when it has none or it is empty. */
+export function sectionText(text: string, title: string): string {
+  const lines = bodyLines(bodyOf(text))
+  const at = sectionAt(lines, title)
+  return at ? lines.slice(at.start + 1, at.end).map(l => l.line).join('\n').trim() : ''
+}
+
+/** The text of a note's `## Result` section, trimmed; '' when it has none or it is empty. As `result_of` in server/rft_server.py. */
+export const resultOf = (text: string) => sectionText(text, 'Result')
+
+/**
+ * Whether an experiment has a result: it is done, or its Result says something while it runs or
+ * after (a planned experiment or an idea has none, whatever its Result holds: "Not run yet."). As
+ * has_result in server/rft_server.py.
+ */
+export const hasResultIn = (status: string, text: string) =>
+  isFinished(status) || (status !== 'planned' && status !== 'idea' && resultOf(text) !== '')
 
 /** A note's `## Code` section, read back; null when it has none. */
 export function codeSection(text: string): CodeSection | null {
@@ -1147,6 +1299,7 @@ export async function validate(io: Io, loaded: Loaded, opts: { root?: string; ho
       if (!cname) errors.push(`${n.id}: \`concept:\` is empty (give the concept a name, or remove the field)`)
       else if (/[\^#|[\]]/.test(cname)) errors.push(`${n.id}: concept name "${cname}" contains ^ # | [ or ]`)
     } else if (fm.concept_summary !== undefined) warnings.push(`${n.id}: concept_summary without concept`)
+    if (n.status === 'verified' && !n.verified) warnings.push(`${n.id}: verified with no stamp (\`verified: <date> <fingerprint>\`): the session stamps and locks it at its next look at the vault`)
     if (fm.superseded_by !== undefined && !n.supersededBy) warnings.push(`${n.id}: superseded_by names no note of the tree (rft_supersede sets or clears it)`)
     if (fm.priority !== undefined && !n.priority) warnings.push(`${n.id}: priority "${unquote(fm.priority)}" is not ${orList([...PRIORITIES])} (the user sets it in the tree view)`)
     if (fm.suggested_priority !== undefined && !n.suggestedPriority) warnings.push(`${n.id}: suggested_priority "${unquote(fm.suggested_priority)}" is not ${orList([...PRIORITIES])} (rft_suggest_priority writes it)`)
@@ -1191,6 +1344,8 @@ export async function validate(io: Io, loaded: Loaded, opts: { root?: string; ho
     const missing = n.children.filter(k => !listed.has(tree.nodes[k]!.name))
     if (missing.length) warnings.push(`${n.id}: "Children in the tree" does not list ${missing.join(', ')} (rft_sync adds them)`)
   }
+  const noNotebook = Object.values(tree.nodes).filter(n => lacksNotebook(tree, n)).map(n => n.id).sort(compareNames)
+  if (noNotebook.length) warnings.push(`Experiments in a concept with code and no notebook (${noNotebook.length}): ${noNotebook.slice(0, 20).join(', ')}${noNotebook.length > 20 ? ', …' : ''} — rft_set_notebook writes one, which makes their numbers, figures and tables`)
   for (const p of PRIORITIES) {
     const limit = PRIORITY_LIMITS[p]
     const held = Object.values(tree.nodes).filter(n => n.priority === p && OPEN_STATUSES.includes(n.status)).map(n => n.id).sort(compareNames)

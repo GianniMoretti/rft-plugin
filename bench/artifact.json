@@ -1,0 +1,7 @@
+[
+  {
+    "name": "artifact",
+    "setup": ["python3", "{bench}/lifecycle.py", "artifact", "--project", "{work}", "--plugin", "{plugin}"],
+    "prompt": "E08 has a result now. Update the artifact of its concept, Mix-based augmentation."
+  }
+]

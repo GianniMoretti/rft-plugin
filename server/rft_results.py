@@ -1,0 +1,546 @@
+"""What an experiment notebook's run leaves in the vault, at no model turn. Standard library only.
+
+A notebook (server/rft_notebook.py runs it) hands back RESULTS, the numbers the experiment's note
+reports, and may hand back FIGURES and TABLES. `apply` takes that run to the vault:
+
+- **Checked**: each number of RESULTS against the note's Result, at the precision the Result
+  writes it (as checkResults did in hooks/lib/notebooks.ts): ok, differs, failed or unchecked.
+- **Recorded**: the numbers written into the note's Result as a table between two comment lines
+  (BLOCK_BEGIN … BLOCK_END), with where they come from: the notebook, its commit, the queue's runs
+  of the experiment and theirs. A run records when asked (`record`: the runner, once an
+  experiment's jobs end, and rft_run_notebook with record: true), or when nothing would be lost:
+  the Result has no table yet and writes no number. A locked note is left as it is. So Claude
+  never copies a number into a note: it writes what they mean around them.
+- **Saved**, when the numbers are recorded or check ok (so what the vault shows is what the note
+  says): RESULTS as results/<id>.json; each figure as figures/<id>_<name>.svg, which a concept's
+  artifact names as ../figures/<file> (and as .pdf beside it, for the manuscript's \\rftfig, when the
+  notebook gave a matplotlib figure); each table as tables/<id>_<name>.html (and .tex, a booktabs
+  tabular for the manuscript's \\rfttable), which an artifact
+  takes in with <rft-table src="<id>_<name>"></rft-table> (filled in here, and when the artifact
+  is written: hooks/lib/artifacts.ts).
+- **Stamped**: the note's `reproduced:` line, the run's date, state, commit and time.
+- **Sent to review**: a verified note (`status: verified`, the user's check) whose run differs or
+  failed no longer holds as verified: its status becomes `review`, it is unlocked, and its History
+  says why (as reviewText in hooks/lib/verify.ts).
+
+A concept can have a notebook too, on the note that starts it (`apply_concept`): it reads
+EXPERIMENTS, the RESULTS its experiments' notebooks saved (results/<id>.json names the concepts
+each belongs to, the outer ones too), and makes the FIGURES and TABLES that compare them, saved as
+figures/<concept id>_<name>.svg and tables/<concept id>_<name>.html for its artifact. After an
+experiment's run records or checks ok, the notebooks of its concepts run as well (rft_notebook.py
+apply), so an artifact's comparisons follow its experiments at no model turn.
+
+    python3 rft_notebook.py apply --vault V --exp E08 [--record]   (runs the notebook, then this)
+"""
+from __future__ import annotations
+
+import base64
+import html
+import json
+import math
+import os
+import re
+from pathlib import Path
+
+import rft_queue  # beside this file: the runs of the experiment, from the queue's history
+
+RESULTS_DIR = "results"
+FIGURES_DIR = "figures"
+TABLES_DIR = "tables"
+ARTIFACTS_DIR = "artifacts"
+SUBDIRS = ("experiments", "directions", "references", "theory")
+BLOCK_BEGIN = "<!-- rft-results: the notebook's RESULTS, written by its run; rft_run_notebook rewrites it -->"
+BLOCK_END = "<!-- /rft-results -->"
+BLOCK_RE = re.compile(r"^<!-- rft-results\b.*?-->[ \t]*\n.*?^<!-- /rft-results -->[ \t]*$", re.M | re.S)
+FENCE_RE = re.compile(r"^\s*(```|~~~)")
+TABLE_TAG = re.compile(r'(<rft-table\s+src\s*=\s*["\']([^"\']+)["\']\s*>)(.*?)(</rft-table>)', re.S | re.I)
+# a number in prose, as NUMBER in hooks/lib/notebooks.ts reads it (JavaScript's \w and \d: ASCII)
+NUMBER = re.compile(r"(?<![\w.])([-−]?)(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?(?:[eE]([-+]?\d+))?(?![\w.]*\d)", re.A)
+MAX_FIGURE = 10_000_000  # the largest SVG an artifact takes in
+SHOWN_RUNS = 6
+
+
+# ---------------------------------------------------------------- RESULTS against the Result
+
+def numbers_in(text: str) -> list[tuple[float, float]]:
+    """The numbers of a text, each with how close a value must be to read as it (half its last digit)."""
+    out = []
+    for m in NUMBER.finditer(text):
+        frac, exp = m.group(3) or "", int(m.group(4) or 0)
+        try:
+            x = float(f"{'-' if m.group(1) else ''}{m.group(2).replace(',', '')}{'.' + frac if frac else ''}e{exp}")
+        except (ValueError, OverflowError):
+            continue
+        if math.isfinite(x):
+            out.append((x, 0.5 * 10 ** (exp - len(frac)) * (1 + 1e-9)))
+    return out
+
+
+def leaves(x, key: str = "", found: list | None = None, skipped: list | None = None):
+    """The numbers of RESULTS by their path (`a.b`, `a[0]`), and the paths of what is not a number."""
+    found = [] if found is None else found
+    skipped = [] if skipped is None else skipped
+    if isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x):
+        found.append((key or "RESULTS", x))
+    elif isinstance(x, list):
+        for i, v in enumerate(x):
+            leaves(v, f"{key}[{i}]", found, skipped)
+    elif isinstance(x, dict):
+        for k, v in x.items():
+            leaves(v, f"{key}.{k}" if key else str(k), found, skipped)
+    else:
+        skipped.append(key or "RESULTS")
+    return found, skipped
+
+
+def check(results, text: str) -> tuple[list[dict], list[str]]:
+    """Each number of RESULTS, and whether the text writes it (at the precision the text gives)."""
+    found, skipped = leaves(results)
+    nums = numbers_in(text)
+    return [{"key": k, "value": v, "found": any(abs(v - x) <= tol for x, tol in nums)} for k, v in found], skipped
+
+
+# ---------------------------------------------------------------- notes
+
+def split_note(text: str) -> tuple[list[str] | None, str]:
+    """The frontmatter's lines and the body; (None, text) when there is no frontmatter."""
+    t = text.replace("\r\n", "\n")
+    if not t.startswith("---\n"):
+        return None, t
+    end = t.find("\n---", 4)
+    if end < 0:
+        return None, t
+    nl = t.find("\n", end + 4)
+    return t[4:end].split("\n"), "" if nl < 0 else t[nl + 1:]
+
+
+def join_note(head: list[str] | None, body: str) -> str:
+    return body if head is None else "---\n" + "\n".join(head) + "\n---\n" + body
+
+
+def unquote(v: str | None) -> str:
+    v = (v or "").strip()
+    return re.sub(r'^"(.*)"$', r"\1", re.sub(r"^'(.*)'$", r"\1", v)).strip()
+
+
+def field(text: str, key: str) -> str:
+    head, _ = split_note(text)
+    for line in head or []:
+        if line.startswith(key + ":"):
+            return unquote(line[len(key) + 1:])
+    return ""
+
+
+def set_field(text: str, key: str, value: str, after: str | None = None) -> str:
+    """A one-line frontmatter field set in place, else after `after` (or children:, or parent:), as setField in hooks/lib/vault.ts."""
+    head, body = split_note(text)
+    if head is None:
+        return text
+    line = f"{key}: {value}"
+    at = next((i for i, l in enumerate(head) if l.startswith(key + ":")), None)
+    if at is not None:
+        head[at] = line
+        head[at + 1:] = [l for l in head[at + 1:] if not l.startswith(key + ":")]
+    else:
+        pos = len(head)
+        for a in [x for x in (after, "children", "parent") if x]:
+            i = next((i for i, l in enumerate(head) if l.startswith(a + ":")), None)
+            if i is not None:
+                pos = i + 1
+                break
+        head.insert(pos, line)
+    return join_note(head, body)
+
+
+STATUS_WORDS = ("planned", "running", "done", "review", "verified", "idea", "dropped", "discussed", "moved")
+
+
+def remove_field(text: str, key: str) -> str:
+    head, body = split_note(text)
+    return text if head is None else join_note([l for l in head if not l.startswith(key + ":")], body)
+
+
+def with_status(text: str, status: str) -> str:
+    """The note's status set: `status:`, the status among its tags, the **Status:** line (as withStatus in hooks/lib/vault.ts)."""
+    out = set_field(text, "status", status)
+    tags = field(out, "tags")
+    if tags:
+        items = [t.strip() for t in tags.strip("[]").split(",") if t.strip()]
+        kept = [t for t in items if t not in STATUS_WORDS]
+        if len(kept) != len(items):
+            out = set_field(out, "tags", "[" + ", ".join(kept + [status]) + "]")
+    return re.sub(r"(\*\*Status:\*\*\s*)[a-z]+", lambda m: m.group(1) + status, out, count=1)
+
+
+def with_history(text: str, line: str) -> str:
+    """A dated line under `## History`, made before "Children in the tree" when missing (as withHistory in hooks/lib/vault.ts)."""
+    heading = "## History"
+    at = text.find(f"\n{heading}\n")
+    if at < 0:
+        kids = text.find("\n## Children in the tree")
+        if kids < 0:
+            return text.rstrip("\n") + f"\n\n{heading}\n{line}\n"
+        return text[:kids].rstrip("\n") + f"\n\n{heading}\n{line}\n" + text[kids:]
+    start = at + len(heading) + 2
+    nxt = text.find("\n## ", start - 1)
+    end = len(text) if nxt < 0 else nxt
+    sec = text[start:end].rstrip()
+    return text[:start] + (sec + "\n" if sec else "") + line + "\n" + text[end:]
+
+
+def _headings(lines: list[str]) -> list[int]:
+    out, fenced = [], False
+    for i, line in enumerate(lines):
+        if FENCE_RE.match(line):
+            fenced = not fenced
+        if not fenced and line.startswith("## "):
+            out.append(i)
+    return out
+
+
+def _section(lines: list[str], title: str) -> tuple[int, int] | None:
+    heads = _headings(lines)
+    start = next((i for i in heads if lines[i][3:].strip() == title), None)
+    if start is None:
+        return None
+    return start, next((i for i in heads if i > start), len(lines))
+
+
+def result_of(text: str) -> str:
+    """The text of a note's `## Result` section, trimmed, as result_of in rft_server.py."""
+    lines = split_note(text)[1].split("\n")
+    at = _section(lines, "Result")
+    return "\n".join(lines[at[0] + 1:at[1]]).strip() if at else ""
+
+
+def with_block(text: str, block: str) -> str:
+    """The note with `block` as the table at the top of its Result: in place of the one there, else
+    first in the section (made before Directions found or the children list when there is none)."""
+    head, body = split_note(text)
+    lines = body.split("\n")
+    at = _section(lines, "Result")
+    if at is None:
+        before = _section(lines, "Directions found") or _section(lines, "Children in the tree")
+        where = before[0] if before else len(lines)
+        lines[where:where] = ["## Result", block, ""]
+        return join_note(head, "\n".join(lines))
+    inner = "\n".join(lines[at[0] + 1:at[1]])
+    if BLOCK_RE.search(inner):
+        inner = BLOCK_RE.sub(lambda _m: block, inner, count=1)
+    else:
+        rest = inner.strip("\n")
+        inner = block + ("\n\n" + rest if rest else "") + "\n"
+    lines[at[0] + 1:at[1]] = (inner.rstrip("\n") + "\n").split("\n")
+    return join_note(head, "\n".join(lines))
+
+
+def note_path(vault: Path, exp: str) -> Path | None:
+    """An experiment's note, by its id."""
+    for sub in SUBDIRS:
+        for f in sorted((vault / sub).glob(f"{exp} *.md")) + sorted((vault / sub).glob(f"{exp}.md")):
+            return f
+    return None
+
+
+def write_atomic(path: Path, data: str | bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    if isinstance(data, bytes):
+        tmp.write_bytes(data)
+    else:
+        tmp.write_text(data, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+# ---------------------------------------------------------------- what is written
+
+def number_text(v) -> str:
+    """A value as RESULTS gives it (the notebook rounds to what the note reports)."""
+    return v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
+
+
+def seconds_text(s) -> str | None:
+    if not isinstance(s, (int, float)) or not math.isfinite(s):
+        return None
+    s = round(float(s), 1)
+    return str(int(s)) if s.is_integer() else str(s)
+
+
+def reproduced_line(date: str, state: str, commit: str | None, dirty: bool | None, seconds) -> str:
+    """The `reproduced:` value, as reproducedLine in hooks/lib/vault.ts writes it."""
+    sec = seconds_text(seconds)
+    return f"{date} {state}" + (f" @{commit}{'+dirty' if dirty else ''}" if commit else "") + (f" in {sec} s" if sec is not None else "")
+
+
+def runs_of(vault: Path, exp: str, only: list[str] | None = None) -> list[dict]:
+    """The queue's runs of the experiment that ended well (its notebook's runs left out), oldest first."""
+    try:
+        hist = rft_queue.Queue(vault, probe=lambda: [], wake=lambda: None).history()
+    except (rft_queue.QueueError, OSError):
+        return []
+    out = [j for j in hist if j.get("exp") == exp and j.get("state") == "done" and j.get("kind", "run") != "notebook"
+           and (only is None or j["id"] in only)]
+    return sorted(out, key=lambda j: (j.get("started") or 0, int(j["id"][1:]) if j["id"][1:].isdigit() else 0))
+
+
+def provenance(outcome: dict, runs: list[dict], date: str, repo_rel: str | None) -> str:
+    """Where the numbers come from, in a line: the notebook at its commit, and the runs it read."""
+    nb = repo_rel or outcome.get("file") or "the notebook"
+    at = f" at {outcome['commit']}{' with uncommitted changes' if outcome.get('dirty') else ''}" if outcome.get("commit") else ""
+    parts = [f"From `{nb}`{at}, {date}"]
+    if runs:
+        ids = [j["id"] for j in runs]
+        shown = ", ".join(ids) if len(ids) <= SHOWN_RUNS else f"{', '.join(ids[:SHOWN_RUNS])} and {len(ids) - SHOWN_RUNS} more"
+        commits = sorted({f"{j['commit']}{'+patch' if j.get('patch') else ''}" for j in runs if j.get("commit")})
+        parts.append(f"runs {shown}" + (f" (code {', '.join(commits)})" if commits else ""))
+    return "; ".join(parts) + "."
+
+
+def results_block(results, line: str) -> str:
+    """The Result's table of RESULTS, between its comment lines."""
+    found, skipped = leaves(results)
+    rows = [(k, number_text(v)) for k, v in found]
+    if skipped:
+        flat = {}
+
+        def walk(x, key=""):
+            if isinstance(x, dict):
+                for k, v in x.items():
+                    walk(v, f"{key}.{k}" if key else str(k))
+            elif isinstance(x, list):
+                for i, v in enumerate(x):
+                    walk(v, f"{key}[{i}]")
+            else:
+                flat[key or "RESULTS"] = x
+        walk(results)
+        rows = [(k, number_text(v)) for k, v in flat.items()]
+    cell = lambda t: str(t).replace("|", "\\|").replace("\n", " ")  # noqa: E731
+    return "\n".join([BLOCK_BEGIN, "| RESULTS | value |", "|---|---|", *[f"| {cell(k)} | {cell(v)} |" for k, v in rows],
+                      "", f"*{line}*", BLOCK_END])
+
+
+def slug(name: str) -> str:
+    s = re.sub(r"[^a-z0-9]+", "_", str(name).lower()).strip("_")[:40].rstrip("_")
+    return s or "figure"
+
+
+TEX_SPECIAL = {"\\": r"\textbackslash{}", "&": r"\&", "%": r"\%", "$": r"\$", "#": r"\#", "_": r"\_",
+               "{": r"\{", "}": r"\}", "~": r"\textasciitilde{}", "^": r"\textasciicircum{}"}
+
+
+def tex_text(s: str) -> str:
+    """Text as LaTeX typesets it: its special characters escaped, ± as math."""
+    out = "".join(TEX_SPECIAL.get(ch, ch) for ch in s)
+    return out.replace("±", r"$\pm$")
+
+
+def is_number(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def table_tex(t: dict) -> str:
+    """A table of the notebook as a booktabs tabular, for the manuscript (\\rfttable): its header above
+    \\midrule, columns of numbers right-aligned; no float, so the snippet gives the table, caption and label."""
+    cols = [str(c) for c in t.get("columns") or []]
+    rows = [list(r) + [None] * (len(cols) - len(r)) for r in t.get("rows") or []]
+    numeric = [bool(rows) and all(r[i] is None or is_number(r[i]) for r in rows) for i in range(len(cols))]
+    cell = lambda v: "" if v is None else tex_text(number_text(v))  # noqa: E731
+    lines = [r"\begin{tabular}{" + "".join("r" if n else "l" for n in numeric) + "}", r"\toprule",
+             " & ".join(tex_text(c) for c in cols) + r" \\", r"\midrule",
+             *(" & ".join(cell(v) for v in r[:len(cols)]) + r" \\" for r in rows), r"\bottomrule", r"\end{tabular}"]
+    return "\n".join(lines) + "\n"
+
+
+def table_html(caption: str, t: dict) -> str:
+    """A table of the notebook (columns and rows) as the HTML an artifact takes in; numbers right-aligned by the page's style."""
+    esc = lambda v: html.escape(number_text(v) if v is not None else "")  # noqa: E731
+    head = "".join(f"<th>{html.escape(str(c))}</th>" for c in t.get("columns") or [])
+    body = "\n".join("<tr>" + "".join(f"<td>{esc(v)}</td>" for v in row) + "</tr>" for row in t.get("rows") or [])
+    return f"<table>\n<caption>{html.escape(caption)}</caption>\n<thead><tr>{head}</tr></thead>\n<tbody>\n{body}\n</tbody>\n</table>"
+
+
+def fill_tables(page: str, tables: dict[str, str]) -> tuple[str, list[str]]:
+    """Each <rft-table src="name"> of a page filled with that table, when it is one of `tables`; the page and the names filled."""
+    filled: list[str] = []
+
+    def one(m):
+        name = m.group(2)
+        if name not in tables:
+            return m.group(0)
+        filled.append(name)
+        return f"{m.group(1)}\n{tables[name]}\n{m.group(4)}"
+    return TABLE_TAG.sub(one, page), filled
+
+
+def refresh_artifacts(vault: Path, tables: dict[str, str]) -> list[str]:
+    """The artifacts whose <rft-table> names one of `tables`, filled again; their paths in the vault.
+    The header (what the page was written from) is kept: a table is the note's numbers, not a new result."""
+    out = []
+    d = vault / ARTIFACTS_DIR
+    for f in sorted(d.glob("*.html")) if d.is_dir() else []:
+        try:
+            text = f.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        new, filled = fill_tables(text, tables)
+        if filled and new != text:
+            write_atomic(f, new)
+            out.append(f"{ARTIFACTS_DIR}/{f.name}")
+    return out
+
+
+def save(vault: Path, exp: str, outcome: dict, date: str, runs: list[dict]) -> tuple[dict, list[str]]:
+    """RESULTS, the figures and the tables of a run, kept in the vault; what was saved, and what was not (why)."""
+    notes: list[str] = []
+    figures, tables, captions, contents = [], {}, {}, {}
+    for name, svg in (outcome.get("figures") or {}).items():
+        if not isinstance(svg, str) or "<svg" not in svg[:2000]:
+            notes.append(f"figure {name!r}: not an SVG")
+            continue
+        if len(svg.encode()) > MAX_FIGURE:
+            notes.append(f"figure {name!r}: larger than {MAX_FIGURE // 1_000_000} MB")
+            continue
+        file = f"{exp}_{slug(name)}.svg"
+        write_atomic(vault / FIGURES_DIR / file, svg)
+        figures.append(f"{FIGURES_DIR}/{file}")
+        captions[f"{FIGURES_DIR}/{file}"] = str(name)
+        # the same figure as PDF, for the manuscript's \rftfig, when the notebook gave one (a matplotlib figure)
+        pdf = (outcome.get("pdfs") or {}).get(name)
+        pdf_path = vault / FIGURES_DIR / f"{exp}_{slug(name)}.pdf"
+        if isinstance(pdf, str):
+            try:
+                data = base64.b64decode(pdf, validate=True)
+            except ValueError:
+                data = b""
+            if data.startswith(b"%PDF") and len(data) <= MAX_FIGURE:
+                write_atomic(pdf_path, data)
+        elif pdf_path.exists():
+            pdf_path.unlink()  # an older run's, which would no longer show this figure
+    for name, t in (outcome.get("tables") or {}).items():
+        if not isinstance(t, dict) or not isinstance(t.get("columns"), list):
+            notes.append(f"table {name!r}: not a table")
+            continue
+        key = f"{exp}_{slug(name)}"
+        tables[key] = table_html(str(name), t)
+        contents[key] = {"caption": str(name), "columns": t["columns"][:12], "rows": [r[:12] for r in (t.get("rows") or [])[:20]],
+                         "more_rows": max(0, len(t.get("rows") or []) - 20)}
+        write_atomic(vault / TABLES_DIR / f"{key}.html", tables[key] + "\n")
+        write_atomic(vault / TABLES_DIR / f"{key}.tex", table_tex(t))
+    notes.extend(f"{n}" for n in outcome.get("notes") or [])
+    record = {"exp": exp, "concepts": concept_chain(vault, exp), "date": date, "results": outcome.get("results"), "commit": outcome.get("commit"),
+              "dirty": outcome.get("dirty"), "notebook": outcome.get("file"),
+              "runs": [{"id": j["id"], "label": j.get("label") or "", "out": j.get("out"), "commit": j.get("commit"),
+                        "patch": j.get("patch")} for j in runs],
+              "figures": figures, "tables": [f"{TABLES_DIR}/{k}.html" for k in tables],
+              "captions": captions, "contents": contents}
+    write_atomic(vault / RESULTS_DIR / f"{exp}.json", json.dumps(record, ensure_ascii=False, indent=1) + "\n")
+    saved = {"results": f"{RESULTS_DIR}/{exp}.json", "figures": figures, "tables": sorted(tables),
+             "artifacts": refresh_artifacts(vault, tables)}
+    return saved, notes
+
+
+def _concepts(vault: Path) -> tuple[dict, dict]:
+    """The tree's notes by id and its concepts by id, as the server reads them."""
+    import rft_server  # beside this file; only here, where the tree is needed
+    tree = rft_server.Vault(Path(vault), "rft").tree()
+    return {n["id"]: n for n in tree["nodes"]}, {c["id"]: c for c in tree.get("concepts") or []}
+
+
+def concept_chain(vault: Path, nid: str) -> list[str]:
+    """The concepts a note belongs to, its own first, then those above it (the project's is "root")."""
+    nodes, concepts = _concepts(vault)
+    out, cid = [], (nodes.get(nid) or {}).get("concept")
+    while cid and cid not in out:
+        out.append(cid)
+        cid = (concepts.get(cid) or {}).get("parent")
+    return out
+
+
+def concept_notebooks(vault: Path, exp: str) -> list[str]:
+    """The start notes of the concepts above an experiment that have a notebook, its own concept's first."""
+    nodes, concepts = _concepts(vault)
+    out, cid = [], (nodes.get(exp) or {}).get("concept")
+    while cid and cid not in [c for c, _ in out]:
+        start = (concepts.get(cid) or {}).get("root")
+        out.append((cid, start))
+        cid = (concepts.get(cid) or {}).get("parent")
+    return [start for _, start in out if start and (nodes.get(start) or {}).get("notebook")]
+
+
+def apply_concept(vault, cid: str, outcome: dict, date: str) -> dict:
+    """A concept notebook's run taken to the vault: its figures and tables saved (as <cid>_<name>)
+    and filled into the artifacts that name them, its RESULTS if it has any, its note stamped:
+    ok when it ran, failed with the end of its traceback. Nothing is checked against a Result."""
+    vault = Path(vault)
+    path = note_path(vault, cid)
+    out = {k: outcome.get(k) for k in ("ok", "seconds", "commit", "dirty", "file", "error") if outcome.get(k) is not None}
+    out["kind"] = "concept"
+    if path is None:
+        return {**out, "ok": False, "state": "failed", "error": f"no note {cid} in the vault"}
+    out["note"] = str(path.relative_to(vault))
+    state = "ok" if outcome.get("ok") else "failed"
+    out["state"] = state
+    if state == "ok":
+        out["saved"], out["notes"] = save(vault, cid, outcome, date, [])
+    stamp = reproduced_line(date, state, outcome.get("commit"), outcome.get("dirty"), outcome.get("seconds"))
+    write_atomic(path, set_field(path.read_text(encoding="utf-8"), "reproduced", json.dumps(stamp), after="notebook"))
+    out["reproduced"] = stamp
+    return out
+
+
+# ---------------------------------------------------------------- the run, applied
+
+def apply(vault, exp: str, outcome: dict, date: str, record: bool = False, runs: list[str] | None = None) -> dict:
+    """A notebook's run (rft_notebook.run's answer) taken to the experiment's note and the vault:
+    checked, recorded, saved and stamped, as the module's docstring says. The answer: the state,
+    the checks, what was recorded and saved, and the notes of what was not."""
+    vault = Path(vault)
+    path = note_path(vault, exp)
+    out = {k: outcome.get(k) for k in ("ok", "seconds", "commit", "dirty", "file", "error") if outcome.get(k) is not None}
+    if path is None:
+        return {**out, "ok": False, "state": "failed", "error": f"no note {exp} in the vault"}
+    out["note"] = str(path.relative_to(vault))
+    text = path.read_text(encoding="utf-8")
+    locked = field(text, "locked").lower() in ("true", "yes")
+    result = result_of(text)
+    recorded = False
+    if not outcome.get("ok"):
+        state = "failed"
+    elif outcome.get("results") is None:
+        state, out["why"] = "unchecked", "no RESULTS"
+    else:
+        checks, skipped = check(outcome["results"], result)
+        out["checks"], out["skipped"] = checks, skipped
+        if not checks:
+            state, out["why"] = "unchecked", "no number in RESULTS"
+        else:
+            has_block = bool(BLOCK_RE.search(result))
+            if (record or (not has_block and not numbers_in(result))) and (locked and not numbers_in(result)):
+                state, out["why"] = "unchecked", "locked"  # nothing to check against, and not ours to write
+            elif record or (not has_block and not numbers_in(result)):
+                if locked:
+                    state, out["why"] = "ok" if all(c["found"] for c in checks) else "differs", "locked"
+                else:
+                    ran = runs_of(vault, exp, runs)
+                    rel = None
+                    if outcome.get("file"):
+                        top = rft_queue.repo_of(Path(outcome["file"]).parent)
+                        rel = os.path.relpath(outcome["file"], top) if top else None
+                    text = with_block(text, results_block(outcome["results"], provenance(outcome, ran, date, rel)))
+                    recorded, state = True, "ok"
+                    out["checks"] = [{**c, "found": True} for c in checks]
+            else:
+                state = "ok" if all(c["found"] for c in checks) else "differs"
+    out["state"], out["recorded"], out["locked"] = state, recorded, locked
+    if state == "ok" and outcome.get("results") is not None:
+        out["saved"], out["notes"] = save(vault, exp, outcome, date, runs_of(vault, exp, runs))
+    stamp = reproduced_line(date, state, outcome.get("commit"), outcome.get("dirty"), outcome.get("seconds"))
+    text = set_field(text, "reproduced", json.dumps(stamp), after="notebook")
+    if field(text, "status") == "verified" and state in ("differs", "failed"):
+        # the user's check no longer holds: review, unlocked, and why
+        why = "its notebook's run failed" if state == "failed" else "its notebook's run differs from its Result"
+        text = with_history(remove_field(with_status(text, "review"), "locked"), f"- {date}: to review, {why}")
+        out["review"] = True
+    write_atomic(path, text)
+    out["reproduced"] = stamp
+    return out

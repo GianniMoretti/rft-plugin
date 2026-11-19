@@ -4,20 +4,41 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Reasoning tree</title>
+<!-- the tab's symbol: a root note (a direction) and two notes under it (an experiment, a reference), in the tree's colours -->
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 8C16 16 7 15 7 24M16 8C16 16 25 15 25 24' fill='none' stroke='%238b93a3' stroke-width='2.6' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='7.5' r='5' fill='%239775fa'/%3E%3Ccircle cx='7' cy='24.5' r='5' fill='%2320c997'/%3E%3Ccircle cx='25' cy='24.5' r='5' fill='%23f06595'/%3E%3C/svg%3E">
 <script src="theme.js" data-rft-inline></script>
 <link rel="stylesheet" href="app.css" data-rft-inline>
 <link rel="stylesheet" href="vendor/katex.v0.16.22.min.css" data-rft-inline>
+<link rel="stylesheet" href="vendor/codemirror.v5.65.16.min.css">
 </head>
 <body>
 <header id="bar">
+  <!-- the experiment queue's monitor (web/queue.js): the GPUs, the jobs running and waiting, their history -->
+  <button id="jobs-toggle" class="icon-btn" hidden aria-expanded="false" aria-controls="jobs" title="Experiment queue: GPUs, jobs and their history" aria-label="Experiment queue: GPUs, jobs and their history">
+    <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/><path d="M8.5 10h7M8.5 14h4.5"/></svg>
+    <span id="jobs-badge" class="pad-badge" hidden></span>
+  </button>
   <h1 id="title">Reasoning tree</h1>
   <span id="counts" class="muted"></span>
   <span id="live" class="live" title="Live: follows the vault"></span>
+  <!-- each page is its symbol alone, drawn as the favicon is (notes as solid shapes in the tree's colours, links and
+       frames grey); its name shows on hover, as the other icon buttons' do -->
   <div class="group pages" role="group" aria-label="Page">
-    <button data-show="tree" aria-pressed="true" title="The reasoning tree: every note under the one it came from">Tree</button>
-    <button data-show="concepts" aria-pressed="false" title="A tree whose nodes are the concepts">Concepts</button>
-    <button data-show="kanban" aria-pressed="false" title="The notes in one column per status, ordered by priority or date">Kanban</button>
-    <button data-show="calendar" aria-pressed="false" title="The deadlines and the runs: a timeline, or a month">Calendar</button>
+    <button data-show="tree" aria-pressed="true" aria-label="Tree" title="Tree: the reasoning tree, every note under the one it came from">
+      <!-- the favicon: a direction, and an experiment and a reference under it -->
+      <svg class="page-ico" viewBox="0 0 32 32" aria-hidden="true"><path class="ln" d="M16 8C16 16 7 15 7 24M16 8C16 16 25 15 25 24"/><circle class="tone direction s-done" cx="16" cy="7.5" r="5"/><circle class="tone experiment s-done" cx="7" cy="24.5" r="5"/><circle class="tone reference s-done" cx="25" cy="24.5" r="5"/></svg></button>
+    <button data-show="concepts" aria-pressed="false" aria-label="Concepts" title="Concepts: a tree whose nodes are the concepts">
+      <!-- three concepts as overlapping regions (as the concept overlay draws them), in concept colours -->
+      <svg class="page-ico" viewBox="0 0 32 32" aria-hidden="true"><circle class="region" style="fill:#f783ac" cx="11" cy="12" r="8"/><circle class="region" style="fill:#3bc9db" cx="21" cy="12" r="8"/><circle class="region" style="fill:#91a7ff" cx="16" cy="21" r="8"/></svg></button>
+    <button data-show="kanban" aria-pressed="false" aria-label="Kanban" title="Kanban: the notes in one column per status, ordered by priority or date">
+      <!-- three columns of notes (idea, running, done), each the strength its status has in the tree -->
+      <svg class="page-ico" viewBox="0 0 32 32" aria-hidden="true"><rect class="tone experiment s-idea" x="1" y="3" width="9" height="6" rx="3"/><rect class="tone direction s-idea" x="1" y="11" width="9" height="6" rx="3"/><rect class="tone reference s-idea" x="1" y="19" width="9" height="6" rx="3"/><rect class="tone direction s-running" x="11.5" y="3" width="9" height="6" rx="3"/><rect class="tone experiment s-running" x="11.5" y="11" width="9" height="6" rx="3"/><rect class="tone reference s-done" x="22" y="3" width="9" height="6" rx="3"/><rect class="tone experiment s-done" x="22" y="11" width="9" height="6" rx="3"/><rect class="tone direction s-done" x="22" y="19" width="9" height="6" rx="3"/></svg></button>
+    <button data-show="calendar" aria-pressed="false" aria-label="Calendar" title="Calendar: the deadlines and the runs, a timeline or a month">
+      <!-- a month with a run's bar and a deadline's diamond, as the timeline draws them -->
+      <svg class="page-ico" viewBox="0 0 32 32" aria-hidden="true"><rect class="ln" x="4" y="6" width="24" height="22" rx="4"/><path class="ln" d="M11 3.5v5M21 3.5v5M4 12.5h24"/><rect class="tone experiment s-done" x="8" y="17" width="12" height="5.5" rx="2.75"/><rect class="due" x="21.2" y="17.2" width="5" height="5" transform="rotate(45 23.7 19.7)"/></svg></button>
+    <button data-show="manuscript" id="show-manuscript" aria-pressed="false" aria-label="Manuscript" title="Manuscript: LaTeX snippets resting on verified notes, assembled into documents, and their PDF">
+      <!-- a page resting on a verified note (ringed, as in the tree) -->
+      <svg class="page-ico" viewBox="0 0 32 32" aria-hidden="true"><path class="ln" d="M8 3h10l7 7v6M14 29H8a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3M18 3v7h7"/><path class="ln text" d="M10 15h8M10 20h5"/><circle class="tone direction s-done" cx="23" cy="24" r="4.2"/><circle class="tone direction ring" cx="23" cy="24" r="6.6"/></svg></button>
   </div>
   <div class="group tree-only" role="group" aria-label="View">
     <!-- each toggle shows the symbol of its state (or of what a click does); its tooltip names it -->
@@ -63,8 +84,52 @@
 <main>
   <svg id="canvas" aria-label="The reasoning tree"><defs><marker id="arrow" viewBox="0 -4 8 8" refX="8" refY="0" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,-4L8,0L0,4Z"></path></marker></defs><g id="viewport"><g id="regions"></g><g id="origins"></g><g id="links"></g><g id="nodes"></g><g id="badges"></g></g></svg>
   <svg id="concept-canvas" hidden aria-label="The concept tree"><g id="cviewport"></g></svg>
-  <aside id="legend" aria-label="Legend and filter">
-    <button id="legend-toggle" class="legend-toggle" aria-expanded="true" title="Show or hide the legend">Legend <span class="caret">▾</span></button>
+  <section id="jobs" hidden aria-label="Experiment queue">
+    <div class="jobs-head">
+      <strong>Experiment queue</strong>
+      <span id="jobs-sum" class="muted"></span>
+      <button id="jobs-pause" type="button" hidden aria-label="Pause the queue">⏸</button>
+      <button id="jobs-close" type="button" title="Close (Esc)" aria-label="Close the experiment queue">✕</button>
+    </div>
+    <div id="jobs-hosts" class="jobs-tabs jobs-hosts" role="tablist" aria-label="Machines"></div>
+    <div id="jobs-gpus" class="jobs-gpus" aria-label="GPUs"></div>
+    <div class="jobs-tabs" role="tablist" aria-label="Jobs">
+      <button type="button" role="tab" data-jtab="queue" aria-selected="true">Queue <span id="jobs-nq" class="muted"></span></button>
+      <button type="button" role="tab" data-jtab="history" aria-selected="false">History <span id="jobs-nh" class="muted"></span></button>
+    </div>
+    <div id="jobs-list" class="jobs-list"></div>
+    <div class="jobs-foot">
+      <span id="jobs-msg" role="status"></span>
+      <span class="muted jobs-file" title="The queue and its history live in the vault's .queue/ folder; each job's output in .queue/logs/">.queue/</span>
+    </div>
+  </section>
+  <!-- the bottom-left corner: the scratchpad's button with the legend's faint ? beside it, and under them
+       whichever is open; the open scratchpad takes the legend's place -->
+  <div id="corner">
+  <div class="corner-btns">
+  <button id="pad-toggle" class="icon-btn" hidden aria-expanded="false" aria-controls="pad" title="Scratchpad: quick notes and to-dos" aria-label="Scratchpad: quick notes and to-dos">
+    <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h14a1 1 0 0 1 1 1v10l-6 6H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 20v-5a1 1 0 0 1 1-1h5"/><path d="M8 8h8M8 11.5h5"/></svg>
+    <span id="pad-badge" class="pad-badge" hidden></span>
+  </button>
+  <button id="legend-toggle" class="legend-mark" aria-expanded="false" aria-controls="legend" title="Legend: what the colours, glows and shapes mean" aria-label="Legend">?</button>
+  </div>
+  <section id="pad" hidden aria-label="Scratchpad">
+    <div class="pad-head">
+      <strong>Scratchpad</strong>
+      <span id="pad-count" class="muted"></span>
+      <button id="pad-add" type="button" title="A new to-do below the caret's line (Ctrl/Cmd+Enter makes a line a to-do, or ticks it)">+ To-do</button>
+      <button id="pad-close" type="button" title="Close (Esc)" aria-label="Close the scratchpad">✕</button>
+    </div>
+    <textarea id="pad-text" aria-label="The scratchpad's text, in markdown" readonly
+      placeholder="Quick notes and to-dos, saved as you type.&#10;&#10;- [ ] a to-do: Ctrl/Cmd+Enter ticks it&#10;- Enter continues a list"></textarea>
+    <div class="pad-foot">
+      <span id="pad-msg" role="status"></span>
+      <button id="pad-keep" type="button" class="primary" hidden title="Save your text over the newer one">Keep mine</button>
+      <button id="pad-take" type="button" hidden title="Drop your text and take the newer one">Take theirs</button>
+      <span class="pad-file muted" title="In the vault's top folder, beside 00 Index.md: plain markdown that Obsidian shows too, and not a note of the tree">Scratchpad.md</span>
+    </div>
+  </section>
+  <aside id="legend" class="closed" aria-label="Legend and filter">
     <div id="legend-body">
     <div class="legend-title">Type <span class="muted">(the colour)</span></div>
     <div class="row"><span class="tdot tone direction s-done"></span>Direction (D..)</div>
@@ -84,9 +149,10 @@
       <div class="legend-title">Concepts <span class="muted">(click to focus)</span></div>
       <div id="concepts-list"></div>
     </div>
-    <div class="hint muted">Drag to pan, scroll to zoom. Click a node to read it, double-click or ± to fold.</div>
+    <div class="hint muted">Drag to pan, scroll to zoom. Click a node to read it, double-click or ± to fold. Arrow keys: ↑ parent, ↓ child, ← → siblings.</div>
     </div>
   </aside>
+  </div>
   <aside id="filters" hidden aria-label="Filters">
     <div class="fhead"><strong>Filters</strong><button id="filters-close" title="Close">✕</button></div>
     <section>
@@ -131,6 +197,61 @@
     </div>
     <div id="kb-cols" class="kb-cols"></div>
   </section>
+  <section id="manuscript" hidden aria-label="The manuscript">
+    <div class="ms-bar">
+      <span class="seg ms-levels ms-needs" role="group" aria-label="Level">
+        <button type="button" data-ms-level="snippets" aria-pressed="true" title="The building blocks: each resting on notes of the tree, written once, reused in documents">Snippets</button><button type="button" data-ms-level="documents" aria-pressed="false" title="What is built with them: documents holding copies of snippets, and text of their own">Documents</button>
+      </span>
+      <button id="ms-new" class="ms-snippets-only" type="button" title="A new snippet, resting on notes of the tree">+ Snippet</button>
+      <label class="ms-docs-only">Document <select id="ms-doc" aria-label="Document"></select></label>
+      <button id="ms-new-doc" class="ms-docs-only" type="button" title="A new document: a paper (article) or a thesis chapter (report)">+ Document</button>
+      <button id="ms-lock" class="icon-btn cycle ms-needs" type="button" aria-pressed="true" aria-label="Lock">
+        <svg class="ico lock-open" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.6-1.7"/></svg>
+        <svg class="ico lock-closed on" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+      </button>
+      <button id="ms-compile" class="primary ms-needs" type="button">Compile</button>
+      <span id="ms-status" class="muted" role="status"></span>
+    </div>
+    <form id="ms-new-form" class="ms-new-form" hidden>
+      <select id="ms-new-kind" aria-label="Kind"></select>
+      <input id="ms-new-title" type="text" autocomplete="off" placeholder="Title" aria-label="Title" required>
+      <input id="ms-new-basis" type="text" autocomplete="off" list="ms-notes" placeholder="Rests on: E05, T02 (verified notes first)" aria-label="The notes it rests on" required>
+      <datalist id="ms-notes"></datalist>
+      <button type="submit" class="primary">Add</button><button id="ms-new-cancel" type="button">Cancel</button>
+    </form>
+    <form id="ms-doc-form" class="ms-doc-form" hidden aria-label="A new document">
+      <div class="ms-doc-row">
+        <span class="seg ms-doc-kinds" role="radiogroup" aria-label="Kind">
+          <button type="button" data-doc-kind="article" role="radio" aria-checked="true" title="An article: \section headings, a title, a bibliography">Paper</button><button type="button" data-doc-kind="report" role="radio" aria-checked="false" title="A report with a \chapter: a chapter of a thesis, compiled on its own">Thesis chapter</button>
+        </span>
+        <input id="ms-doc-title" type="text" autocomplete="off" placeholder="Title, e.g. Strong augmentation on small data" aria-label="Title">
+      </div>
+      <div class="ms-doc-row">
+        <label class="ms-doc-name">Name <input id="ms-doc-name" type="text" autocomplete="off" spellcheck="false" placeholder="paper" aria-describedby="ms-doc-hint" required></label>
+        <span id="ms-doc-hint" class="ms-doc-hint muted" aria-live="polite"></span>
+        <span class="ms-spacer"></span>
+        <button id="ms-doc-ok" type="submit" class="primary">Create</button><button id="ms-doc-cancel" type="button" title="Esc">Cancel</button>
+      </div>
+    </form>
+    <div id="ms-empty" class="ms-empty" hidden>
+      <p>No snippets or documents yet. They turn verified notes into writing, at two levels. <b>Snippets</b> are the building blocks: atomic LaTeX resting on the notes they state, written once and reused, so a definition reads the same everywhere. <b>Documents</b> (a paper, a thesis chapter) are built with them: each holds copies of snippets, adapted to its narrative as you like, and text of its own; a copy whose snippet changes is flagged for review, never rewritten.</p>
+      <p>Both are yours to write: Claude proposes snippets from verified notes and where to place them, comments and suggests, and writes only where you unlock it.</p>
+      <button id="ms-start" type="button" class="primary">Start, with a first document</button>
+    </div>
+    <div id="ms-body" class="ms-body" hidden>
+      <nav id="ms-list" class="ms-list" aria-label="Snippets"></nav>
+      <div class="ms-editor">
+        <div id="ms-head" class="ms-head"></div>
+        <div id="ms-cm" class="ms-cm"></div>
+        <div id="ms-threads" class="ms-threads" hidden></div>
+      </div>
+      <div class="ms-pdf">
+        <div id="ms-errors" class="ms-errors" hidden></div>
+        <p id="ms-pdf-note" class="muted ms-pdf-note">No PDF yet: Compile.</p>
+        <iframe id="ms-pdf-frame" title="The document's PDF" hidden></iframe>
+      </div>
+    </div>
+  </section>
   <section id="calendar" hidden aria-label="The deadlines and the runs">
     <div class="cal-bar">
       <span class="seg" role="group" aria-label="Calendar">
@@ -163,6 +284,26 @@
     <div id="cal-body" class="cal-body"></div>
   </section>
   <aside id="drawer" hidden>
+    <!-- a concept's artifact, when its concept was clicked: in the drawer's place of a note (web/artifacts.js) -->
+    <section id="artifact-view" hidden aria-label="The concept's artifact">
+      <div class="drawer-head">
+        <div id="art-path" class="drawer-concept"></div>
+        <span class="drawer-actions">
+          <button id="art-tree" class="icon-btn" aria-label="Show in tree" title="Show in tree: the concept's start note, its region highlighted">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7v5M6 17v-5h12v5"/><circle cx="12" cy="5" r="2.6" fill="currentColor" stroke="none"/><circle cx="6" cy="19" r="2.6" fill="currentColor" stroke="none"/><circle cx="18" cy="19" r="2.6" fill="currentColor" stroke="none"/></svg>
+          </button>
+          <button id="art-focus" class="icon-btn" aria-label="Focus" title="Focus: show only this concept's subtree">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+          </button>
+          <button id="art-close" title="Close">✕</button>
+        </span>
+      </div>
+      <h2 id="art-title" class="art-title"></h2>
+      <p id="art-summary" class="art-summary muted" hidden></p>
+      <p id="art-state" class="art-state"></p>
+      <div id="art-subs" class="art-subs" hidden></div>
+      <div id="art-frame" class="art-frame" hidden></div>
+    </section>
     <div id="drawer-concept" class="drawer-concept"></div>
     <div id="drawer-code" class="drawer-code muted" hidden></div>
     <div class="drawer-head">
@@ -187,10 +328,14 @@
         <button id="drawer-move" class="icon-btn" hidden aria-label="Move" title="Move this note and the notes below it under another note">
           <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.6" fill="currentColor" stroke="none"/><path d="M6 9v4a3 3 0 0 0 3 3h9"/><path d="M15 13l3 3-3 3"/></svg>
         </button>
+        <button id="drawer-notebook" class="icon-btn" hidden aria-pressed="false" aria-label="Notebook" title="The experiment's notebook, beside the note: the code that rebuilds its Result">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M10 8.5v7l5.5-3.5z" fill="currentColor" stroke="none"/></svg>
+        </button>
         <button id="drawer-close" title="Close">✕</button>
       </span>
     </div>
     <div id="drawer-priority" class="drawer-priority" hidden></div>
+    <div id="drawer-verify" class="drawer-verify" hidden></div>
     <div id="drawer-dates" class="drawer-dates" hidden></div>
     <p id="hl-hint" class="hl-hint" hidden>Highlighter on: select text to highlight it; select or click a highlight to take it out. <kbd>Esc</kbd> turns it off.</p>
     <p id="edit-nokey" class="edit-nokey" hidden>To edit or add notes, open the address <code>/rft</code> printed (it ends in
@@ -242,6 +387,7 @@
     <div id="drawer-superseded" class="drawer-superseded" hidden></div>
     <div id="drawer-origin" class="drawer-origin muted" hidden></div>
     <div id="drawer-refs" class="drawer-origin muted" hidden></div>
+    <div id="drawer-written" class="drawer-origin muted" hidden></div>
     <article id="note"></article>
     <section id="threads" hidden aria-label="Comments and suggestions"></section>
     <div id="sel-bar" class="sel-bar" hidden role="toolbar" aria-label="On the selected text">
@@ -276,6 +422,25 @@
       <div class="muted editor-hint">The text below the frontmatter: status, parent and tags change through Claude.</div>
     </div>
   </aside>
+  <!-- an experiment's notebook, on the left while its note is open on the right: the marimo editor of
+       the experiment's repo, which the server starts (POST api/notebook; server/rft_notebook.py) -->
+  <aside id="nbpane" hidden aria-label="The experiment's notebook">
+    <div class="nb-head">
+      <span id="nb-title" class="nb-title"></span>
+      <span class="drawer-actions">
+        <a id="nb-tab" class="icon-btn" target="_blank" rel="noopener noreferrer" aria-label="Open in a tab" title="Open the notebook in a tab of its own">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
+        </a>
+        <button id="nb-close" title="Close the notebook (the note's notebook button opens it again)">✕</button>
+      </span>
+    </div>
+    <div id="nb-run" class="nb-run"></div>
+    <p id="nb-msg" class="nb-msg muted" hidden></p>
+    <div id="nb-frame" class="nb-frame"></div>
+  </aside>
+  <!-- the notebook's right edge: drag it to widen or narrow it -->
+  <div id="nbpane-resize" role="separator" aria-orientation="vertical" aria-controls="nbpane" tabindex="0"
+    aria-label="Width of the notebook" title="Drag to resize the notebook (double-click: back to the default width)"></div>
   <!-- the drawer's left edge: drag it to widen or narrow the note; shown with the drawer -->
   <div id="drawer-resize" role="separator" aria-orientation="vertical" aria-controls="drawer" tabindex="0"
     aria-label="Width of the note" title="Drag to resize the note (double-click: back to the default width)"></div>
@@ -289,6 +454,11 @@
 <script src="layout.js" data-rft-inline></script>
 <script src="concepts.js" data-rft-inline></script>
 <script src="markdown.js" data-rft-inline></script>
+<script src="scratchpad.js" data-rft-inline></script>
+<script src="queue.js"></script>
+<script src="vendor/codemirror.v5.65.16.min.js"></script>
+<script src="manuscript.js"></script>
+<script src="artifacts.js" data-rft-inline></script>
 <script src="app.js" data-rft-inline></script>
 </body>
 </html>

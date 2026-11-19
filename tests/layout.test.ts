@@ -1,5 +1,6 @@
 // The tree view's radial layout (web/layout.js): the root at the centre, one ring per level,
 // siblings a fixed arc apart, and a wide tree squeezed to the circle without its ends meeting.
+// And the arrow keys' walk through the drawn tree: up the parent, down a child, sideways a sibling.
 
 import { describe, expect, test } from 'claude-code/testing'
 
@@ -9,7 +10,13 @@ import '../web/layout.js'
 type Spec = { id: string; children?: Spec[] }
 type Placed = { data: Spec; depth: number; parent: Placed | null; angle: number; radius: number; descendants: () => Placed[] }
 type D3 = { hierarchy: (d: Spec) => Placed }
-type Api = { radial: (d3: D3, root: Placed, breadth: number, depth: number) => Placed; normalAngle: (a: number) => number }
+type Dir = 'up' | 'down' | 'left' | 'right'
+type Walk = { roots: string[]; kids: (id: string) => string[]; parentOf: (id: string) => string | null; last?: Map<string, string> }
+type Api = {
+  radial: (d3: D3, root: Placed, breadth: number, depth: number) => Placed
+  normalAngle: (a: number) => number
+  step: (dir: Dir, id: string, walk: Walk) => string | null
+}
 
 const g = globalThis as unknown as { d3: D3; RftLayout: Api }
 const L = g.RftLayout
@@ -71,5 +78,61 @@ describe('radial layout', () => {
     near(L.normalAngle(-Math.PI / 2), (3 * Math.PI) / 2)
     near(L.normalAngle(2 * Math.PI), 0)
     expect(L.normalAngle(1)).toBe(1)
+  })
+})
+
+describe('arrow keys', () => {
+  // D00 → E01, D01, E02; D01 → D02, D03; two top-level notes when `roots` says so
+  const children: Record<string, string[]> = { D00: ['E01', 'D01', 'E02'], D01: ['D02', 'D03'] }
+  const parent: Record<string, string> = { E01: 'D00', D01: 'D00', E02: 'D00', D02: 'D01', D03: 'D01' }
+  const walk = (extra: Partial<Walk> = {}): Walk => ({
+    roots: ['D00'],
+    kids: id => children[id] || [],
+    parentOf: id => parent[id] || null,
+    ...extra,
+  })
+
+  test('up goes to the parent, and nowhere from the top', () => {
+    expect(L.step('up', 'D02', walk())).toBe('D01')
+    expect(L.step('up', 'D01', walk())).toBe('D00')
+    expect(L.step('up', 'D00', walk())).toBe(null)
+  })
+
+  test('down goes to the first child, and nowhere from a leaf', () => {
+    expect(L.step('down', 'D00', walk())).toBe('E01')
+    expect(L.step('down', 'E02', walk())).toBe(null)
+  })
+
+  test('down goes back to the child shown last, while it is still a child', () => {
+    expect(L.step('down', 'D00', walk({ last: new Map([['D00', 'E02']]) }))).toBe('E02')
+    // moved away, or hidden by the filters: the first child instead
+    expect(L.step('down', 'D00', walk({ last: new Map([['D00', 'D03']]) }))).toBe('E01')
+  })
+
+  test('left and right move along the siblings, round from the last to the first', () => {
+    expect(L.step('right', 'E01', walk())).toBe('D01')
+    expect(L.step('right', 'D01', walk())).toBe('E02')
+    expect(L.step('right', 'E02', walk())).toBe('E01')
+    expect(L.step('left', 'D01', walk())).toBe('E01')
+    expect(L.step('left', 'E01', walk())).toBe('E02')
+    expect(L.step('left', 'D03', walk())).toBe('D02')
+  })
+
+  test('only the drawn children count as siblings', () => {
+    // D01 hidden by the filters: E01 and E02 are next to each other
+    const shown = walk({ kids: id => (children[id] || []).filter(k => k !== 'D01') })
+    expect(L.step('right', 'E01', shown)).toBe('E02')
+    expect(L.step('left', 'E02', shown)).toBe('E01')
+  })
+
+  test('the top-level notes are siblings of each other', () => {
+    const two = walk({ roots: ['D00', 'D10'] })
+    expect(L.step('right', 'D00', two)).toBe('D10')
+    expect(L.step('left', 'D10', two)).toBe('D00')
+    expect(L.step('right', 'D10', two)).toBe('D00')
+    // an only child, or a single top: round to itself
+    expect(L.step('right', 'D00', walk())).toBe('D00')
+    // a note the walk does not know has no siblings
+    expect(L.step('right', 'X99', two)).toBe(null)
   })
 })

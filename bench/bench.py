@@ -6,8 +6,11 @@ turns reported side by side. The project is copied, never touched.
     python3 bench/bench.py --project ~/my-project-copy --tasks tasks.json \
         --plugin old=/tmp/rft-0.19 --plugin new=~/code/rft-plugin [--runs 2] [--out results.json]
 
-tasks.json is a list of {"name": ..., "prompt": ...}; a prompt can be a slash command
-("/rft-next"). Input tokens count every token sent: input + cache creation + cache reads.
+tasks.json is a list of {"name": ..., "prompt": ..., "setup"?: [argv]}; a prompt can be a slash
+command ("/rft-next"). A setup runs in the fresh copy before the prompt, once per run, with {work}
+(the copy), {plugin} (the plugin folder of the run) and {bench} (this folder) filled in: it brings
+the project to the stage the task starts from (lifecycle.py and lifecycle.json: one experiment
+from planned to recorded). Input tokens count every token sent: input + cache creation + cache reads.
 """
 
 import argparse
@@ -21,10 +24,15 @@ from pathlib import Path
 TOOLS = "mcp__rft__*,Read,Grep,Glob"
 
 
-def run_once(project: Path, plugin: Path, prompt: str, timeout: int) -> dict:
+def run_once(project: Path, plugin: Path, prompt: str, timeout: int, setup: list[str] | None = None) -> dict:
     with tempfile.TemporaryDirectory(prefix="rft-bench-") as tmp:
         work = Path(tmp) / "project"
         shutil.copytree(project, work, symlinks=True, ignore=shutil.ignore_patterns(".git"))
+        if setup:
+            argv = [a.format(work=work, plugin=plugin, bench=Path(__file__).resolve().parent) for a in setup]
+            s = subprocess.run(argv, cwd=work, capture_output=True, text=True, timeout=timeout)
+            if s.returncode != 0:
+                return {"error": f"setup failed: {(s.stderr or s.stdout)[-300:]}"}
         cmd = ["claude", "-p", prompt, "--plugin-dir", str(plugin), "--output-format", "json", "--allowedTools", TOOLS]
         out = subprocess.run(cmd, cwd=work, capture_output=True, text=True, timeout=timeout)
         try:
@@ -79,7 +87,7 @@ def main(argv=None) -> int:
     results: dict = {}
     for t in tasks:
         for label, folder in plugins:
-            rows = [run_once(a.project.expanduser(), Path(folder).expanduser(), t["prompt"], a.timeout) for _ in range(a.runs)]
+            rows = [run_once(a.project.expanduser(), Path(folder).expanduser().resolve(), t["prompt"], a.timeout, t.get("setup")) for _ in range(a.runs)]
             results.setdefault(t["name"], {})[label] = rows
             ok = [r for r in rows if "error" not in r]
             print(f"{t['name']:<14} {label:<6} input {mean(ok, 'input'):>9.0f}  output {mean(ok, 'output'):>6.0f}  "

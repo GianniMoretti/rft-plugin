@@ -7,8 +7,12 @@ accepted suggestion); the `locked:` line of its frontmatter; its `priority:` lin
 alone (which also answers Claude's `suggested_priority:`); its dates, the user's too (`due:`,
 `start:`, `est:`, which also answer Claude's suggested ones); the deadlines in vault/milestones/
 (a new one, its due date, the notes it needs, its status, and Claude's suggested ones accepted or
-dismissed); and its discussion, the comments and suggestions on parts of its text, in
-vault/.comments/<id>.json (as hooks/lib/comments.ts reads it). A new note, or a note's new type, it never writes itself: it asks the session that runs it,
+dismissed); its discussion, the comments and suggestions on parts of its text, in
+vault/.comments/<id>.json (as hooks/lib/comments.ts reads it); and the user's scratchpad, quick
+notes and to-dos in vault/Scratchpad.md. It serves each concept's artifact (vault/artifacts/<id> <name>.html,
+written by Claude with rft_set_artifact) read-only, as a page of its own in a sandbox (GET api/artifact?concept=<id>):
+no script of it reaches the network, the page that frames it, or a write; the tree lists the artifacts
+with what changed since they were written. A new note, or a note's new type, it never writes itself: it asks the session that runs it,
 with a line `RFT_ADD_NODE {"parent", "type", "title"}` or `RFT_SET_TYPE {"id", "type"}` on stdout,
 and the plugin makes the change as the rft_add_node or rft_set_type tool does (no model turn), then
 answers the note's id once it is on disk. `RFT_ASK {"id", "thread"}` asks the session's Claude to
@@ -16,8 +20,13 @@ answer a thread (a model turn). It binds 127.0.0.1 only, takes requests only for
 host name (so a web page elsewhere cannot reach it through DNS rebinding), serves nothing but an
 allow-list of page files, and reads or writes a note only by its id, in a markdown file that
 resolves inside one of the vault's note folders (experiments/, directions/, references/,
-theory/), and a deadline only in milestones/. A write (PUT api/note, POST api/node, api/type, api/comment, api/lock,
-api/priority, api/dates, api/milestone) must also come from the page itself (its
+theory/), a deadline only in milestones/, and the scratchpad only as a plain file at the vault's
+top. It shows the experiment queue (GET api/queue: the GPUs, the jobs waiting and running, the
+history; rft_queue.py beside it) and takes the user's changes to it (POST api/queue: a job moved,
+cancelled or retried, the queue paused, the GPUs it may use); a job's output (GET api/queue/output)
+goes only to a request carrying the key; all three answer 404 until this machine is paired with
+the queue (rft_queue.py machine add), so the page shows no monitor. A write (PUT api/note, PUT api/scratchpad, POST api/node, api/type, api/comment, api/lock, api/verify,
+api/priority, api/dates, api/milestone, api/queue) must also come from the page itself (its
 Origin) and carry the vault's key, which is in the address the server prints, so neither
 another web page nor another user of the machine can change a note. The key is kept in the
 user's cache, readable by them alone, so it stays the same across restarts.
@@ -39,6 +48,7 @@ on a free port instead.
 from __future__ import annotations
 
 import argparse
+import base64
 import datetime
 import errno
 import hashlib
@@ -48,12 +58,21 @@ import json
 import os
 import re
 import secrets
+import shutil
+import signal
+import socket
 import stat
 import sys
 import threading
 import time
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from html import escape as html_escape, unescape as html_unescape
+from urllib.parse import parse_qs, quote, urlsplit
+
+import rft_latex  # the manuscript's LaTeX: its generated files and the compile
+import rft_manuscript  # the manuscript as the page shows it
+import rft_notebook
+import rft_queue  # the experiment queue, beside this file
 
 # the node types by folder (ID_RE below has their id letters), as TYPES in hooks/lib/vault.ts has them
 SUBDIRS = {"experiments": "experiment", "directions": "direction", "references": "reference", "theory": "theory"}
@@ -70,11 +89,24 @@ PAGE_FILES = {
     "/concepts.js": ("concepts.js", "text/javascript; charset=utf-8"),
     "/theme.js": ("theme.js", "text/javascript; charset=utf-8"),
     "/markdown.js": ("markdown.js", "text/javascript; charset=utf-8"),
+    "/scratchpad.js": ("scratchpad.js", "text/javascript; charset=utf-8"),
+    "/queue.js": ("queue.js", "text/javascript; charset=utf-8"),
+    "/artifacts.js": ("artifacts.js", "text/javascript; charset=utf-8"),
+    "/manuscript.js": ("manuscript.js", "text/javascript; charset=utf-8"),
+    # the Manuscript tab's editor
+    "/vendor/codemirror.v5.65.16.min.js": ("vendor/codemirror.v5.65.16.min.js", "text/javascript; charset=utf-8"),
+    "/vendor/codemirror.v5.65.16.min.css": ("vendor/codemirror.v5.65.16.min.css", "text/css; charset=utf-8"),
+    "/vendor/LICENSE-codemirror.txt": ("vendor/LICENSE-codemirror.txt", "text/plain; charset=utf-8"),
     "/vendor/d3.v7.9.0.min.js": ("vendor/d3.v7.9.0.min.js", "text/javascript; charset=utf-8"),
     "/vendor/LICENSE-d3.txt": ("vendor/LICENSE-d3.txt", "text/plain; charset=utf-8"),
     "/vendor/katex.v0.16.22.min.js": ("vendor/katex.v0.16.22.min.js", "text/javascript; charset=utf-8"),
     "/vendor/katex.v0.16.22.min.css": ("vendor/katex.v0.16.22.min.css", "text/css; charset=utf-8"),
     "/vendor/LICENSE-katex.txt": ("vendor/LICENSE-katex.txt", "text/plain; charset=utf-8"),
+    # an artifact's SVG figure as a PDF, made in the page (loaded the first time one is asked for)
+    "/vendor/jspdf.v4.2.1.umd.min.js": ("vendor/jspdf.v4.2.1.umd.min.js", "text/javascript; charset=utf-8"),
+    "/vendor/svg2pdf.v2.9.0.umd.min.js": ("vendor/svg2pdf.v2.9.0.umd.min.js", "text/javascript; charset=utf-8"),
+    "/vendor/LICENSE-jspdf.txt": ("vendor/LICENSE-jspdf.txt", "text/plain; charset=utf-8"),
+    "/vendor/LICENSE-svg2pdf.txt": ("vendor/LICENSE-svg2pdf.txt", "text/plain; charset=utf-8"),
 }
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 ID_RE = re.compile(r"^[EDRT]\d+$")
@@ -89,7 +121,38 @@ RESCAN_S = 5.0  # a name not found looks through the folders again at most this 
 MAX_SCAN_FILES = 2_000_000  # the most files a search by name looks through
 SKIP_DIRS = {"node_modules", "__pycache__"}  # with every dot folder: never searched by name
 PAGE_CSP = ("default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; "
-            "connect-src 'self'; frame-ancestors 'self'")
+            "connect-src 'self'; frame-src 'self' blob:; frame-ancestors 'self'")
+# frame-src: the page's own frames (the artifacts, and the marimo editors of the experiments'
+# notebooks, which this server passes on under notebook/<name>/), and the manuscript's PDF (fetched
+# with the key, shown from a blob: address only the page itself can make)
+# where the notebooks' editors answer, through this server (rft_notebook.Editors): its own port, the
+# only one a browser on another machine (an SSH tunnel to it) may reach
+NOTEBOOK_PREFIX = f"/{rft_notebook.EDITOR_PATH}/"
+NOTEBOOK_GONE = ("<!doctype html><meta charset=utf-8><meta name=color-scheme content='light dark'>"
+                 "<title>The notebook's editor stopped</title><body style='font:14px/1.5 sans-serif;margin:2em'>"
+                 "<p>This notebook's editor is not running: it stops once nobody has had it open for "
+                 f"{rft_notebook.EDITOR_IDLE_MINUTES // 60} hours, and with the tree view's server.</p>"
+                 "<p>Close the notebook pane and open it again to start it.</p>").encode()
+# a concept's artifact: a page of Claude's, served as a document of its own in a sandbox (an opaque
+# origin: it reads no storage and makes no write as the page), its scripts inline, nothing from
+# elsewhere; `{here}` is the server's own address, for its images and the page that frames it
+ARTIFACT_CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src {here} data:; "
+                "media-src {here} data:; font-src data:; form-action 'none'; base-uri 'none'; frame-ancestors {here}; "
+                "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox")
+ARTIFACTS = "artifacts"
+# where an artifact's figures are kept: looked in first after the artifacts' own folder
+FIGURES = "figures"
+# an SVG an artifact shows comes inside its page, as a data: image: the sandboxed frame has no origin
+# of its own, and a browser blocks an SVG answer to it (ORB); up to this size
+MAX_INLINE_SVG = 10_000_000
+# the scripts inside an artifact's frame, in this order: the LaTeX of its tables, then its runtime
+FRAME_SCRIPTS = ("latex.js", "frame.js")
+# its first line, as hooks/lib/vault.ts reads it: JSON in an HTML comment
+ARTIFACT_HEAD = re.compile(r"^<!-- rft-artifact (\{.*\}) -->[ \t]*(?:\r?\n|$)")
+MAX_ARTIFACT_BYTES = 1_000_000
+CONCEPT_ID_RE = re.compile(r"^(root|[EDRT]\d+)$")
+FENCE_RE = re.compile(r"^\s*(```|~~~)")
+IMG_SRC_RE = re.compile(r"(<img\b[^>]*?\bsrc\s*=\s*)([\"'])(.*?)\2", re.I | re.S)
 # an image runs nothing, even an SVG opened on its own
 IMAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
 # the discussion of each note: vault/.comments/<id>.json, a dot folder Obsidian leaves alone, as
@@ -114,6 +177,9 @@ DAY_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 DUE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}):(\d{2}))?(?:\s*(AoE|UTC|Z|[+-]\d{2}:?\d{2}))?$", re.I)
 EST_RE = re.compile(r"^(\d+)\s*([dw])?$", re.I)
 DATE_FIELDS = ("due", "start", "est")
+# the user's quick notes and to-dos: one markdown file at the vault's top, outside the tree (no
+# note folder holds it, so neither the tree nor its version sees it), as web/scratchpad.js shows it
+SCRATCHPAD = "Scratchpad.md"
 DATE_SUGGESTION_FIELDS = ("suggested_start", "suggested_est", "suggested_dates_why")
 FORBIDDEN_TITLE = re.compile(r'[\^#|\[\]\\/:*"<>?]')
 
@@ -235,6 +301,83 @@ def version_of(data: bytes) -> str:
     return hashlib.sha1(data).hexdigest()[:16]
 
 
+def fnv(text: str) -> str:
+    """FNV-1a over the UTF-16 code units of `text`, as 8 hex digits, as hooks/lib/artifacts.ts has it."""
+    h = 0x811C9DC5
+    data = text.encode("utf-16-le", "surrogatepass")
+    for i in range(0, len(data), 2):
+        h ^= data[i] | (data[i + 1] << 8)
+        h = (h * 0x01000193) & 0xFFFFFFFF
+    return f"{h:08x}"
+
+
+def result_of(text: str) -> str:
+    """The text of a note's `## Result` section, trimmed ('' when it has none), as resultOf in
+    hooks/lib/vault.ts: from the heading to the next `## ` heading, neither inside a fenced block."""
+    lines, fenced, heads = body_of(text).split("\n"), False, []
+    for i, line in enumerate(lines):
+        if FENCE_RE.match(line):
+            fenced = not fenced
+        if not fenced and line.startswith("## "):
+            heads.append(i)
+    start = next((i for i in heads if lines[i][3:].strip() == "Result"), None)
+    if start is None:
+        return ""
+    end = next((i for i in heads if i > start), len(lines))
+    return "\n".join(lines[start + 1:end]).strip()
+
+
+def has_result(status: str, text: str) -> bool:
+    """Whether an experiment has a result: done, or a Result that says something once it runs (a
+    planned experiment or an idea has none, whatever its Result holds), as hasResultIn in hooks/lib/vault.ts."""
+    return status in FINISHED or (status not in ("planned", "idea") and result_of(text) != "")
+
+
+def experiment_key(n: dict, text: str) -> str:
+    """What a concept's artifact is written from, for one experiment, as experimentKey in hooks/lib/artifacts.ts."""
+    return fnv(f"{n['id']}|{n['status']}|{n['title']}|{n.get('summary') or ''}|{n.get('supersededBy') or ''}|{result_of(text)}")
+
+
+def image_key(key: str) -> str:
+    """The key an artifact's frame gets for its images: it reads image files as the vault key does,
+    and writes nothing, so a script of the artifact that learns it can change no note."""
+    return hashlib.sha256(f"{key}:images".encode()).hexdigest()[:32]
+
+
+def artifact_head(text: str) -> dict | None:
+    """The header of an artifact file (its first line), or None when it has none."""
+    m = ARTIFACT_HEAD.match(text)
+    if not m:
+        return None
+    try:
+        head = json.loads(m.group(1))
+    except ValueError:
+        return None
+    return head if isinstance(head, dict) and isinstance(head.get("concept"), str) and head["concept"] else None
+
+
+def artifact_page(text: str) -> str:
+    """An artifact file without its header line."""
+    m = ARTIFACT_HEAD.match(text)
+    return text[m.end():] if m else text
+
+
+def wrap_artifact(html: str, js: str, css: str, theme: str) -> str:
+    """The artifact as a document: its theme, the base style and the frame's runtime first in its
+    head, as wrap in web/artifacts.js builds it for the standalone page."""
+    js = re.sub(r"</(script)", r"<\\/\1", js, flags=re.I)
+    css = re.sub(r"</(style)", r"<\\/\1", css, flags=re.I)
+    pre = (f'<meta charset="utf-8"><script>document.documentElement.dataset.theme = "{theme}"</script>'
+           f"<style>{css}</style><script>{js}</script>")
+    m = re.search(r"<head\b[^>]*>", html, re.I)
+    if m:
+        return html[:m.end()] + pre + html[m.end():]
+    m = re.search(r"<html\b[^>]*>", html, re.I)
+    if m:
+        return html[:m.end()] + f"<head>{pre}</head>" + html[m.end():]
+    return f"<!doctype html><html><head>{pre}</head><body>{html}</body></html>"
+
+
 def id_of(name: str) -> str:
     return name.split(" ")[0]
 
@@ -244,7 +387,9 @@ def natural_key(name: str):
     return (m.group(1), int(m.group(2)), m.group(3)) if m else (name, 0, "")
 
 
-STATUSES = {"planned", "running", "done", "idea", "dropped", "discussed", "moved"}
+STATUSES = {"planned", "running", "done", "review", "verified", "idea", "dropped", "discussed", "moved"}
+# done, and the two a done note goes on to: verified (the user checked its claim) and review (it may no longer hold)
+FINISHED = ("done", "review", "verified")
 
 
 def parse_tags(value: str | None) -> list[str]:
@@ -272,6 +417,33 @@ def unquote(value: str | None) -> str:
     if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
         v = v[1:-1]
     return v.strip()
+
+
+REPRODUCED_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}) (ok|differs|failed|unchecked)(?: @([0-9a-f]{4,40}(?:\+dirty)?))?(?: in (\d+(?:\.\d+)?) s)?$")
+
+
+VERIFIED_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}) ([0-9a-f]{8})$")
+
+
+def parse_verified(value: str | None) -> dict | None:
+    """A note's verification stamp (`verified: <date> <fingerprint>`, written when the user verifies
+    it), as parseVerified in hooks/lib/vault.ts reads it: {date, fingerprint}; None when it is not one."""
+    m = VERIFIED_RE.match(unquote(value))
+    return {"date": m.group(1), "fingerprint": m.group(2)} if m else None
+
+
+def parse_reproduced(value: str | None) -> dict | None:
+    """An experiment notebook's last run (`reproduced:`, written by rft_run_notebook), as parseReproduced
+    in hooks/lib/vault.ts reads it: {date, state, commit?, seconds?}; None when it is not one."""
+    m = REPRODUCED_RE.match(unquote(value))
+    if not m:
+        return None
+    out = {"date": m.group(1), "state": m.group(2)}
+    if m.group(3):
+        out["commit"] = m.group(3)
+    if m.group(4):
+        out["seconds"] = float(m.group(4)) if "." in m.group(4) else int(m.group(4))
+    return out
 
 
 def unquote_json(value: str | None) -> str:
@@ -429,6 +601,7 @@ class Vault:
         self._lock = threading.Lock()
         self._write_lock = threading.Lock()
         self._ask_lock = threading.Lock()
+        self._compile_lock = threading.Lock()
         self._sig: str | None = None
         self._tree: dict | None = None
         # the folders an image is searched in by name: the vault, then the Obsidian vault around it
@@ -436,6 +609,9 @@ class Vault:
         self.image_tops = [self.root] + ([outer] if outer and outer != self.root else [])
         self._names: dict[Path, tuple[float, dict[str, list[tuple[str, str]]]]] = {}
         self._names_lock = threading.Lock()
+        # the experiment queue (vault/.queue/): the monitor reads it, and the user reorders, pauses,
+        # cancels and retries jobs; its runner, a process of its own, runs them
+        self.queue = rft_queue.Queue(self.root)
 
     def signature(self) -> str:
         parts = []
@@ -445,7 +621,7 @@ class Vault:
                 for f in sorted(d.glob("*.md")):
                     st = f.stat()
                     parts.append(f"{sub}/{f.name}:{st.st_mtime_ns}:{st.st_size}")
-        for sub, pattern in ((COMMENTS, "*.json"), (MILESTONES, "*.md")):
+        for sub, pattern in ((COMMENTS, "*.json"), (MILESTONES, "*.md"), (ARTIFACTS, "*.html")):
             d = self.root / sub
             if d.is_dir():
                 for f in sorted(d.glob(pattern)):
@@ -466,6 +642,7 @@ class Vault:
 
     def _load(self, sig: str) -> dict:
         nodes: dict[str, dict] = {}
+        texts: dict[str, str] = {}  # the experiments', for the keys their concept's artifact is written from
         refs: dict[str, str | None] = {}
         origins: dict[str, list[str]] = {}
         refs_of: dict[str, list[str]] = {}
@@ -508,6 +685,18 @@ class Vault:
                 pdf = link_target(fm.get("pdf"))
                 if pdf:
                     nodes[nid]["pdf"] = pdf
+                notebook = unquote(fm.get("notebook"))
+                if notebook:
+                    nodes[nid]["notebook"] = notebook
+                reproduced = parse_reproduced(fm.get("reproduced"))
+                if reproduced:
+                    nodes[nid]["reproduced"] = reproduced
+                verified = parse_verified(fm.get("verified"))
+                if verified:
+                    nodes[nid]["verified"] = verified
+                suggested_verified = unquote_json(fm.get("suggested_verified"))
+                if suggested_verified:
+                    nodes[nid]["suggestedVerified"] = suggested_verified
                 # the dates, as hooks/lib/vault.ts reads them: values that are none are left out
                 plan = {"due": unquote(fm.get("due")) if due_ok(fm.get("due")) else None,
                         "start": day_of(fm.get("start")), "est": est_of(fm.get("est")),
@@ -517,6 +706,10 @@ class Vault:
                 if plan["suggestedStart"] or plan["suggestedEst"]:
                     plan["suggestedDatesWhy"] = unquote_json(fm.get("suggested_dates_why")) or None
                 nodes[nid].update({k: v for k, v in plan.items() if v})
+                if ftype == "experiment":
+                    texts[nid] = text
+                    if has_result(nodes[nid]["status"], text):
+                        nodes[nid]["hasResult"] = True
                 after_of[nid] = link_targets(fm.get("after"))
                 cname = unquote(fm.get("concept"))
                 repos = parse_repos(fm.get("concept_repos"))
@@ -569,8 +762,9 @@ class Vault:
         tags = [{"tag": t, "count": c} for t, c in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
         concepts = compute_concepts(nodes, roots, self.project, decl, repos_only)
         milestones = self._milestones(by_name, nodes)
+        artifacts = self._artifacts(nodes, roots, texts)
         return {"project": self.project, "version": sig, "nodes": list(nodes.values()), "roots": roots, "tags": tags,
-                "concepts": concepts, "milestones": milestones, "gpus": self._config().get("gpus") if count_of(str(self._config().get("gpus", ""))) else None}
+                "concepts": concepts, "milestones": milestones, "artifacts": artifacts, "gpus": self._config().get("gpus") if count_of(str(self._config().get("gpus", ""))) else None}
 
     def _config(self) -> dict:
         """The project's .rft/config.json, or {} when there is none to read."""
@@ -579,6 +773,67 @@ class Vault:
         except (OSError, ValueError):
             return {}
         return data if isinstance(data, dict) else {}
+
+    def _artifact_files(self):
+        """The artifact files: each `artifacts/*.html` inside that folder (no link out of it), with its header, by name."""
+        d = (self.root / ARTIFACTS)
+        if not d.is_dir():
+            return
+        top = d.resolve()
+        for f in sorted(d.glob("*.html"), key=lambda p: p.name):
+            try:
+                if f.is_symlink() or f.resolve().parent != top or not f.is_file() or f.stat().st_size > MAX_ARTIFACT_BYTES:
+                    continue
+                data = f.read_bytes()
+            except OSError:
+                continue
+            head = artifact_head(data.decode("utf-8", errors="replace"))
+            if head:
+                yield f, data, head
+
+    def _artifacts(self, nodes: dict[str, dict], roots: list[str], texts: dict[str, str]) -> list[dict]:
+        """Each concept's artifact, with what changed since it was written: the keys of the concept's
+        own experiments with a result now, against those in its header, as artifactState in
+        hooks/lib/artifacts.ts has it (in the order of the tree)."""
+        order: list[str] = []
+        stack = list(reversed(roots))
+        while stack:
+            nid = stack.pop()
+            order.append(nid)
+            stack.extend(reversed(nodes[nid]["children"]))
+        out, seen = [], set()
+        for f, data, head in self._artifact_files():
+            cid = head["concept"]
+            if cid in seen:
+                continue
+            seen.add(cid)
+            now = {i: experiment_key(nodes[i], texts[i]) for i in order
+                   if nodes[i]["concept"] == cid and nodes[i]["type"] == "experiment" and nodes[i].get("hasResult")}
+            basis = head.get("basis") if isinstance(head.get("basis"), dict) else {}
+            changed = [i for i in now if i in basis and basis[i] != now[i]]
+            added = [i for i in now if i not in basis]
+            removed = [i for i in basis if i not in now]
+            out.append({"concept": cid, "name": str(head.get("name") or cid), "path": f"{ARTIFACTS}/{f.name}",
+                        "updated": str(head.get("updated") or ""), "version": version_of(data),
+                        "stale": bool(changed or added or removed), "changed": changed, "added": added, "removed": removed})
+        return out
+
+    def artifact(self, cid: str) -> str | None:
+        """A concept's artifact page, without its header; None when the concept has none."""
+        if not CONCEPT_ID_RE.match(cid or ""):
+            return None
+        if not any(a["concept"] == cid for a in self.tree()["artifacts"]):
+            return None
+        for _f, data, head in self._artifact_files():
+            if head["concept"] == cid:
+                return artifact_page(data.decode("utf-8", errors="replace"))
+        return None
+
+    def artifact_image(self, cid: str, src: str) -> Path | None:
+        """An image a concept's artifact shows, found as a note's are, from the artifacts' folder."""
+        if not CONCEPT_ID_RE.match(cid or "") or not any(a["concept"] == cid for a in self.tree()["artifacts"]):
+            return None
+        return self._find_image(self.root / ARTIFACTS, src, [self.root / FIGURES])
 
     def _milestones(self, by_name: dict[str, str], nodes: dict[str, dict]) -> list[dict]:
         """The deadlines in milestones/: due date as written, status, the notes they need by id and
@@ -635,8 +890,9 @@ class Vault:
 
     def note(self, nid: str) -> dict | None:
         """A note as the page shows it: its body, version, whether it is locked, and its threads,
-        each placed in the body as it is now (`at`: [start, end], or None when detached)."""
-        path = self.note_path(nid)
+        each placed in the body as it is now (`at`: [start, end], or None when detached). A
+        manuscript's snippet (S..) reads the same way: its LaTeX as the body, locked as the manuscript is."""
+        path = self.text_path(nid)
         if path is None:
             return None
         data = path.read_bytes()
@@ -646,11 +902,39 @@ class Vault:
         for t in self._threads(nid)["threads"]:
             at = locate(body, str(t.get("quote") or ""), str(t.get("prefix") or ""), str(t.get("suffix") or ""))
             threads.append({**t, "at": [at[0], at[1]] if at else None, "exact": bool(at and at[2])})
+        if rft_manuscript.SNIPPET_ID.match(nid):
+            h = rft_manuscript.header(text)
+            return {"id": nid, "name": f"{nid} {h['title']}" if h else nid, "body": body, "version": version_of(data),
+                    "locked": rft_manuscript.snippet_locked(rft_manuscript.read_registry(self.root), nid), "threads": threads}
+        if rft_manuscript.DOC_RE.match(nid) and not ID_RE.match(nid):
+            return {"id": nid, "name": f"the document {nid}", "body": body, "version": version_of(data),
+                    "locked": rft_manuscript.document_locked(rft_manuscript.read_docs_registry(self.root), nid), "threads": threads}
         return {"id": nid, "name": path.name[:-3], "body": body, "version": version_of(data),
                 "locked": is_locked(front(text)), "threads": threads}
 
+    def text_path(self, nid: str) -> Path | None:
+        """A note's file, a snippet's (S.., snippets/S...tex) or a document's (by its name,
+        documents/<name>/main.tex): what the page reads, edits and discusses."""
+        if rft_manuscript.SNIPPET_ID.match(nid or ""):
+            path = (rft_manuscript.snippets_dir(self.root) / f"{nid}.tex").resolve()
+            return path if path.parent == rft_manuscript.snippets_dir(self.root).resolve() and path.is_file() else None
+        if rft_manuscript.DOC_RE.match(nid or "") and not ID_RE.match(nid):
+            path = rft_manuscript.documents_dir(self.root) / nid / "main.tex"
+            return path if path.is_file() and not path.is_symlink() else None
+        return self.note_path(nid)
+
     def inside(self, path: Path) -> bool:
         return self.root in path.parents
+
+    def notebook_link(self, nid: str) -> Path | None:
+        """The vault's link to an experiment's notebook (its `notebook:`), when the note has one and it
+        names a place in the vault; where the link leads is rft_notebook's to check."""
+        n = next((x for x in self.tree()["nodes"] if x["id"] == nid), None)
+        rel = (n or {}).get("notebook")
+        if not rel:
+            return None
+        path = Path(os.path.normpath(self.root / rel))
+        return path if self.inside(path) and (path.is_symlink() or path.is_file()) else None
 
     def image(self, nid: str, src: str) -> Path | None:
         """The image file note `nid` embeds as `src` (`![[src]]` or `![](src)`), resolved, as
@@ -658,20 +942,25 @@ class Vault:
         Obsidian vault's; else by name, the file whose path ends as `src` does that lies nearest
         the note, first in the vault, then in the Obsidian vault. None when there is none."""
         note = self.note_path(nid)
+        return None if note is None else self._find_image(note.parent, src)
+
+    def _find_image(self, near: Path, src: str, also: list[Path] = ()) -> Path | None:
+        """The image `src` names, seen from the folder `near` (then from the folders `also`), as
+        `image` finds a note's."""
         src = (src or "").strip()
-        if note is None or not src or "\x00" in src or len(src) > 4096:
+        if not src or "\x00" in src or len(src) > 4096:
             return None
         if src.lower().startswith("file://"):
             src = src[len("file://"):]
         if not is_image(Path(src)):
             return None
         inner = src.lstrip("/")  # Obsidian reads `/a.png` from its vault's top
-        tries = ([Path(src)] if Path(src).is_absolute() else []) + [note.parent / inner, *(t / inner for t in self.image_tops)]
+        tries = ([Path(src)] if Path(src).is_absolute() else []) + [near / inner, *(a / inner for a in also), *(t / inner for t in self.image_tops)]
         parts = [p for p in Path(inner).parts if p not in (".", "..")]
         try:
             found = next((p for p in tries if p.is_file()), None)
             for top in self.image_tops if parts else ():
-                found = found or self._by_name(top, parts, note.parent)
+                found = found or self._by_name(top, parts, near)
             path = found.resolve() if found else None
         except OSError:  # a name too long, a folder it may not read
             return None
@@ -718,7 +1007,7 @@ class Vault:
     def write_body(self, nid: str, body: str, version: str | None) -> tuple[int, dict]:
         """Replaces a note's body, keeping its frontmatter byte for byte. Refused, with the note as
         it is now, when the file changed since `version` (None: write anyway)."""
-        path = self.note_path(nid)
+        path = self.text_path(nid)
         if path is None:
             return 404, {"error": "no such note"}
         with self._write_lock:
@@ -954,6 +1243,61 @@ class Vault:
             self._write_note(path, text, frame % "\n".join(fields), body)
         return 200, {"id": mid}
 
+    # ------------------------------------------------------------ the scratchpad
+
+    def _scratchpad_file(self) -> Path | None:
+        """The scratchpad's file at the vault's top; None when that name is held by something else
+        than a plain file (a folder, a link), which is then neither read nor written."""
+        path = self.root / SCRATCHPAD
+        return None if path.is_symlink() or (path.exists() and not path.is_file()) else path
+
+    def scratchpad(self) -> tuple[int, dict]:
+        """The scratchpad as the page shows it: its text (newlines as \\n) and version; empty, with
+        no version, until it is first written."""
+        path = self._scratchpad_file()
+        if path is None:
+            return 422, {"error": f"{SCRATCHPAD} in the vault is not a plain file"}
+        try:
+            data = path.read_bytes()
+        except FileNotFoundError:
+            return 200, {"name": SCRATCHPAD, "text": "", "version": None}
+        text = data.decode("utf-8", errors="replace").replace("\r\n", "\n")
+        return 200, {"name": SCRATCHPAD, "text": text, "version": version_of(data)}
+
+    def write_scratchpad(self, text: str, version: str | None, force: bool = False) -> tuple[int, dict]:
+        """Writes the scratchpad, as it is given (made when there is none), in the newlines the
+        file had. Refused, with the text as it is now, when the file changed since `version` (None:
+        it was not made yet), unless `force`."""
+        path = self._scratchpad_file()
+        if path is None:
+            return 422, {"error": f"{SCRATCHPAD} in the vault is not a plain file"}
+        with self._write_lock:
+            try:
+                data = path.read_bytes()
+            except FileNotFoundError:
+                data = None
+            now = None if data is None else version_of(data)
+            if not force and version != now:
+                return 409, {"error": "the scratchpad changed since it was read", "version": now,
+                             "text": "" if data is None else data.decode("utf-8", errors="replace").replace("\r\n", "\n")}
+            try:
+                old = "" if data is None else data.decode("utf-8")
+            except UnicodeDecodeError:
+                return 422, {"error": f"{SCRATCHPAD} is not UTF-8 text; edit it in an editor"}
+            text = text.replace("\r\n", "\n")
+            # (a lone surrogate, which JSON can carry and UTF-8 cannot, becomes "?")
+            out = (text.replace("\n", "\r\n") if "\r\n" in old else text).encode("utf-8", errors="replace")
+            # a new file renamed over the old one: a reader never sees half of it
+            tmp = path.with_name(f".{path.name}.rft-tmp")
+            try:
+                tmp.write_bytes(out)
+                if data is not None:
+                    os.chmod(tmp, stat.S_IMODE(path.stat().st_mode))
+                os.replace(tmp, path)
+            finally:
+                tmp.unlink(missing_ok=True)
+        return 200, {"name": SCRATCHPAD, "version": version_of(out)}
+
     # ------------------------------------------------------------ comments and suggestions
 
     def _comments_file(self, nid: str) -> Path:
@@ -990,8 +1334,8 @@ class Vault:
         accept {thread}: a suggestion's replacement written into the note, when the quote is still
           there as it was; reject {thread};
         ask {thread}: the session that runs the server asked to answer it (a model turn).
-        The answer is the note as api/note gives it."""
-        path = self.note_path(nid)
+        The answer is the note as api/note gives it. A manuscript's snippet (S..) is discussed the same way."""
+        path = self.text_path(nid)
         if path is None:
             return 404, {"error": "no such note"}
         action = req.get("action")
@@ -1148,6 +1492,209 @@ class Vault:
                               "it may still change (is the session that ran /rft still open?)"}
 
 
+    # ---------------------------------------------------------------- the manuscript
+
+    def manuscript(self) -> dict:
+        """Snippets and documents as the page shows them (rft_manuscript.summary), with each
+        snippet's and document's open threads, each document's last PDF, and whether latexmk is there."""
+        texts: dict[str, str] = {}
+        paths = {n["id"]: n["path"] for n in self.tree()["nodes"]}
+
+        def read(nid: str) -> str:
+            if nid not in texts:
+                try:
+                    texts[nid] = (self.root / paths[nid]).read_text(encoding="utf-8", errors="replace")
+                except (KeyError, OSError):
+                    texts[nid] = ""
+            return texts[nid]
+
+        out = rft_manuscript.summary(self.root, self.tree(), read)
+        if not out["exists"]:
+            return out
+        for x in out["snippets"] + out["documents"]:
+            x["threads"] = sum(1 for t in self._threads(x.get("id") or x["name"])["threads"] if t.get("state") == "open")
+        for d in out["documents"]:
+            pdf = rft_manuscript.documents_dir(self.root) / ".build" / d["name"] / "main.pdf"
+            if pdf.is_file():
+                d["built"] = int(pdf.stat().st_mtime)
+        out["latexmk"] = bool(shutil.which("latexmk"))
+        return out
+
+    def manuscript_path(self, rel: str) -> Path | None:
+        """A file the page may read and write: a snippet (snippets/S<n>.tex, an existing one) or a
+        document (documents/<name>/main.tex)."""
+        if not re.fullmatch(r"snippets/S\d+\.tex|documents/[a-z0-9][a-z0-9-]*/main\.tex", rel or ""):
+            return None
+        path = self.root / rel
+        return path if path.is_file() and not path.is_symlink() else None
+
+    def manuscript_file(self, rel: str) -> tuple[int, dict]:
+        path = self.manuscript_path(rel)
+        if path is None:
+            return 404, {"error": "no such snippet or document"}
+        data = path.read_bytes()
+        out = {"path": rel, "text": data.decode("utf-8", errors="replace"), "version": version_of(data)}
+        if rel.startswith("snippets/"):
+            out["locked"] = rft_manuscript.snippet_locked(rft_manuscript.read_registry(self.root), Path(rel).stem)
+        else:
+            name = rel.split("/")[1]
+            out["locked"] = rft_manuscript.document_locked(rft_manuscript.read_docs_registry(self.root), name)
+            # the snippets' text each copy was taken from, for a copy in review: the snippet then and now
+            try:
+                out["taken"] = json.loads((rft_manuscript.documents_dir(self.root) / name / ".blocks.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                out["taken"] = {}
+        return 200, out
+
+    def write_manuscript_file(self, rel: str, text: str, version: str | None) -> tuple[int, dict]:
+        """The user's edit of a snippet or a document, refused with the file as it is now when it
+        changed since `version` (None: write anyway)."""
+        path = self.manuscript_path(rel)
+        if path is None:
+            return 404, {"error": "no such snippet or document"}
+        with self._write_lock:
+            data = path.read_bytes()
+            if version is not None and version != version_of(data):
+                return 409, {"error": "the file changed since it was opened", **self.manuscript_file(rel)[1]}
+            self._write_note(path, data.decode("utf-8", errors="replace"), "", text)
+        return self.manuscript_file(rel)
+
+    def set_manuscript_lock(self, level: str, locked: bool, one: str | None = None) -> tuple[int, dict]:
+        """Locks or unlocks, for Claude, the snippets (`level` snippets) or the documents
+        (`documents`): all of them, or (`one`) one snippet or document while they are locked."""
+        if level not in ("snippets", "documents"):
+            return 400, {"error": "level must be snippets or documents"}
+        path = (rft_manuscript.snippets_dir(self.root) / "snippets.json") if level == "snippets" else (rft_manuscript.documents_dir(self.root) / "documents.json")
+        if not path.is_file():
+            return 404, {"error": f"this vault has no {level} yet"}
+        if one is not None and (self.text_path(one) is None or not (rft_manuscript.SNIPPET_ID if level == "snippets" else rft_manuscript.DOC_RE).match(one)):
+            return 404, {"error": f"no such {level[:-1]}"}
+        with self._write_lock:
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except ValueError:
+                return 422, {"error": f"{path.name} is not JSON: fix it by hand"}
+            if one is None:
+                raw["locked"] = locked
+            else:
+                unlocked = [x for x in raw.get("unlocked") or [] if x != one]
+                raw["unlocked"] = unlocked if locked else unlocked + [one]
+            tmp = path.with_name(f".{path.name}.rft-tmp")
+            tmp.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
+            os.replace(tmp, path)
+        return 200, self.manuscript()
+
+    def compile_manuscript(self, doc: str | None = None, snippet: str | None = None) -> tuple[int, dict]:
+        """Compiles a document (rft_latex.compile_doc), or a snippet alone (compile_snippet), one compile at a time."""
+        with self._compile_lock:
+            r = rft_latex.compile_snippet(self.root, snippet) if snippet is not None else rft_latex.compile_doc(self.root, doc or "")
+        r.pop("pdf", None)  # a path on disk: the page asks api/manuscript/pdf
+        return (404 if str(r.get("error", "")).startswith("no ") else 200), r
+
+    def manuscript_pdf(self, doc: str | None = None, snippet: str | None = None) -> Path | None:
+        build = rft_manuscript.documents_dir(self.root) / ".build"
+        if snippet is not None:
+            pdf = build / "_snippets" / f"{snippet}.pdf" if rft_manuscript.SNIPPET_ID.match(snippet) else None
+        else:
+            pdf = build / doc / "main.pdf" if rft_manuscript.DOC_RE.match(doc or "") else None
+        return pdf if pdf is not None and pdf.is_file() else None
+
+    def manuscript_ask(self, req: dict, ask) -> tuple[int, dict]:
+        """What the session does for the page, as it does for Claude (hooks/lib/manuscript.ts), so
+        stamps and copies are made in one place: `new` {kind, title, basis} a snippet the user
+        starts; `reviewed` {id} its stamp taken anew; `document` {name, kind} a new document;
+        `place` {name, id, after?}, `move` {name, id, after?}, `remove` {name, id} a copy in a
+        document; `take` or `keep` {name, id} a copy in review answered. The answer comes once the
+        files show it."""
+        action = req.get("action")
+        sdir, ddir = rft_manuscript.snippets_dir(self.root), rft_manuscript.documents_dir(self.root)
+        stamp = lambda p: p.stat().st_mtime_ns if p.is_file() else 0  # noqa: E731
+        if action == "new":
+            if not all(isinstance(req.get(k), str) and req[k].strip() for k in ("kind", "title")) or not isinstance(req.get("basis"), list):
+                return 400, {"error": "expected {action: new, kind, title, basis: [ids]}"}
+            before = {p.stem for p in rft_manuscript.snippet_files(self.root)}
+            found = lambda: next((p.stem for p in rft_manuscript.snippet_files(self.root) if p.stem not in before), None)  # noqa: E731
+        elif action == "reviewed":
+            sid = req.get("id")
+            if not isinstance(sid, str) or not rft_manuscript.SNIPPET_ID.match(sid) or self.text_path(sid) is None:
+                return 404, {"error": "no such snippet"}
+            reg, was = sdir / "snippets.json", stamp(sdir / "snippets.json")
+            found = lambda: sid if stamp(reg) != was else None  # noqa: E731
+        elif action == "document":
+            name, kind, title = req.get("name"), req.get("kind", "article"), req.get("title", "")
+            if not isinstance(name, str) or not rft_manuscript.DOC_RE.match(name) or kind not in ("article", "report") \
+                    or not isinstance(title, str) or len(title) > 200 or "\n" in title:
+                return 400, {"error": "expected {action: document, name: lowercase letters, digits and dashes, kind: article or report, title?: one line}"}
+            if (ddir / name / "main.tex").exists():
+                return 409, {"error": f"there is already a document {name}"}
+            found = lambda: name if (ddir / name / "main.tex").is_file() else None  # noqa: E731
+        elif action in ("place", "move", "remove", "take", "keep"):
+            name, sid = req.get("name"), req.get("id")
+            if not isinstance(name, str) or not rft_manuscript.DOC_RE.match(name) or not (ddir / name / "main.tex").is_file():
+                return 404, {"error": "no such document"}
+            if not isinstance(sid, str) or not rft_manuscript.SNIPPET_ID.match(sid):
+                return 400, {"error": f"expected {{action: {action}, name, id: a snippet, after?}}"}
+            held = {b["id"] for b in rft_manuscript.parse_blocks((ddir / name / "main.tex").read_text(encoding="utf-8", errors="replace"))}
+            if action == "place" and sid in held:
+                return 409, {"error": f"{name} already holds a copy of {sid}"}
+            if action != "place" and sid not in held:
+                return 404, {"error": f"{name} holds no copy of {sid}"}
+            doc, was = ddir / name / "main.tex", stamp(ddir / name / "main.tex")
+            found = lambda: sid if stamp(doc) != was else None  # noqa: E731
+        else:
+            return 400, {"error": "action must be new, reviewed, document, place, move, remove, take or keep"}
+        with self._ask_lock:
+            try:
+                ask("RFT_MANUSCRIPT", {k: v for k, v in req.items() if k in ("action", "id", "kind", "title", "basis", "name", "after")})
+            except (OSError, ValueError):
+                return 503, {"error": "the Claude Code session that ran /rft is gone"}
+            deadline = time.monotonic() + NODE_WAIT_S
+            while time.monotonic() < deadline:
+                time.sleep(0.1)
+                got = found()
+                if got:
+                    return 200, {"id": got, **self.manuscript()}
+        return 504, {"error": f"the Claude Code session did not answer within {NODE_WAIT_S:g} s; is the session that ran /rft still open?"}
+
+    def verify(self, nid: str, action: str, ask) -> tuple[int, dict]:
+        """The user verifies a note (`verify`: verified, locked and stamped with a fingerprint of
+        its claim), dismisses Claude's suggestion to (`dismiss`), or sends a verified note back to
+        review (`review`, unlocked). Done by the session, as add_node is, so the stamp is computed
+        in one place (hooks/lib/verify.ts); the answer comes once the note shows it."""
+        if action not in ("verify", "dismiss", "review"):
+            return 400, {"error": "action must be verify, dismiss or review"}
+        with self._ask_lock:
+            n = next((n for n in self.tree()["nodes"] if n["id"] == nid), None)
+            if n is None:
+                return 404, {"error": "no such note"}
+            if action == "verify" and n["status"] == "verified":
+                return 400, {"error": "the note is verified already"}
+            if action == "verify" and n["status"] not in ("done", "review"):
+                return 400, {"error": f"the note is {n['status']}: only a done note, or one in review, is verified"}
+            if action == "review" and n["status"] != "verified":
+                return 400, {"error": "only a verified note goes back to review"}
+            if action == "dismiss" and not n.get("suggestedVerified"):
+                return 400, {"error": "Claude suggested no verification for this note"}
+            try:
+                ask("RFT_VERIFY", {"id": nid, "action": action})
+            except (OSError, ValueError):
+                return 503, {"error": "the Claude Code session that ran /rft is gone"}
+
+            def found(nodes):
+                m = next((m for m in nodes if m["id"] == nid), None)
+                if m is None:
+                    return None
+                if action == "verify":
+                    return m if m["status"] == "verified" and m.get("verified") else None
+                if action == "review":
+                    return m if m["status"] == "review" else None
+                return m if not m.get("suggestedVerified") else None
+
+            if self._wait(found):
+                return 200, self.note(nid)
+        return 504, {"error": f"the Claude Code session did not answer within {NODE_WAIT_S:g} s; "
+                              "it may still (is the session that ran /rft still open?)"}
+
     def move_node(self, nid: str, parent: str, ask, unlock: bool = False) -> tuple[int, dict]:
         """Moves a note and its subtree under `parent`, done by the session as for add_node; the
         answer comes once the note's parent is the new one and the notes are quiet. `unlock`: the
@@ -1192,9 +1739,11 @@ def ask_session(verb: str, request: dict) -> None:
 
 # ------------------------------------------------------------------ http
 
-def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_session):
-    """The request handler; without a `token` it never writes. `ask` hands a new note to the session."""
+def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_session, editors=None):
+    """The request handler; without a `token` it never writes. `ask` hands a new note to the session;
+    `editors` serves the experiments' notebooks (rft_notebook.Editors)."""
     web = web.resolve()
+    editors = editors if editors is not None else rft_notebook.Editors()
 
     class Handler(http.server.BaseHTTPRequestHandler):
         server_version = "rft"
@@ -1203,25 +1752,76 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
         def log_message(self, fmt, *args):  # quiet: the plugin reads stdout for the URL only
             pass
 
-        def _send(self, status: int, body: bytes, ctype: str, head_only: bool = False):
+        def _send(self, status: int, body: bytes, ctype: str, head_only: bool = False, csp: str = PAGE_CSP):
             self.send_response(status)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
-            self.send_header("Content-Security-Policy", PAGE_CSP)
+            self.send_header("Content-Security-Policy", csp)
             self.end_headers()
             if not head_only:
                 self.wfile.write(body)
+
+        def _artifact(self, q: dict, head_only: bool):
+            """GET api/artifact?concept=<id>[&theme=dark][&y=<px>][&token=<image key>]: the concept's artifact
+            as a document of its own, in a sandbox: its theme, the base style and the frame's runtime first,
+            its images through api/image (with the image key when this request carries it or the vault key:
+            never the vault key itself, which a script of the page could read)."""
+            one = lambda k: (q.get(k) or [""])[0]
+            cid = one("concept")
+            page = vault.artifact(cid)
+            if page is None:
+                return self._send(404, b"no artifact for this concept", "text/plain", head_only)
+            given = one("token").encode()
+            keyed = bool(token) and (secrets.compare_digest(given, token.encode()) or secrets.compare_digest(given, image_key(token).encode()))
+
+            def image(m):
+                src = m.group(3)
+                if re.match(r"^\s*(data:|https?:|//)", src, re.I):
+                    return m.group(0)
+                q = m.group(2)
+                svg = inline_svg(html_unescape(src))
+                if svg is not None:  # inside the page: an SVG from the server would be blocked
+                    return f"{m.group(1)}{q}{svg}{q} data-rft-src={q}{html_escape(src, quote=True)}{q}"
+                url = f"api/image?artifact={cid}&amp;src={quote(html_unescape(src), safe='')}" + (f"&amp;token={image_key(token)}" if keyed else "")
+                return f"{m.group(1)}{q}{url}{q}"
+
+            def inline_svg(src: str) -> str | None:
+                """An SVG the artifact shows as a data: image, when it is one it may show: in the vault,
+                or anywhere with the key, as api/image serves it; None for any other image."""
+                path = vault.artifact_image(cid, src)
+                if path is None or path.suffix.lower() != ".svg" or not (keyed or vault.inside(path)):
+                    return None
+                try:
+                    if path.stat().st_size > MAX_INLINE_SVG:
+                        return None
+                    data = path.read_bytes()
+                except OSError:
+                    return None
+                return "data:image/svg+xml;base64," + base64.b64encode(data).decode("ascii")
+
+            theme = "dark" if one("theme") == "dark" else "light"
+            def text(name: str) -> str:
+                try:
+                    return (web / name).read_text(encoding="utf-8")
+                except OSError:  # a plugin folder without it: the page without it
+                    return ""
+            # each script ends where the next begins: `;` keeps one's opening ( from calling the last
+            js, css = "\n;\n".join(text(f) for f in FRAME_SCRIPTS), text("frame.css")
+            doc = wrap_artifact(IMG_SRC_RE.sub(image, page), js, css, theme)
+            here = f"http://{(self.headers.get('Host') or '').strip()}"
+            self._send(200, doc.encode("utf-8"), "text/html; charset=utf-8", head_only, ARTIFACT_CSP.format(here=here))
 
         def _image(self, q: dict, head_only: bool):
             """GET api/image?note=<id>&src=<as the note writes it>[&token=<key>]: the image, when
             it is in the vault or the request carries the key. Without the key, an image that is
             not in the vault is refused whether it exists or not, so nothing outside can be probed."""
             one = lambda k: (q.get(k) or [""])[0]
-            path = vault.image(one("note"), one("src"))
-            keyed = bool(token) and secrets.compare_digest(one("token").encode(), token.encode())
+            path = vault.artifact_image(one("artifact"), one("src")) if one("artifact") else vault.image(one("note"), one("src"))
+            given = one("token").encode()
+            keyed = bool(token) and (secrets.compare_digest(given, token.encode()) or secrets.compare_digest(given, image_key(token).encode()))
             if path is None or not (keyed or vault.inside(path)):
                 if keyed:
                     return self._send(404, b"no such image", "text/plain", head_only)
@@ -1248,6 +1848,64 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             if data:
                 self.wfile.write(data)
 
+        def _queue_log(self, q: dict, head_only: bool):
+            """GET api/queue/output?id=<job>: a job's output, only for the page carrying the key
+            (X-RFT-Token, a header no other page can send): a log may hold what a note does not.
+            The monitor follows it by byte, in bounded pieces (rft_queue.read_log): with no `from`,
+            its last 64 KB from a line's start; with `from=<end of the last piece>`, what came since.
+            `raw=1`: the whole log, as a file to save. `lines=<n>`: its last lines (older pages).
+            Whatever goes wrong is answered as an error, never a dropped connection."""
+            given = self.headers.get("X-RFT-Token") or ""
+            if not token or not secrets.compare_digest(given, token):
+                return self._json(403, {"error": "the key is missing or out of date: open the address /rft printed"}, head_only)
+            jid = (q.get("id") or [""])[0]
+            one = lambda k: (q.get(k) or [""])[0]  # noqa: E731
+            try:
+                if one("raw") == "1":
+                    return self._log_file(jid, head_only)
+                if "from" in q or "lines" not in q:
+                    try:
+                        start = int(one("from")) if one("from") else None
+                    except ValueError:
+                        start = None
+                    return self._json(200, vault.queue.read_log(jid, start), head_only)
+                try:
+                    lines = int(one("lines"))
+                except ValueError:
+                    lines = 40
+                return self._json(200, {"id": jid, "text": vault.queue.log(jid, lines)}, head_only)
+            except rft_queue.NotFound as err:
+                return self._json(404, {"error": str(err)}, head_only)
+            except (rft_queue.QueueError, OSError) as err:
+                return self._json(409, {"error": str(err)}, head_only)
+            except Exception as err:  # noqa: BLE001 - said to the page, which shows it, instead of a dropped connection
+                return self._json(500, {"error": f"the log was not read: {type(err).__name__}: {err}"}, head_only)
+
+        def _log_file(self, jid: str, head_only: bool):
+            """A job's whole output as a file to save, sent in pieces as it is on disk now."""
+            path = vault.queue.log_path(jid)
+            if path is None or not path.is_file():
+                return self._json(404, {"error": f"{jid} has no output yet"}, head_only)
+            with open(path, "rb") as f:
+                size = os.fstat(f.fileno()).st_size
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(size))
+                self.send_header("Content-Disposition", f'attachment; filename="{jid}.log"')
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Content-Security-Policy", PAGE_CSP)
+                self.end_headers()
+                if head_only:
+                    return
+                left = size
+                while left > 0:
+                    data = f.read(min(1 << 20, left))
+                    if not data:
+                        break
+                    self.wfile.write(data)
+                    left -= len(data)
+
         def _json(self, status: int, obj, head_only=False):
             self._send(status, json.dumps(obj, ensure_ascii=False).encode(), "application/json; charset=utf-8", head_only)
 
@@ -1256,10 +1914,75 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             name = host.rsplit(":", 1)[0] if not host.startswith("[") else host.split("]")[0] + "]"
             return name in LOOPBACK_HOSTS
 
+        def _proxy(self):
+            """A request under notebook/<name>/: passed on as it came to the marimo editor of that name
+            (rft_notebook.Editors, which serves under that path), and its answer back as it went; a
+            websocket's bytes both ways until either end closes. The editor checks its own key (in the
+            address, then its cookie), so the page reaches it through this port alone."""
+            head_only = self.command == "HEAD"
+            if not self._host_ok():
+                return self._send(403, b"forbidden host", "text/plain", head_only)
+            name = self.path[len(NOTEBOOK_PREFIX):].split("/", 1)[0].split("?", 1)[0]
+            port = editors.port_of(name) if name else None
+            if port is None:
+                return self._send(502, NOTEBOOK_GONE, "text/html; charset=utf-8", head_only)
+            hop = {t.strip().lower() for t in (self.headers.get("Connection") or "").split(",")}
+            upgrade = "upgrade" in hop and bool(self.headers.get("Upgrade"))
+            lines = [f"{self.command} {self.path} HTTP/1.1"]
+            for k, v in self.headers.items():
+                if "\r" in v or "\n" in v:
+                    return self._send(400, b"bad header", "text/plain", head_only)
+                if k.lower() in ("connection", "keep-alive", "proxy-connection") or (k.lower() == "upgrade" and not upgrade):
+                    continue
+                lines.append(f"{k}: {v}")
+            # one request a connection (this server answers HTTP/1.0), a websocket for as long as it lasts
+            lines.append("Connection: Upgrade" if upgrade else "Connection: close")
+            try:
+                up = socket.create_connection(("127.0.0.1", port), timeout=10)
+            except OSError:
+                return self._send(502, NOTEBOOK_GONE, "text/html; charset=utf-8", head_only)
+            self.close_connection = True
+            try:
+                up.settimeout(None)
+                up.sendall(("\r\n".join(lines) + "\r\n\r\n").encode("latin-1"))
+            except (OSError, UnicodeEncodeError):
+                up.close()
+                return
+
+            def inward():  # what the browser sends after the head: a body, a websocket's frames
+                try:
+                    while data := self.rfile.read1(65536):
+                        up.sendall(data)
+                    up.shutdown(socket.SHUT_WR)
+                except (OSError, ValueError):
+                    pass
+            threading.Thread(target=inward, daemon=True).start()
+            try:
+                while data := up.recv(65536):
+                    self.wfile.write(data)
+            except (OSError, ValueError):
+                pass
+            finally:
+                up.close()
+                try:
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+        def _proxy_only(self):
+            """DELETE, PATCH, OPTIONS: an editor's under notebook/; read-only elsewhere."""
+            if self.path.startswith(NOTEBOOK_PREFIX):
+                return self._proxy()
+            self._refuse()
+
+        do_DELETE = do_PATCH = do_OPTIONS = _proxy_only
+
         def do_HEAD(self):
             self.do_GET(head_only=True)
 
         def do_GET(self, head_only: bool = False):
+            if self.path.startswith(NOTEBOOK_PREFIX):
+                return self._proxy()
             if not self._host_ok():
                 return self._send(403, b"forbidden host", "text/plain", head_only)
             url = urlsplit(self.path)
@@ -1280,6 +2003,33 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 return self._json(200, note, head_only) if note else self._json(404, {"error": "no such note"}, head_only)
             if route == "/api/image":
                 return self._image(parse_qs(url.query), head_only)
+            if route == "/api/artifact":
+                return self._artifact(parse_qs(url.query), head_only)
+            if route == "/api/scratchpad":
+                return self._json(*vault.scratchpad(), head_only)
+            if route == "/api/manuscript":
+                return self._json(200, vault.manuscript(), head_only)
+            if route == "/api/manuscript/file":
+                return self._json(*vault.manuscript_file((parse_qs(url.query).get("path") or [""])[0]), head_only)
+            if route == "/api/manuscript/pdf":
+                # the PDF only for the page carrying the key: a document may hold what no note shows
+                given = self.headers.get("X-RFT-Token") or ""
+                if not token or not secrets.compare_digest(given, token):
+                    return self._json(403, {"error": "the key is missing or out of date: open the address /rft printed"}, head_only)
+                q = parse_qs(url.query)
+                pdf = vault.manuscript_pdf((q.get("doc") or [None])[0], (q.get("snippet") or [None])[0])
+                if pdf is None:
+                    return self._json(404, {"error": "not compiled yet"}, head_only)
+                return self._send(200, pdf.read_bytes(), "application/pdf", head_only)
+            # no queue until this machine is paired with it (rft_queue.Queue.pair): the page shows no monitor
+            if route.startswith("/api/queue") and not vault.queue.paired():
+                return self._json(404, {"error": NOT_PAIRED}, head_only)
+            if route == "/api/queue":
+                return self._json(*queue_snapshot(vault.queue), head_only)
+            # a job's output: api/queue/output (api/queue/log for older pages, though ad and tracker
+            # blockers refuse addresses like it, taking them for an analytics beacon)
+            if route in ("/api/queue/output", "/api/queue/log"):
+                return self._queue_log(parse_qs(url.query), head_only)
             if route == "/api/paper":
                 path = vault.paper((parse_qs(url.query).get("id") or [""])[0])
                 if path is None:
@@ -1323,7 +2073,30 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             return url, req
 
         def do_PUT(self):
-            """PUT api/note?id=<id> {"body": "...", "version": "<as read>"} or {"body": "...", "force": true}."""
+            """PUT api/note?id=<id> {"body": "...", "version": "<as read>"} or {"body": "...", "force": true};
+            PUT api/scratchpad {"text": "...", "version": "<as read>" or null} or {"text": "...", "force": true}."""
+            if self.path.startswith(NOTEBOOK_PREFIX):
+                return self._proxy()
+            if urlsplit(self.path).path == "/api/manuscript/file":
+                got = self._write_request("/api/manuscript/file", MAX_NOTE_BYTES)
+                if got is None:
+                    return
+                _, req = got
+                force = req.get("force") is True
+                version = None if force else req.get("version")
+                if not isinstance(req.get("path"), str) or not isinstance(req.get("text"), str) or not (force or isinstance(version, str)):
+                    return self._json(400, {"error": "expected {path, text, version} or {path, text, force: true}"})
+                return self._json(*vault.write_manuscript_file(req["path"], req["text"], version))
+            if urlsplit(self.path).path == "/api/scratchpad":
+                got = self._write_request("/api/scratchpad", MAX_NOTE_BYTES)
+                if got is None:
+                    return
+                _, req = got
+                force = req.get("force") is True
+                version = req.get("version", False)
+                if not isinstance(req.get("text"), str) or not (force or version is None or isinstance(version, str)):
+                    return self._json(400, {"error": "expected {text, version} (null before the file is made) or {text, force: true}"})
+                return self._json(*vault.write_scratchpad(req["text"], None if force else version, force))
             got = self._write_request("/api/note", MAX_NOTE_BYTES)
             if got is None:
                 return
@@ -1347,8 +2120,33 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             PRIORITIES or null} or {"id": "<id>", "dismiss": true} (Claude's suggestion only); POST
             api/dates {"id": "<id>", "due"?, "start"?, "est"?: a value or null} or {"id", "dismiss": true}
             (Claude's suggested dates only); POST api/milestone {"title", "due", "needs"?: [ids]} (a new
-            deadline), {"id": "M..", "due"?, "needs"?, "status"?} or {"id", "accept" | "dismiss": true}."""
+            deadline), {"id": "M..", "due"?, "needs"?, "status"?} or {"id", "accept" | "dismiss": true}.
+            POST api/notebook {"id": "<id>"}: the address of the experiment's notebook in its repo's
+            marimo editor ({"url"}, under notebook/ on this server), the editor started first if need be."""
+            if self.path.startswith(NOTEBOOK_PREFIX):
+                return self._proxy()
             route = urlsplit(self.path).path
+            if route == "/api/queue":
+                got = self._write_request("/api/queue", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                if not vault.queue.paired():
+                    return self._json(404, {"error": NOT_PAIRED})
+                return self._json(*queue_change(vault.queue, got[1]))
+            if route == "/api/notebook":
+                got = self._write_request("/api/notebook", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                nid = got[1].get("id")
+                if not isinstance(nid, str):
+                    return self._json(400, {"error": 'expected {"id": "<id>"}'})
+                path = vault.notebook_link(nid)
+                if path is None:
+                    return self._json(404, {"error": f"{nid} has no notebook in the vault"})
+                try:
+                    return self._json(200, {"url": editors.open(path)})
+                except rft_notebook.NotebookError as e:
+                    return self._json(502, {"error": str(e)})
             if route == "/api/dates":
                 got = self._write_request("/api/dates", MAX_NODE_BYTES)
                 if got is None:
@@ -1404,6 +2202,35 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 if "priority" not in req or (req["priority"] is not None and req["priority"] not in PRIORITIES):
                     return self._json(400, bad)
                 return self._json(*vault.set_priority(req["id"], req["priority"]))
+            if route == "/api/manuscript/compile":
+                got = self._write_request("/api/manuscript/compile", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                _, req = got
+                if not (isinstance(req.get("doc"), str) or isinstance(req.get("snippet"), str)):
+                    return self._json(400, {"error": "expected {doc} or {snippet}"})
+                return self._json(*vault.compile_manuscript(req.get("doc"), req.get("snippet")))
+            if route == "/api/manuscript/lock":
+                got = self._write_request("/api/manuscript/lock", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                _, req = got
+                if not isinstance(req.get("locked"), bool) or ("id" in req and not isinstance(req["id"], str)) or req.get("level") not in ("snippets", "documents"):
+                    return self._json(400, {"error": "expected {level: snippets or documents, locked: true or false, id?: a snippet or document}"})
+                return self._json(*vault.set_manuscript_lock(req["level"], req["locked"], req.get("id")))
+            if route == "/api/manuscript/ask":
+                got = self._write_request("/api/manuscript/ask", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                return self._json(*vault.manuscript_ask(got[1], ask))
+            if route == "/api/verify":
+                got = self._write_request("/api/verify", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                _, req = got
+                if not all(isinstance(req.get(k), str) for k in ("id", "action")):
+                    return self._json(400, {"error": "expected {id, action: verify, dismiss or review}"})
+                return self._json(*vault.verify(req["id"], req["action"], ask))
             if route == "/api/move":
                 got = self._write_request("/api/move", MAX_NODE_BYTES)
                 if got is None:
@@ -1428,9 +2255,49 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 return self._json(400, {"error": "expected {parent, type, title}"})
             return self._json(*vault.add_node(req["parent"], req["type"], req["title"].strip(), ask))
 
-        do_DELETE = do_PATCH = _refuse
-
     return Handler
+
+
+def queue_snapshot(q) -> tuple[int, dict]:
+    """GET api/queue: the GPUs, the jobs waiting and running, the last ones that ended. A queue with
+    work and no runner (the machine restarted, the runner stopped) gets one."""
+    try:
+        snap = q.snapshot(100)
+    except rft_queue.QueueError as err:
+        return 500, {"error": str(err)}
+    if not snap["runner"] and any(j["state"] == "running" or (j["state"] == "pending" and not snap["paused"]) for j in snap["jobs"]):
+        try:
+            q.wake()
+        except OSError:
+            pass
+    return 200, snap
+
+
+NOT_PAIRED = "no machine is paired with this vault's experiment queue, so there is no queue: /rft-machine add pairs this one"
+
+QUEUE_OPS = ('expected {op: "move", id, before?: "top" or a job id or null}, {op: "cancel", id}, {op: "retry", id}, '
+             '{op: "pause", paused: true or false} or {op: "gpus", allowed: [GPU indices] or null}')
+
+
+def queue_change(q, req: dict) -> tuple[int, dict]:
+    """POST api/queue: the user's change to the queue, from the monitor."""
+    op, jid = req.get("op"), req.get("id")
+    try:
+        if op == "move" and isinstance(jid, str) and (req.get("before") is None or isinstance(req.get("before"), str)):
+            return 200, {"job": q.move(jid, req.get("before"))}
+        if op == "cancel" and isinstance(jid, str):
+            return 200, {"job": q.cancel(jid, "cancelled in the tree view")}
+        if op == "retry" and isinstance(jid, str):
+            return 200, {"job": q.retry(jid, by="user")}
+        if op == "pause" and isinstance(req.get("paused"), bool):
+            return 200, q.pause(req["paused"])
+        if op == "gpus" and "allowed" in req:
+            return 200, q.allow(req["allowed"])
+    except rft_queue.NotFound as err:
+        return 404, {"error": str(err)}
+    except rft_queue.QueueError as err:
+        return 409, {"error": str(err)}
+    return 400, {"error": QUEUE_OPS}
 
 
 def vault_key(vault: Path) -> str:
@@ -1485,15 +2352,24 @@ def take_over(port: int, handler, every: float = 1.0):
             pass
 
 
-def watch_parent(server, watch_stdin: bool):
-    """Exit when the parent dies (we are re-parented), and with --watch-stdin when it closes our stdin."""
+def watch_parent(server, watch_stdin: bool, on_exit=None):
+    """Exit when the parent dies (we are re-parented), and with --watch-stdin when it closes our stdin;
+    `on_exit` runs first (the notebook editors are stopped)."""
     parent = os.getppid()
+
+    def leave():
+        if on_exit:
+            try:
+                on_exit()
+            except Exception:
+                pass
+        os._exit(0)
 
     def by_pid():
         while True:
             time.sleep(2)
             if os.getppid() != parent:
-                os._exit(0)
+                leave()
 
     def by_stdin():
         try:
@@ -1501,7 +2377,7 @@ def watch_parent(server, watch_stdin: bool):
                 pass
         except Exception:
             pass
-        os._exit(0)
+        leave()
 
     threading.Thread(target=by_pid, daemon=True).start()
     if watch_stdin and not sys.stdin.isatty():
@@ -1520,9 +2396,12 @@ def main(argv=None):
     a = ap.parse_args(argv)
     vault = Vault(Path(a.vault), a.project, Path(a.config) if a.config else None)
     token = vault_key(Path(a.vault))
-    handler = make_handler(vault, Path(a.web), token)
+    editors = rft_notebook.Editors()
+    handler = make_handler(vault, Path(a.web), token, editors=editors)
     if not a.no_watch:
-        watch_parent(None, a.watch_stdin)
+        watch_parent(None, a.watch_stdin, on_exit=editors.stop_all)
+    # stopped from outside: the editors run in process groups of their own, so stop them too
+    signal.signal(signal.SIGTERM, lambda *_: (editors.stop_all(), os._exit(0)))
 
     def announce(port: int):
         print(f"RFT_SERVER_URL http://127.0.0.1:{port}/?token={token}", flush=True)
@@ -1547,6 +2426,8 @@ def main(argv=None):
         server.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        editors.stop_all()
 
 
 if __name__ == "__main__":

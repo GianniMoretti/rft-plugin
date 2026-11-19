@@ -9,16 +9,18 @@ import type { CodeRepo, Concept, Config, Io, Loaded, NodeType, RftNode, Tree } f
 import {
   CANVAS, CODE, CONFIG_PATH, ID_RE, INDEX, LEGEND, MARK, MERMAID, NODE_TYPES, ROOT_CONCEPT, STATUSES, SUBDIR,
   TEMPLATES, TYPES, bodyOf, codeRepos, codeSection, compactTree, conceptOrder, conceptPath, counts, countsLine,
-  declaredConcept, defaultConfig, front, idOf, indexTemplate, isAbsolute, isInGit, isNodeType, join, load, locate,
+  declaredConcept, defaultConfig, front, idOf, indexTemplate, isAbsolute, isFinished, isInGit, isNodeType, join, load, locate,
   needsCode, nextId, noteText, orList, readConfig, removeField, renameLinks, repoAbs, reposLine, resolveId, retyped,
   sanitiseTitle, setField, statusSummary, subtreeOf, sync, tagCounts, unquote, validate, walk, withCardRenamed,
   withChildListed, withChildUnlisted, withCodeSection, withLinksRenamed, withMove, withRefs, withStatus,
   withTopicalTags, writeConfig,
 } from './vault'
 import { cleanSummary, withSummary } from './map'
+import { artifactNotice, embeddedArtifacts } from './artifacts'
 import type { Feature } from './tools'
 import { featuresInUse } from './tools'
 import { checkSuggestion, fullText } from './priority'
+import { suggestVerified, toReview } from './verify'
 
 /** Why Claude may not change a locked note's text, and what it does instead. */
 export const lockedText = (n: { id: string; name: string }, instead = `propose the change with rft_suggest {id: "${n.id}", quote: the exact text to replace, replacement}`) =>
@@ -154,6 +156,7 @@ export async function addNode(io: Io, loaded: Loaded, input: AddInput, env?: Cod
   if (!title) throw new RftError('the title is empty once the characters that break links are removed')
   const status = input.status ?? TYPES[input.type].status
   if (!(STATUSES as readonly string[]).includes(status)) throw new RftError(`status must be one of ${STATUSES.join(', ')}`)
+  if (status === 'verified' || status === 'review') throw new RftError(`a new note is never ${status}: only the user verifies a note once its claim is checked (suggest it later with rft_set_status verified)`)
   const isEmpty = Object.keys(tree.nodes).length === 0
   let parent: string | null = null
   if (input.parent) {
@@ -364,11 +367,15 @@ export function tagsReport(loaded: Loaded): string {
  * vault that uses dates (a milestone, or a note with `due:` or `start:`), so other vaults' notes
  * do not change.
  */
-export async function setStatus(io: Io, loaded: Loaded, ref: string, status: string, note?: string, summary?: string, date?: string): Promise<string> {
+export async function setStatus(io: Io, loaded: Loaded, ref: string, status: string, note?: string, summary?: string, date?: string, unlock = false): Promise<string> {
   const id = resolveId(loaded.tree, ref)
   if (!id) throw new RftError(`"${ref}" is not a note of the tree`)
   if (!(STATUSES as readonly string[]).includes(status)) throw new RftError(`status must be one of ${STATUSES.join(', ')}`)
   const n = loaded.tree.nodes[id]!
+  // verified is the user's to give: Claude's call suggests it; review takes a verified note back, unlocked once the user agrees
+  if (status === 'verified') return suggestVerified(io, loaded, id, note, summary)
+  if (status === 'review') return toReview(io, loaded, id, note, date ?? today(), unlock)
+  if (n.status === 'verified') throw new RftError(`${n.name} is verified: only the user changes that. If its claim may no longer hold, set it to review (rft_set_status review, with the reason as note); the user agrees to unlock it, and decides from there`)
   const prev = loaded.texts[id]!
   if (note && isLocked(prev)) throw new RftError(lockedText(n, 'set the status without a note, and propose the text with rft_suggest'))
   let next = withStatus(prev, n, status, note)
@@ -382,7 +389,7 @@ export async function setStatus(io: Io, loaded: Loaded, ref: string, status: str
   Object.assign(loaded, fresh)
   const nudge = !summary?.trim() && note?.trim() && (status === 'done' || status === 'dropped')
     ? ' Update its one-line summary with what it found (rft_set_summary).' : ''
-  return `${n.name}: ${n.status} → ${status}${note ? ' (note added)' : ''}${summary?.trim() ? ', summary updated' : ''}. Updated ${report.changed.length} derived file(s).${nudge}`
+  return `${n.name}: ${n.status} → ${status}${note ? ' (note added)' : ''}${summary?.trim() ? ', summary updated' : ''}. Updated ${report.changed.length} derived file(s).${nudge}${await artifactNotice(io, loaded, id)}`
 }
 
 /**
@@ -654,7 +661,7 @@ export async function setCode(io: Io, loaded: Loaded, env: CodeEnv, ref: string,
   const now = codeSection(text)
   let out = `${n.name}: ## ${CODE} ${was ? 'updated' : 'written'}, checked against ${said.join('; ')}.`
   if (!now?.description) out += ' It holds no description yet: pass text, how the note relates to the code.'
-  if (n.type === 'experiment' && n.status === 'done' && !now?.reproduce) out += ' A done experiment says how to reproduce its results: pass reproduce.'
+  if (n.type === 'experiment' && isFinished(n.status) && !now?.reproduce) out += ' A done experiment says how to reproduce its results: pass reproduce.'
   return out
 }
 
@@ -735,6 +742,9 @@ function codeContext(tree: Tree, where: { cwd?: string; root?: string; home?: st
   return out.length ? `\n${out.join('\n')}\n` : ''
 }
 
+/** The rule of a session on a machine paired with the experiment queue: every run goes through it. */
+export const QUEUE_RULE = `- This machine is paired with the experiment queue: every run of an experiment's code goes through rft_queue (gpus: 0 for one that needs no GPU), never into the background with Bash (\`&\`, nohup, screen, tmux) nor in the foreground beyond a check of a few seconds, so the user and you see every run and what it holds. The queue runs jobs on this machine's GPUs in the user's order (they reorder, pause, cancel and retry in the tree view). The plugin sets an experiment running when its job starts and tells the user when one ends: never poll rft_jobs to wait for a job (each call is a turn); read it when the user asks, or when the session starts with a result to record, then write the real result (or the failure, from its error) in the note. A job's command runs as \`bash -c\` in its folder with the session's environment only: activate its conda or venv in the command, or give the interpreter's full path. Each job gets \`$RFT_OUT\`, an output folder of its own: have the command write its outputs there. Scripts you write for the queue follow the manual's "Writing a job the monitor can read": a tqdm bar with a fixed desc and a total on each long loop, changing numbers in set_postfix (never in the desc), inner loops leave=False, stages appended to \`$RFT_PROGRESS\` (\`{"stage": "train", "i": 2, "n": 3}\`), timestamped lines, results to \`$RFT_OUT\`; the monitor and rft_jobs show how far each running job is from them. The runner records the commit and uncommitted changes it ran, and a failed job's traceback: rft_jobs <id> shows them, so its log is rarely needed. rft_job (move one job: top, end, or before another; cancel; retry; pause or resume the queue) only when the user asks; a move answers the new order, so no rft_jobs after it.`
+
 /**
  * `vault`: where the notes are as the session sees them, when the tree is not in its folder;
  * `where`: the session's folder and the tree's (and the home folder), to say which concept's code
@@ -748,14 +758,20 @@ function featureRules(vault: string, features: ReadonlySet<Feature>): string {
   const full: Record<Feature, string> = {
     priorities: `- Priorities (\`priority:\` urgent, high, medium or low; at most 1 urgent, 5 high and 10 medium among the open notes) are the user's alone: never write \`priority:\` (Edit, Write and shell writes that change it are refused), and a new note gets none. When you have a clear reason (it unblocks other work, the user said it matters, it is cheap and decisive), suggest one: rft_suggest_priority {id, priority, why}, or rft_add_node's suggested_priority and priority_why; the user accepts or dismisses it in the tree view. Work on what the user made urgent or high first.`,
     dates: `- Dates are the user's too: deadlines (milestones in \`${vault}/milestones/\`, outside the tree: \`due:\` and the notes they \`needs:\`), a note's own \`due:\`, an experiment's \`start:\` and \`est:\` (3d, 2w). Never write them (edits that change them are refused). Suggest a start or an estimate with rft_suggest_dates {id, start, est, why}; add a deadline the user gives you with rft_add_deadline (they confirm it); suggest a paper submission only when the user names a venue or asks, with rft_suggest_deadline and the venue's official dates page read now, not from memory. Write \`gpus:\` on an experiment that takes more than one GPU and \`after:\` on one that waits for another run; rft_set_status records the days a run started and finished. rft_next lists the deadlines first, with what puts them at risk.`,
+    verify: `- A verified note (\`status: verified\`, ✔) is a claim the user checked: only they verify a note, in the tree view, which locks it; only verified notes become snippets. When a result is final (its notebook reproduced it, a proof is complete, a paper read against its summary), suggest it: rft_set_status {id, status: "verified", note: what was checked and how}. A verified note whose claim changes or is overturned goes to review (↺, unlocked) by itself; set one to review yourself (rft_set_status review, note: why) when you find its claim may no longer hold. Build on verified notes first.`,
     locks: `- A note with \`locked: true\` in its frontmatter is the user's: never change its text (Edit, Write and shell writes to it are refused, and so are rft_set_status notes and rft_set_code on it). Propose each change with rft_suggest {id, quote, replacement}; the user accepts or rejects it in the tree view. Its status, tags and derived fields still change through the rft tools. Moving it (rft_move_node) or marking it superseded (rft_supersede) writes a line in its History, so the plugin first asks the user whether to unlock it; if they keep it locked the call fails: do not retry it.`,
+    artifacts: `- Each concept has an artifact (\`${vault}/artifacts/\`): one HTML page of the results of its own experiments, which the tree view opens when the concept is clicked. At the end of a task that recorded results (a Result written, an experiment done, a result superseded), update the artifact of each concept that got them, once per concept: rft_artifact <concept> says what changed, then rft_set_artifact with edits (html for a new page); a concept with results and no artifact gets one then too. Only numbers that are in the notes; link every note id (<a href="#E05">E05</a>). Its charts and tables come only from notebooks' FIGURES and TABLES, placed by the names rft_artifact lists (<img src="../figures/…">, <rft-table src="…"></rft-table>, filled in for you): never drawn or typed by hand; a comparison across experiments comes from the concept's notebook. Write the files only with rft_set_artifact, which stamps them with the results they were written from.`,
+    notebooks: `- An experiment in a concept with code has a marimo notebook that makes the numbers of its Result (\`notebook:\`, a link in \`${vault}/notebooks/\` to the file in its concept's repo): from its runs' saved outputs after an expensive run, from scratch for a short one. Write it with rft_set_notebook when you plan the experiment (plain cells: the tool writes marimo's format, with a first cell giving RUNS, the experiment's runs in the experiment queue that ended well, each with \`out\`, its output folder); it runs in the repo's uv environment from the repo's root. Set RESULTS (the numbers the note reports, rounded as it reports them), and FIGURES and TABLES for the concept's artifact. ${features.has('queue') ? 'When the experiment\'s last job ends, the queue\'s runner runs it,' : 'Once its runs are over, run it with rft_run_notebook: it'} writes RESULTS in the note's Result as a table, saves the figures and tables, and stamps the note: never type those numbers yourself, nor read the runs' or the cells' outputs; read the Result, write what the numbers mean around the table, and set the status. rft_run_notebook runs it now: recorded or ok; differs (fix the notebook, or record: true if its numbers are right); failed (the end of the traceback). A concept's notebook, on its start note (rft_set_notebook <its id>), compares its experiments from EXPERIMENTS (their saved RESULTS) and sets the FIGURES and TABLES its artifact shows; it runs again after each of them. Plotting style and helpers shared by a repo's notebooks go in one module in its notebooks/ folder (on their sys.path), which each imports. Change a notebook with Edit (plain Python). The user opens it beside the note in the tree view.`,
+    manuscript: `- Two levels turn verified notes into writing. Snippets (\`${vault}/snippets/\`, S..) are the building blocks: atomic LaTeX resting on notes (its \`% basis:\` line, and the notes its \\rftnum, \\rftfig, \\rfttable and \\cite name), written once and reused. Documents (\`${vault}/documents/<name>/\`) are built with them: each holds copies of snippets (adapted to its narrative as the user likes) and text of its own; a copy goes to review when its snippet changes, never rewritten by itself. rft_manuscript shows both and the verified notes still to write. Both are the user's while locked (the default): propose snippets only from verified notes, and placements, as tables first, and do only what the user picks: stubs with rft_set_snippet (outline: the claim, the numbers and the macros that give them, the caveats), copies with rft_set_document; then comment and suggest when asked (rft_comment, rft_suggest with the snippet's id or the document's name), never write their text. Unlocked, write a snippet with rft_set_snippet. Never type a number, figure or table a macro gives; when you fill a reference's Source, add its BibTeX in a \`\`\`bibtex block (refs.bib is made from them). A snippet in review rests on a note that changed: say so, and suggest how its text should follow.`,
     comments: `- The user discusses notes in the tree view: comments and suggestions on a part of a note's text (rft_comments lists them). Answer a thread only when the user asks you to: the tree view's Ask Claude sends it to you, and you answer in the thread with rft_comment or rft_suggest, not in the chat.`,
+    queue: QUEUE_RULE,
   }
-  const out = (['priorities', 'dates', 'locks', 'comments'] as const).filter(f => features.has(f)).map(f => full[f])
+  const out = (['priorities', 'dates', 'verify', 'locks', 'comments', 'artifacts', 'notebooks', 'queue', 'manuscript'] as const).filter(f => features.has(f)).map(f => full[f])
   const absent = [
     features.has('priorities') ? '' : 'priorities (\`priority:\`)',
     features.has('dates') ? '' : `dates (\`due:\`, \`start:\`, \`est:\`, deadlines in \`${vault}/milestones/\`)`,
     features.has('locks') ? '' : 'the text of a note with \`locked: true\`',
+    features.has('verify') ? '' : 'verifying a note (\`status: verified\`: rft_set_status verified only suggests it)',
   ].filter(Boolean)
   if (absent.length) out.push(`- These are the user's to set, never yours: ${absent.join(', ')}. Edits that change them are refused, with the tool to suggest a change instead.`)
   return out.map(l => `${l}\n`).join('')
@@ -773,8 +789,8 @@ The reasoning of this research project is kept as a tree of Obsidian notes in \`
 - Each concept can have a digest (vault \`map/\`): its state, key results, dead ends, open questions. After a piece of work changes a concept (a result, a dropped line, a new branch), or when rft_map says its digest is missing or out of date and you have read its notes, rewrite it with rft_set_digest.
 - When a result overturns an earlier one (a corrected number, a bug in the run, a better-controlled rerun), mark the old note with rft_supersede (id, by, why) and update the concept's digest: a note shown as [superseded by …] is not to be built on.
 - When asked what to do next, or before opening new work, call rft_next: the user's priorities first, then running and planned experiments, directions with nothing tried under them, the digests' open questions.
-${featureRules(vault, features)}- Before launching an experiment (a training run, a grid, a numerical check, a measurement, a literature search for a yes or no answer), create its node first: rft_add_node with type experiment, parent = the direction it tests, status planned or running, and What / Why filled.
-- When it finishes or gives a partial result, write the real numbers in its note (Result, with spread over seeds and what failed; Directions found; Code / data: commit, script, results folder, machine), then rft_set_status. Record only results that were actually obtained, never expected or invented ones.
+${featureRules(vault, features)}- Before launching an experiment (a training run, a grid, a numerical check, a measurement, a literature search for a yes or no answer), create its node first: rft_add_node with type experiment, parent = the direction it tests, status planned or running, and What / Why filled.${features.has('queue') ? ' Its runs then go through rft_queue (above).' : ''}
+- When it finishes or gives a partial result, write the real result in its note (Result, with spread over seeds and what failed, unless its notebook's run wrote the numbers: see Results below; Directions found), then rft_set_status. Record only results that were actually obtained, never expected or invented ones.
 - Every new idea or question, from a result, a reference, the user or a discussion, even if rejected: rft_add_node with type direction, parent = the note it comes from. Rejected ideas get status discussed; abandoned ones dropped; moved ones moved, with the reason (rft_set_status note).
 - Literature first. When the work turns to a field or question the tree does not cover yet, ASK the user whether to run a thorough literature search before experimenting (the user can also run /rft-literature <topic>), so the work starts from prior results. When you propose a new concept, offer a search for it too; it goes under the concept's start note.
 - A paper, method or literature review that was read: rft_add_node with type reference, parent = the note that led to it. A literature search is ONE note tagged literature, its papers listed in it; a single paper gets a note of its own only when the user chooses. Fill Source with a link that can be checked (DOI, arXiv id or URL), Summary, Method, Key results as the source reports them (and where), and your reading under Relevance. Only sources actually read: never invent a citation, or a result the source does not report. Status planned = to read, running = reading, done = summarised, dropped = not relevant.
@@ -789,7 +805,7 @@ ${featureRules(vault, features)}- Before launching an experiment (a training run
 - To find what was tried, measured or read on a subject, use rft_search (titles, summaries, tags, concepts and text, best first, with the concepts whose digest matches) before reading note files one by one; check it before proposing an experiment that may already exist. rft_add_node also lists the close notes already in the tree: if one already answers or ruled out the new one, tell the user.
 - Code: a concept can link the code repositories its work runs on (\`concept_repos:\` on its starting note; on the root note, the whole project's). Its notes work with its own repos first, then those of the concepts above it. When you create a concept, ask the user whether code for it already exists and where; link it with rft_set_repos (never guess a path), then read the code and give the concept's experiments and directions a ## Code section with rft_set_code.
 - The ## Code section of an experiment or direction says how it relates to the code: entry points, files, functions, configs, what has to change (a short pointer for a direction). Write it from the code as it is now (the current commit and uncommitted changes), not as an older note saw it; rft_set_code records the commit it was checked against. Before working on such an experiment (planning, launching, analysing), call rft_code: it lists what changed since that commit; read the changes and update the references with rft_set_code.
-- Results go in the experiment's own note: read the run's outputs where its repo keeps them, process them (seeds aggregated, tables) and write the numbers in Result; record how to reproduce them (the commit of the run, the command and config, where the raw outputs are, how they were processed) with rft_set_code's reproduce.
+- Results go in the experiment's own note. In a concept with code, they come from its notebook: write it when you plan the experiment (rft_set_notebook), and its run writes them in the Result as a table, with the notebook, commit and runs they come from (the figures and tables comparing a concept's experiments come from the concept's own notebook, on its start note); you write what they mean, and in rft_set_code's reproduce only what that line does not say (config, data). Without a notebook: read the run's outputs, process them (seeds aggregated, tables), write the numbers in Result, and record how to reproduce them (the commit of the run, the command and config, where the raw outputs are, how they were processed) with rft_set_code's reproduce.
 - The rft-manual skill is the full manual; rft_map shows the project map, rft_tree the whole tree.
 ${codeContext(tree, where)}
 ${map ? 'The project map at the start of this session (each concept with its state; rft_map <concept> for its notes)' : `The tree at the start of this session${Object.keys(tree.concepts ?? {}).length > 1 ? ', by concept (← parent, when not the line above)' : ''}`}:
@@ -810,6 +826,6 @@ export async function exportHtml(io: Io, loaded: Loaded, assets: PageAssets): Pr
       return { ...t, at: at ? [at.start, at.end] : null, exact: Boolean(at?.exact) }
     })
   }
-  await io.write(path, staticPage(assets, tree, texts, config.project, signature.length.toString(36), comments, { milestones: loaded.milestones, gpus: config.gpus }))
+  await io.write(path, staticPage(assets, tree, texts, config.project, signature.length.toString(36), comments, { milestones: loaded.milestones, gpus: config.gpus }, await embeddedArtifacts(io, loaded)))
   return path
 }

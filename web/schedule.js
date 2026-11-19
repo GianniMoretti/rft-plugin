@@ -17,7 +17,9 @@
   const MS_DAY = 86400000
   // a note that no longer needs doing (its result is in, or it will not be done)
   const GONE = ['dropped', 'discussed', 'moved']
-  const ENDED = ['done', ...GONE]
+  // done, and the two a done note goes on to: verified by the user, and back in review
+  const FINISHED = ['done', 'review', 'verified']
+  const ENDED = [...FINISHED, ...GONE]
   /** A milestone's statuses: open (planned for), done, suggested (by Claude, until the user answers) and dismissed. */
   const MILESTONE_STATUSES = ['open', 'done', 'suggested', 'dismissed']
   const DUE_EXAMPLES = '2026-11-13, 2026-11-13 23:59, 2026-11-13 23:59 AoE'
@@ -109,7 +111,7 @@
           const plannedTo = addDays(from, n.est)
           out.push({ id: n.id, from, to: later(plannedTo, addDays(today, 1)), plannedTo, kind: 'running', over: plannedTo <= today })
         } else out.push({ id: n.id, from, to: addDays(later(from, today), 1), kind: 'running', noEnd: true })
-      } else if (n.status === 'done') {
+      } else if (FINISHED.includes(n.status)) {
         if (n.started && n.finished && n.finished >= n.started) out.push({ id: n.id, from: n.started, to: addDays(n.finished, 1), kind: 'done' })
       } else if (!GONE.includes(n.status) && n.start && n.est > 0) {
         out.push({ id: n.id, from: n.start, to: addDays(n.start, n.est), kind: 'planned' })
@@ -201,7 +203,7 @@
         if (!n) problems.push(`${nid} is not a note of the tree`)
         else if (n.supersededBy) problems.push(`${n.name} was superseded by ${n.supersededBy}`)
         else if (GONE.includes(n.status)) problems.push(`${n.name} was ${n.status}`)
-        else if (n.status !== 'done') items.push(n)
+        else if (!FINISHED.includes(n.status)) items.push(n)
       }
       for (const m of missing || []) problems.push(`${m} is not a note of the tree`)
       const latest = new Map()

@@ -1,12 +1,14 @@
 // The standalone page: the web view's files (web/) with the stylesheet and scripts inlined
 // and the tree, with every note's text, embedded as `window.RFT_DATA`. One visualization
-// codebase serves both the live view and this export.
+// codebase serves both the live view and this export. The concepts' artifacts are embedded too
+// (`RFT_DATA.artifacts`, their images as placeholders), with the frame's runtime and base style
+// (`RFT_DATA.frame`), for the page to show them read-only.
 
 import type { Milestone } from './dates'
 import type { Tree } from './vault'
 import { bodyOf, conceptOrder, tagCounts } from './vault'
 
-export type PageAssets = { html: string; css: string; js: string; d3: string; katex: string; katexCss: string; filters: string; kanban: string; layout: string; concepts: string; markdown: string; theme: string; schedule: string }
+export type PageAssets = { html: string; css: string; js: string; d3: string; katex: string; katexCss: string; filters: string; kanban: string; layout: string; concepts: string; markdown: string; theme: string; schedule: string; scratchpad: string; artifacts: string; latex: string; frame: string; frameCss: string }
 
 export const ASSET_PATHS = {
   html: 'web/index.html',
@@ -18,6 +20,11 @@ export const ASSET_PATHS = {
   layout: 'web/layout.js',
   concepts: 'web/concepts.js',
   markdown: 'web/markdown.js',
+  scratchpad: 'web/scratchpad.js',
+  artifacts: 'web/artifacts.js',
+  latex: 'web/latex.js',
+  frame: 'web/frame.js',
+  frameCss: 'web/frame.css',
   theme: 'web/theme.js',
   d3: 'web/vendor/d3.v7.9.0.min.js',
   katex: 'web/vendor/katex.v0.16.22.min.js',
@@ -25,19 +32,24 @@ export const ASSET_PATHS = {
 } as const
 
 /** The tree as the server's `api/tree` answers it, with the deadlines and the GPUs the runs share. */
-export const treeJson = (tree: Tree, project: string, version: string, milestones: Milestone[] = [], gpus?: number) => ({
+export const treeJson = (tree: Tree, project: string, version: string, milestones: Milestone[] = [], gpus?: number, artifacts: Record<string, unknown>[] = []) => ({
   project, version, nodes: Object.values(tree.nodes), roots: tree.roots, tags: tagCounts(tree),
   concepts: conceptOrder(tree.concepts ?? {}),
-  milestones: milestones.map(m => ({ ...m, due: m.dueText })), gpus: gpus ?? null,
+  milestones: milestones.map(m => ({ ...m, due: m.dueText })), gpus: gpus ?? null, artifacts,
 })
 
 const script = (code: string) => `<script>${code.replace(/<\/script/gi, '<\\/script')}</script>`
 
 /** `comments`: each note's threads, placed in its body as the server's api/note places them, shown read-only. */
-export function staticPage(a: PageAssets, tree: Tree, texts: Record<string, string>, project: string, version: string, comments: Record<string, unknown[]> = {}, schedule: { milestones?: Milestone[]; gpus?: number } = {}): string {
+/** `artifacts`: the concepts' artifacts, their state for the tree and each page by concept id. */
+export function staticPage(a: PageAssets, tree: Tree, texts: Record<string, string>, project: string, version: string, comments: Record<string, unknown[]> = {}, schedule: { milestones?: Milestone[]; gpus?: number } = {}, artifacts: { list: Record<string, unknown>[]; pages: Record<string, string> } = { list: [], pages: {} }): string {
   const bodies: Record<string, string> = {}
   for (const id of Object.keys(tree.nodes)) bodies[id] = bodyOf(texts[id] ?? '')
-  const data = JSON.stringify({ tree: treeJson(tree, project, version, schedule.milestones, schedule.gpus), bodies, comments }).replace(/</g, '\\u003c')
+  const data = JSON.stringify({
+    tree: treeJson(tree, project, version, schedule.milestones, schedule.gpus, artifacts.list), bodies, comments,
+    // the frame's scripts as the server puts them in: its tables' LaTeX, then its runtime
+    artifacts: artifacts.pages, frame: { js: `${a.latex ?? ''}\n;\n${a.frame}`, css: a.frameCss },
+  }).replace(/</g, '\\u003c')
   // function replacements: the inlined code may hold `$&` and the like
   return a.html
     .replace(/<script src="theme\.js" data-rft-inline><\/script>/, () => script(a.theme))
@@ -51,5 +63,13 @@ export function staticPage(a: PageAssets, tree: Tree, texts: Record<string, stri
     .replace(/<script src="layout\.js" data-rft-inline><\/script>/, () => script(a.layout))
     .replace(/<script src="concepts\.js" data-rft-inline><\/script>/, () => script(a.concepts))
     .replace(/<script src="markdown\.js" data-rft-inline><\/script>/, () => script(a.markdown))
+    .replace(/<script src="scratchpad\.js" data-rft-inline><\/script>/, () => script(a.scratchpad))
+    // the experiment queue's monitor reads the live server: a standalone page has none
+    .replace(/<script src="queue\.js"><\/script>\n?/, '')
+    // the manuscript's tab lives on the server: its editor and its script stay out of the standalone page
+    .replace(/<link rel="stylesheet" href="vendor\/codemirror[^"]*">\n?/, '')
+    .replace(/<script src="vendor\/codemirror[^"]*"><\/script>\n?/, '')
+    .replace(/<script src="manuscript\.js"><\/script>\n?/, '')
+    .replace(/<script src="artifacts\.js" data-rft-inline><\/script>/, () => script(a.artifacts))
     .replace(/<script src="app\.js" data-rft-inline><\/script>/, () => script(`window.RFT_DATA = ${data};`) + script(a.js))
 }

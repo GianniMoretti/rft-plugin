@@ -3,6 +3,7 @@ adding a note through the session, and their safety.
 
     python3 -m unittest discover -s tests -p "test_*.py"
 """
+import base64
 import contextlib
 import http.client
 import io
@@ -22,6 +23,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import rft_manuscript  # noqa: E402
 import rft_server  # noqa: E402
 
 WEB = Path(__file__).resolve().parents[1] / "web"
@@ -300,6 +302,9 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.get("/layout.js")[0], 200)
         self.assertEqual(self.get("/theme.js")[0], 200)
         self.assertEqual(self.get("/markdown.js")[0], 200)
+        self.assertEqual(self.get("/scratchpad.js")[0], 200)
+        self.assertEqual(self.get("/vendor/jspdf.v4.2.1.umd.min.js")[0], 200)
+        self.assertEqual(self.get("/vendor/svg2pdf.v2.9.0.umd.min.js")[0], 200)
         self.assertEqual(self.get("/vendor/d3.v7.9.0.min.js")[0], 200)
         self.assertEqual(self.get("/vendor/katex.v0.16.22.min.js")[0], 200)
         self.assertEqual(self.get("/vendor/katex.v0.16.22.min.css")[0], 200)
@@ -327,6 +332,7 @@ class ServerTest(unittest.TestCase):
         try:
             port = server.server_address[1]
             self.assertEqual(self.put("E01", {"body": "x", "force": True}, port=port)[0], 405)
+            self.assertEqual(self.write("PUT", "/api/scratchpad", {"text": "x", "force": True}, port=port)[0], 405)
             self.assertEqual(self.post({"parent": "D00", "type": "direction", "title": "x"}, port=port)[0], 405)
         finally:
             server.shutdown()
@@ -410,6 +416,84 @@ class ServerTest(unittest.TestCase):
         data = p.read_bytes()
         self.assertTrue(data.endswith(b"---\r\nOne\r\nTwo\r\n"))
         self.assertNotIn(b"\n", data.replace(b"\r\n", b""))
+
+    # ------------------------------------------------------------ the scratchpad
+
+    def pad(self, payload, **kw):
+        return self.write("PUT", "/api/scratchpad", payload, **kw)
+
+    def fresh_pad(self):
+        """No scratchpad yet; whatever a test writes is removed afterwards."""
+        p = self.vault / "Scratchpad.md"
+        p.unlink(missing_ok=True)
+        self.addCleanup(p.unlink, missing_ok=True)
+        return p
+
+    def test_scratchpad_made_on_first_write_and_outside_the_tree(self):
+        p = self.fresh_pad()
+        tree = json.loads(self.get("/api/tree")[2])
+        status, _, body = self.get("/api/scratchpad")
+        self.assertEqual((status, json.loads(body)), (200, {"name": "Scratchpad.md", "text": "", "version": None}))
+        status, res = self.pad({"text": "- [ ] email the lab\nidea: try X", "version": None})
+        self.assertEqual(status, 200)
+        self.assertEqual(p.read_text(), "- [ ] email the lab\nidea: try X")  # as given: no newline added
+        got = json.loads(self.get("/api/scratchpad")[2])
+        self.assertEqual((got["text"], got["version"]), ("- [ ] email the lab\nidea: try X", res["version"]))
+        self.assertEqual(self.pad({"text": "", "version": got["version"]})[0], 200)
+        self.assertEqual(p.read_text(), "")
+        # not a note: the tree, and its version, stay as they were
+        self.assertEqual(json.loads(self.get("/api/tree")[2]), tree)
+        self.assertEqual([f.name for f in self.vault.iterdir() if f.name.endswith(".rft-tmp")], [])
+
+    def test_scratchpad_refused_when_it_changed(self):
+        p = self.fresh_pad()
+        # made elsewhere (Obsidian, Claude) after the page read that there was none
+        p.write_text("from Obsidian")
+        status, res = self.pad({"text": "mine", "version": None})
+        self.assertEqual((status, res["text"]), (409, "from Obsidian"))
+        # changed elsewhere after the page's last save
+        _, ok = self.pad({"text": "mine", "version": res["version"]})
+        p.write_text("from Claude")
+        status, res = self.pad({"text": "mine, more", "version": ok["version"]})
+        self.assertEqual((status, res["text"]), (409, "from Claude"))
+        self.assertEqual(p.read_text(), "from Claude")
+        # with the version it answered, or with force, the write goes through
+        self.assertEqual(self.pad({"text": "mine, more", "version": res["version"]})[0], 200)
+        p.write_text("again")
+        self.assertEqual(self.pad({"text": "mine, forced", "force": True})[0], 200)
+        self.assertEqual(p.read_text(), "mine, forced")
+
+    def test_scratchpad_needs_the_page_and_its_key(self):
+        p = self.fresh_pad()
+        body = {"text": "changed", "force": True}
+        self.assertEqual(self.pad(body, key=None)[0], 403)
+        self.assertEqual(self.pad(body, key="wrong")[0], 403)
+        self.assertEqual(self.pad(body, origin="http://evil.example")[0], 403)
+        self.assertEqual(self.pad(body, host="evil.example")[0], 403)
+        self.assertEqual(self.pad(body, ctype="text/plain")[0], 415)
+        self.assertEqual(self.pad(b"not json")[0], 400)
+        self.assertEqual(self.pad({"text": "no version"})[0], 400)
+        self.assertEqual(self.pad({"text": "x", "version": 3})[0], 400)
+        self.assertEqual(self.pad({"text": 3, "force": True})[0], 400)
+        for m in ["POST", "DELETE", "PATCH"]:
+            self.assertEqual(self.get("/api/scratchpad", method=m)[0], 405, m)
+        self.assertFalse(p.exists())
+
+    def test_scratchpad_keeps_crlf_and_writes_no_link(self):
+        p = self.fresh_pad()
+        p.write_bytes(b"a\r\nb\r\n")
+        got = json.loads(self.get("/api/scratchpad")[2])
+        self.assertEqual(got["text"], "a\nb\n")
+        self.assertEqual(self.pad({"text": "a\nb\nc\n", "version": got["version"]})[0], 200)
+        self.assertEqual(p.read_bytes(), b"a\r\nb\r\nc\r\n")
+        # a link (here to a file outside the vault) is neither read nor written through
+        p.unlink()
+        os.symlink(self.root / "secret.md", p)
+        secret = (self.root / "secret.md").read_bytes()
+        self.assertEqual(self.get("/api/scratchpad")[0], 422)
+        self.assertEqual(self.pad({"text": "pwned", "force": True})[0], 422)
+        self.assertEqual((self.root / "secret.md").read_bytes(), secret)
+        self.assertTrue(p.is_symlink())
 
     # ------------------------------------------------------------ comments, suggestions, lock
 
@@ -857,6 +941,52 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.move({"id": "D01", "parent": "D00", "unlock": True})[0], 200)
         self.assertEqual(self.asked, [("RFT_MOVE_NODE", {"id": "D01", "parent": "D00", "unlock": True})])
 
+    def verifier(self, status="done", extra=""):
+        """E01 with `status` (and `extra` fields), and the session as the server sees it for a
+        verification: the note's status as the session writes it."""
+        p = self.vault / "experiments" / "E01 First run.md"
+        before = p.read_text()
+        self.addCleanup(p.write_text, before)
+        p.write_text(before.replace("status: running", f"status: {status}{extra}"))
+
+        def answer(request):
+            text = p.read_text()
+            if request["action"] == "verify":
+                text = text.replace(f"status: {status}", 'status: verified\nverified: "2026-11-17 a1b2c3d4"\nlocked: true')
+            elif request["action"] == "review":
+                text = text.replace("status: verified", "status: review").replace("locked: true\n", "")
+            text = text.replace('suggested_verified: "Reran it"\n', "")
+            p.write_text(text)
+
+        self.session(answer)
+
+    def verify(self, payload, **kw):
+        return self.write("POST", "/api/verify", payload, **kw)
+
+    def test_verify_asks_the_session_and_answers_once_verified(self):
+        self.verifier(extra='\nsuggested_verified: "Reran it"')
+        nodes = {n["id"]: n for n in json.loads(self.get("/api/tree")[2])["nodes"]}
+        self.assertEqual(nodes["E01"]["suggestedVerified"], "Reran it")
+        status, res = self.verify({"id": "E01", "action": "verify"})
+        self.assertEqual((status, res["locked"]), (200, True))
+        self.assertEqual(self.asked, [("RFT_VERIFY", {"id": "E01", "action": "verify"})])
+        nodes = {n["id"]: n for n in json.loads(self.get("/api/tree")[2])["nodes"]}
+        self.assertEqual((nodes["E01"]["status"], nodes["E01"]["verified"]), ("verified", {"date": "2026-11-17", "fingerprint": "a1b2c3d4"}))
+        self.assertNotIn("suggestedVerified", nodes["E01"])
+        # verified notes count as finished: an experiment with a result
+        self.assertTrue(nodes["E01"].get("hasResult"))
+        self.assertEqual(self.verify({"id": "E01", "action": "review"})[0], 200)
+        self.assertEqual(json.loads(self.get("/api/note?id=E01")[2])["locked"], False)
+
+    def test_verify_bad_requests_reach_no_session(self):
+        self.verifier(status="running")
+        for payload, status in [({"id": "E01"}, 400), ({"id": "E01", "action": "approve"}, 400), ({"id": "E01", "action": 1}, 400),
+                                ({"id": "E42", "action": "verify"}, 404), ({"id": "E01", "action": "verify"}, 400),
+                                ({"id": "E01", "action": "review"}, 400), ({"id": "E01", "action": "dismiss"}, 400)]:
+            self.assertEqual(self.verify(payload)[0], status, payload)
+        self.assertEqual(self.verify({"id": "E01", "action": "verify"}, key=None)[0], 403)
+        self.assertEqual(self.asked, [])
+
     def test_serves_a_reference_pdf_from_papers_only(self):
         papers = self.vault / "papers" / "Runs"
         papers.mkdir(parents=True)
@@ -1104,6 +1234,374 @@ class ImageTest(unittest.TestCase):
         self.assertEqual(rft_server.Vault(self.vault, "demo").image_tops, [self.vault.resolve(), self.obs.resolve()])
         with tempfile.TemporaryDirectory() as t:
             self.assertEqual(rft_server.Vault(Path(t), "demo").image_tops, [Path(t).resolve()])
+
+
+class ArtifactTest(unittest.TestCase):
+    """Concept artifacts: listed in the tree with their state, each served in a sandbox of its own,
+    read-only, its images as a note's are found."""
+
+    RESULT = "CutMix closes the gap at 1k (0.3 ± 0.5 points); Mixup does not."
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        root = Path(cls.tmp.name)
+        vault = root / "vault"
+        for d in ("directions", "experiments", "artifacts"):
+            (vault / d).mkdir(parents=True)
+        (vault / "directions" / "D00 Root question.md").write_text(note("D00", "direction", "done", "", "Root question"))
+        (vault / "directions" / "D04 Mixup.md").write_text(note("D04", "direction", "done", "D00 Root question", "Mixup", concept="Mix-based augmentation"))
+        # the same note as the key's vector in tests/artifacts.test.ts
+        (vault / "experiments" / "E05 Mixup and CutMix at 1k images.md").write_text(
+            '---\nid: E05\ntype: experiment\nstatus: done\ndate: 2026-03-20\nsummary: "CutMix closes the gap at 1k, Mixup does not"\n'
+            'parent: "[[D04 Mixup]]"\nsuperseded_by: "[[E06 Cosine]]"\ntags: [demo, experiment, done]\n---\n\n'
+            f"# E05 · Mixup and CutMix at 1k images\n\n## What\nMixup and CutMix.\n\n## Result\n\n{cls.RESULT}\n\n## Directions found\n")
+        (vault / "experiments" / "E06 Cosine.md").write_text(note("E06", "experiment", "done", "D04 Mixup", "Cosine").replace("Text of E06.", "## Result\n+1 point."))
+        (vault / "experiments" / "E07 Third.md").write_text(note("E07", "experiment", "running", "D04 Mixup", "Third").replace("Text of E07.", "## Result\nPartial: +0.5."))
+        (vault / "experiments" / "E08 Planned.md").write_text(note("E08", "experiment", "planned", "D04 Mixup", "Planned").replace("Text of E08.", "## Result\n"))
+        # planned: no result, whatever its Result holds
+        (vault / "experiments" / "E09 Later.md").write_text(note("E09", "experiment", "planned", "D04 Mixup", "Later").replace("Text of E09.", "## Result\nNot run yet."))
+        head = {"concept": "D04", "name": "Mix-based augmentation", "updated": "2026-03-01",
+                "basis": {"E05": "33efe36b", "E06": "00000000", "E03": "12345678"}}
+        cls.page = '<h1>Mix</h1>\n<p><a href="#E05">E05</a> <img src="fig.png"> <img src="data:image/png;base64,AA=="> <img src="https://x.org/a.png"> <img src="/abs/out.png"></p>\n'
+        # SVG figures: kept in vault/figures/, named bare or by a path from the artifacts' folder, or outside the vault
+        cls.svg = b'<svg xmlns="http://www.w3.org/2000/svg" width="10pt" height="10pt"><rect width="10" height="10"/></svg>'
+        (vault / "figures").mkdir()
+        (vault / "figures" / "chart.svg").write_bytes(cls.svg)
+        (root / "out.svg").write_bytes(cls.svg)
+        cls.page += f'<figure><img src="chart.svg" alt="a"><img src="../figures/chart.svg" alt="b"><img src="{root / "out.svg"}" alt="c"></figure>\n'
+        cls.file = vault / "artifacts" / "D04 Mix-based augmentation.html"
+        cls.file.write_text(f"<!-- rft-artifact {json.dumps(head)} -->\n{cls.page}")
+        (vault / "artifacts" / "fig.png").write_bytes(b"\x89PNG fig")
+        (root / "out.png").write_bytes(b"\x89PNG out")
+        # an artifact that is a link out of the vault, and an html file with no header
+        (root / "outside.html").write_text('<!-- rft-artifact {"concept":"D00","name":"x","updated":"","basis":{}} -->\n<p>secret</p>')
+        os.symlink(root / "outside.html", vault / "artifacts" / "00 Linked out.html")
+        (vault / "artifacts" / "by hand.html").write_text("<p>by hand</p>")
+        cls.vault, cls.root = vault, root
+        handler = rft_server.make_handler(rft_server.Vault(vault, "demo"), WEB, KEY)
+        cls.server = rft_server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        cls.port = cls.server.server_address[1]
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.tmp.cleanup()
+
+    get = ServerTest.get
+
+    def tree(self):
+        return json.loads(self.get("/api/tree")[2])
+
+    def test_the_tree_lists_the_artifacts_with_what_changed_since(self):
+        t = self.tree()
+        [a] = t["artifacts"]
+        self.assertEqual({k: v for k, v in a.items() if k != "version"}, {
+            "concept": "D04", "name": "Mix-based augmentation", "path": "artifacts/D04 Mix-based augmentation.html",
+            "updated": "2026-03-01", "stale": True, "changed": ["E06"], "added": ["E07"], "removed": ["E03"]})
+        self.assertRegex(a["version"], r"^[0-9a-f]{16}$")
+        nodes = {n["id"]: n for n in t["nodes"]}
+        self.assertTrue(nodes["E05"]["hasResult"])
+        self.assertTrue(nodes["E07"]["hasResult"])
+        self.assertNotIn("hasResult", nodes["E08"])
+        self.assertNotIn("hasResult", nodes["E09"])
+        self.assertFalse(rft_server.has_result("planned", "## Result\nNot run yet."))
+        self.assertTrue(rft_server.has_result("dropped", "## Result\nBug in the loader."))
+        self.assertNotIn("hasResult", nodes["D04"])
+
+    def test_the_key_of_an_experiment_is_the_plugins(self):
+        text = (self.vault / "experiments" / "E05 Mixup and CutMix at 1k images.md").read_text()
+        self.assertEqual(rft_server.result_of(text), self.RESULT)
+        n = {"id": "E05", "status": "done", "title": "Mixup and CutMix at 1k images",
+             "summary": "CutMix closes the gap at 1k, Mixup does not", "supersededBy": "E06"}
+        self.assertEqual(rft_server.experiment_key(n, text), "33efe36b")
+        self.assertEqual(rft_server.result_of("# E09 · X\n\n```\n## Result\nfake\n```\n\n## Result\nreal\n"), "real")
+
+    def test_a_changed_artifact_changes_the_tree_and_its_version(self):
+        before = self.tree()
+        self.file.write_text(self.file.read_text().replace("<h1>Mix</h1>", "<h1>Mix, again</h1>"))
+        self.addCleanup(self.file.write_text, self.file.read_text().replace("<h1>Mix, again</h1>", "<h1>Mix</h1>"))
+        after = self.tree()
+        self.assertNotEqual(before["version"], after["version"])
+        self.assertNotEqual(before["artifacts"][0]["version"], after["artifacts"][0]["version"])
+
+    def test_the_page_is_served_in_a_sandbox_of_its_own(self):
+        status, ctype, body = self.get("/api/artifact?concept=D04&theme=dark")
+        self.assertEqual(status, 200)
+        self.assertEqual(ctype, "text/html; charset=utf-8")
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.request("GET", "/api/artifact?concept=D04", headers={"Host": f"127.0.0.1:{self.port}"})
+        r = c.getresponse()
+        csp = r.getheader("Content-Security-Policy")
+        r.read()
+        c.close()
+        here = f"http://127.0.0.1:{self.port}"
+        for part in ("default-src 'none'", "script-src 'unsafe-inline'", "style-src 'unsafe-inline'", f"img-src {here} data:",
+                     "font-src data:", "form-action 'none'", "base-uri 'none'", f"frame-ancestors {here}", "sandbox allow-scripts allow-popups"):
+            self.assertIn(part, csp)
+        self.assertNotIn("allow-same-origin", csp)
+        html = body.decode()
+        self.assertIn("<h1>Mix</h1>", html)
+        self.assertNotIn("rft-artifact", html)  # the header stays in the file
+        self.assertIn('document.documentElement.dataset.theme = "dark"', html)
+        self.assertIn((WEB / "frame.css").read_text().strip().splitlines()[0], html)
+        self.assertIn((WEB / "frame.js").read_text().strip().splitlines()[0], html)
+        self.assertIn((WEB / "latex.js").read_text().strip().splitlines()[0], html)
+        # the scripts one after the other, a `;` between: the next one's opening ( calls nothing
+        self.assertIn((WEB / "latex.js").read_text() + "\n;\n" + (WEB / "frame.js").read_text(), html)
+        self.assertLess(html.index("dataset.theme"), html.index("<h1>Mix</h1>"))
+        # a theme that is not one of the two is the light one
+        self.assertIn('dataset.theme = "light"', self.get("/api/artifact?concept=D04&theme=%22%3E")[2].decode())
+
+    def test_its_images_are_found_as_a_notes_are_and_from_elsewhere_only_with_the_key(self):
+        html = self.get("/api/artifact?concept=D04")[2].decode()
+        self.assertIn('src="api/image?artifact=D04&amp;src=fig.png"', html)
+        self.assertIn('src="data:image/png;base64,AA=="', html)
+        self.assertIn('src="https://x.org/a.png"', html)  # left to the policy, which blocks it
+        self.assertIn('src="api/image?artifact=D04&amp;src=%2Fabs%2Fout.png"', html)
+        # the frame gets the image key, which reads images and writes nothing, never the vault key
+        ikey = rft_server.image_key(KEY)
+        for given in (KEY, ikey):
+            keyed = self.get(f"/api/artifact?concept=D04&token={given}")[2].decode()
+            self.assertIn(f'src="api/image?artifact=D04&amp;src=fig.png&amp;token={ikey}"', keyed)
+            self.assertNotIn(KEY, keyed)
+        self.assertNotIn("token=", self.get("/api/artifact?concept=D04&token=wrong")[2].decode())
+        status, ctype, data = self.get("/api/image?artifact=D04&src=fig.png")
+        self.assertEqual((status, ctype, data), (200, "image/png", b"\x89PNG fig"))
+        out = quote(str(self.root / "out.png"), safe="")
+        self.assertEqual(self.get(f"/api/image?artifact=D04&src={out}")[0], 403)
+        self.assertEqual(self.get(f"/api/image?artifact=D04&src={out}&token={KEY}")[2], b"\x89PNG out")
+        self.assertEqual(self.get(f"/api/image?artifact=D04&src={out}&token={ikey}")[2], b"\x89PNG out")
+        self.assertEqual(self.get("/api/image?artifact=D99&src=fig.png")[0], 403)
+
+    def test_an_svg_comes_inside_the_page(self):
+        """The frame has no origin of its own, so a browser blocks an SVG the server sends it (ORB):
+        an SVG figure comes inside the page as a data: image, its name kept for its PDF."""
+        html = self.get("/api/artifact?concept=D04")[2].decode()
+        data = "data:image/svg+xml;base64," + base64.b64encode(self.svg).decode()
+        self.assertIn(f'src="{data}" data-rft-src="chart.svg"', html)  # found in figures/
+        self.assertIn(f'src="{data}" data-rft-src="../figures/chart.svg"', html)
+        # one outside the vault: inside the page only with the key, as api/image serves it
+        out = str(self.root / "out.svg")
+        self.assertIn(f'src="api/image?artifact=D04&amp;src={quote(out, safe="")}"', html)
+        self.assertNotIn(f'data-rft-src="{out}"', html)
+        for given in (KEY, rft_server.image_key(KEY)):
+            self.assertIn(f'src="{data}" data-rft-src="{out}"', self.get(f"/api/artifact?concept=D04&token={given}")[2].decode())
+        # a PNG still comes through api/image, which a browser lets through
+        self.assertIn('src="api/image?artifact=D04&amp;src=fig.png"', html)
+        self.assertEqual(self.get("/api/image?artifact=D04&src=chart.svg")[0], 200)
+
+    def test_only_an_artifact_of_the_vault_by_its_concept(self):
+        for q in ("concept=D99", "concept=root", "concept=..%2Fx", "concept=", "", "concept=D00"):
+            self.assertEqual(self.get(f"/api/artifact?{q}")[0], 404, q)
+        self.assertEqual(self.get("/api/artifact?concept=D04", host="evil.example")[0], 403)
+        listed = [a["path"] for a in self.tree()["artifacts"]]
+        self.assertNotIn("artifacts/00 Linked out.html", listed)
+        self.assertNotIn("artifacts/by hand.html", listed)
+
+    def test_read_only(self):
+        before = self.file.read_bytes()
+        for m in ("PUT", "POST", "DELETE", "PATCH"):
+            status = self.get("/api/artifact?concept=D04", method=m, headers=[("Origin", f"http://127.0.0.1:{self.port}"), ("X-RFT-Token", KEY)], data=b"{}")[0]
+            self.assertIn(status, (403, 404, 405), m)
+        self.assertEqual(self.file.read_bytes(), before)
+
+    def test_a_name_with_an_arrow_is_read_back(self):
+        head = '<!-- rft-artifact {"concept":"D04","name":"Gap -\\u002d\\u003e zero","updated":"2026-03-01","basis":{}} -->\n<p>x</p>\n'
+        self.assertEqual(rft_server.artifact_head(head)["name"], "Gap --> zero")
+        self.assertIsNone(rft_server.artifact_head("<p>no header</p>"))
+
+    def test_the_page_script_is_served(self):
+        self.assertEqual(self.get("/artifacts.js")[0], 200)
+
+
+class ManuscriptTest(unittest.TestCase):
+    """Snippets and documents as the page sees them: the snippets with their state and the documents
+    using them, each document's copies with theirs, a snippet or document read and written (a conflict
+    refused), the two locks, a compile and its PDF (with the key only), a snippet compiled alone,
+    comments on a snippet and a document, and what the session makes for the page."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        vault = Path(cls.tmp.name) / "vault"
+        for d in ("directions", "experiments", "references", "results", "snippets", "documents/paper", "documents/thesis"):
+            (vault / d).mkdir(parents=True)
+        (vault / "directions" / "D00 Root question.md").write_text(note("D00", "direction", "done", "", "Root question"))
+        cls.e05 = vault / "experiments" / "E05 Mixup.md"
+        cls.e05.write_text(note("E05", "experiment", "verified", "D00 Root question", "Mixup").replace("Text of E05.", "## Result\nCutMix  closes the gap: 0.3 ± 0.5 points.\n"))
+        (vault / "experiments" / "E06 Planned.md").write_text(note("E06", "experiment", "planned", "D00 Root question", "Planned"))
+        (vault / "references" / "R01 Mixup paper.md").write_text(note("R01", "reference", "verified", "D00 Root question", "Mixup paper").replace(
+            "Text of R01.", "## Source\n```bibtex\n@article{zhang2018mixup,\n  title={mixup},\n  year={2018}\n}\n```\n"))
+        (vault / "results" / "E05.json").write_text(json.dumps({"results": {"gap": 0.3, "seeds": 3}}))
+        s1 = "% rft-snippet S01 · result · CutMix\n% basis: E05\n\\paragraph{CutMix}\nThe gap closes by \\rftnum{E05}{gap} \\cite{zhang2018mixup}.\n"
+        s2 = "% rft-snippet S02 · discussion · Next\n% basis: E06\n\\paragraph{Next}\n% your text\n"
+        (vault / "snippets" / "S01.tex").write_text(s1)
+        (vault / "snippets" / "S02.tex").write_text(s2)
+        copy = lambda sid, text, content=None: (lambda c: f"% rft-begin {sid} {rft_manuscript.content_fingerprint(rft_manuscript.content_of(text))}\n{c}\n% rft-end {sid}")(content or rft_manuscript.content_of(text))  # noqa: E731
+        head = "\\documentclass{article}\n\\usepackage{amsthm}\n\\usepackage[numbers]{natbib}\n\\usepackage{rft}\n\\begin{document}\n"
+        tail = "\\bibliographystyle{plainnat}\n\\bibliography{refs}\n\\end{document}\n"
+        (vault / "documents" / "paper" / "main.tex").write_text(head + "\\section{Results}\n" + copy("S01", s1) + "\nSee \\ref{S07}.\n" + tail)
+        (vault / "documents" / "thesis" / "main.tex").write_text(head + copy("S01", s1, "\\paragraph{CutMix}\nIn our words, the gap closes by \\rftnum{E05}{gap}.") + "\n" + tail)
+        (vault / "documents" / "paper" / ".blocks.json").write_text(json.dumps({"S01": rft_manuscript.content_of(s1)}))
+        fp = rft_manuscript.substance_fingerprint("experiment", cls.e05.read_text())
+        (vault / "snippets" / "snippets.json").write_text(json.dumps({"locked": True, "next": 3, "snippets": {"S01": {"stamp": {"E05": fp}}}, "unlocked": []}))
+        (vault / "documents" / "documents.json").write_text(json.dumps({"locked": True, "unlocked": []}))
+        cls.vault = vault
+        cls.asked = []
+
+        def ask(verb, request):
+            cls.asked.append((verb, request))
+            if cls.answer:
+                cls.answer(request)
+
+        cls.answer = None
+        handler = rft_server.make_handler(rft_server.Vault(vault, "demo"), WEB, KEY, ask)
+        cls.server = rft_server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        cls.port = cls.server.server_address[1]
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.tmp.cleanup()
+
+    get = ServerTest.get
+    write = ServerTest.write
+
+    def ms(self):
+        return json.loads(self.get("/api/manuscript")[2])
+
+    def keep(self, path: Path):
+        before = path.read_bytes()
+        self.addCleanup(path.write_bytes, before)
+
+    def test_the_same_fingerprints_as_the_plugin(self):
+        # the values hooks/lib/verify.ts gives (tests/verify.test.ts)
+        e = "---\nid: E05\n---\n# E05 · X\n\n## Result\nCutMix  closes the gap: 0.3 ± 0.5 points.\n<!-- rft-results a -->\n| acc | 71.3 |\n\n## Code\nx\n"
+        self.assertEqual(rft_manuscript.substance_fingerprint("experiment", e), "58942782")
+        t = "---\nid: T01\n---\n## Statement\nA gap $g = a - b$.\n\n## Builds on\nE05.\n\n## Explanation\n“Proof” — by ε.\n"
+        self.assertEqual(rft_manuscript.substance_fingerprint("theory", t), "1a85e809")
+        # and a snippet's content, as hooks/lib/snippets.ts takes it (tests/manuscript-view.test.ts)
+        self.assertEqual(rft_manuscript.content_fingerprint("\\paragraph{One}  % a comment\nText   one.\n"), rft_manuscript.content_fingerprint("\\paragraph{One}\nText one."))
+        self.assertEqual(rft_manuscript.content_fingerprint("\\paragraph{One}\nText one."), "a25f30cc")
+
+    def test_the_snippets_and_the_documents_with_their_states(self):
+        m = self.ms()
+        self.assertEqual((m["exists"], m["locked"], m["docsLocked"]), (True, True, True))
+        s1, s2 = m["snippets"]
+        self.assertEqual((s1["kind"], s1["title"], s1["basis"], s1["review"], s1["stub"], s1["locked"]), ("result", "CutMix", ["E05", "R01"], [], False, True))
+        self.assertEqual(s1["usedIn"], [{"doc": "paper", "state": "sync"}, {"doc": "thesis", "state": "adapted"}])
+        self.assertEqual((s2["stub"], s2["unverified"], s2["usedIn"]), (True, ["E06"], []))
+        paper, thesis = m["documents"]
+        self.assertEqual((paper["name"], paper["copies"], paper["refsMissing"]), ("paper", [{"id": "S01", "state": "sync", "line": 7, "snippetReview": False}], ["S07"]))
+        self.assertEqual(thesis["copies"][0]["state"], "adapted")
+        # S01 changes: both copies to review, their text as it was
+        s1p = self.vault / "snippets" / "S01.tex"
+        self.keep(s1p)
+        s1p.write_text(s1p.read_text().replace("closes", "shrinks"))
+        self.assertEqual([d["copies"][0]["state"] for d in self.ms()["documents"]], ["review", "review"])
+        # E05's Result changes: S01 in review, and its copies say their snippet is
+        s1p.write_text(s1p.read_text().replace("shrinks", "closes"))
+        self.keep(self.e05)
+        self.e05.write_text(self.e05.read_text().replace("0.3 ± 0.5", "0.4 ± 0.5"))
+        m = self.ms()
+        self.assertEqual((m["snippets"][0]["review"], m["documents"][0]["copies"][0]["snippetReview"]), (["E05 changed"], True))
+
+    def test_a_file_read_and_written_and_a_conflict_refused(self):
+        path = self.vault / "snippets" / "S02.tex"
+        self.keep(path)
+        f = json.loads(self.get("/api/manuscript/file?path=snippets/S02.tex")[2])
+        self.assertTrue(f["locked"])
+        text = f["text"].replace("% your text", "Mine.")
+        status, got = self.write("PUT", "/api/manuscript/file", {"path": "snippets/S02.tex", "text": text, "version": f["version"]})
+        self.assertEqual((status, got["text"]), (200, text))
+        self.assertEqual(path.read_text(), text)
+        status, got = self.write("PUT", "/api/manuscript/file", {"path": "snippets/S02.tex", "text": "x", "version": f["version"]})
+        self.assertEqual((status, got["text"]), (409, text))
+        d = json.loads(self.get("/api/manuscript/file?path=documents/paper/main.tex")[2])
+        self.assertEqual((d["locked"], list(d["taken"])), (True, ["S01"]))  # what each copy was taken from: the review's "then"
+        for bad in ("snippets/S09.tex", "../secret.tex", "documents/../x/main.tex", "documents/rft.sty", "snippets/snippets.json", "documents/paper/.blocks.json"):
+            self.assertEqual(self.get(f"/api/manuscript/file?path={quote(bad)}")[0], 404, bad)
+            self.assertEqual(self.write("PUT", "/api/manuscript/file", {"path": bad, "text": "x", "force": True})[0], 404, bad)
+        self.assertEqual(self.write("PUT", "/api/manuscript/file", {"path": "snippets/S02.tex", "text": "x", "force": True}, key=None)[0], 403)
+
+    def test_the_two_locks(self):
+        for reg in (self.vault / "snippets" / "snippets.json", self.vault / "documents" / "documents.json"):
+            self.keep(reg)
+        status, m = self.write("POST", "/api/manuscript/lock", {"level": "snippets", "locked": False, "id": "S01"})
+        self.assertEqual((status, m["unlocked"], m["snippets"][0]["locked"]), (200, ["S01"], False))
+        status, m = self.write("POST", "/api/manuscript/lock", {"level": "documents", "locked": False, "id": "thesis"})
+        self.assertEqual([d["locked"] for d in m["documents"]], [True, False])
+        status, m = self.write("POST", "/api/manuscript/lock", {"level": "documents", "locked": False})
+        self.assertEqual((m["docsLocked"], m["documents"][0]["locked"]), (False, False))
+        self.assertEqual(self.write("POST", "/api/manuscript/lock", {"level": "snippets", "locked": True, "id": "S42"})[0], 404)
+        self.assertEqual(self.write("POST", "/api/manuscript/lock", {"level": "documents", "locked": True, "id": "book"})[0], 404)
+        self.assertEqual(self.write("POST", "/api/manuscript/lock", {"locked": False})[0], 400)
+
+    def test_comments_on_a_snippet_and_a_document(self):
+        self.addCleanup(lambda: [(self.vault / ".comments" / f).unlink(missing_ok=True) for f in ("S01.json", "paper.json")])
+        n = json.loads(self.get("/api/note?id=S01")[2])
+        self.assertEqual((n["name"], n["locked"]), ("S01 CutMix", True))
+        status, got = self.write("POST", "/api/comment", {"id": "S01", "action": "new", "kind": "comment", "quote": "closes", "prefix": "The gap ", "suffix": " by", "text": "By how much?"})
+        self.assertEqual((status, got["threads"][0]["quote"]), (200, "closes"))
+        d = json.loads(self.get("/api/note?id=paper")[2])
+        self.assertEqual((d["name"], d["locked"]), ("the document paper", True))
+        status, got = self.write("POST", "/api/comment", {"id": "paper", "action": "new", "kind": "comment", "quote": "See", "prefix": "", "suffix": "", "text": "Which?"})
+        self.assertEqual(status, 200)
+        m = self.ms()
+        self.assertEqual((m["snippets"][0]["threads"], m["documents"][0]["threads"]), (1, 1))
+        # the lock of a note is not theirs
+        self.assertEqual(self.write("POST", "/api/lock", {"id": "S01", "locked": False})[0], 404)
+        self.assertEqual(self.write("POST", "/api/lock", {"id": "paper", "locked": False})[0], 404)
+
+    def test_what_the_session_makes_for_the_page(self):
+        doc = self.vault / "documents" / "paper" / "main.tex"
+        self.keep(doc)
+
+        def answer(request):
+            if request["action"] == "new":
+                p = self.vault / "snippets" / "S03.tex"
+                p.write_text("% rft-snippet S03 · result · Mine\n% basis: E05\n")
+                self.addCleanup(p.unlink)
+            if request["action"] == "place":
+                doc.write_text(doc.read_text() + "% rft-begin S02 00000000\n% rft-end S02\n")
+
+        type(self).answer = answer
+        self.addCleanup(setattr, type(self), "answer", None)
+        status, got = self.write("POST", "/api/manuscript/ask", {"action": "new", "kind": "result", "title": "Mine", "basis": ["E05"]})
+        self.assertEqual((status, got["id"]), (200, "S03"))
+        self.assertEqual(self.asked[-1], ("RFT_MANUSCRIPT", {"action": "new", "kind": "result", "title": "Mine", "basis": ["E05"]}))
+        status, got = self.write("POST", "/api/manuscript/ask", {"action": "place", "name": "paper", "id": "S02", "after": "S01"})
+        self.assertEqual((status, got["id"]), (200, "S02"))
+        self.assertEqual(self.asked[-1], ("RFT_MANUSCRIPT", {"action": "place", "name": "paper", "id": "S02", "after": "S01"}))
+        for bad, code in (({"action": "new", "kind": "result"}, 400), ({"action": "drop"}, 400), ({"action": "document", "name": "My Paper"}, 400),
+                          ({"action": "document", "name": "notes", "title": "two\nlines"}, 400), ({"action": "document", "name": "notes", "title": 3}, 400),
+                          ({"action": "reviewed", "id": "S42"}, 404), ({"action": "document", "name": "paper"}, 409),
+                          ({"action": "place", "name": "paper", "id": "S01"}, 409), ({"action": "take", "name": "thesis", "id": "S02"}, 404),
+                          ({"action": "place", "name": "book", "id": "S01"}, 404)):
+            self.assertEqual(self.write("POST", "/api/manuscript/ask", bad)[0], code, bad)
+
+    @unittest.skipUnless(shutil.which("latexmk") and shutil.which("pdftotext"), "latexmk or pdftotext is not on PATH")
+    def test_a_compile_and_its_pdf_with_the_key_only(self):
+        self.addCleanup(shutil.rmtree, self.vault / "documents" / ".build", True)
+        status, r = self.write("POST", "/api/manuscript/compile", {"doc": "paper"})
+        self.assertEqual(status, 200)
+        self.assertTrue(r["ok"], r)
+        self.assertNotIn("pdf", r)  # no path on disk to the page
+        self.assertEqual(self.get("/api/manuscript/pdf?doc=paper")[0], 403)
+        status, ctype, body = self.get("/api/manuscript/pdf?doc=paper", headers=[("X-RFT-Token", KEY)])
+        self.assertEqual((status, ctype, body[:4]), (200, "application/pdf", b"%PDF"))
+        self.assertIn("built", self.ms()["documents"][0])
+        # a snippet alone
+        status, r = self.write("POST", "/api/manuscript/compile", {"snippet": "S01"})
+        self.assertTrue(r["ok"], r)
+        status, _, body = self.get("/api/manuscript/pdf?snippet=S01", headers=[("X-RFT-Token", KEY)])
+        self.assertEqual((status, body[:4]), (200, b"%PDF"))
+        self.assertEqual(self.write("POST", "/api/manuscript/compile", {"doc": "../x"})[0], 404)
+        self.assertEqual(self.write("POST", "/api/manuscript/compile", {"snippet": "S99"})[0], 404)
+        self.assertEqual(self.write("POST", "/api/manuscript/compile", {"doc": "paper"}, key=None)[0], 403)
 
 
 class SharedPortTest(unittest.TestCase):

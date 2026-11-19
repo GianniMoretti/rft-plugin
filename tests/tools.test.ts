@@ -21,9 +21,14 @@ describe('tool list', () => {
     mock.clock(on)
     const w = world(on, demoFiles())
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.tools).toHaveLength(30)
+    // no machine paired with the experiment queue: its tools are not there at all, rft_machine waits to pair one
+    expect(w.tools).toHaveLength(38)
     expect(inPrompt(w)).toEqual([...CORE_TOOLS].sort())
-    for (const t of Object.values(FEATURE_TOOLS).flat()) expect(w.deferred).toContain(t)
+    for (const t of Object.values(FEATURE_TOOLS).flat()) {
+      if (FEATURE_TOOLS.queue.includes(t as never)) expect(w.tools).not.toContain(t)
+      else expect(w.deferred).toContain(t)
+    }
+    expect(w.deferred).toContain('rft_machine')
   })
 
   test('a deadline or a dated note brings the date tools into the prompt', async ($, on) => {
@@ -58,6 +63,16 @@ describe('tool list', () => {
     expect(inPrompt(w)).toEqual([...CORE_TOOLS, ...FEATURE_TOOLS.comments].sort())
   })
 
+  test('an artifact brings the artifact tools', async ($, on) => {
+    mock.clock(on)
+    const files = demoFiles()
+    files['vault/artifacts/00 demo.html'] = '<!-- rft-artifact {"concept":"root","name":"demo","updated":"2026-03-01","basis":{}} -->\n<h1>demo</h1>\n'
+    const w = world(on, files)
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    expect(FEATURE_TOOLS.artifacts).toEqual(['rft_artifact', 'rft_set_artifact'])
+    expect(inPrompt(w)).toEqual([...CORE_TOOLS, ...FEATURE_TOOLS.artifacts].sort())
+  })
+
   test('a deferred tool still answers when called', async ($, on) => {
     mock.clock(on)
     const w = world(on, demoFiles())
@@ -80,7 +95,8 @@ describe('rules on demand', () => {
 
   test('a vault with none of the features: one short line instead of the four rules', async ($, on) => {
     const rules = await rulesOf($ as never, on as never, demoFiles())
-    expect(rules).toContain("These are the user's to set, never yours: priorities (`priority:`), dates (`due:`, `start:`, `est:`, deadlines in `vault/milestones/`), the text of a note with `locked: true`.")
+    expect(rules).toContain("These are the user's to set, never yours: priorities (`priority:`), dates (`due:`, `start:`, `est:`, deadlines in `vault/milestones/`), the text of a note with `locked: true`, verifying a note (`status: verified`: rft_set_status verified only suggests it).")
+    expect(rules).not.toContain('A verified note (')
     expect(rules).not.toContain('rft_suggest_priority')
     expect(rules).not.toContain('rft_suggest_dates')
     expect(rules).not.toContain('rft_comments lists them')
@@ -97,11 +113,12 @@ describe('rules on demand', () => {
   })
 
   test('with every feature in use there is no short line', async ($, on) => {
-    const files = withE02('priority: high\nlocked: true\nstart: 2026-12-01')
+    const files = withE02('priority: high\nlocked: true\nstart: 2026-12-01\nsuggested_verified: "reproduced"')
     files['vault/.comments/E02.json'] = JSON.stringify({ note: 'E02', next: 1, threads: [] })
     const rules = await rulesOf($ as never, on as never, files)
     expect(rules).toContain('rft_comments lists them')
     expect(rules).toContain('rft_suggest_dates {id, start, est, why}')
+    expect(rules).toContain('A verified note (`status: verified`, ✔) is a claim the user checked')
     expect(rules).not.toContain('never yours')
   })
 })

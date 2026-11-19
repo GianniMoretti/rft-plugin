@@ -3,15 +3,17 @@
 // `api/tree`, reads notes from `api/note` and writes a note's edited text back to it, asks
 // `api/node` for a new note under the one shown and `api/type` to change its type, and keeps a
 // note's discussion (comments, suggestions) with `api/comment`, its lock with `api/lock` and its
-// priority (the user's alone; also the answer to Claude's suggested one) with `api/priority`; or
+// priority (the user's alone; also the answer to Claude's suggested one) with `api/priority`, and
+// mounts the scratchpad (web/scratchpad.js, `api/scratchpad`), and shows a concept's artifact in the
+// drawer when the concept is clicked (web/artifacts.js; `api/artifact`, in a sandboxed frame); or
 // inlined into a standalone tree.html by /rft-view, where `window.RFT_DATA` holds the tree,
 // every note's text and its threads, and nothing is edited.
 (function () {
   'use strict'
 
-  const STATUSES = ['done', 'running', 'planned', 'idea', 'dropped', 'discussed', 'moved']
-  const MARK = { done: '✓', running: '…', planned: '→', idea: '?', dropped: '✗', discussed: '·', moved: '↗' }
-  const LABEL = { done: 'done', running: 'running', planned: 'planned', idea: 'idea', dropped: 'dropped', discussed: 'discussed, not pursued', moved: 'moved' }
+  const STATUSES = ['verified', 'review', 'done', 'running', 'planned', 'idea', 'dropped', 'discussed', 'moved']
+  const MARK = { verified: '✔', review: '↺', done: '✓', running: '…', planned: '→', idea: '?', dropped: '✗', discussed: '·', moved: '↗' }
+  const LABEL = { verified: 'verified', review: 'review: verified, changed since', done: 'done', running: 'running', planned: 'planned', idea: 'idea', dropped: 'dropped', discussed: 'discussed, not pursued', moved: 'moved' }
   const R = 7 // node radius
   const TYPES = ['direction', 'experiment', 'reference', 'theory']
   // the note that starts a concept is a star: its points this far out, its notches this share of that
@@ -40,6 +42,7 @@
   let matchSet = new Set() // the notes that pass the filters
   let shownSet = new Set() // the notes drawn: all of them, or with "hide" the matches and their ancestors
   let selected = null
+  const lastChild = new Map() // a note → its child shown last, where ↓ goes back to
   let matchAt = -1
   let positions = new Map()
   let hasView = false
@@ -51,6 +54,9 @@
   let view = 'tree' // tree: the reasoning tree; concepts: the concept tree
   let focus = null // the concept whose subtree alone is drawn, or null
   let shown = null // the note in the drawer as last read: { id, body, version }
+  let artifactShown = null // the concept whose artifact the drawer shows instead of a note, or null
+  let pendingArtifact = null // ?artifact=<concept id>: the artifact to open once the tree is drawn
+  const A = window.RftArtifacts
   let editing = null // while a note's text is edited: { id, version, lead, text (as opened), newer (on a conflict) }
   let saving = false
   let adding = false
@@ -58,7 +64,8 @@
   let showOrigins = false
   let retyping = false
   const K = window.RftKanban
-  const PAGES = ['tree', 'concepts', 'kanban', 'calendar']
+  const PAGES = ['tree', 'concepts', 'kanban', 'calendar', 'manuscript']
+  let manuscriptView = null // web/manuscript.js, mounted on the live page only
   let boardSet = new Set() // the notes on the kanban: those that match, in the focused concept when there is one
   let kanbanOrder = 'priority' // priority | date
   let kanbanOpen = new Set() // the folded columns opened
@@ -119,6 +126,7 @@
       if (CAL_MODES.includes(q.get('cal'))) calMode = q.get('cal')
       if (q.has('focus')) focus = q.get('focus') || null
       if (q.has('note')) selected = q.get('note')
+      if (q.has('artifact')) pendingArtifact = q.get('artifact')
       buildArrowMarkers()
       buildHalos()
       layoutKind = store.get('layout', 'td')
@@ -130,8 +138,10 @@
       if (fq.has('hide')) filters = F.normalise({ ...filters, mode: 'hide' })
       setFont(new URLSearchParams(location.search).get('font') || store.get('font', 1), false)
       setDrawerWidth(store.get('drawerWidth', null), false)
+      const aw = Number(store.get('artifactWidth', null))
+      if (aw > 0) mainEl.style.setProperty('--artifact-w', `${aw}px`)
       buildLegend()
-      setLegendOpen(store.get('legendOpen', true))
+      setLegendOpen(store.get('legendShown', false))
       showOrigins = Boolean(store.get('origins', false)) || q.get('origins') === 'on'
       syncOriginsButton()
       syncLayoutButtons()
@@ -286,6 +296,7 @@
     const mark = nodeIn.append('g').attr('class', 'mark')
     mark.append('circle').attr('class', 'halo')
     mark.append('circle').attr('class', 'sel')
+    mark.append('circle').attr('class', 'vring')
     mark.append('path').attr('class', 'dot')
     mark.append('path').attr('class', 'core')
     nodeIn.append('text').attr('class', 'label')
@@ -299,6 +310,8 @@
     all.attr('class', n => nodeClass(n.data))
     all.select('path.dot').attr('d', n => shapeOf(n.data.id))
     all.select('circle.sel').attr('r', n => (stars.has(n.data.id) ? STAR_R : R) + 4)
+    // a verified note's ring, dashed while it is in review
+    all.select('circle.vring').attr('r', n => (stars.has(n.data.id) ? STAR_R : R) + 2.2)
     all.select('circle.halo')
       .attr('display', n => (glowOf(n.data) ? null : 'none'))
       .attr('r', n => (glowOf(n.data) ? (stars.has(n.data.id) ? STAR_R * 0.8 : R) + HALO[glowOf(n.data)] : 0))
@@ -488,22 +501,27 @@
   async function select(id) {
     // the note being edited stays as it is; another one only once its changes are saved or dropped
     if (editing && (editing.id === id || !leaveEditor())) return
+    if (artifactShown) leaveArtifact()
     if (id !== selected) { closeAdder(); closeMover(); closeRetyper() }
     selected = id
     showEditButton()
     gNodes.selectAll('g.node').attr('class', n => nodeClass(n.data))
     markCards()
     const n = byId.get(id)
+    if (n.parent) lastChild.set(n.parent, id)
     const drawer = document.getElementById('drawer')
     drawer.hidden = false
-    renderConceptPath(document.getElementById('drawer-concept'), n.concept, 'Focus on this concept')
+    renderConceptPath(document.getElementById('drawer-concept'), n.concept, "Open this concept's artifact", openArtifact)
     renderOrigin(n)
     renderRefs(n)
+    renderWritten(n)
     renderCode(document.getElementById('drawer-code'), n.concept)
     document.getElementById('drawer-meta').textContent = `${n.type} · ${MARK[n.status] || ''} ${n.status}${n.date ? ' · ' + n.date : ''}${n.tags && n.tags.length ? ' · #' + n.tags.join(' #') : ''}`
     renderDrawerPriority(n)
+    renderDrawerVerify(n)
     renderDrawerDates(n)
     markRows()
+    syncNotebook(n)
     const summary = document.getElementById('drawer-summary')
     summary.textContent = n.summary || ''
     summary.hidden = !n.summary
@@ -552,6 +570,56 @@
     select(id)
     centreOn(id)
   }
+
+  // ---------------------------------------------------------------- the arrow keys
+
+  // In the tree, the arrow keys walk from the note shown: ↑ to its parent, ↓ to a child (the one
+  // shown last, else the first; a folded note unfolds), ← → round its siblings. With no note
+  // shown they start at the top. They leave a field, the open drawer and the other pages alone.
+  let keysInDrawer = false // the last click was in the drawer: there the arrows scroll the note
+
+  /** The notes at the top of the drawn tree. */
+  const drawnTops = () => (focus ? [concepts.get(focus).root] : tree.roots.length === 1 ? tree.roots : tree.roots.filter(id => shownSet.has(id)))
+
+  /** Whether a note is in the drawn tree, folded away or not. */
+  function walkable(id) {
+    if (!byId.has(id)) return false
+    const tops = drawnTops()
+    return tops.includes(id) || (shownSet.has(id) && ancestors(id).some(a => tops.includes(a)))
+  }
+
+  /** Pans to a note only when it is off the visible canvas (beside the drawer) or near its edge. */
+  function keepInView(id) {
+    const p = positions.get(id)
+    if (!p) return
+    const el = svg.node()
+    const w = el.clientWidth - (drawer.hidden ? 0 : drawer.offsetWidth), h = el.clientHeight, m = 60
+    const [x, y] = d3.zoomTransform(el).apply(p.p)
+    if (x > m && y > m && x < w - m && y < h - m) return
+    svg.transition().duration(300).call(zoom.translateTo, p.p[0], p.p[1], [Math.max(0, w) / 2, h / 2])
+    setViewNext('fit')
+  }
+
+  document.addEventListener('pointerdown', ev => { keysInDrawer = Boolean(ev.target.closest && ev.target.closest('#drawer')) }, true)
+  document.addEventListener('keydown', ev => {
+    const dir = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' }[ev.key]
+    if (!dir || !tree || view !== 'tree' || editing || ev.defaultPrevented || ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return
+    if ((keysInDrawer && !drawer.hidden) || (ev.target.closest && ev.target.closest('input, textarea, select, [contenteditable], #drawer, #drawer-resize'))) return
+    const tops = drawnTops()
+    const to = walkable(selected)
+      ? L.step(dir, selected, {
+          roots: tops,
+          kids: id => byId.get(id).children.filter(walkable),
+          parentOf: id => (tops.includes(id) ? null : byId.get(id).parent),
+          last: lastChild,
+        })
+      : tops[0]
+    ev.preventDefault()
+    if (!to || to === selected) return
+    reveal(to)
+    select(to)
+    keepInView(to)
+  })
 
   // ---------------------------------------------------------------- editing a note's text
 
@@ -631,10 +699,19 @@
     return false
   }
 
-  /** A button that asks to be pressed again: its label says so for 5 seconds. */
+  /**
+   * A button that asks to be pressed again: its label says so for 5 seconds. An icon button keeps
+   * its icon (there is no room for words): it lights up and the notice at the bottom asks instead.
+   */
   function pressedTwice(button, ask) {
     const key = `button ${button.closest('[data-thread]')?.dataset.thread ?? ''} ${button.dataset.act ?? ''}`
     if (armed(key)) return true
+    if (button.querySelector('svg')) {
+      button.classList.add('armed')
+      notify(`${ask} Press it again within a few seconds.`)
+      setTimeout(() => button.classList.remove('armed'), 5000)
+      return false
+    }
     const label = button.textContent
     button.textContent = ask
     setTimeout(() => { if (button.textContent === ask) button.textContent = label }, 5000)
@@ -920,6 +997,24 @@
   }
 
   /** The notes it builds on (`refs:`), and for a reference the notes that cite it, as links. */
+  /** The manuscript's snippets that rest on the note: each opens in the Manuscript tab. */
+  function renderWritten(n) {
+    const box = document.getElementById('drawer-written')
+    box.replaceChildren()
+    const ids = manuscriptView ? manuscriptView.writtenIn(n.id) : []
+    box.hidden = !ids.length
+    if (!ids.length) return
+    box.append('Written in ')
+    ids.forEach((id, i) => {
+      if (i) box.append(', ')
+      const a = document.createElement('a')
+      a.textContent = id
+      a.title = 'Open this snippet in the Manuscript tab'
+      a.addEventListener('click', ev => { ev.preventDefault(); setView('manuscript'); manuscriptView.openSnippet(id) })
+      box.appendChild(a)
+    })
+  }
+
   function renderRefs(n) {
     const box = document.getElementById('drawer-refs')
     box.innerHTML = ''
@@ -1245,6 +1340,7 @@
     hideSelBar()
     fnPop.hidden = true
     document.getElementById('drawer').hidden = true
+    hideNotebook()
     selected = null
     gNodes.selectAll('g.node').attr('class', n => nodeClass(n.data))
     markCards()
@@ -1259,9 +1355,10 @@
     const v = Number(w)
     drawerW = w == null || !Number.isFinite(v) ? null
       : Math.round(Math.min(Math.max(DRAWER_MIN, window.innerWidth * 0.92), Math.max(DRAWER_MIN, v)))
-    if (drawerW == null) mainEl.style.removeProperty('--drawer-w')
-    else mainEl.style.setProperty('--drawer-w', `${drawerW}px`)
-    if (save) store.set('drawerWidth', drawerW)
+    const prop = artifactShown ? '--artifact-w' : '--drawer-w'
+    if (drawerW == null) mainEl.style.removeProperty(prop)
+    else mainEl.style.setProperty(prop, `${drawerW}px`)
+    if (save) store.set(artifactShown ? 'artifactWidth' : 'drawerWidth', drawerW)
   }
   let drag = null // while the edge is dragged: where the press started, and the width then
   resizer.addEventListener('pointerdown', ev => {
@@ -1280,7 +1377,7 @@
   })
   const endDrag = () => {
     if (!drag) return
-    if (drag.moved) store.set('drawerWidth', drawerW)
+    if (drag.moved) store.set(artifactShown ? 'artifactWidth' : 'drawerWidth', drawerW)
     drag = null
     document.body.classList.remove('resizing')
   }
@@ -1396,13 +1493,13 @@
     else at = [x, y - 36]
     const left = atEdge && layoutKind !== 'radial'
     const pill = d3.select('#badges').append('g').attr('class', `badge ${className}`).attr('data-x', at[0]).attr('data-y', at[1])
-      .attr('data-concept', c.id).on('click', ev => { ev.stopPropagation(); setFocus(c.id) })
+      .attr('data-concept', c.id).on('click', ev => { ev.stopPropagation(); openArtifact(c.id) })
     const text = pill.append('text').attr('text-anchor', left ? 'start' : 'middle').attr('x', left ? 8 : 0).attr('y', left ? -5 : 4)
       .attr('font-size', 11.5).text(c.name)
     const w = Math.max(40, text.node().getComputedTextLength() + 16)
     pill.insert('rect', 'text').attr('x', left ? 0 : -w / 2).attr('y', left ? -19 : -10).attr('width', w).attr('height', 19).attr('rx', 9.5)
       .attr('fill', C.colourOf(concepts, c.id))
-    pill.append('title').text(`${c.name}${c.summary ? ' — ' + c.summary : ''} (click to focus)`)
+    pill.append('title').text(`${c.name}${c.summary ? ' — ' + c.summary : ''} (click: its artifact)`)
   }
 
   function drawConcepts(pos) {
@@ -1460,17 +1557,18 @@
   }
 
   /** The concept path of `id` as links that focus on each concept. */
-  function renderConceptPath(box, id, title) {
+  /** The concept path of `id`, each concept a link: to `pick` it (a note's header, an artifact's: its artifact), else to focus on it. */
+  function renderConceptPath(box, id, title, pick) {
     box.innerHTML = ''
     const path = C.pathOf(concepts, concepts.has(id) ? id : C.ROOT)
     path.forEach((cid, i) => {
       if (i) box.append(' › ')
       const a = document.createElement('a')
       a.textContent = concepts.get(cid).name
-      a.title = cid === C.ROOT ? 'Show the whole tree' : title
+      a.title = cid === C.ROOT && !pick ? 'Show the whole tree' : title
       const colour = C.colourOf(concepts, cid)
       if (colour) a.style.color = colour
-      a.addEventListener('click', ev => { ev.preventDefault(); setFocus(cid === C.ROOT ? null : cid) })
+      a.addEventListener('click', ev => { ev.preventDefault(); if (pick) pick(cid); else setFocus(cid === C.ROOT ? null : cid) })
       box.appendChild(a)
     })
   }
@@ -1549,14 +1647,18 @@
     }
   }
 
+  // the legend opens from the faint ? beside the scratchpad's button; it starts closed
   const legend = document.getElementById('legend')
   function setLegendOpen(open) {
     legend.classList.toggle('closed', !open)
     document.getElementById('legend-toggle').setAttribute('aria-expanded', String(open))
   }
   document.getElementById('legend-toggle').addEventListener('click', () => {
-    const open = legend.classList.contains('closed')
-    store.set('legendOpen', open)
+    const pad = document.getElementById('pad')
+    // the open scratchpad stands in the legend's place: the ? closes it and shows the legend
+    const open = (pad && !pad.hidden) || legend.classList.contains('closed')
+    if (pad && !pad.hidden) document.getElementById('pad-close').click()
+    store.set('legendShown', open)
     setLegendOpen(open)
   })
 
@@ -1576,7 +1678,9 @@
     document.getElementById('concept-canvas').toggleAttribute('hidden', v !== 'concepts')
     document.getElementById('kanban').hidden = v !== 'kanban'
     calSection.hidden = v !== 'calendar'
+    document.getElementById('manuscript').hidden = v !== 'manuscript'
     syncConceptButtons()
+    if (v === 'manuscript' && manuscriptView) void manuscriptView.show()
     if (v === 'concepts') drawConceptTree()
     if (v === 'kanban') drawKanban()
     if (v === 'calendar') drawCalendar()
@@ -1614,7 +1718,7 @@
     cviewport.append('g').selectAll('path').data(top.links()).join('path').attr('class', 'clink').attr('d', clink)
     const node = cviewport.append('g').selectAll('g').data(top.descendants()).join('g')
       .attr('class', 'cnode').attr('transform', n => `translate(${n.p[0]},${n.p[1]})`)
-      .on('click', (ev, n) => { ev.stopPropagation(); openConcept(n.data.id) })
+      .on('click', (ev, n) => { ev.stopPropagation(); openArtifact(n.data.id) })
     const repos = c => c.repos || []
     const baseName = p => p.replace(/\/+$/, '').split('/').pop() || p
     node.append('title').text(n => `${n.data.name}${n.data.summary ? ' — ' + n.data.summary : ''}${repos(n.data).length ? '\nCode: ' + repos(n.data).join(', ') : ''}`)
@@ -1666,6 +1770,376 @@
     setTimeout(() => flashConcept(id), 450)
   }
 
+  // ---------------------------------------------------------------- pages in a frame
+
+  // a page of its own in a frame inside `box`: made once, loaded again only when `version` changes
+  // (a page the frame was not made for: made anew), its messages taken only from that frame
+  const frames = new Map() // box → { frame, version, sandbox, onMessage }
+  function openFrame(box, src, opts = {}) {
+    let f = frames.get(box)
+    if (!f || f.sandbox !== (opts.sandbox ?? null)) {
+      box.replaceChildren()
+      const frame = document.createElement('iframe')
+      if (opts.sandbox != null) frame.setAttribute('sandbox', opts.sandbox)
+      if (opts.allow) frame.setAttribute('allow', opts.allow)
+      frame.setAttribute('referrerpolicy', 'no-referrer')
+      if (opts.title) frame.title = opts.title
+      box.appendChild(frame)
+      f = { frame, version: null, sandbox: opts.sandbox ?? null, onMessage: null }
+      frames.set(box, f)
+    }
+    f.onMessage = opts.onMessage || null
+    const version = String(opts.version ?? src)
+    if (f.version !== version) {
+      f.version = version
+      if (opts.srcdoc != null) { f.frame.removeAttribute('src'); f.frame.srcdoc = opts.srcdoc } else { f.frame.removeAttribute('srcdoc'); f.frame.src = src }
+    }
+    return f.frame
+  }
+  function closeFrame(box) {
+    frames.delete(box)
+    box.replaceChildren()
+  }
+  window.addEventListener('message', ev => {
+    for (const f of frames.values()) {
+      if (ev.source === f.frame.contentWindow) { if (f.onMessage) f.onMessage(ev.data || {}); return }
+    }
+  })
+
+  // ---------------------------------------------------------------- an experiment's notebook (server/rft_notebook.py)
+
+  // the marimo notebook that rebuilds an experiment's Result, on the left while its note is open on
+  // the right: the server starts the editor of the experiment's repo (POST api/notebook, with the
+  // key: the editor runs code) and the page frames it, one frame for every notebook. Closed by
+  // hand, it stays closed for the notes opened after, until the drawer's notebook button opens it.
+  const nbPane = document.getElementById('nbpane')
+  const nbFrame = document.getElementById('nb-frame')
+  const nbMsg = document.getElementById('nb-msg')
+  const nbRun = document.getElementById('nb-run')
+  const nbTab = document.getElementById('nb-tab')
+  const nbBtn = document.getElementById('drawer-notebook')
+  const nbUrls = new Map() // note id → its editor's address, once the server gave it
+  let nbShown = null // the note whose notebook the pane shows
+  let nbClosed = Boolean(store.get('notebookClosed', false))
+
+  /** Shows or hides the notebook pane for the note just opened. */
+  function syncNotebook(n) {
+    const has = Boolean(n && n.notebook) && !EMBED
+    nbBtn.hidden = !has
+    if (!has || nbClosed) { hideNotebook(); return }
+    openNotebook(n)
+  }
+
+  async function openNotebook(n) {
+    nbShown = n.id
+    nbPane.hidden = false
+    nbBtn.setAttribute('aria-pressed', 'true')
+    document.getElementById('nb-title').textContent = `${n.id} · notebook`
+    nbRun.textContent = A.reproducedText(n.reproduced)
+    nbRun.className = `nb-run${n.reproduced && n.reproduced.state ? ` r-${n.reproduced.state}` : ''}`
+    nbRun.title = n.reproduced ? 'The last run by rft_run_notebook, which checks RESULTS against the note\'s Result' : 'Claude runs it with rft_run_notebook'
+    // the address asked every time, the one known shown meanwhile: the server answers it at once
+    // while the editor runs, and starts a new one, at a new address, once it stopped (hours unused)
+    const known = nbUrls.get(n.id)
+    if (!editKey()) {
+      if (known) showNbFrame(n, known)
+      else showNbMsg('Open the address /rft printed: the notebook runs code, so it needs the key.')
+      return
+    }
+    if (known) showNbFrame(n, known)
+    else showNbMsg('Starting the notebook in its repo\'s environment… (the first time can take a minute)')
+    let url
+    try {
+      const res = await fetch('api/notebook', {
+        method: 'POST',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'X-RFT-Token': editKey() },
+        body: JSON.stringify({ id: n.id }),
+      })
+      const reply = await res.json().catch(() => ({}))
+      if (!res.ok || typeof reply.url !== 'string') throw new Error(reply.error || `the server answered ${res.status}`)
+      url = reply.url
+      nbUrls.set(n.id, url)
+    } catch (e) {
+      if (nbShown === n.id) showNbMsg(`The notebook did not open: ${e.message}`)
+      return
+    }
+    if (nbShown === n.id) showNbFrame(n, url)
+  }
+
+  /** The notebook framed: its editor, through this page's own server (notebook/<name>/), the one address a tunnel to it reaches. */
+  function showNbFrame(n, url) {
+    nbMsg.hidden = true
+    nbFrame.hidden = false
+    nbTab.href = url
+    openFrame(nbFrame, url, { title: `The notebook of ${n.id}`, allow: 'clipboard-read; clipboard-write' })
+  }
+
+  function showNbMsg(text) {
+    nbMsg.textContent = text
+    nbMsg.hidden = false
+    nbFrame.hidden = true
+  }
+
+  /** The pane hidden; its frame kept, so the same notebook comes back as it was. */
+  function hideNotebook() {
+    nbShown = null
+    nbPane.hidden = true
+    nbBtn.setAttribute('aria-pressed', 'false')
+  }
+
+  nbBtn.addEventListener('click', () => {
+    nbClosed = !nbPane.hidden
+    store.set('notebookClosed', nbClosed)
+    const n = selected && byId.get(selected)
+    if (nbClosed || !n) hideNotebook()
+    else openNotebook(n)
+  })
+  document.getElementById('nb-close').addEventListener('click', () => {
+    nbClosed = true
+    store.set('notebookClosed', true)
+    hideNotebook()
+  })
+
+  // its right edge drags (arrow keys once focused), a double-click restores the default
+  const nbResizer = document.getElementById('nbpane-resize')
+  const NB_MIN = 320
+  function setNotebookWidth(w, save = true) {
+    const v = Number(w)
+    const width = w == null || !Number.isFinite(v) ? null : Math.round(Math.min(window.innerWidth * 0.92, Math.max(NB_MIN, v)))
+    if (width == null) mainEl.style.removeProperty('--nb-w')
+    else mainEl.style.setProperty('--nb-w', `${width}px`)
+    if (save) store.set('notebookWidth', width)
+  }
+  setNotebookWidth(store.get('notebookWidth', null), false)
+  let nbDrag = null
+  nbResizer.addEventListener('pointerdown', ev => {
+    if (ev.button !== 0) return
+    ev.preventDefault()
+    nbResizer.setPointerCapture(ev.pointerId)
+    nbDrag = { x: ev.clientX, w: nbPane.offsetWidth }
+    document.body.classList.add('resizing')
+  })
+  nbResizer.addEventListener('pointermove', ev => { if (nbDrag) setNotebookWidth(nbDrag.w + ev.clientX - nbDrag.x, false) })
+  const nbEnd = () => {
+    if (!nbDrag) return
+    nbDrag = null
+    document.body.classList.remove('resizing')
+    store.set('notebookWidth', nbPane.offsetWidth)
+  }
+  nbResizer.addEventListener('pointerup', nbEnd)
+  nbResizer.addEventListener('lostpointercapture', nbEnd)
+  nbResizer.addEventListener('dblclick', () => setNotebookWidth(null))
+  nbResizer.addEventListener('keydown', ev => {
+    const d = { ArrowLeft: -1, ArrowRight: 1 }[ev.key]
+    if (!d) return
+    ev.preventDefault()
+    setNotebookWidth(nbPane.offsetWidth + d * (ev.shiftKey ? 120 : 30))
+  })
+
+  // ---------------------------------------------------------------- a concept's artifact (web/artifacts.js)
+
+  // the page of a concept's results Claude writes (vault/artifacts/), shown in the drawer in a note's
+  // place when the concept is clicked: its name on a region or badge, its node in the concept view,
+  // the concept path in a note's header. A note link in it opens the note; the note's concept path
+  // brings the artifact back, where it was scrolled to.
+  const artView = document.getElementById('artifact-view')
+  const artFrame = document.getElementById('art-frame')
+  const artScroll = new Map() // concept → where its artifact was scrolled to
+  const themeNow = () => (document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
+  let imageKey = '' // the key the frame gets for its images, which writes nothing (image_key in server/rft_server.py)
+  async function deriveImageKey() {
+    const key = editKey()
+    if (!key || !window.crypto || !crypto.subtle) return
+    try {
+      const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${key}:images`))
+      imageKey = [...new Uint8Array(hash)].map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 32)
+    } catch (e) { imageKey = '' }
+  }
+
+  async function openArtifact(cid) {
+    if (!tree || !concepts.has(cid)) return
+    if (editing && !leaveEditor()) return
+    closeAdder(); closeMover(); closeRetyper(); closeComposer(); hideSelBar(); setHighlighting(false)
+    fnPop.hidden = true
+    selected = null
+    hideNotebook()
+    gNodes.selectAll('g.node').attr('class', n => nodeClass(n.data))
+    markCards()
+    artifactShown = cid
+    drawer.hidden = false
+    drawer.classList.add('artifact-mode')
+    mainEl.classList.add('artifact-open')
+    artView.hidden = false
+    if (view === 'concepts') drawConceptTree() // fitted again beside the drawer
+    if (!EMBED && !imageKey) await deriveImageKey()
+    if (artifactShown !== cid) return
+    renderArtifact()
+    if (view === 'tree') flashConcept(cid)
+  }
+
+  function leaveArtifact() {
+    const was = artifactShown
+    artifactShown = null
+    drawer.classList.remove('artifact-mode')
+    mainEl.classList.remove('artifact-open')
+    artView.hidden = true
+    if (was && view === 'concepts') drawConceptTree()
+  }
+
+  function closeArtifact() {
+    leaveArtifact()
+    drawer.hidden = true
+  }
+
+  /** How each note link in the artifact is marked: from the tree as it is now. */
+  function noteMarks() {
+    const out = {}
+    for (const n of tree.nodes) out[n.id] = A.decoration(byId, n.id)
+    return out
+  }
+
+  function tellFrame(extra = {}) {
+    const f = frames.get(artFrame)
+    // caps: what this page offers the frame's buttons (a PDF needs the libraries the server serves)
+    if (f && f.frame.contentWindow) f.frame.contentWindow.postMessage({ rft: 'tree', theme: themeNow(), notes: noteMarks(), caps: { pdf: !EMBED }, ...extra }, '*')
+  }
+
+  function answerFrame(msg) {
+    const f = frames.get(artFrame)
+    if (f && f.frame.contentWindow) f.frame.contentWindow.postMessage({ rft: 'tree', ...msg }, '*')
+  }
+
+  /** Copies text, for the frame's Copy LaTeX when the frame itself may not. */
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch (e) {
+      const area = document.createElement('textarea')
+      area.value = text
+      area.style.cssText = 'position:fixed;left:-10000px;top:0'
+      document.body.appendChild(area)
+      area.select()
+      let ok = false
+      try { ok = document.execCommand('copy') } catch (e2) { ok = false }
+      area.remove()
+      return ok
+    }
+  }
+
+  // an SVG figure as a vector PDF: jsPDF and svg2pdf.js (web/vendor, MIT), loaded the first time
+  const PDF_LIBS = ['vendor/jspdf.v4.2.1.umd.min.js', 'vendor/svg2pdf.v2.9.0.umd.min.js']
+  let pdfLibs = null
+  function loadPdfLibs() {
+    if (!pdfLibs) {
+      pdfLibs = PDF_LIBS.reduce((done, src) => done.then(() => new Promise((ok, fail) => {
+        const s = document.createElement('script')
+        s.src = src
+        s.onload = ok
+        s.onerror = () => fail(new Error(`could not load ${src}`))
+        document.head.appendChild(s)
+      })), Promise.resolve()).catch(err => { pdfLibs = null; throw err })
+    }
+    return pdfLibs
+  }
+
+  /** A length of an SVG's width or height in points (px, pt, in, cm, mm; a bare number is px), or null. */
+  function points(value) {
+    const m = /^\s*([\d.]+)\s*(px|pt|in|cm|mm)?\s*$/i.exec(value || '')
+    if (!m) return null
+    const k = { px: 0.75, pt: 1, in: 72, cm: 72 / 2.54, mm: 72 / 25.4 }[(m[2] || 'px').toLowerCase()]
+    return Number(m[1]) * k || null
+  }
+
+  /** Downloads an SVG (its source from the artifact's frame) as a PDF of its own size, named `name`.pdf. */
+  async function svgToPdf(text, name) {
+    await loadPdfLibs()
+    const parsed = new DOMParser().parseFromString(text, 'image/svg+xml')
+    const svg = parsed.documentElement
+    if (!svg || svg.nodeName.toLowerCase() !== 'svg' || parsed.querySelector('parsererror')) throw new Error('not an SVG')
+    // nothing of it runs here: no scripts, no foreign content, no handlers
+    for (const el of svg.querySelectorAll('script, foreignObject')) el.remove()
+    for (const el of [svg, ...svg.querySelectorAll('*')]) for (const a of [...el.attributes]) if (/^on/i.test(a.name)) el.removeAttribute(a.name)
+    const vb = (svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number)
+    const w = points(svg.getAttribute('width')) || (vb.length === 4 && vb[2] * 0.75) || 400
+    const h = points(svg.getAttribute('height')) || (vb.length === 4 && vb[3] * 0.75) || 300
+    const host = document.createElement('div')
+    host.style.cssText = 'position:fixed;left:-100000px;top:0;visibility:hidden'
+    const node = document.importNode(svg, true)
+    host.appendChild(node)
+    document.body.appendChild(host)
+    try {
+      const pdf = new window.jspdf.jsPDF({ unit: 'pt', format: [w, h], orientation: w > h ? 'landscape' : 'portrait' })
+      if (typeof pdf.svg === 'function') await pdf.svg(node, { x: 0, y: 0, width: w, height: h })
+      else await window.svg2pdf.svg2pdf(node, pdf, { x: 0, y: 0, width: w, height: h })
+      pdf.save(`${String(name || 'figure').replace(/[^\w.-]+/g, '-') || 'figure'}.pdf`)
+    } finally {
+      host.remove()
+    }
+  }
+
+  function renderArtifact() {
+    const cid = artifactShown
+    const e = cid ? A.entry(tree, cid) : null
+    if (!e) { closeArtifact(); return }
+    const c = concepts.get(cid)
+    renderConceptPath(document.getElementById('art-path'), cid, "Open this concept's artifact", openArtifact)
+    document.getElementById('art-title').textContent = c.name
+    const summary = document.getElementById('art-summary')
+    summary.textContent = c.summary || ''
+    summary.hidden = !c.summary
+    const state = document.getElementById('art-state')
+    state.textContent = A.stateText(e, tree)
+    state.className = `art-state ${e.state}`
+    const subs = document.getElementById('art-subs')
+    const list = A.subConcepts(tree, cid)
+    subs.replaceChildren()
+    subs.hidden = !list.length
+    if (list.length) subs.append('Sub-concepts: ')
+    list.forEach((s, i) => {
+      if (i) subs.append(' · ')
+      const a = document.createElement('a')
+      a.className = `art-sub ${s.state}`
+      a.textContent = s.name
+      a.title = `${s.name}: ${A.stateText(A.entry(tree, s.id), tree)}`
+      const colour = C.colourOf(concepts, s.id)
+      if (colour) a.style.color = colour
+      a.addEventListener('click', ev => { ev.preventDefault(); openArtifact(s.id) })
+      subs.appendChild(a)
+    })
+    document.getElementById('art-focus').title = cid === C.ROOT ? 'Show the whole tree' : "Focus: show only this concept's subtree"
+    const html = EMBED ? EMBED.artifacts && EMBED.artifacts[cid] : null
+    if (!e.artifact || (EMBED && html == null)) { closeFrame(artFrame); artFrame.hidden = true; return }
+    artFrame.hidden = false
+    const version = `${cid}:${e.artifact.version}`
+    const kept = frames.get(artFrame)
+    const same = kept && kept.version === version
+    const title = `The artifact of ${c.name}`
+    if (EMBED) openFrame(artFrame, null, { srcdoc: A.wrap(html, EMBED.frame || {}, themeNow()), sandbox: 'allow-scripts allow-popups', allow: 'clipboard-write', version, onMessage: onArtifactMessage, title })
+    else openFrame(artFrame, A.frameSrc(cid, { theme: themeNow(), token: imageKey, y: artScroll.get(cid) || 0 }), { sandbox: 'allow-scripts allow-popups allow-popups-to-escape-sandbox', allow: 'clipboard-write', version, onMessage: onArtifactMessage, title })
+    // the frame kept: its note links marked again, from the tree as it is now, and scrolled back to
+    // where it was (hidden while a note was shown, it lost its place)
+    if (same) tellFrame({ y: artScroll.get(cid) || 0 })
+  }
+
+  function onArtifactMessage(d) {
+    if (d.rft !== 'artifact' || !artifactShown) return
+    if (d.type === 'ready') tellFrame(EMBED ? { y: artScroll.get(artifactShown) || 0 } : {})
+    else if (d.type === 'scroll' && typeof d.y === 'number') artScroll.set(artifactShown, d.y)
+    else if (d.type === 'go' && typeof d.id === 'string' && byId.has(d.id)) { if (view === 'concepts') select(d.id); else go(d.id) }
+    else if (d.type === 'copy' && typeof d.text === 'string') copyText(d.text).then(ok => answerFrame({ ticket: d.ticket, ok }))
+    else if (d.type === 'pdf' && typeof d.svg === 'string' && !EMBED) {
+      svgToPdf(d.svg, d.name).then(() => answerFrame({ ticket: d.ticket, ok: true }), err => { console.warn('rft: PDF', err); answerFrame({ ticket: d.ticket, ok: false }) })
+    }
+  }
+
+  // the theme switched: the artifact follows, without loading again
+  new MutationObserver(() => { if (artifactShown) tellFrame() }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+  document.getElementById('art-close').addEventListener('click', closeArtifact)
+  document.getElementById('art-tree').addEventListener('click', () => { if (artifactShown) openConcept(artifactShown) })
+  document.getElementById('art-focus').addEventListener('click', () => { if (artifactShown) setFocus(artifactShown === C.ROOT ? null : artifactShown) })
+
   document.getElementById('cmode').addEventListener('click', () => setMode(following(CMODES, conceptMode)))
   document.querySelectorAll('[data-show]').forEach(t => t.addEventListener('click', () => setView(t.dataset.show)))
 
@@ -1675,7 +2149,7 @@
   // date; the priority is the user's alone, set here or in the drawer, and the answer to Claude's
   // suggested one
   const kbCols = document.getElementById('kb-cols')
-  const COLUMN_LABEL = { ...LABEL, other: 'another status' }
+  const COLUMN_LABEL = { ...LABEL, review: 'review', other: 'another status' }
   const PRIORITY_LABEL = { urgent: 'Urgent', high: 'High', medium: 'Medium', low: 'Low' }
 
   /** A priority menu in `box` the user is in (focused, not waiting for its write), or null. */
@@ -1888,6 +2362,105 @@
    * follows once the note is written. Changes made in a row each go through (the server writes
    * them one at a time).
    */
+  // ---------------------------------------------------------------- verification
+
+  /**
+   * Why a note should not be verified yet, as hooks/lib/verify.ts verifyBlockers says it (the
+   * user may verify it anyway, after a warning); none when it can be.
+   */
+  function verifyWarnings(n) {
+    const out = []
+    if (n.supersededBy) out.push(`it is superseded by ${n.supersededBy}`)
+    if (n.type === 'experiment' && n.notebook && (!n.reproduced || n.reproduced.state !== 'ok')) {
+      out.push(n.reproduced ? `its notebook's last run ${n.reproduced.state === 'unchecked' ? 'checked nothing' : n.reproduced.state} (${n.reproduced.date})` : 'its notebook has not run')
+    }
+    if (n.type === 'direction') {
+      const under = id => (byId.get(id)?.children || []).some(k => byId.get(k)?.status === 'verified' || under(k))
+      if (!under(n.id)) out.push('no verified note under it confirms it')
+    }
+    return out
+  }
+
+  /**
+   * The drawer's verification row: a verified note's stamp and Back to review; Verify on a note that
+   * is done or in review; Claude's suggestion to verify, with Accept and Dismiss. Only the user
+   * verifies, and verifying locks the note.
+   */
+  function renderDrawerVerify(n) {
+    const box = document.getElementById('drawer-verify')
+    box.replaceChildren()
+    const can = n && ['done', 'review', 'verified'].includes(n.status)
+    box.hidden = !can && !(n && n.suggestedVerified)
+    if (box.hidden) return
+    const button = (text, title, action) => {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.textContent = text
+      b.title = title
+      b.disabled = Boolean(EMBED)
+      b.addEventListener('click', () => verify(n, action, b))
+      return b
+    }
+    const state = document.createElement('span')
+    state.className = `verify-state s-${n.status}`
+    if (n.status === 'verified') {
+      state.textContent = `✔ Verified${n.verified ? ` on ${n.verified.date}` : ''}`
+      state.title = 'You checked what this note claims; it is locked, so Claude only suggests changes to it. A change to its claim sends it back to review.'
+      box.append(state, button('Back to review', 'Its claim may no longer hold: review it again (this unlocks it)', 'review'))
+    } else if (n.status === 'review') {
+      state.textContent = `↺ In review${n.verified ? `, verified on ${n.verified.date}` : ''}`
+      state.title = 'It was verified, and its claim changed since or was overturned: check it again, then verify it, or give it another status'
+      box.append(state)
+      if (!n.suggestedVerified) box.append(button('Verify', 'You checked its claim again: verify it, which locks it', 'verify'))
+    } else if (can && !n.suggestedVerified) {
+      box.append(button('Verify', 'You checked what this note claims: verify it, which locks it. Only verified notes go into the manuscript.', 'verify'))
+    }
+    if (n.suggestedVerified && n.status !== 'verified') {
+      const s = document.createElement('div')
+      s.className = 'suggest'
+      s.innerHTML = `<span>Claude suggests <b>verifying it</b>: <span class="suggest-why">${escH(n.suggestedVerified)}</span></span>`
+      s.title = n.suggestedVerified
+      if (!EMBED) {
+        const bar = document.createElement('span')
+        bar.className = 'suggest-bar'
+        if (can) bar.append(button('Accept', 'Verify it, which locks it', 'verify'))
+        bar.append(button('Dismiss', 'Drop the suggestion', 'dismiss'))
+        s.appendChild(bar)
+      }
+      box.appendChild(s)
+    }
+  }
+
+  /** Verifies a note, dismisses Claude's suggestion to, or sends it back to review: done by the session that ran /rft. */
+  async function verify(n, action, control) {
+    if (EMBED) return
+    if (!editKey()) {
+      notify('To verify notes, open the address /rft printed (it ends in ?token=…) once: this browser then remembers its key.')
+      return
+    }
+    if (action === 'verify') {
+      const warn = verifyWarnings(n)
+      if (warn.length && !confirm(`${n.id} may not be ready to verify: ${warn.join('; ')}.\n\nVerify it anyway?`)) return
+    }
+    if (control) control.disabled = true
+    try {
+      const res = await fetch('api/verify', {
+        method: 'POST',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'X-RFT-Token': editKey() },
+        body: JSON.stringify({ id: n.id, action }),
+      })
+      const reply = await res.json().catch(() => ({}))
+      if (!res.ok) notify(`${action === 'dismiss' ? 'Not dismissed' : action === 'review' ? 'Not sent to review' : 'Not verified'}: ${reply.error || `the server answered ${res.status}`}`)
+    } catch (e) {
+      notify('The server is not answering.')
+    } finally {
+      await poll()
+      if (selected && byId.has(selected)) renderDrawerVerify(byId.get(selected))
+      if (control) control.disabled = false
+    }
+  }
+
   async function setPriority(id, priority, control, dismiss = false) {
     if (EMBED) return
     const redraw = () => { drawKanban(); if (selected && byId.has(selected)) renderDrawerPriority(byId.get(selected)) }
@@ -2791,11 +3364,39 @@
   const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s)
   const who = by => (by === 'claude' ? 'Claude' : 'You')
   const STATE = { resolved: 'Resolved', accepted: 'Accepted', rejected: 'Rejected', applied: 'Applied by Claude' }
+  const TIP = {
+    ask: 'Ask Claude to answer this thread (with your reply, if you wrote one), in the background: the answer comes into the thread',
+    accept: 'Write the new text into the note',
+    reject: 'Reject the suggestion: it goes to the history',
+    resolve: 'Settled: it goes to the history',
+  }
+  /** Why a suggestion's new text cannot be written into the note, or '' when it can. */
+  const cantAccept = t => (t.replacement == null ? 'There is no new text to write yet' : !t.exact ? 'The text changed since the suggestion' : '')
+  // the margin cards' buttons, drawn as the drawer's other icons are (.ico)
+  const ICON = {
+    reply: '<path d="M9.5 14.5L4.5 9.5l5-5"/><path d="M4.5 9.5H14a5.5 5.5 0 0 1 5.5 5.5v4"/>',
+    ask: '<path d="M10.5 3c.6 4.4 2.5 6.3 6.9 6.9-4.4.6-6.3 2.5-6.9 6.9-.6-4.4-2.5-6.3-6.9-6.9 4.4-.6 6.3-2.5 6.9-6.9z"/><path d="M18.5 15v5.5M15.75 17.75h5.5"/>',
+    accept: '<path d="M4.5 12.5l4.8 4.8L19.5 7"/>',
+    reject: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
+    resolve: '<circle cx="12" cy="12" r="8.5"/><path d="M8.2 12.4l2.7 2.7 5-5.6"/>',
+  }
+  const iconBtn = (act, label, tip, cls, off = false) =>
+    `<button type="button" class="s-btn ${cls}" data-act="${act}" aria-label="${label}" title="${escH(tip)}"${off ? ' disabled' : ''}><svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ICON[act]}</svg></button>`
+  /** An open thread's buttons, as icons, on its card in the margin and under the note: reply, ask Claude, then accept and reject a suggestion, or resolve a comment. */
+  function threadButtons(t, replyTip) {
+    const no = cantAccept(t)
+    return iconBtn('reply', 'Reply', replyTip, 'neutral') +
+      iconBtn('ask', t.asked ? 'Ask Claude again' : 'Ask Claude', t.asked ? `Again: ${TIP.ask}` : TIP.ask, 'ask') +
+      (t.kind === 'suggestion'
+        ? iconBtn('accept', 'Accept', no || TIP.accept, 'ok', Boolean(no)) + iconBtn('reject', 'Reject', TIP.reject, 'no')
+        : iconBtn('resolve', 'Resolve', TIP.resolve, 'ok'))
+  }
   const sameNote = (a, b) => a && b && a.id === b.id && a.body === b.body && a.locked === b.locked && JSON.stringify(a.threads) === JSON.stringify(b.threads)
 
   /** The note in the drawer, drawn: its text, its open threads marked, its footnotes in the margin, its threads below. */
   function showNote() {
     const top = shownFor === (shown && shown.id) ? drawer.scrollTop : 0
+    const typing = shownFor === (shown && shown.id) ? marginFocus() : null
     hideSelBar()
     fnPop.hidden = true
     if (!shown) {
@@ -2814,6 +3415,7 @@
     showLock()
     shownFor = shown.id
     drawer.scrollTop = top
+    refocusMargin(typing)
   }
 
   // ------------------------------------------------ where the page is in the note's text
@@ -2952,22 +3554,48 @@
   const MARGIN_GAP = 18
   let wideMargin = false // whether the margin column shows the footnotes' texts and the threads' cards
 
-  /** A card in the margin for an open thread: its kind, a suggestion's new text, its last message, cut short. */
+  /**
+   * A card in the margin for an open thread: its kind, a suggestion's new text, its last message,
+   * cut short; and, where the note can be written, a box for a short reply and the thread's
+   * buttons as icons (reply, ask Claude, then accept and reject a suggestion, or resolve a comment).
+   */
   function sideCard(t) {
     const msgs = t.messages || []
     const last = msgs[msgs.length - 1]
     const replies = Math.max(0, msgs.length - 1)
     const kind = t.kind === 'comment' ? 'Comment' : t.replacement == null ? 'Suggestion · in words' : 'Suggestion'
+    const err = threadErrors.get(draftKey(t.id))
     const el = document.createElement('div')
     el.className = `side side-t ${t.kind}`
     el.dataset.thread = t.id
     el.title = 'Open the thread'
+    let acts = ''
+    if (!EMBED) {
+      acts = `<div class="s-act" title=""><input type="text" class="s-reply" placeholder="Reply" aria-label="A short reply" title="A short reply: Enter posts it, Esc leaves it">` +
+        threadButtons(t, 'Reply (Enter)') + '</div>'
+    }
     el.innerHTML = `<div class="s-head"><b>${kind}</b>${replies ? ` · ${replies} ${replies > 1 ? 'replies' : 'reply'}` : ''}${t.exact ? '' : ' · the text changed'}</div>` +
       (t.kind === 'suggestion' && t.replacement != null
         ? `<div class="s-repl">${t.replacement ? escH(clip(t.replacement, 240)) : '<em>(delete the text)</em>'}</div>` : '') +
       (last ? `<div class="s-msg"><span class="s-who">${who(last.by)}:</span> ${mdm.inline(clip(String(last.text || '').replace(/\s+/g, ' ').trim(), 320))}</div>` : '') +
-      (t.asked ? '<div class="s-asked">Claude is answering…</div>' : '')
+      (t.asked ? '<div class="s-asked">Claude is answering…</div>' : '') +
+      (err ? `<div class="s-error">${escH(err)}</div>` : '') + acts
+    const box = el.querySelector('.s-reply')
+    if (box) box.value = drafts.get(draftKey(t.id)) || ''
     return el
+  }
+
+  /** The margin's reply box being typed in, to give it back its focus once the margin is drawn again. */
+  function marginFocus() {
+    const f = document.activeElement
+    if (!f || !f.classList || !f.classList.contains('s-reply') || !article.contains(f)) return null
+    return { tid: f.closest('.side-t').dataset.thread, start: f.selectionStart, end: f.selectionEnd }
+  }
+  function refocusMargin(keep) {
+    const box = keep && article.querySelector(`.side-t[data-thread="${CSS.escape(keep.tid)}"] .s-reply`)
+    if (!box || document.activeElement === box) return
+    box.focus({ preventScroll: true })
+    box.setSelectionRange(keep.start, keep.end)
   }
 
   /**
@@ -2979,6 +3607,7 @@
   function layoutSidenotes() {
     const layer = article.querySelector(':scope > .sidenotes')
     if (!layer || article.hidden) return
+    const typing = marginFocus()
     layer.textContent = ''
     const sups = [...article.querySelectorAll('.src sup.fn-ref')]
     const open = shown ? shown.threads.filter(t => t.state === 'open' && t.at) : []
@@ -3031,6 +3660,7 @@
     }
     // the column may run on below the text: the threads under it stay clear of it
     if (wideMargin && below > 0) article.style.minHeight = `${Math.ceil(below)}px`
+    refocusMargin(typing)
   }
   let layoutQueued = false
   new ResizeObserver(() => {
@@ -3332,11 +3962,8 @@
     const err = threadErrors.get(draftKey(t.id))
     let bar = ''
     if (can && isOpen) {
-      const accept = t.kind === 'suggestion'
-        ? `<button type="button" data-act="accept" class="primary"${t.replacement == null || !t.exact ? ' disabled' : ''} title="${t.replacement == null ? 'There is no new text to write yet' : !t.exact ? 'The text changed since the suggestion' : 'Write the new text into the note'}">Accept</button><button type="button" data-act="reject">Reject</button>`
-        : '<button type="button" data-act="resolve" title="Settled: it goes to the history">Resolve</button>'
       bar = `<textarea rows="2" placeholder="Reply" aria-label="Reply"></textarea>
-        <div class="t-bar"><button type="button" data-act="reply" title="Ctrl+Enter">Reply</button><button type="button" data-act="ask" title="Ask Claude to answer this thread (with your reply, if you wrote one), in the background: the answer comes into the thread">${t.asked ? 'Ask again' : 'Ask Claude'}</button>${accept}</div>`
+        <div class="t-bar">${threadButtons(t, 'Reply (Ctrl+Enter)')}</div>`
     } else if (can) bar = '<div class="t-bar"><button type="button" data-act="reopen">Reopen</button></div>'
     return `<div class="thread ${t.kind} ${escH(t.state)}" data-thread="${escH(t.id)}">
       <div class="t-head"><span><span class="t-kind">${kind}</span> <span class="muted">${state}</span></span>${isOpen && t.at ? '<button type="button" class="linkish" data-act="show" title="Show it in the text">show</button>' : ''}</div>
@@ -3393,37 +4020,57 @@
     const r = await send({ id, thread: tid, action, ...extra })
     if (!r.ok) {
       threadErrors.set(`${id} ${tid}`, `Not done: ${r.error}.`)
-      if (shown && shown.id === id) renderThreads()
+      if (shown && shown.id === id) { renderThreads(); layoutSidenotes() }
     }
     return r
   }
 
-  threadsBox.addEventListener('click', async ev => {
-    const link = ev.target.closest('a[data-go]')
-    if (link) { ev.preventDefault(); go(link.dataset.go); return }
-    const b = ev.target.closest('button[data-act]')
-    if (!b || !shown) return
-    const tid = b.closest('.thread').dataset.thread
-    const what = b.dataset.act
+  /**
+   * A thread's button, under the note or on its card in the margin: Reply and Ask post the reply
+   * written in `box` first, when there is one. The draft goes before the request, so the redraw
+   * that follows a posted reply does not write it back, and returns when the reply is refused.
+   */
+  async function threadAction(tid, what, box, b) {
     if (what === 'show') { showMark(tid); return }
     if (!editKey()) { noKey.hidden = false; return }
     const id = shown.id
-    const box = b.closest('.thread').querySelector('textarea')
     const text = box ? box.value.trim() : ''
-    if (what === 'reply' && !text) { box.focus(); return }
+    if (what === 'reply' && !text) { if (box) box.focus(); return }
     // no native confirm (the desktop's browser pane refuses dialogs): a second press within a few seconds
     if (what === 'accept' && !pressedTwice(b, 'Write it?')) return
     b.disabled = true
     if ((what === 'reply' || what === 'ask') && text) {
+      const key = `${id} ${tid}`
+      const draft = drafts.get(key)
+      drafts.delete(key)
       const r = await act(id, tid, 'reply', { text })
-      if (!r.ok) return
-      drafts.delete(`${id} ${tid}`)
-      if (box) box.value = ''
+      if (!r.ok) {
+        if (draft != null) { drafts.set(key, draft); if (shown && shown.id === id) { renderThreads(); layoutSidenotes() } }
+        return
+      }
     }
     if (what !== 'reply') await act(id, tid, what)
+  }
+
+  /** A reply being written, in the box under the note or on the card in the margin: the other box shows it too. */
+  function setDraft(tid, value, from) {
+    drafts.set(draftKey(tid), value)
+    const q = CSS.escape(tid)
+    for (const box of [threadsBox.querySelector(`.thread[data-thread="${q}"] textarea`), article.querySelector(`.side-t[data-thread="${q}"] .s-reply`)]) {
+      if (box && box !== from) box.value = value
+    }
+  }
+
+  threadsBox.addEventListener('click', ev => {
+    const link = ev.target.closest('a[data-go]')
+    if (link) { ev.preventDefault(); go(link.dataset.go); return }
+    const b = ev.target.closest('button[data-act]')
+    if (!b || !shown) return
+    const t = b.closest('.thread')
+    threadAction(t.dataset.thread, b.dataset.act, t.querySelector('textarea'), b)
   })
   threadsBox.addEventListener('input', ev => {
-    if (ev.target.tagName === 'TEXTAREA') drafts.set(draftKey(ev.target.closest('.thread').dataset.thread), ev.target.value)
+    if (ev.target.tagName === 'TEXTAREA') setDraft(ev.target.closest('.thread').dataset.thread, ev.target.value, ev.target)
   })
   threadsBox.addEventListener('keydown', ev => {
     if (ev.target.tagName !== 'TEXTAREA' || ev.key !== 'Enter' || !(ev.ctrlKey || ev.metaKey)) return
@@ -3441,8 +4088,26 @@
     if (tid !== hovered) { hovered = tid; setActive(tid) }
   })
   article.addEventListener('mouseleave', () => { if (hovered) { hovered = null; setActive(null) } })
+  // the short reply on a card in the margin: Enter posts it, Esc leaves the box with the draft kept
+  const isMarginReply = el => Boolean(el.classList && el.classList.contains('s-reply'))
+  article.addEventListener('input', ev => {
+    if (isMarginReply(ev.target)) setDraft(ev.target.closest('.side-t').dataset.thread, ev.target.value, ev.target)
+  })
+  article.addEventListener('keydown', ev => {
+    if (!isMarginReply(ev.target)) return
+    if (ev.key === 'Enter' && !ev.isComposing) { ev.preventDefault(); ev.target.closest('.side-t').querySelector('button[data-act="reply"]').click() }
+    else if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); ev.target.blur() }
+  })
   article.addEventListener('click', ev => {
     if (ev.target.closest('a[data-go]')) return
+    // a card's buttons in the margin act on its thread; a click in its reply box only types there
+    const sb = ev.target.closest('.side-t button[data-act]')
+    if (sb) {
+      const c = sb.closest('.side-t')
+      if (shown) threadAction(c.dataset.thread, sb.dataset.act, c.querySelector('.s-reply'), sb)
+      return
+    }
+    if (ev.target.closest('.side-t .s-act')) return
     const hlMark = highlighting && ev.target.closest('.src mark.hl')
     if (hlMark) {
       const sel = window.getSelection()
@@ -3529,11 +4194,37 @@
 
   function first() {
     if (TOKEN) store.set('key', TOKEN)
+    // the scratchpad lives on the server: the standalone page has none, and a server started
+    // before it existed serves neither its script nor api/scratchpad
+    if (!EMBED && window.RftScratchpad) window.RftScratchpad.mount({ key: editKey, store, every: POLL_MS })
+    // the experiment queue's monitor: only on the server too (the standalone page leaves its script out)
+    if (!EMBED && window.RftQueue) {
+      window.RftQueue.mount({
+        key: editKey, store,
+        open: id => { if (byId.has(id)) select(id) },
+        title: id => (byId.get(id) || {}).title || '',
+      })
+    }
+    // the manuscript's tab: only on the server (the standalone page leaves its script out)
+    if (!EMBED && window.RftManuscript) {
+      manuscriptView = window.RftManuscript.mount({
+        key: editKey, store, notify,
+        open: id => { if (byId.has(id)) select(id) },
+        nodes: () => byId,
+        visible: () => view === 'manuscript',
+        changed: () => { if (selected && byId.has(selected)) renderWritten(byId.get(selected)) },
+      })
+    } else {
+      document.getElementById('show-manuscript').hidden = true
+      if (view === 'manuscript') view = 'tree'
+    }
     render(false)
     hasView = true
     requestAnimationFrame(() => initialView())
     setView(view)
     if (selected && byId.has(selected)) select(selected)
+    if (pendingArtifact && concepts.has(pendingArtifact)) openArtifact(pendingArtifact)
+    pendingArtifact = null
   }
 
   const live = document.getElementById('live')
@@ -3551,6 +4242,7 @@
         if (!hasView) first()
         else { render(true); if (view === 'concepts') drawConceptTree(); drawKanban(); drawCalendar() }
         if (selected && byId.has(selected)) select(selected)
+        if (artifactShown) renderArtifact()
       }
     } catch (e) {
       live.className = 'live off'

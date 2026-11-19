@@ -7,7 +7,8 @@
 // A locked note (`locked: true`) is the user's: Claude only suggests changes to it.
 
 import type { Io, Loaded, RftNode } from './vault'
-import { bodyOf, front, join, resolveId, unquote } from './vault'
+import { bodyOf, compareNames, front, join, resolveId, unquote } from './vault'
+import { documentRel, isDocumentLocked, isDocumentName, isSnippetId, isSnippetLocked, readDocsRegistry, readRegistry, readSnippet } from './snippets'
 
 export const COMMENTS_DIR = '.comments'
 /** The characters kept on each side of a quote, to find it again. */
@@ -40,12 +41,12 @@ export const commentsPath = (vault: string, id: string) => join(vault, COMMENTS_
 export const isLocked = (text: string) => ['true', 'yes'].includes(unquote(front(text).locked).toLowerCase())
 
 /**
- * A change that writes a line into a locked note's History (a move, a supersede mark): made only
+ * A change that writes a line into a locked note's History (a move, a supersede mark, review): made only
  * unlocked, once the user agrees; thrown, before anything is written, while they have not.
  */
 export class LockedChange extends Error {
-  constructor(readonly node: { id: string; name: string }, readonly change: 'move' | 'supersede') {
-    super(`${node.name} is locked: to ${change === 'move' ? 'move it' : 'mark it as superseded'}, the user must agree to unlock it`)
+  constructor(readonly node: { id: string; name: string }, readonly change: 'move' | 'supersede' | 'review') {
+    super(`${node.name} is locked: to ${change === 'move' ? 'move it' : change === 'supersede' ? 'mark it as superseded' : 'set it to review'}, the user must agree to unlock it`)
   }
 }
 
@@ -143,6 +144,33 @@ const noteOf = (loaded: Loaded, ref: string): RftNode => {
   return loaded.tree.nodes[id]!
 }
 
+/**
+ * What a discussion is about: a note of the tree, a snippet (S..), or a document (by its name): its
+ * text, whether it is the user's alone (a locked note; a locked snippet or document), and its file
+ * (relative to the vault).
+ */
+export type Subject = { id: string; name: string; text: string; locked: boolean; path: string; what: 'note' | 'snippet' | 'document' }
+
+export async function subjectOf(io: Io, loaded: Loaded, ref: string): Promise<Subject> {
+  const vault = loaded.config.vault
+  if (isSnippetId(ref)) {
+    const id = ref.trim().toUpperCase()
+    const s = await readSnippet(io, vault, id)
+    if (!s) throw new CommentError(`"${ref}" is no snippet`)
+    const r = await readRegistry(io, vault)
+    return { id, name: `${id}${s.title ? ` ${s.title}` : ''}`, text: s.text, locked: isSnippetLocked(r, id), path: s.path, what: 'snippet' }
+  }
+  const doc = ref.trim()
+  if (isDocumentName(doc) && !resolveId(loaded.tree, doc)) {
+    let text: string
+    try { text = (await io.read(join(vault, documentRel(doc)))).replace(/\r\n/g, '\n') } catch { throw new CommentError(`"${ref}" is no note, snippet or document`) }
+    return { id: doc, name: `the document ${doc}`, text, locked: isDocumentLocked(await readDocsRegistry(io, vault), doc), path: documentRel(doc), what: 'document' }
+  }
+  const n = noteOf(loaded, ref)
+  const text = loaded.texts[n.id] ?? ''
+  return { id: n.id, name: n.name, text, locked: isLocked(text), path: n.path, what: 'note' }
+}
+
 const textArg = (v: unknown, what: string): string => {
   const t = typeof v === 'string' ? v.trim() : ''
   if (t.length > MAX_TEXT) throw new CommentError(`${what} holds at most ${MAX_TEXT} characters`)
@@ -183,13 +211,13 @@ function threadText(body: string, t: Thread, full: boolean): string {
 export async function commentsReport(io: Io, loaded: Loaded, ref?: string): Promise<string> {
   const vault = loaded.config.vault
   if (ref) {
-    const n = noteOf(loaded, ref)
+    const n = await subjectOf(io, loaded, ref)
     const c = await readComments(io, vault, n.id)
     if (!c.threads.length) return `${n.name}: no comments or suggestions.`
-    const body = bodyOf(loaded.texts[n.id] ?? '')
+    const body = bodyOf(n.text)
     const open = c.threads.filter(t => t.state === 'open')
     const closed = c.threads.filter(t => t.state !== 'open')
-    const out = [`${n.name}${isLocked(loaded.texts[n.id] ?? '') ? ' (locked: suggest changes, never edit it)' : ''}: ${open.length} open, ${closed.length} closed.`]
+    const out = [`${n.name}${n.locked ? ' (locked: suggest changes, never edit it)' : ''}: ${open.length} open, ${closed.length} closed.`]
     for (const t of open) out.push('', threadText(body, t, true))
     if (closed.length) out.push('', 'History:', ...closed.map(t => threadText(body, t, false)))
     return out.join('\n')
@@ -199,6 +227,14 @@ export async function commentsReport(io: Io, loaded: Loaded, ref?: string): Prom
     const open = (await readComments(io, vault, n.id)).threads.filter(t => t.state === 'open')
     if (open.length) rows.push(`- ${n.name}: ${open.map(t => `${t.id} ${t.kind}${t.asked ? ' (asked)' : ''}`).join(', ')}`)
   }
+  // the manuscript's snippets
+  const files = await io.list(join(vault, COMMENTS_DIR)).catch(() => [])
+  for (const f of files.filter(f => f.name.endsWith('.json') && !resolveId(loaded.tree, f.name.slice(0, -5))).sort((a, b) => compareNames(a.name, b.name))) {
+    const id = f.name.slice(0, -5)
+    if (!isSnippetId(id) && !isDocumentName(id)) continue
+    const open = (await readComments(io, vault, id)).threads.filter(t => t.state === 'open')
+    if (open.length) rows.push(`- ${id} (${isSnippetId(id) ? 'snippet' : 'document'}): ${open.map(t => `${t.id} ${t.kind}${t.asked ? ' (asked)' : ''}`).join(', ')}`)
+  }
   return rows.length ? `Notes with open threads (rft_comments with an id shows them):\n${rows.join('\n')}` : 'No open comments or suggestions in the tree.'
 }
 
@@ -207,16 +243,16 @@ export async function commentsReport(io: Io, loaded: Loaded, ref?: string): Prom
  * itself, which closes the thread), or a new comment thread on `quote`.
  */
 export async function comment(io: Io, loaded: Loaded, i: { id: string; thread?: string; quote?: string; text?: unknown; applied?: boolean }, now = stamp()): Promise<string> {
-  const n = noteOf(loaded, i.id)
+  const n = await subjectOf(io, loaded, i.id)
   const vault = loaded.config.vault
   const c = await readComments(io, vault, n.id)
   const text = textArg(i.text, 'text')
-  const body = bodyOf(loaded.texts[n.id] ?? '')
+  const body = bodyOf(n.text)
   if (i.thread) {
     const t = findThread(c, n.id, i.thread)
     if (i.applied) {
       if (t.kind !== 'suggestion') throw new CommentError(`${n.id} ${t.id} is a comment: reply to it, or apply nothing`)
-      if (isLocked(loaded.texts[n.id] ?? '')) throw new CommentError(`${n.name} is locked: you cannot apply a change to it; write the replacement with rft_suggest {id, thread, replacement}, and the user accepts it`)
+      if (n.locked) throw new CommentError(`${n.name} is locked: you cannot apply a change to it; write the replacement with rft_suggest {id, thread, replacement}, and the user accepts it`)
     } else if (!text) throw new CommentError('text is empty: write the reply')
     if (text) t.messages.push({ by: 'claude', at: now, text })
     t.asked = null
@@ -239,14 +275,14 @@ export async function comment(io: Io, loaded: Loaded, i: { id: string; thread?: 
  * suggestion replacing `quote`. The user accepts or rejects it in the tree view.
  */
 export async function suggest(io: Io, loaded: Loaded, i: { id: string; thread?: string; quote?: string; replacement?: unknown; text?: unknown }, now = stamp()): Promise<string> {
-  const n = noteOf(loaded, i.id)
+  const n = await subjectOf(io, loaded, i.id)
   const vault = loaded.config.vault
   const c = await readComments(io, vault, n.id)
   if (typeof i.replacement !== 'string') throw new CommentError('replacement is missing: the new text, in markdown, for the quoted text')
   const replacement = i.replacement.replace(/\r\n/g, '\n')
   if (replacement.length > MAX_TEXT) throw new CommentError(`replacement holds at most ${MAX_TEXT} characters`)
   const text = textArg(i.text, 'text')
-  const body = bodyOf(loaded.texts[n.id] ?? '')
+  const body = bodyOf(n.text)
   if (i.thread) {
     const t = findThread(c, n.id, i.thread)
     if (t.kind !== 'suggestion') throw new CommentError(`${n.id} ${t.id} is a comment: propose the change as a new suggestion, with its quote`)
@@ -269,21 +305,25 @@ export async function suggest(io: Io, loaded: Loaded, i: { id: string; thread?: 
 }
 
 /** The prompt that asks Claude to answer one thread, as the user did from the tree view. `path`: the note's file as the session sees it. */
-export function askText(loaded: Loaded, c: Comments, id: string, thread: string, path: string): string {
-  const n = loaded.tree.nodes[id]
+export function askText(n: Subject, c: Comments, thread: string, path: string): string {
+  const id = n.id
   const t = c.threads.find(x => x.id === thread)
-  if (!n || !t) throw new CommentError(`${id} has no thread ${thread}`)
-  const locked = isLocked(loaded.texts[id] ?? '')
+  if (!t) throw new CommentError(`${id} has no thread ${thread}`)
+  const locked = n.locked
   const ref = `{id: "${id}", thread: "${t.id}"`
+  const what = n.what
+  const reads = n.what === 'snippet' ? `the snippet, and the notes it rests on (rft_manuscript ${id})`
+    : n.what === 'document' ? `the document, and the snippets its copies come from (rft_manuscript ${id})`
+      : 'the note, and its code, results or references when the question is about them'
   const todo = t.kind === 'comment'
-    ? `It is a comment: a discussion of this part of the note before any edit. Read what it needs (the note, and its code, results or references when the question is about them), then reply with rft_comment ${ref}, text}. Do not edit the note. When a change looks right, say so in the reply, or propose it with rft_suggest {id: "${id}", quote, replacement}.`
+    ? `It is a comment: a discussion of this part of the ${what} before any edit. Read what it needs (${reads}), then reply with rft_comment ${ref}, text}. Do not edit the ${what}. When a change looks right, say so in the reply, or propose it with rft_suggest {id: "${id}", quote, replacement}.`
     : locked
-      ? `${id} is locked: do not edit it. Write the new text for the quoted part with rft_suggest ${ref}, replacement, text: why}; the user accepts or rejects it in the tree view. A change needed elsewhere in the note is one more rft_suggest {id: "${id}", quote, replacement}. When the suggestion is unclear or looks wrong, reply with rft_comment ${ref}, text} instead.`
-      : `Make the change in the note yourself: edit the quoted part as ${t.replacement == null ? 'the instruction says' : 'the replacement has it (adapting it only where the note needs it)'}, and only what that needs. Then close the thread with rft_comment ${ref}, applied: true, text: what you changed}. When the suggestion is unclear or looks wrong, reply with rft_comment ${ref}, text} instead and leave the note as it is.`
+      ? `${id} is locked: do not edit it. Write the new text for the quoted part with rft_suggest ${ref}, replacement, text: why}; the user accepts or rejects it in the tree view. A change needed elsewhere in the ${what} is one more rft_suggest {id: "${id}", quote, replacement}. When the suggestion is unclear or looks wrong, reply with rft_comment ${ref}, text} instead.`
+      : `Make the change in the ${what} yourself${n.what === 'snippet' ? ` (rft_set_snippet {id: "${id}", edits})` : ''}: edit the quoted part as ${t.replacement == null ? 'the instruction says' : `the replacement has it (adapting it only where the ${what} needs it)`}, and only what that needs. Then close the thread with rft_comment ${ref}, applied: true, text: what you changed}. When the suggestion is unclear or looks wrong, reply with rft_comment ${ref}, text} instead and leave the ${what} as it is.`
   return [
     `The user asks you, from the tree view, to answer thread ${t.id} on ${n.name} (${path}). Answer in the thread with the rft tools; in the chat, one short line at most.`,
     '',
-    threadText(bodyOf(loaded.texts[id] ?? ''), t, true),
+    threadText(bodyOf(n.text), t, true),
     '',
     todo,
   ].join('\n')
@@ -294,17 +334,16 @@ export function askText(loaded: Loaded, c: Comments, id: string, thread: string,
  * the answer, which the plugin writes into the thread (`answerThread`). It edits nothing, so a
  * change to the note is a replacement the user accepts in the tree view.
  */
-export function subagentAskText(loaded: Loaded, c: Comments, id: string, thread: string, path: string): string {
-  const n = loaded.tree.nodes[id]
+export function subagentAskText(n: Subject, c: Comments, thread: string, path: string): string {
   const t = c.threads.find(x => x.id === thread)
-  if (!n || !t) throw new CommentError(`${id} has no thread ${thread}`)
+  if (!t) throw new CommentError(`${n.id} has no thread ${thread}`)
   const todo = t.kind === 'comment'
     ? 'It is a comment: a discussion of this part of the note. Your final message is your reply in the thread, as the user will read it (markdown, short).'
     : `It is a suggestion. Your final message is the new text for the quoted part, between <replacement> and </replacement>, ${t.replacement == null ? 'written as the instruction says' : 'from the proposed replacement, adapted only where the note needs it'}, then one line on why; the user accepts or rejects it in the tree view. When the suggestion is unclear or looks wrong, write no replacement: your final message is then your reply.`
   return [
-    `Answer thread ${t.id} on ${n.name} (${path}). Read what it needs (the note, and its code, results or references when the question is about them) and nothing more.`,
+    `Answer thread ${t.id} on ${n.name} (${path}). Read what it needs (the ${n.what === 'snippet' ? 'snippet, a LaTeX building block, and the notes it rests on' : n.what === 'document' ? 'document, in LaTeX, and the snippets its copies come from' : 'note, and its code, results or references when the question is about them'}) and nothing more.`,
     '',
-    threadText(bodyOf(loaded.texts[id] ?? ''), t, true),
+    threadText(bodyOf(n.text), t, true),
     '',
     todo,
   ].join('\n')

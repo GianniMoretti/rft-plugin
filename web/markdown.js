@@ -140,6 +140,9 @@
         }
         if (raw.startsWith('```')) { close(); out.push(inCode ? '</pre>' : '<pre>'); inCode = !inCode; continue }
         if (inCode) { out.push(`<span class="src" data-s="${s0}" data-e="${s0 + raw.length}" data-raw>${escH(raw)}</span>`); continue }
+        // a line that is only an HTML comment is not shown, as in Obsidian (the rft-results lines
+        // around a Result's table of RESULTS)
+        if (/^\s*<!--.*-->\s*$/.test(raw)) { close(); continue }
         const fd = FN_DEF.exec(raw)
         if (fd) {
           close()

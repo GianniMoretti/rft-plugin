@@ -20,7 +20,7 @@ describe('activation', () => {
     const w = world(on, {})
     on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.commands).toEqual(['rft', 'rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-next', 'rft-summarize', 'rft-update', 'rft-view'])
+    expect(w.commands).toEqual(['rft', 'rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-next', 'rft-machine', 'rft-jobs', 'rft-summarize', 'rft-manuscript', 'rft-artifact', 'rft-update', 'rft-view'])
     expect(w.tools).toEqual([])
     expect(w.opened).toEqual([])
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
@@ -37,7 +37,7 @@ describe('activation', () => {
     const w = world(on, demoFiles())
     on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.tools).toEqual(['rft_add_node', 'rft_set_repos', 'rft_code', 'rft_set_code', 'rft_set_status', 'rft_suggest_priority', 'rft_suggest_dates', 'rft_add_deadline', 'rft_suggest_deadline', 'rft_set_summary', 'rft_map', 'rft_supersede', 'rft_next', 'rft_set_digest', 'rft_move_node', 'rft_set_refs', 'rft_search', 'rft_graph', 'rft_collect_papers', 'rft_set_tags', 'rft_set_type', 'rft_set_concept', 'rft_concepts', 'rft_tags', 'rft_tree', 'rft_validate', 'rft_sync', 'rft_comments', 'rft_comment', 'rft_suggest'])
+    expect(w.tools).toEqual(['rft_add_node', 'rft_set_repos', 'rft_code', 'rft_set_code', 'rft_set_notebook', 'rft_run_notebook', 'rft_set_status', 'rft_suggest_priority', 'rft_suggest_dates', 'rft_add_deadline', 'rft_suggest_deadline', 'rft_set_summary', 'rft_map', 'rft_supersede', 'rft_next', 'rft_set_digest', 'rft_artifact', 'rft_manuscript', 'rft_set_snippet', 'rft_set_document', 'rft_set_artifact', 'rft_move_node', 'rft_set_refs', 'rft_search', 'rft_graph', 'rft_collect_papers', 'rft_set_tags', 'rft_set_type', 'rft_set_concept', 'rft_concepts', 'rft_tags', 'rft_tree', 'rft_validate', 'rft_sync', 'rft_comments', 'rft_comment', 'rft_suggest', 'rft_machine'])
     expect(w.opened).toEqual(['rft-tree'])
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
     const rules = res.sections.find(s => s.id === 'rft:rules')
@@ -51,8 +51,8 @@ describe('activation', () => {
     const w = world(on, demoFiles(), { refuse: ['rft'] })
     on('prompt.compose', () => ({ sections: [] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.commands).toEqual(['rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-next', 'rft-summarize', 'rft-update', 'rft-view'])
-    expect(w.tools).toHaveLength(30)
+    expect(w.commands).toEqual(['rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-next', 'rft-machine', 'rft-jobs', 'rft-summarize', 'rft-manuscript', 'rft-artifact', 'rft-update', 'rft-view'])
+    expect(w.tools).toHaveLength(38)
     expect(w.opened).toEqual(['rft-tree'])
     expect(w.toasts.join()).toContain('/rft')
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
@@ -61,7 +61,7 @@ describe('activation', () => {
 
   test('no command takes the name of the plugin skill', async () => {
     // a plugin skill named <x> is the command /rft:<x>; the engine refuses a command of the same name
-    expect(['rft', 'rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-next', 'rft-summarize', 'rft-update', 'rft-view']).not.toContain(SKILL)
+    expect(['rft', 'rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-next', 'rft-machine', 'rft-jobs', 'rft-summarize', 'rft-manuscript', 'rft-artifact', 'rft-update', 'rft-view']).not.toContain(SKILL)
   })
 
   test('autoOpen off keeps the pane closed', { options: { autoOpen: false } }, async ($, on) => {
@@ -516,6 +516,49 @@ describe('web view', () => {
     expect(asked).toHaveLength(1)
   })
 
+  test('the tree view verifies a note through the session: verified, locked and stamped; dismissed and sent back to review the same way', async ($, on) => {
+    mock.clock(on)
+    const files = demoFiles()
+    const path = `vault/experiments/${E01}.md`
+    files[path] = files[path]!.replace('status: done\n', 'status: done\nsuggested_verified: "Reran it"\n')
+    const w = world(on, files)
+    const srv = fakeServer(on)
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    await $.command.run(RUN(''))
+    srv.print(`RFT_VERIFY ${JSON.stringify({ id: 'E01', action: 'verify' })}\n`)
+    await until(() => w.fs.read(path).includes('status: verified'))
+    expect(w.fs.read(path)).toMatch(/\nverified: "\d{4}-\d{2}-\d{2} [0-9a-f]{8}"\n/)
+    expect(isLocked(w.fs.read(path))).toBe(true)
+    expect(w.fs.read(path)).not.toContain('suggested_verified')
+    srv.print(`RFT_VERIFY ${JSON.stringify({ id: 'E01', action: 'review' })}\n`)
+    await until(() => w.fs.read(path).includes('status: review'))
+    expect(isLocked(w.fs.read(path))).toBe(false)
+    expect(w.fs.read(path)).toContain('to review, by the user')
+  })
+
+  test('the Manuscript tab\'s requests reach the session: a document, a snippet the user starts, its copy placed, a copy answered, a snippet reviewed', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, demoFiles())
+    const srv = fakeServer(on)
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    await $.command.run(RUN(''))
+    const doc = 'vault/documents/paper/main.tex'
+    srv.print(`RFT_MANUSCRIPT ${JSON.stringify({ action: 'document', name: 'paper', kind: 'article' })}\n`)
+    await until(() => w.fs.exists(doc))
+    srv.print(`RFT_MANUSCRIPT ${JSON.stringify({ action: 'new', kind: 'result', title: 'Mine', basis: ['E02'] })}\n`)
+    await until(() => w.fs.exists('vault/snippets/S01.tex'))
+    expect(w.fs.read('vault/snippets/S01.tex')).toContain('% basis: E02')
+    expect(w.fs.read(doc)).not.toContain('S01') // a snippet enters a document only when placed
+    srv.print(`RFT_MANUSCRIPT ${JSON.stringify({ action: 'place', name: 'paper', id: 'S01' })}\n`)
+    await until(() => w.fs.read(doc).includes('% rft-begin S01 '))
+    w.fs.write('vault/snippets/S01.tex', w.fs.read('vault/snippets/S01.tex').replace('% your text', 'Written now.'))
+    srv.print(`RFT_MANUSCRIPT ${JSON.stringify({ action: 'take', name: 'paper', id: 'S01' })}\n`)
+    await until(() => w.fs.read(doc).includes('Written now.'))
+    srv.print(`RFT_MANUSCRIPT ${JSON.stringify({ action: 'reviewed', id: 'S01' })}\n`)
+    await until(() => w.fs.read('vault/snippets/snippets.json').includes('reviewed'))
+    expect(JSON.parse(w.fs.read('vault/snippets/snippets.json')).snippets.S01.reviewed).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+
   test('/rft outside an RFT project starts nothing', async ($, on) => {
     mock.clock(on)
     world(on, {})
@@ -597,7 +640,7 @@ describe('linked trees', () => {
     const srv = fakeServer(on)
     on('prompt.compose', () => ({ sections: [] }))
     await $.session.start({ cwd: REPO, source: 'startup' } as never)
-    expect(w.tools).toHaveLength(30)
+    expect(w.tools).toHaveLength(38)
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
     expect(res.sections.find(s => s.id === 'rft:rules')?.text).toContain(`notes in \`${TREE}/vault/\``)
     expect((await $.tool.call({ tool: 'mcp__rft__rft_tree' } as never)).text).toContain(`theory notes in ${TREE}/vault/.`)
@@ -632,7 +675,7 @@ describe('linked trees', () => {
     mock.clock(on)
     const w = world(on, linked(), { cwd: `${TREE}/analysis` })
     await $.session.start({ cwd: `${TREE}/analysis`, source: 'startup' } as never)
-    expect(w.tools).toHaveLength(30)
+    expect(w.tools).toHaveLength(38)
     const tree = await $.tool.call({ tool: 'mcp__rft__rft_tree' } as never)
     expect(tree.text).toMatch(/^demo: 2 directions, 2 experiments/)
   })

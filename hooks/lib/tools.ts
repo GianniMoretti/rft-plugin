@@ -2,7 +2,9 @@
 // every turn, so only the tools a session uses most are there; the rest wait behind ToolSearch
 // (the model sees their names and loads a schema when it needs one). A group of feature tools
 // joins the prompt when the vault uses that feature: dates when there are deadlines or dated
-// notes, priorities when a note has one, rft_suggest when a note is locked, comments when a note has a thread.
+// notes, priorities when a note has one, the verification rule when a note is verified, in review or suggested for it, rft_suggest when a note is locked, comments when a note has a thread,
+// the artifact tools once the vault has a concept artifact, the notebook tools once an experiment has a notebook,
+// the queue tools once this machine is paired with the experiment queue (`.queue/machine.json`; never registered before), the manuscript tools once it has snippets (`snippets/snippets.json`).
 // The rules for these features enter the session's rules on the same condition (ops.ts rulesText).
 
 import type { Loaded } from './vault'
@@ -16,20 +18,30 @@ export const CORE_TOOLS = [
 export const FEATURE_TOOLS = {
   dates: ['rft_suggest_dates', 'rft_add_deadline', 'rft_suggest_deadline'],
   priorities: ['rft_suggest_priority'],
+  verify: [],
   locks: ['rft_suggest'],
   comments: ['rft_comments', 'rft_comment', 'rft_suggest'],
+  artifacts: ['rft_artifact', 'rft_set_artifact'],
+  notebooks: ['rft_set_notebook', 'rft_run_notebook'],
+  queue: ['rft_queue', 'rft_jobs', 'rft_job'],
+  manuscript: ['rft_manuscript', 'rft_set_snippet', 'rft_set_document'],
 } as const
 
 export type Feature = keyof typeof FEATURE_TOOLS
 
-/** The features this vault uses; `threads`: whether any note has a comment thread. */
-export function featuresInUse(loaded: Loaded, threads: boolean): Set<Feature> {
+/** The features this vault uses; `threads`: whether any note has a comment thread; `queue`: whether it has an experiment queue. */
+export function featuresInUse(loaded: Loaded, threads: boolean, queue = false): Set<Feature> {
   const nodes = Object.values(loaded.tree.nodes)
   const out = new Set<Feature>()
   if ((loaded.milestones ?? []).length || nodes.some(n => n.due || n.start)) out.add('dates')
   if (nodes.some(n => n.priority || n.suggestedPriority)) out.add('priorities')
   if (nodes.some(n => n.locked)) out.add('locks')
+  if (nodes.some(n => n.status === 'verified' || n.status === 'review' || n.suggestedVerified)) out.add('verify')
   if (threads) out.add('comments')
+  if (loaded.hasArtifacts) out.add('artifacts')
+  if (nodes.some(n => n.notebook)) out.add('notebooks')
+  if (queue) out.add('queue')
+  if (loaded.hasManuscript) out.add('manuscript')
   return out
 }
 

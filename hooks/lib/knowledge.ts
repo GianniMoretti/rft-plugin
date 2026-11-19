@@ -8,8 +8,10 @@ import { LockedChange, isLocked } from './comments'
 import type { Digest } from './map'
 import { readDigests, resolveConcept } from './map'
 import { scheduleReport } from './schedule'
+import { artifactMarks, describeState } from './artifacts'
 import type { Io, Loaded, RftNode } from './vault'
-import { MARK, OPEN_STATUSES, PRIORITIES, conceptOrder, conceptPath, join, load, removeField, resolveId, setField, withHistory } from './vault'
+import { manuscriptNext } from './manuscript'
+import { MARK, OPEN_STATUSES, PRIORITIES, conceptOrder, conceptPath, join, load, removeField, resolveId, setField, sync, withHistory, withStatus, lacksNotebook } from './vault'
 
 export class KnowledgeError extends Error {}
 
@@ -44,11 +46,16 @@ export async function supersede(io: Io, loaded: Loaded, ref: string, by: string 
     if (at === id) throw new KnowledgeError(`${newer} is already superseded, through the chain, by ${id}`)
   }
   const m = tree.nodes[newer]!
-  const out = withHistory(setField(writable(), 'superseded_by', `"[[${m.name}]]"`, 'summary'), `- ${date}: superseded by [[${m.name}]]${reason}`)
+  let out = withHistory(setField(writable(), 'superseded_by', `"[[${m.name}]]"`, 'summary'), `- ${date}: superseded by [[${m.name}]]${reason}`)
+  // a verified claim that is overturned goes back to the user: review, unlocked
+  const wasVerified = n.status === 'verified'
+  if (wasVerified) out = removeField(withStatus(out, n, 'review'), 'locked')
   await io.write(join(config.vault, n.path), out)
   Object.assign(loaded, await load(io, config))
+  if (wasVerified) await sync(io, loaded)
   return `${n.name} is marked as superseded by ${m.name}: its result is no longer to be built on. ` +
-    `Update the digest of its concept (rft_set_digest) so the current result is the one it states${n.summary ? '' : ', and give it a summary'}.${unlocked}`
+    `Update the digest of its concept (rft_set_digest) so the current result is the one it states${n.summary ? '' : ', and give it a summary'}.${unlocked}` +
+    (wasVerified ? ` It was verified: it is in review now, for the user to look at again.` : '')
 }
 
 /** The note that holds now, following a chain of superseded results. */
@@ -107,6 +114,9 @@ export async function nextReport(io: Io, loaded: Loaded, today: string, ref?: st
     if (planned.length) out.push(`Planned, never run (${planned.length}, ${orderOf(planned)}):`, ...capped(planned.map(n => line(n, today)), max))
     if (ideas.length) out.push(`Directions not explored yet (${ideas.length}, ${orderOf(ideas)}):`, ...capped(ideas.map(n => line(n, today)), max))
     if (questions.length) out.push(`Open questions (from the digest${digests[c.id] && digests[c.id]!.updated ? ` of ${digests[c.id]!.updated}` : ''}):`, ...capped(questions.map(q => `  - ${q}`), max))
+    // in work with no notebook yet: one makes its numbers when its jobs end
+    const bare = [...running, ...planned].filter(n => lacksNotebook(tree, n))
+    if (bare.length) out.push(`No notebook yet (rft_set_notebook): ${bare.map(n => `${n.id} (${n.status})`).join(', ')}`)
   }
   // the user's priorities across the concepts in scope: the open notes they made urgent, high or medium
   const inScope = (n: RftNode) => !scope || conceptPath(concepts, n.concept).includes(scope.id)
@@ -118,8 +128,29 @@ export async function nextReport(io: Io, loaded: Loaded, today: string, ref?: st
   const tail = waiting.length
     ? ['', `Suggested priorities waiting for the user (the tree view's kanban or note drawer): ${waiting.map(n => `${n.id} ${n.suggestedPriority}`).join(', ')}.`]
     : []
+  // verification: the notes whose verified claim may no longer hold, and Claude's suggestions, both waiting for the user
+  const review = Object.values(tree.nodes).filter(n => inScope(n) && n.status === 'review')
+  const toVerify = Object.values(tree.nodes).filter(n => inScope(n) && n.suggestedVerified && n.status !== 'verified')
+  if (review.length || toVerify.length) {
+    tail.push(...(tail.length ? [] : ['']), [
+      review.length ? `In review, for the user to check again and verify (the note's drawer): ${review.map(n => n.id).join(', ')}.` : '',
+      toVerify.length ? `Verifications you suggested, waiting for the user: ${toVerify.map(n => n.id).join(', ')}.` : '',
+    ].filter(Boolean).join(' '))
+  }
+  const writing = await manuscriptNext(io, loaded)
+  if (writing.length) tail.push(...(tail.length ? [] : ['']), writing.join(' '))
   const sched = scheduleReport(loaded, today)
   tail.push(...(sched.tail.length && !tail.length ? [''] : []), ...sched.tail)
+  // in a vault with artifacts: the concepts whose artifact is out of date, or missing while they have results
+  const marks = Object.entries(await artifactMarks(io, loaded)).filter(([id]) => inScope({ concept: id } as RftNode))
+  const stale = marks.filter(([, m]) => m.stale).map(([id, m]) => `${concepts[id]!.name} (${describeState(m.stale!)})`)
+  const none = marks.filter(([, m]) => m.none).map(([id]) => concepts[id]!.name)
+  if (stale.length || none.length) {
+    tail.push(...(tail.length ? [] : ['']), [
+      stale.length ? `Artifacts out of date: ${stale.join('; ')}.` : '',
+      none.length ? `${stale.length ? 'Without one' : 'Concepts with results and no artifact'}: ${none.join(', ')}.` : '',
+    ].filter(Boolean).join(' '))
+  }
   if (!out.length && !focus.length) {
     const none = `Nothing open${scope ? ` in ${scope.name}` : ''}: no unexplored direction, no planned experiment, no open question in the digests.`
     return sched.head.length ? `${sched.head.join('\n')}\n${none}${tail.join('\n')}` : `${none}${tail.join('\n')}`
