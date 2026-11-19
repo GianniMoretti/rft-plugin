@@ -355,8 +355,15 @@ from the start. A deferred tool shows only its name until the model loads it wit
   or cite), Claude asks once, and `notebook: no` records a refusal so it does not ask again
   (said only in a vault whose concepts link code). Artifacts ask before a notebook too, and
   type a short table from the notes' numbers when the user wants none.
+- **`/rft-update` with the new features**: the base update needs nothing new (each feature
+  makes its files only when used; templates and the vault's format are unchanged). The PR's
+  `/rft-update notebooks` re-runs the existing notebooks as before, but lists the experiments
+  without one only for information (not those with `notebook: no`); `--write` needs a concept or
+  experiment ids, and alone writes nothing. `/rft-artifact` no longer writes a notebook unasked:
+  it asks at the end when a page needs a comparison no notebook makes.
 - Measured on the replica vault against 1.0.0: session start +1% (45,355 against 44,892 input
-  tokens), a recall question +1%. 387 plugin tests and 196 server tests pass (8 need uv).
+  tokens), a recall question +1%. Checked headless: an experiment for a paper gets the question,
+  an exploratory one none. 387 plugin tests and 196 server tests pass (8 need uv).
 
 ## Backlog
 
