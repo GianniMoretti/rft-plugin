@@ -154,7 +154,7 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_set_repos` | links code repositories to a concept (or, on the root note, to the whole project), once you give the path |
   | `rft_code` | a note's code context: its repos by priority, the commit it was last checked against, and the commits and files changed since |
   | `rft_set_code` | writes or updates a note's `## Code` section (how it relates to the code, how to reproduce its results), recording each repo's current commit |
-  | `rft_set_notebook` | gives an experiment its marimo notebook, best when it is planned: written from plain cells in its concept's repo (`notebooks/<id>_<title>.py`, a first cell reading `RUNS`, its runs in the queue) or one already there, linked from `vault/notebooks/<id>.py` and the note (`notebook:`) |
+  | `rft_set_notebook` | gives an experiment its marimo notebook, when you want one (best while it is planned): written from plain cells in its concept's repo (`notebooks/<id>_<title>.py`, a first cell reading `RUNS`, its runs in the queue) or one already there, linked from `vault/notebooks/<id>.py` and the note (`notebook:`) |
   | `rft_run_notebook` | runs the notebook now in its repo's uv environment: its `RESULTS` written in the note's Result as a table, or checked against it (ok, differs, failed), in a few lines; its figures and tables saved for the artifacts; stamps the note (`reproduced:`) |
   | `rft_tree` | prints the tree or a subtree |
   | `rft_validate` | checks ids, types, statuses, titles, parents, broken wikilinks, derived fields |
@@ -711,12 +711,18 @@ manuscript's editor, with its LaTeX mode) are bundled, so the page needs no netw
 
 ### Experiment notebooks
 
-An experiment in a concept with code has a **notebook** that makes the numbers of its Result: a
+An experiment in a concept with code can have a **notebook** that makes the numbers of its Result: a
 [marimo](https://marimo.io) notebook in its concept's code repository, which runs in that repo's
 own [uv](https://docs.astral.sh/uv/) environment. It reads its runs' saved outputs after an
-expensive training run, or reruns a short experiment from scratch. Claude writes it when the
-experiment is planned, and its run records the result when the jobs end, so no one copies a
-number by hand. It opens on the **left** of the tree view while the note is open on the right,
+expensive training run, or reruns a short experiment from scratch. Its run records the result when
+the jobs end, so no one copies a number by hand.
+
+**A notebook is your choice, per experiment.** Exploratory runs (does it work, a quick check,
+development) get none, and Claude does not ask. When an experiment's results are meant to last
+(figures or tables for a paper, a thesis or the docs, a result to verify or to cite in a snippet),
+Claude asks you once whether to give it a notebook for reproducibility. If you decline, it writes
+`notebook: no` in the note and does not ask again. Claude never writes one unasked, and nothing
+(`rft_next`, `rft_validate`, `rft_add_node`) reminds you of experiments without one. It opens on the **left** of the tree view while the note is open on the right,
 so you can run it and read the note side by side.
 
 - **Where it is**: `<repo>/notebooks/E02_<title>.py`, in the first repo the concept links (see Code

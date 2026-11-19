@@ -153,6 +153,8 @@ export type RftNode = {
   suggestedDatesWhy?: string
   /** An experiment's marimo notebook (`notebook:`): a link in the vault's notebooks/ to the file in its concept's repo. */
   notebook?: string
+  /** `notebook: no`: the user chose no notebook for it. */
+  noNotebook?: boolean
   /** The notebook's last run (`reproduced:`, written by rft_run_notebook). */
   reproduced?: Reproduced
   /** When the user last verified it, and the fingerprint of what it claimed then (`verified:`). */
@@ -589,7 +591,9 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
       }
       readPlan(nodes[id]!, fm)
       const notebook = unquote(fm.notebook)
-      if (notebook) nodes[id]!.notebook = notebook
+      // `notebook: no`: the user chose none for it (Claude does not ask again)
+      if (/^(no|none|false)$/i.test(notebook)) nodes[id]!.noNotebook = true
+      else if (notebook) nodes[id]!.notebook = notebook
       const reproduced = parseReproduced(fm.reproduced)
       if (reproduced) nodes[id]!.reproduced = reproduced
       const verified = parseVerified(fm.verified)
@@ -891,7 +895,7 @@ export const reposLine = (repos: string[]) => `[${repos.map(p => JSON.stringify(
  * numbers, figures and tables; rft_add_node, rft_next and rft_validate say so.
  */
 export const lacksNotebook = (tree: Tree, n: RftNode) =>
-  n.type === 'experiment' && !n.notebook && !n.supersededBy && ['planned', 'running', ...FINISHED_STATUSES].includes(n.status) && codeRepos(tree.concepts, n.concept).length > 0
+  n.type === 'experiment' && !n.notebook && !n.noNotebook && !n.supersededBy && ['planned', 'running', ...FINISHED_STATUSES].includes(n.status) && codeRepos(tree.concepts, n.concept).length > 0
 
 export function codeRepos(concepts: Record<string, Concept> | undefined, id: string): CodeRepo[] {
   const out: CodeRepo[] = []
@@ -1344,8 +1348,6 @@ export async function validate(io: Io, loaded: Loaded, opts: { root?: string; ho
     const missing = n.children.filter(k => !listed.has(tree.nodes[k]!.name))
     if (missing.length) warnings.push(`${n.id}: "Children in the tree" does not list ${missing.join(', ')} (rft_sync adds them)`)
   }
-  const noNotebook = Object.values(tree.nodes).filter(n => lacksNotebook(tree, n)).map(n => n.id).sort(compareNames)
-  if (noNotebook.length) warnings.push(`Experiments in a concept with code and no notebook (${noNotebook.length}): ${noNotebook.slice(0, 20).join(', ')}${noNotebook.length > 20 ? ', …' : ''} — rft_set_notebook writes one, which makes their numbers, figures and tables`)
   for (const p of PRIORITIES) {
     const limit = PRIORITY_LIMITS[p]
     const held = Object.values(tree.nodes).filter(n => n.priority === p && OPEN_STATUSES.includes(n.status)).map(n => n.id).sort(compareNames)

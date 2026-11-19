@@ -47,7 +47,7 @@ import { MACHINE_FILE, machinePrompt, probeText, readMachine, statusText } from 
 import type { MachineStatus, Probe } from './lib/machine'
 import { QUEUE_CLI, QUEUE_FILE, addedText, cancelledText, jobEvents, jobsNext, jobsReport, movedText, queueLine, readQueue, retriedText, toStart } from './lib/queue'
 import type { Job, QueueView } from './lib/queue'
-import { CONFIG_PATH, LEGEND, MARK, NODE_TYPES, bodyOf, isLiterature, counts, countsLine, isAbsolute, join, locate, readConfig, lacksNotebook, repoAbs, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
+import { CONFIG_PATH, LEGEND, MARK, NODE_TYPES, bodyOf, isLiterature, counts, countsLine, isAbsolute, join, locate, readConfig, repoAbs, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
 
 const PANE = 'rft-tree'
 const TITLE = 'Reasoning tree'
@@ -160,7 +160,7 @@ const TOOLS = {
   },
   rft_set_notebook: {
     description:
-      'Give an experiment its marimo notebook, or a concept its own (on the note that starts it: the figures and tables comparing its experiments, from EXPERIMENTS, their saved RESULTS by id; it runs again after each of them). An experiment\'s makes the numbers of its Result: from its runs\' saved outputs after an expensive run, from scratch for a short one. Write it when the experiment is planned: once its runs end it writes RESULTS in its Result (on a machine paired with the experiment queue, the queue\'s runner runs it then, at no model turn; else rft_run_notebook). Pass cells (plain Python, one string per cell; the tool writes marimo\'s format, with mo imported and a first cell setting RUNS: the queue\'s runs of the experiment that ended well, each a dict with out, its output folder ($RFT_OUT), label and commit) and it is written in the concept\'s first repo as notebooks/<id>_<title>.py; or file, a notebook already in the repo. Either way it is linked from the vault (notebooks/<id>.py) and the note (notebook:). It runs in the repo\'s uv environment with the repo\'s root as working folder and the notebook\'s folder first on sys.path. Set RESULTS, a dict of the numbers the note reports, rounded as it should report them; and for the concept\'s artifact, FIGURES ({name: matplotlib figure or SVG text}) and TABLES ({name: DataFrame, list of row dicts or dict of columns}). Import shared plotting code (style, palette, helpers) from one module in the repo\'s notebooks/ folder rather than repeating it. Change it later with Edit (plain Python), not with this tool.',
+      'Give an experiment its marimo notebook, or a concept its own (on the note that starts it: the figures and tables comparing its experiments, from EXPERIMENTS, their saved RESULTS by id; it runs again after each of them). An experiment\'s makes the numbers of its Result: from its runs\' saved outputs after an expensive run, from scratch for a short one. Only for an experiment the user wants one for (ask them when its results are meant to last: figures or tables for a paper, a thesis or the docs; never for an exploratory run): once its runs end it writes RESULTS in its Result (on a machine paired with the experiment queue, the queue\'s runner runs it then, at no model turn; else rft_run_notebook). Pass cells (plain Python, one string per cell; the tool writes marimo\'s format, with mo imported and a first cell setting RUNS: the queue\'s runs of the experiment that ended well, each a dict with out, its output folder ($RFT_OUT), label and commit) and it is written in the concept\'s first repo as notebooks/<id>_<title>.py; or file, a notebook already in the repo. Either way it is linked from the vault (notebooks/<id>.py) and the note (notebook:). It runs in the repo\'s uv environment with the repo\'s root as working folder and the notebook\'s folder first on sys.path. Set RESULTS, a dict of the numbers the note reports, rounded as it should report them; and for the concept\'s artifact, FIGURES ({name: matplotlib figure or SVG text}) and TABLES ({name: DataFrame, list of row dicts or dict of columns}). Import shared plotting code (style, palette, helpers) from one module in the repo\'s notebooks/ folder rather than repeating it. Change it later with Edit (plain Python), not with this tool.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -894,10 +894,7 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
         suggestedPriority: str(i.suggested_priority), priorityWhy: str(i.priority_why),
       }, await codeEnv($, h))
       const similar = similarNotes(loaded, node.id)
-      const added = loaded.tree.nodes[node.id]
-      const nb = added && lacksNotebook(loaded.tree, added)
-        ? `\nIts concept links code: write its notebook now (rft_set_notebook ${node.id}), so its run writes the numbers, figures and tables when its jobs end.` : ''
-      return `${node.report}\nId: ${node.id}\nNote: ${join(shownVault(h, loaded.config), node.path)}${nb}${similar ? `\n${similar}` : ''}`
+      return `${node.report}\nId: ${node.id}\nNote: ${join(shownVault(h, loaded.config), node.path)}${similar ? `\n${similar}` : ''}`
     }
     case 'rft_set_repos':
       return setRepos(io, loaded, await codeEnv($, h), String(i.id ?? ''), strings(i.repos))

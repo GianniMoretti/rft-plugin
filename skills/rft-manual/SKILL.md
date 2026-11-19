@@ -1,6 +1,6 @@
 ---
 name: rft-manual
-description: Operating manual of the Reasoning Flow Tree: experiment (E..), direction (D..), reference (R..) and theory (T..) notes recording a research project's reasoning, grouped into concepts (lines of research) with their code repositories. Use in a project with .rft/config.json whenever an experiment is planned, launched (on a machine paired with the experiment queue: rft_queue; pairing it: rft_machine) or finished (a queued job ended), an experiment in a concept with code is planned (write its notebook: rft_set_notebook), an idea or question comes up (even a rejected one), a paper or review is read, a new field comes up (offer a literature search first), a definition or method is written down, an idea is dropped or moved, a branch belongs under another note (move it), a new line of research opens (propose a concept, ask for its code), work starts on an experiment whose concept links code, Claude is asked to answer a tree-view comment or suggestion, a note is locked, a note's priority comes up (suggest one, never set it), a result is final (suggest verifying it, never set verified), a verified note's claim may no longer hold (review), snippets or documents come up (stubs and placements from verified notes, the user writes and picks), or the user asks about the tree, its concepts, its code or what was tried (start from rft_map).
+description: Operating manual of the Reasoning Flow Tree: experiment (E..), direction (D..), reference (R..) and theory (T..) notes recording a research project's reasoning, grouped into concepts (lines of research) with their code repositories. Use in a project with .rft/config.json whenever an experiment is planned, launched (on a machine paired with the experiment queue: rft_queue; pairing it: rft_machine) or finished (a queued job ended), an experiment's results are meant for a paper, thesis or docs (ask whether to give it a notebook: rft_set_notebook), an idea or question comes up (even a rejected one), a paper or review is read, a new field comes up (offer a literature search first), a definition or method is written down, an idea is dropped or moved, a branch belongs under another note (move it), a new line of research opens (propose a concept, ask for its code), work starts on an experiment whose concept links code, Claude is asked to answer a tree-view comment or suggestion, a note is locked, a note's priority comes up (suggest one, never set it), a result is final (suggest verifying it, never set verified), a verified note's claim may no longer hold (review), snippets or documents come up (stubs and placements from verified notes, the user writes and picks), or the user asks about the tree, its concepts, its code or what was tried (start from rft_map).
 ---
 
 # Reasoning Flow Tree (rft)
@@ -242,9 +242,9 @@ key results as tables and small charts, what failed, what is still running.
 - **The page** is prose and layout, HTML with its own `<style>`. **Its charts and tables come from
   notebooks**: an experiment's notebook, or the concept's for comparisons across its experiments
   (see Experiment notebooks), saves `FIGURES` and `TABLES`, placed by name (below). Never draw a
-  chart or type a table of results by hand: one the page needs and no notebook makes is a figure
-  or table to add to a notebook. Only in a concept without code, a short table typed from the
-  notes' numbers. The view loads nothing from elsewhere (no CDN, no fetch); it gives each SVG
+  chart of results by hand: a chart or table the page needs that no notebook makes, ask the user
+  whether to make it in a notebook; if not, leave the chart out and type a short table from the
+  notes' own numbers. The view loads nothing from elsewhere (no CDN, no fetch); it gives each SVG
   figure a button that downloads it as a PDF, and each table one that copies it as a LaTeX
   `table` float. Its base
   style follows the view's light and dark themes: `var(--fg)`, `--muted`, `--bg`, `--panel`,
@@ -264,13 +264,17 @@ key results as tables and small charts, what failed, what is still running.
 
 ## Experiment notebooks
 
-An experiment in a concept with code gets a **notebook** that makes the numbers of its Result, so
-no one types them, a reader can rerun them, and the concept's artifact rests on numbers that were
-reproduced. It is a marimo notebook in the concept's first repo (`notebooks/<id>_<title>.py`),
+An experiment in a concept with code can have a **notebook** that makes the numbers of its Result,
+so no one types them, a reader can rerun them, and the concept's artifact rests on numbers that
+were reproduced. **It is the user's choice, per experiment.** An exploratory run (does it work, a
+quick check, development) gets none, and you do not ask. When an experiment's results are meant
+to last (figures or tables for a paper, a thesis or the docs, a result to verify or to cite in a
+snippet), ask the user once whether to give it a notebook for reproducibility. If they decline,
+write `notebook: no` in its frontmatter and do not ask again. Never write one unasked. It is a marimo notebook in the concept's first repo (`notebooks/<id>_<title>.py`),
 linked from the vault (`vault/notebooks/<id>.py`) and the note (`notebook:`); it runs in the
 repo's own uv environment, from the repo's root.
 
-- **Write it when you plan the experiment**, with `rft_set_notebook(id, cells)`: plain Python, one
+- **Write it once the user wants one** (best while the experiment is planned), with `rft_set_notebook(id, cells)`: plain Python, one
   string per cell (a markdown cell as `mo.md("...")`; `mo` is imported for you); or `file`, a
   notebook already in the repo. Its first cell (written for you) gives `RUNS`: the experiment's
   runs in the queue that ended well, oldest first, each its record with `out` (its output folder,
@@ -517,8 +521,9 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
    In a concept with code, call `rft_code` first and plan from the code as it is now; the note's
    `## Code` section says how the run uses the code. On a machine paired with the experiment
    queue, every run is then queued with `rft_queue` (see The experiment queue), not started in the
-   background: the plugin sets the note running when its job starts. In a concept with code, write its notebook now
-   (`rft_set_notebook`), so its run records the result when the jobs end.
+   background: the plugin sets the note running when its job starts. If its results are meant for
+   a paper, a thesis or the docs, ask whether to give it a notebook (`rft_set_notebook`, see
+   Experiment notebooks); not for an exploratory run.
 2. **When it finishes or gives a partial result** (for a queued run: the user is told when its
    job ends, and the session start lists the jobs whose result is not recorded yet): when its
    notebook's run wrote the numbers in **Result**, write what they mean around the table, what
@@ -593,7 +598,7 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 | `rft_set_repos` | link code repos to a concept (or, on the root note, to the project); an empty list removes them |
 | `rft_code` | a note's code context: its repos by priority, the commit it was checked against, what changed since |
 | `rft_set_code` | write or update a note's `## Code` section (description, Reproduce), recording each repo's current commit |
-| `rft_set_notebook` | give an experiment its marimo notebook, best when it is planned: plain cells written to its concept's repo (a first cell gives `RUNS`), or a file already there; linked from the vault and the note |
+| `rft_set_notebook` | give an experiment its marimo notebook, when the user wants one (best while it is planned): plain cells written to its concept's repo (a first cell gives `RUNS`), or a file already there; linked from the vault and the note |
 | `rft_run_notebook` | run the notebook now in its repo's uv environment: `RESULTS` written in the Result's table (recorded, or `record: true`) or checked against it (ok, differs, failed); `FIGURES` and `TABLES` saved; stamps `reproduced:` |
 | `rft_tree` | the current tree, or the subtree of one node (`root`, `depth`) |
 | `rft_validate` | errors (bad ids, statuses, titles, missing parents, broken links) and warnings |

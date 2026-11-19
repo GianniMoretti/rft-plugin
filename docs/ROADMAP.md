@@ -27,6 +27,7 @@ could be done, and when it is done. A package builds only on the ones before it.
 | 0.25.0 | One note per literature search (done) | – |
 | 0.26.0 | /rft-update (done) | – |
 | 1.0.0 | One release with everything, measured (done) | 0.21.0–0.26.0 |
+| 1.1.0 | Alex's PR #6 merged, notebooks on request | 1.0.0 |
 
 ---
 
@@ -339,6 +340,23 @@ from the start. A deferred tool shows only its name until the model loads it wit
   background, literature notes, `/rft-update`, the vault's format, the benchmark).
 
 ---
+
+## 1.1.0 — Alex's PR #6 merged, notebooks on request
+
+- **Alex's PR #6**: the experiment queue (`/rft-machine add`, `rft_queue`, the monitor), experiment
+  and concept notebooks (marimo, in the repo's uv environment), concept artifacts, the `verified`
+  and `review` statuses, snippets and documents (LaTeX), the scratchpad, arrow keys in the tree.
+  Each is off until used: no queue until a machine is paired, no artifact or manuscript rules
+  until one exists, no notebook rules until an experiment has one; the server only with `/rft`.
+- **Notebooks only on request.** The PR had Claude write a notebook for every experiment in a
+  concept with code: in the session rules, the manual's description, `rft_add_node`'s answer,
+  `rft_next` and `rft_validate`. Now a notebook is the user's choice, per experiment: none for
+  exploratory runs; for results meant to last (a paper, a thesis, the docs, a result to verify
+  or cite), Claude asks once, and `notebook: no` records a refusal so it does not ask again
+  (said only in a vault whose concepts link code). Artifacts ask before a notebook too, and
+  type a short table from the notes' numbers when the user wants none.
+- Measured on the replica vault against 1.0.0: session start +1% (45,355 against 44,892 input
+  tokens), a recall question +1%. 387 plugin tests and 196 server tests pass (8 need uv).
 
 ## Backlog
 

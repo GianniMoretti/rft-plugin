@@ -162,7 +162,7 @@ export async function notebookGaps(io: Io, loaded: Loaded, scope?: Concept): Pro
     const own = ownNotes(tree, c.id).filter(n => n.type === 'experiment' && n.hasResult && !n.supersededBy)
     const html = artifacts[c.id]?.html ?? ''
     const g: ConceptGaps = {
-      concept: c, bare: own.filter(n => !n.notebook).map(n => n.id), results: own.length,
+      concept: c, bare: own.filter(n => !n.notebook && !n.noNotebook).map(n => n.id), results: own.length,
       needsConceptNotebook: own.length > 1 && !tree.nodes[c.root!]?.notebook, svg: inlineCharts(html), tables: typedTables(html),
     }
     if (g.bare.length || g.needsConceptNotebook || g.svg || g.tables) byConcept.push(g)

@@ -266,18 +266,27 @@ describe('the run stamp', () => {
   })
 })
 
-describe('every experiment of a concept with code gets a notebook', () => {
-  test('rft_validate names those without one, and rft_next those in work', async () => {
+describe('a notebook is the user\'s choice, per experiment', () => {
+  test('nothing asks for one: rft_validate and rft_next say nothing of experiments without one', async () => {
     const files = project()
     files[PATH.E02] = files[PATH.E02]!.replace('status: done', 'status: running')
     const { io, loaded } = await open(files)
-    const v = await validate(io, loaded, { root: ROOT })
-    expect(v.warnings.find(w => w.startsWith('Experiments in a concept with code and no notebook'))).toContain('(1): E02')
-    expect(await nextReport(io, loaded, '2026-11-16')).toContain('No notebook yet (rft_set_notebook): E02 (running)')
-    // with its notebook, or outside a concept with code, nothing is said
-    const linked = await open(project({ e02: 'notebook: "notebooks/E02.py"' }))
-    expect((await validate(linked.io, linked.loaded, { root: ROOT })).warnings.join('\n')).not.toContain('no notebook')
-    expect(v.warnings.find(w => w.startsWith('Experiments in a concept with code and no notebook'))).not.toContain('E01') // its concept links no code
+    expect((await validate(io, loaded, { root: ROOT })).warnings.join('\n')).not.toContain('notebook')
+    expect(await nextReport(io, loaded, '2026-11-16')).not.toContain('notebook')
+  })
+
+  test('the rules: ask only for results meant to last, in a vault whose concepts link code; `notebook: no` is remembered', async () => {
+    const { loaded } = await open(project())
+    const rules = rulesText(loaded.tree, loaded.config)
+    expect(rules).toContain('Notebooks are the user\'s choice, per experiment')
+    expect(rules).toContain('An exploratory run (does it work, a quick check, development) gets none, and you do not ask.')
+    expect(rules).not.toContain('write it when you plan the experiment')
+    const plain = await open(demoAt(ROOT))
+    expect(rulesText(plain.loaded.tree, plain.loaded.config)).not.toContain('Notebooks are the user')
+    const declined = await open(project({ e02: 'notebook: no' }))
+    const e02 = declined.loaded.tree.nodes.E02!
+    expect(e02.notebook).toBeUndefined()
+    expect(e02.noNotebook).toBe(true)
   })
 
   test("rft_artifact gives a Result's table of RESULTS in one line", () => {
@@ -400,12 +409,12 @@ describe('the notebook tools in a session', () => {
     expect(ran).toEqual(['Edit'])
   })
 
-  test("rft_add_node asks for an experiment's notebook when its concept links code", async ($, on) => {
+  test("rft_add_node does not ask for a notebook, even when its concept links code", async ($, on) => {
     mock.clock(on)
     world(on, project(), { cwd: ROOT })
     await $.session.start({ cwd: ROOT, source: 'startup' } as never)
     const r = await $.tool.call({ tool: 'mcp__rft__rft_add_node', type: 'experiment', title: 'Seed sweep', parent: 'D01', status: 'planned', what: 'Three seeds.', summary: 'Seeds' } as never)
-    expect(String(r.text)).toContain('write its notebook now (rft_set_notebook E03)')
+    expect(String(r.text)).not.toContain('notebook')
     const d = await $.tool.call({ tool: 'mcp__rft__rft_add_node', type: 'direction', title: 'Another idea', parent: 'D01', status: 'idea', idea: 'x', summary: 'x' } as never)
     expect(String(d.text)).not.toContain('notebook')
   })

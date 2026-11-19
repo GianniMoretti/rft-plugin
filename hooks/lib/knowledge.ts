@@ -11,7 +11,7 @@ import { scheduleReport } from './schedule'
 import { artifactMarks, describeState } from './artifacts'
 import type { Io, Loaded, RftNode } from './vault'
 import { manuscriptNext } from './manuscript'
-import { MARK, OPEN_STATUSES, PRIORITIES, conceptOrder, conceptPath, join, load, removeField, resolveId, setField, sync, withHistory, withStatus, lacksNotebook } from './vault'
+import { MARK, OPEN_STATUSES, PRIORITIES, conceptOrder, conceptPath, join, load, removeField, resolveId, setField, sync, withHistory, withStatus } from './vault'
 
 export class KnowledgeError extends Error {}
 
@@ -114,9 +114,6 @@ export async function nextReport(io: Io, loaded: Loaded, today: string, ref?: st
     if (planned.length) out.push(`Planned, never run (${planned.length}, ${orderOf(planned)}):`, ...capped(planned.map(n => line(n, today)), max))
     if (ideas.length) out.push(`Directions not explored yet (${ideas.length}, ${orderOf(ideas)}):`, ...capped(ideas.map(n => line(n, today)), max))
     if (questions.length) out.push(`Open questions (from the digest${digests[c.id] && digests[c.id]!.updated ? ` of ${digests[c.id]!.updated}` : ''}):`, ...capped(questions.map(q => `  - ${q}`), max))
-    // in work with no notebook yet: one makes its numbers when its jobs end
-    const bare = [...running, ...planned].filter(n => lacksNotebook(tree, n))
-    if (bare.length) out.push(`No notebook yet (rft_set_notebook): ${bare.map(n => `${n.id} (${n.status})`).join(', ')}`)
   }
   // the user's priorities across the concepts in scope: the open notes they made urgent, high or medium
   const inScope = (n: RftNode) => !scope || conceptPath(concepts, n.concept).includes(scope.id)
