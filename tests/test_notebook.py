@@ -365,8 +365,9 @@ class FakeEditors:
         self.fail = None
         self.editor = FakeEditor()
 
-    def open(self, path):
+    def open(self, path, style=None):
         self.opened.append(Path(path))
+        self.style = style
         if self.fail:
             raise rft_notebook.NotebookError(self.fail)
         return "notebook/abc/?file=notebooks/E02_baseline.py&access_token=abc"

@@ -77,6 +77,10 @@ describe('the notebook file', () => {
     expect(notebookSource('x', ['a = 1\n\nb = 2'])).toContain('    a = 1\n\n    b = 2\n')
     expect(src.trimEnd().endsWith('if __name__ == "__main__":\n    app.run()')).toBe(true)
     expect(src).not.toContain('RUNS')
+    // the project's figure style, before the cells, its helpers as rs
+    expect(src).toContain('@app.cell(hide_code=True)\ndef _():\n    # the project\'s figure style')
+    expect(src).toContain('    import rft_style as rs\n\n    rs.use()\n    return (rs,)\n')
+    expect(src.indexOf('import rft_style as rs')).toBeLessThan(src.indexOf('import json\n'))
   })
 
   test("a new notebook reads RUNS, the experiment's runs in the queue, with names of its own so the cells may import json too", () => {

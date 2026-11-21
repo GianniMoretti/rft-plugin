@@ -203,6 +203,8 @@ class PipelineTest(unittest.TestCase):
             self.assertIn(f"<td>{rft_results.number_text(a)}</td>", page)
         self.assertTrue(page.startswith("<!-- rft-artifact "))
         self.assertIn("<svg", (self.vault / "figures" / "E08_training_loss.svg").read_text())
+        # the project's figure style put beside the notebooks by the run, for their cells to import
+        self.assertIn("PROJECT: dict = {}", (self.toy / "notebooks" / "rft_style.py").read_text())
         # and the concept's comparisons, its notebook run after E08's, at no model turn either
         self.assertEqual(saved["concepts"][0], "D04")
         self.assertIn(f"<tr><td>E08</td><td>{rft_results.number_text(saved['results']['acc_mean'])}</td>", page)

@@ -2425,7 +2425,7 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 if path is None:
                     return self._json(404, {"error": f"{nid} has no notebook in the vault"})
                 try:
-                    return self._json(200, {"url": editors.open(path)})
+                    return self._json(200, {"url": editors.open(path, rft_notebook.project_style(vault.root))})
                 except rft_notebook.NotebookError as e:
                     return self._json(502, {"error": str(e)})
             if route == "/api/dates":

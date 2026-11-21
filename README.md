@@ -812,6 +812,35 @@ so you can run it and read the note side by side.
 - It needs `uv` on `PATH`. A vault where no experiment has a notebook sees none of this: the two
   tools wait behind ToolSearch, and their rules are left out.
 
+### Figures
+
+Every notebook draws its figures in the **project's figure style** (the design:
+`docs/design/figures.md`): `rft_style.py`, which the run and the editor put beside the notebooks
+(commit it with them, so a fresh clone draws the same figures), with the project's tokens written
+in. A new notebook imports it as `rs` and applies it; the run applies it to older ones too. Its
+helpers draw a figure the way the reference does (Thomas Fel's figures, read from their sources):
+one message per figure with a word in bold in its title, the series it is about in the accent and
+the rest grey, an ordered parameter as one colour family light to dark, spread as a pale band,
+labels at the lines' ends instead of a legend, faint grids, no top or right spines, and a
+transparent background for a light page.
+
+The tokens are the project's, in `.rft/config.json`; anything left out takes the default:
+
+```json
+"style": {
+  "text": "#211A52", "muted": "#76818B", "axis": "#BBC0C5", "grid": "#BBC0C5", "neutral": "#A6A3BA",
+  "fill": "#E4E3F5", "accent": "#4D4875", "contrast": "#DF6752", "baseline": "#76818B",
+  "categorical": ["#4D4875", "#7A72CC", "#AFAAE0", "#594FBF", "#A6A3BA", "#BDB9E5"],
+  "ramp": ["#AFAAE0", "#7A72CC", "#594FBF", "#4D4875", "#211A52"],
+  "font": "Arial", "headingFont": "Arial Black", "background": "transparent"
+}
+```
+
+`accent` is the series a figure is about, `contrast` the one point that must stand out,
+`categorical` the colours of unordered series in order, `ramp` an ordered parameter light to dark,
+`background` a colour instead of `transparent`. A colour is `#RRGGBB`; one that is not keeps the
+default. A font matplotlib does not have falls back to Inter, Helvetica, Arial, then DejaVu Sans.
+
 ### Snippets and documents
 
 Research ends in writing: a paper, a thesis, an article. Verified notes become writing at **two
@@ -1068,6 +1097,7 @@ session with the plugin loaded from this folder.
   experiment's notebook: the vault's link followed, the run in its repo's uv environment (its
   `RESULTS`, `FIGURES` and `TABLES`), the marimo editors the tree view frames;
   `server/rft_latex.py` the generated LaTeX and the compile of a document or a snippet;
+  `server/rft_style.py` the figure style the notebooks draw with;
   `server/rft_manuscript.py` snippets and documents as the page reads them; `server/rft_decks.py`
   the slide decks as the page reads and writes them;
   `server/rft_results.py` what a run leaves in the vault (the Result's table, the check, the saved

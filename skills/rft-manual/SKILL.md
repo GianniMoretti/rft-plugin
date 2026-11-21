@@ -303,9 +303,9 @@ repo's own uv environment, from the repo's root.
   one of its experiments' notebooks records new numbers, so the artifact's comparisons follow
   them at no model turn. Write one when the artifact needs a comparison across experiments; never
   draw it on the page.
-- **Shared plotting code** (the style, the palette, helpers) goes in one module in the repo's
-  `notebooks/` folder, which is first on every notebook's `sys.path` (e.g. `notebooks/figures.py`),
-  and each notebook imports it: write it once per repo, not in every notebook.
+- **Figures** follow the project's figure style (see Figures): draw them with `rs`, never with
+  colours, fonts or sizes of your own. Plotting code beyond it (a figure several notebooks share)
+  goes in one module in the repo's `notebooks/` folder, first on every notebook's `sys.path`.
 - **Change it** with Edit: it is plain Python.
 - **Never write `reproduced:` or the Result's table**: only a notebook's run writes them (your
   edits of either are refused).
@@ -690,6 +690,30 @@ this applies.
   or a snippet alone when the user asks; `rft_validate` names a basis that is no note, a macro that
   names nothing saved, an unknown citation, a cited reference with no BibTeX, a copy of no snippet
   and a `\ref{S02}` in a document that holds no copy of S02.
+
+## Figures
+
+Every figure of a notebook is drawn in the **project's figure style**: `rft_style.py`, which the
+run and the editor put beside the notebook with the project's tokens (`.rft/config.json`
+`"style"`; left out, the default: slate text, faint grids, transparent backgrounds for a light
+page). A new notebook has a cell that imports it as `rs` and applies it (`rs.use()`, sized for a
+paper's column); the run applies it to older notebooks too. Never set colours, fonts, sizes or
+`plt.style` yourself, and never edit `rft_style.py` (it is written again from the tokens).
+
+- `fig, ax = rs.figure()` (a paper's column), `rs.figure("wide")`, `rs.figure(ncols=3)` for small
+  multiples (one y label, on the first).
+- **One message per figure**: say it in the title, one word in bold, `rs.title(ax, "CutMix",
+  "closes the gap", color=rs.TOKENS["accent"])`: the bold word in the series' colour is its legend.
+- **The series the claim is about** stands out, the rest are grey: `rs.highlight(ax, "CutMix")`.
+- **An ordered parameter** (K, size, depth) is one family, light to dark: `colors = rs.ramp(len(K))`.
+  Unordered categories take the default cycle, at most six; beyond, small multiples.
+- **Spread** over seeds as a pale band: `rs.band(ax, x, mean, sd, label=…)` (markers on by default;
+  `marker=None` for long curves). A baseline: `rs.baseline(ax, x, y, label="SAE")`. A ceiling,
+  floor or target: `rs.reference(ax, y, "ceiling")`.
+- **Labels, not legends**: `rs.label_lines(ax)` names each line at its end in its colour; for small
+  multiples, `rs.legend_below(fig)`, one row under them.
+- Axis labels with units; no title that only repeats the axes; a superseded result greyed or
+  hatched, never left in the accent.
 
 ## Slides
 

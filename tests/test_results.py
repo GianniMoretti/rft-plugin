@@ -339,7 +339,7 @@ class BackfillTest(unittest.TestCase):
             ran, said = [], []
             real = rft_notebook.run
 
-            def fake(path, timeout, uv="uv"):
+            def fake(path, timeout, uv="uv", style=None):
                 ran.append(Path(path).name)
                 if Path(path).name == "E03.py":
                     return {"ok": False, "error": "Traceback (most recent call last):\nFileNotFoundError: runs/E03"}
