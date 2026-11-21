@@ -167,6 +167,16 @@ OPEN_MENU = "(() => { const b = document.getElementById('bar-more-toggle'); if (
 # the queue's button, as web/queue.js shows it where the queue runs (the test's server has no queue), with its count
 QUEUE_BUTTON = ("(() => { document.getElementById('jobs-toggle').hidden = false;"
                 " const b = document.getElementById('jobs-badge'); b.textContent = '17'; b.hidden = false })()")
+# the Manuscript's document compiled and its PDF pane open
+MS_PDF = [page("manuscript"), "document.querySelector('[data-ms-level=documents]').click()",
+          "(() => { const s = document.getElementById('ms-doc'); s.value = 'two-pages'; s.dispatchEvent(new Event('change', { bubbles: true })) })()",
+          "document.querySelector('.phone-panes[data-for=ms-body] [data-pane=pdf]').click()",
+          "document.getElementById('ms-compile').click()",
+          "new Promise(done => { const t0 = Date.now(), t = setInterval(() => { if (document.querySelector('#ms-pdf-pages canvas[data-drawn]') || Date.now() - t0 > 60000) { clearInterval(t); done(true) } }, 100) })"]
+# each page of the PDF drawn: the dark pixels on its canvas (-1: not drawn)
+PDF_INK = ("[...document.querySelectorAll('#ms-pdf-pages canvas.ms-pdf-page')].map(c => { if (!c.width) return -1;"
+           " const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0;"
+           " for (let i = 0; i < d.length; i += 4) if (d[i] < 128 && d[i + 3] > 0) n++; return n })")
 SCREENS = [
     ("tree", [page("tree"), QUEUE_BUTTON]),
     ("menu", [page("tree"), OPEN_MENU]),
@@ -179,6 +189,7 @@ SCREENS = [
     ("timeline", [page("calendar"), "document.querySelector('[data-cal-mode=timeline]').click()"]),
     ("month", [page("calendar"), "document.querySelector('[data-cal-mode=month]').click()"]),
     ("manuscript", [page("manuscript")]),
+    ("manuscript-pdf", MS_PDF),
     ("slides", [page("slides")]),
     ("slides-text", [page("slides"), "document.querySelector('.sl-item').click()"]),
 ]
@@ -202,6 +213,11 @@ def demo_vault(dst: Path):
     (dst / "decks" / "P01 Weekly wrap-up.md").write_text(
         "---\nid: P01\ntype: deck\nlocked: true\n---\n\n# Weekly wrap-up\n\n---\n\n## E06 so far\n\n- CutMix holds at 1k\n- next: three seeds\n")
     (dst / "Scratchpad.md").write_text("- [ ] read the CutMix ablation\n- [x] mail the supervisor\n- a note\n")
+    # a document of two pages, for the Manuscript's PDF
+    (dst / "documents" / "two-pages").mkdir(parents=True)
+    (dst / "documents" / "documents.json").write_text('{"locked": true, "unlocked": []}\n')
+    (dst / "documents" / "two-pages" / "main.tex").write_text(
+        "\\documentclass{article}\n\\begin{document}\n\\section{One}\nThe first page.\n\\newpage\n\\section{Two}\nThe second page.\n\\end{document}\n")
     # urgent and high full (1 and 5 open notes), so a card's priority menu names the notes holding them
     open_notes = sorted(p for p in dst.glob("*/*.md") if re.search(r"^status: (idea|planned|running)$", p.read_text(), re.M))
     for p, prio in zip(open_notes, ["urgent"] + ["high"] * 5):
@@ -345,6 +361,24 @@ class PhoneTest(unittest.TestCase):
         here = self.b.js("location.origin + location.pathname")
         self.assertTrue(self.url.startswith(here or "-"), f"{label}: Back left the page (now at {here})")
         self.assertFalse(self.b.js(is_open), f"{label}: still open after Back")
+
+    def test_compiled_pdf_is_drawn(self):
+        # Chrome on Android shows no PDF in a frame (a broken page): pdf.js draws its pages, the width of the pane
+        if not shutil.which("latexmk"):
+            self.skipTest("needs latexmk")
+        for w, h in SIZES:
+            self.b.size(w, h)
+            self.screen(MS_PDF)
+            self.assertTrue(self.b.wait("document.querySelectorAll('#ms-pdf-pages canvas.ms-pdf-page').length === 2", 60),
+                            f"{w}px: no pages drawn; status: {self.b.js('document.getElementById("ms-status").textContent')!r},"
+                            f" note: {self.b.js('document.getElementById("ms-pdf-note").textContent')!r}")
+            self.assertTrue(self.b.wait(f"{PDF_INK}.every(n => n > 50)", 15), f"{w}px: ink per page {self.b.js(PDF_INK)}")
+            self.assertTrue(self.b.js("document.getElementById('ms-pdf-frame').hidden"), f"{w}px: the frame is shown")
+            fit = self.b.js("(() => { const p = document.getElementById('ms-pdf-pages'), c = p.querySelector('canvas');"
+                            " return [c.clientWidth, p.clientWidth, c.width / c.clientWidth] })()")
+            self.assertGreater(fit[0], fit[1] - 24, f"{w}px: a page {fit[0]} px wide in a pane of {fit[1]}")
+            self.assertAlmostEqual(fit[2], 2, delta=0.05, msg=f"{w}px: drawn at {fit[2]}× (the screen's 2×)")
+        self.assertEqual(self.b.errors, [])
 
     def test_back_closes_what_is_open(self):
         w, h = SIZES[0]

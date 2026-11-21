@@ -119,6 +119,22 @@
     let dirty = false
     let loading = false
     let pdfUrl = null
+    // a browser with no PDF viewer of its own (Chrome on Android: a framed PDF is a broken page) or a
+    // touch screen (a framed PDF there neither scrolls nor zooms with the page): its pages drawn by pdf.js
+    const drawn = navigator.pdfViewerEnabled === false || !!(root.matchMedia && root.matchMedia('(pointer: coarse)').matches)
+    const pdfPages = $('ms-pdf-pages'), pdfView = drawn ? pdfPages : pdfFrame
+    const PDFJS = 'vendor/pdf.v4.10.38.min.mjs', PDFJS_WORKER = 'vendor/pdf.worker.v4.10.38.min.mjs'
+    let pdfjs = null // the module, loaded the first time a PDF is drawn
+    let pdfDoc = null
+    let pdfGen = 0
+    const pdfSeen = drawn ? new IntersectionObserver(seen => { for (const e of seen) e.isIntersecting ? void drawPage(e.target) : letGo(e.target) },
+      { root: pdfPages, rootMargin: '150% 0px' }) : null
+    let pdfWidth = 0
+    if (drawn) new ResizeObserver(() => {
+      if (Math.abs(pdfPages.clientWidth - pdfWidth) < 1) return
+      pdfWidth = pdfPages.clientWidth
+      for (const c of pdfPages.children) if (c.dataset.drawn) void drawPage(c)
+    }).observe(pdfPages)
     let compiling = false
     let composing = null // { kind, anchor }
     let marks = []
@@ -521,7 +537,7 @@
         renderErrors(c)
         renderStatus(c.ok ? `Compiled in ${c.seconds} s` : c.error ? 'Not compiled' : `Errors (${(c.errors || []).length}): the last good PDF stays`)
         // a failed compile leaves the last good PDF on screen
-        if (c.ok || pdfFrame.hidden) await loadPdf()
+        if (c.ok || pdfView.hidden) await loadPdf()
       } catch {
         renderStatus('The server is not answering.')
       } finally {
@@ -551,13 +567,13 @@
 
     async function loadPdf() {
       const w = what()
-      if (!w) { pdfFrame.hidden = true; pdfNote.hidden = false; pdfNote.textContent = level === 'snippets' ? 'Open a snippet: Compile snippet shows it alone.' : 'No document yet.'; return }
+      if (!w) { pdfView.hidden = true; pdfNote.hidden = false; pdfNote.textContent = level === 'snippets' ? 'Open a snippet: Compile snippet shows it alone.' : 'No document yet.'; return }
       if (!canWrite()) { pdfNote.textContent = 'The PDF is shown to the page carrying the key: open the address /rft printed once.'; pdfNote.hidden = false; return }
       try {
         const q = w.snippet ? `snippet=${encodeURIComponent(w.snippet)}` : `doc=${encodeURIComponent(w.doc)}`
         const res = await fetch(`api/manuscript/pdf?${q}`, { cache: 'no-store', headers: { 'X-RFT-Token': key() } })
         if (!res.ok) {
-          pdfFrame.hidden = true
+          pdfView.hidden = true
           pdfNote.textContent = `${w.snippet || w.doc} has not been compiled yet: ${w.snippet ? 'Compile snippet' : 'Compile'}.`
           pdfNote.hidden = false
           return
@@ -565,10 +581,94 @@
         const blob = await res.blob()
         if (pdfUrl) URL.revokeObjectURL(pdfUrl)
         pdfUrl = URL.createObjectURL(blob)
-        pdfFrame.src = pdfUrl
-        pdfFrame.hidden = false
-        pdfNote.hidden = true
+        if (!drawn) {
+          pdfFrame.src = pdfUrl
+          pdfFrame.hidden = false
+          pdfNote.hidden = true
+          return
+        }
+        try {
+          await drawPdf(new Uint8Array(await blob.arrayBuffer()))
+          pdfPages.hidden = false
+          pdfNote.hidden = true
+        } catch (err) {
+          // pdf.js not loaded or the file not read: the PDF itself, for the phone's own viewer
+          pdfPages.hidden = true
+          pdfNote.replaceChildren(`The PDF could not be drawn here (${(err && err.message) || err}): `,
+            el('a', { href: pdfUrl, download: `${w.snippet || w.doc}.pdf`, text: 'open the PDF' }), '.')
+          pdfNote.hidden = false
+        }
       } catch { /* the next compile */ }
+    }
+
+    // ---------------------------------------------------------------- the PDF drawn in the page
+
+    /** The pages as pdf.js draws them, each when it comes near the screen and let go when it is far
+     * (a thesis of 200 pages would not fit in a phone's memory drawn at once), at the screen's
+     * resolution, drawn again when the pane's width changes (the phone turned). */
+    async function drawPdf(bytes) {
+      const gen = ++pdfGen
+      const lib = await pdfLib()
+      const d = await lib.getDocument({ data: bytes, isEvalSupported: false }).promise
+      if (gen !== pdfGen) { void d.destroy(); return }
+      const pages = []
+      for (let i = 1; i <= d.numPages; i++) pages.push(await d.getPage(i))
+      if (gen !== pdfGen) { void d.destroy(); return }
+      // where the reader was, kept across a compile
+      const at = pdfPages.scrollHeight > 0 ? pdfPages.scrollTop / pdfPages.scrollHeight : 0
+      for (const c of pdfPages.children) { pdfSeen.unobserve(c); if (c._task) c._task.cancel() }
+      if (pdfDoc) void pdfDoc.destroy()
+      pdfDoc = d
+      pdfPages.replaceChildren(...pages.map((page, i) => {
+        const v = page.getViewport({ scale: 1 })
+        const c = el('canvas', { class: 'ms-pdf-page', role: 'img', 'aria-label': `Page ${i + 1} of ${pages.length}`, width: 0, height: 0 })
+        c.style.aspectRatio = `${v.width} / ${v.height}`
+        c._page = page
+        return c
+      }))
+      pdfPages.scrollTop = at * pdfPages.scrollHeight
+      for (const c of pdfPages.children) pdfSeen.observe(c)
+    }
+
+    async function drawPage(c) {
+      const w = c.clientWidth
+      if (!c._page || !w) return
+      const dpr = Math.min(root.devicePixelRatio || 1, 3)
+      const vp = c._page.getViewport({ scale: (w * dpr) / c._page.getViewport({ scale: 1 }).width })
+      const size = `${Math.round(vp.width)}x${Math.round(vp.height)}`
+      if (c.dataset.drawn === size) return
+      if (c._task) c._task.cancel()
+      c.dataset.drawn = size
+      c.width = Math.round(vp.width)
+      c.height = Math.round(vp.height)
+      const task = c._page.render({ canvasContext: c.getContext('2d'), viewport: vp })
+      c._task = task
+      try { await task.promise } catch { if (c._task === task) delete c.dataset.drawn } finally { if (c._task === task) c._task = null }
+    }
+
+    function letGo(c) {
+      if (c._task) c._task.cancel()
+      c._task = null
+      delete c.dataset.drawn
+      c.width = 0
+      c.height = 0
+    }
+
+    // pdf.js is a module that names itself globalThis.pdfjsLib: loaded by a module script (a module's
+    // load event comes once it has run), the first time a PDF is drawn
+    function pdfLib() {
+      if (!pdfjs) {
+        pdfjs = new Promise((done, fail) => {
+          const ready = () => root.pdfjsLib && root.pdfjsLib.getDocument
+          if (ready()) return done(root.pdfjsLib)
+          const s = el('script', { type: 'module', src: PDFJS })
+          s.onload = () => ready() ? done(root.pdfjsLib) : fail(new Error('pdf.js did not load'))
+          s.onerror = () => fail(new Error('pdf.js did not load'))
+          document.head.append(s)
+        }).then(lib => { lib.GlobalWorkerOptions.workerSrc = new URL(PDFJS_WORKER, document.baseURI).href; return lib })
+        pdfjs.catch(() => { pdfjs = null })
+      }
+      return pdfjs
     }
 
     // ---------------------------------------------------------------- the discussion

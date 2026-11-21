@@ -114,6 +114,10 @@ PAGE_FILES = {
     "/vendor/svg2pdf.v2.9.0.umd.min.js": ("vendor/svg2pdf.v2.9.0.umd.min.js", "text/javascript; charset=utf-8"),
     "/vendor/LICENSE-jspdf.txt": ("vendor/LICENSE-jspdf.txt", "text/plain; charset=utf-8"),
     "/vendor/LICENSE-svg2pdf.txt": ("vendor/LICENSE-svg2pdf.txt", "text/plain; charset=utf-8"),
+    # the Manuscript's PDF drawn in the page where the browser shows none in a frame (Chrome on Android)
+    "/vendor/pdf.v4.10.38.min.mjs": ("vendor/pdf.v4.10.38.min.mjs", "text/javascript; charset=utf-8"),
+    "/vendor/pdf.worker.v4.10.38.min.mjs": ("vendor/pdf.worker.v4.10.38.min.mjs", "text/javascript; charset=utf-8"),
+    "/vendor/LICENSE-pdfjs.txt": ("vendor/LICENSE-pdfjs.txt", "text/plain; charset=utf-8"),
 }
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 ID_RE = re.compile(r"^[EDRT]\d+$")

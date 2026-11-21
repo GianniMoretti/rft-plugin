@@ -737,14 +737,18 @@ the whole page, the note's actions a row of named chips above it. The phone's **
 what was opened last, and in a note reached by a link shows the note it was in. The kanban
 shows a column at a time, swiped; the Manuscript and the Slides a pane at a time (the list, the
 text, the PDF or slide). On any touch screen, controls are 44 px targets, fields' text 16 px, and
-a selection made with a long press gets its Comment, Suggest and Footnote bar at the bottom.
+a selection made with a long press gets its Comment, Suggest and Footnote bar at the bottom. A
+browser that shows no PDF in a frame (Chrome on Android), and any touch screen, gets the
+Manuscript's PDF drawn by pdf.js, page by page as they come near the screen.
 `tests/test_phone.py` checks every page at 360 and 412 px in headless Chromium.
 
 d3 (ISC licence, `web/vendor/LICENSE-d3.txt`), KaTeX (MIT licence,
 `web/vendor/LICENSE-katex.txt`; its fonts inlined in its stylesheet), jsPDF and svg2pdf.js
 (MIT licences, `web/vendor/LICENSE-jspdf.txt`, `web/vendor/LICENSE-svg2pdf.txt`; an artifact's
-figures as PDF), and CodeMirror 5 (MIT licence, `web/vendor/LICENSE-codemirror.txt`; the
-manuscript's editor, with its LaTeX mode) are bundled, so the page needs no network.
+figures as PDF), CodeMirror 5 (MIT licence, `web/vendor/LICENSE-codemirror.txt`; the
+manuscript's editor, with its LaTeX mode) and pdf.js 4.10.38 (Apache 2.0 licence,
+`web/vendor/LICENSE-pdfjs.txt`; the manuscript's PDF where the browser draws none, loaded the first
+time) are bundled, so the page needs no network.
 
 ### Experiment notebooks
 

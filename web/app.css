@@ -933,6 +933,9 @@ main:has(#drawer:not([hidden])) #manuscript { right: min(var(--drawer-w), 92vw);
 .ms-pdf { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .ms-pdf iframe { flex: 1; width: 100%; border: 0; background: #fff; }
 .ms-pdf iframe[hidden] { display: none; }
+.ms-pdf-pages { flex: 1; min-height: 0; overflow: auto; padding: 8px; background: light-dark(#e6e7ea, #2a2d34); overscroll-behavior: contain; }
+.ms-pdf-pages[hidden] { display: none; }
+.ms-pdf-page { display: block; width: 100%; height: auto; margin: 0 auto 8px; background: #fff; box-shadow: 0 1px 4px #00000040; }
 .ms-pdf-note { padding: 12px; margin: 0; }
 .ms-pdf-note[hidden] { display: none; }
 .ms-errors { max-height: 35%; overflow: auto; display: flex; flex-direction: column; gap: 2px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
