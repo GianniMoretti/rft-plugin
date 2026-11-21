@@ -140,10 +140,11 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
 | `rft_set_snippet` | a new snippet, a building block resting on verified notes: a stub (its outline, for you to write) while snippets are locked; once you unlock one, its text or edits. Its macros are checked against what the notebooks saved, and it is stamped with its notes |
 | `rft_set_document` | a placement you agreed to: a copy of a snippet placed in a document (after a copy or a heading), moved, or removed |
 | `rft_supersede` | marks a note whose result a newer one overturns (`superseded_by:` and a History line); the map, search, graph and tree view show it as superseded, so the old number is not built on |
-  | `rft_next` | what is still open: the deadlines first (nearest first, with what puts them at risk) and the GPU clashes, your priorities, then by concept the experiments running, planned and never run, directions with nothing tried under them (with their age, the higher priorities first), the digests' open questions, and the priorities Claude suggested that wait for you |
+  | `rft_next` | what is still open: the deadlines first (nearest first, with what puts them at risk), the GPU clashes and the meetings of the next 7 days, your priorities, then by concept the experiments running, planned and never run, directions with nothing tried under them (with their age, the higher priorities first), the digests' open questions, and the priorities Claude suggested that wait for you |
   | `rft_suggest_priority` | suggests a priority for a note, with a one-line reason (`suggested_priority:`); you accept or dismiss it in the tree view. Claude never sets a priority itself (see Priorities) |
-  | `rft_suggest_dates` | suggests an experiment's start and/or estimate, with a one-line reason (`suggested_start:`, `suggested_est:`); you accept or dismiss it. Claude never sets a date itself (see Deadlines and the calendar) |
+  | `rft_suggest_dates` | suggests an experiment's start and/or estimate, with a one-line reason (`suggested_start:`, `suggested_est:`); you accept or dismiss it. Claude never sets a date itself (see Deadlines, meetings and the calendar) |
   | `rft_add_deadline` | adds a deadline you gave Claude in the chat (a milestone, with the notes it needs), once you confirm it in a dialog |
+  | `rft_add_meeting` | adds a meeting you gave Claude in the chat, once or recurring (with the notes it needs by its next occurrence), once you confirm it in a dialog |
   | `rft_suggest_deadline` | suggests a paper submission deadline, read from the venue's official dates page (`source:`); you accept or dismiss it in the Calendar |
   | `rft_collect_papers` | downloads, in the background, the open-access PDFs of reference notes (arXiv, OpenReview, PMLR, ACL Anthology, NeurIPS/CVF proceedings, ...) into `vault/papers/<concept>/<year> <first author> <title>.pdf`, linked from each note (`pdf:`; in a literature note, a `PDF:` line under each paper); saved PDFs follow their concept. Never from paywalled publishers |
   | `rft_set_tags` | replaces a note's topical tags (lowercase kebab-case), keeping the project, type and status tags |
@@ -344,18 +345,40 @@ note in the drawer; the board makes room for it.
 - A menu you are in is not redrawn under you while notes change on disk; the board follows once
   you leave it. The standalone `/rft-view` page shows the kanban read-only.
 
-### Deadlines and the calendar
+### Deadlines, meetings and the calendar
 
-**Calendar** (beside Kanban) shows the deadlines and the experiments' runs, as a **Timeline** or a
-**Month**. The dates are yours alone, as priorities are: Claude suggests them, and its own edits
-that change them are refused.
+**Calendar** (beside Kanban) shows the deadlines, the meetings and the experiments' runs, as a
+**Timeline** or a **Month**. The dates are yours alone, as priorities are: Claude suggests them,
+and its own edits that change them are refused.
 
-- **Deadlines** of any kind are milestones: one note each in `vault/milestones/` (outside the
-  tree), e.g. `M01 Workshop paper.md`, with `due:` and the notes it `needs:` done first. A due date
-  is a day, a local time or a time in a zone: `2026-11-13`, `2026-11-13 14:00`,
-  `2026-11-13 23:59 AoE` (or `UTC`, `+01:00`); a zoned one also shows the time where you are.
-  **+ Deadline** adds one (click a day of the Month to start on it); a deadline's name opens its
+- **Deadlines** (a submission, a talk, a thesis chapter) are milestones: one note each in
+  `vault/milestones/` (outside the tree), e.g. `M01 Workshop paper.md`, with `due:` and the notes it
+  `needs:` done first. A due date is a day, a local time or a time in a zone: `2026-11-13`,
+  `2026-11-13 14:00`, `2026-11-13 23:59 AoE` (or `UTC`, `+01:00`); a zoned one also shows the time
+  where you are. **+ Deadline** adds one (or click a day of the Month); a deadline's name opens its
   editor (due date, needs, **Done**). Any note can also have a `due:` of its own.
+- **Meetings**, once or recurring, are one note each in `vault/meetings/`, e.g.
+  `G01 Supervisor meeting.md`:
+
+  ```yaml
+  when: 2026-11-10 14:00       # the first one: a day, a time, a zone as for a due date
+  duration: 1h                 # 45m, 1h30m
+  every: week                  # day, 2 weeks, month (the same date), month on the first Tuesday
+  until: 2027-06-29            # the last day it may fall on (none: no end)
+  skip: [2026-12-22, 2026-12-29]
+  moved: ["2026-12-01 → 2026-12-02 10:00"]
+  ```
+
+  `every:` takes any number of days, weeks or months, and a weekday of the month (`first` …
+  `fifth`, `last`; a month without a fifth one is skipped, as is one without a 31st for a meeting
+  on the 31st). **+ Meeting** adds one (or click a day of the Month): its repeat menu is worked
+  out from the day (every week on Tuesday, every month on the 4th, on the fourth Tuesday, on the
+  last Tuesday, or Custom…). Click an occurrence, on the Month or the Timeline, to **Move** it (a
+  day and a time), **Skip** it, bring a skipped one back, or end the series with it (**Last one**);
+  below, the series itself (its day and time, length, repeat, until, needs), **Save** or
+  **Delete**. A meeting with `needs:` is a deadline too, at its next occurrence: planned for, at
+  risk, on the cards and the kanban as the others are. The strip above the calendar shows the
+  meetings of the next 7 days.
 - **An experiment's run**: `start:` (a day) and `est:` (`3d`, `2w`), set in the note's drawer or
   by dragging its bar on the Timeline (the bar moves the start, its right end the estimate).
   In a vault that uses dates, `rft_set_status` records `started:` and `finished:`. `after:` names the runs it waits for, and
@@ -374,18 +397,21 @@ that change them are refused.
   config, a strip below shows the GPUs taken each day, red above the capacity. **‹ Today ›**
   scroll, **− +** zoom.
 - **Month**: the runs across each week, the deadlines on their days (Claude's dashed, done ones
-  struck through).
+  struck through), the meetings on theirs (a moved one in italics, a skipped one struck through).
+  On the **Timeline**, each meeting has a row above the experiments, a mark on each day it falls on.
 - **Claude suggests** a start and an estimate (`rft_suggest_dates`) and paper submissions
   (`rft_suggest_deadline`, read from the venue's official dates page, never from memory); you
   **Accept** or **Dismiss** them in the drawer and in the Calendar. A dismissed deadline stays
   in the vault as dismissed, so it is not suggested again. A deadline you tell Claude in the chat
   it adds with `rft_add_deadline`, once you confirm it in a dialog.
-- `rft_next` lists the deadlines first, with what puts them at risk, and the GPU clashes; session
+- `rft_next` lists the deadlines first, with what puts them at risk, the GPU clashes and the
+  meetings of the next 7 days; session
   start names the deadlines of the next 14 days that are at risk. A kanban card shows the
   deadline nearest it.
-- **`vault/rft.ics`**, rewritten by `rft_sync` when the dates change, holds the deadlines and the
-  planned runs (never the suggestions), for any calendar app to import; **.ics** in the Calendar
-  downloads the same.
+- **`vault/rft.ics`**, rewritten by `rft_sync` when the dates change, holds the deadlines, the
+  meetings (a recurring one as a series: its rule, its skipped days, each moved one as an event of
+  its own) and the planned runs (never the suggestions), for any calendar app to import; **.ics**
+  in the Calendar downloads the same.
 
 ### The experiment queue
 
@@ -684,7 +710,8 @@ accepted suggestion, its frontmatter kept as it is; the `locked:` line from the 
 `priority:` line from the kanban or the drawer (which also clears Claude's suggested priority), within
 the limits; a note's `due:`, `start:` and `est:` from the Calendar or the drawer (which also clear
 Claude's suggested dates); a deadline in `vault/milestones/` (a new one, its due date, needs and
-status, Claude's suggested one accepted or dismissed); a note's comments file in `vault/.comments/`;
+status, Claude's suggested one accepted or dismissed); a meeting in `vault/meetings/` (a new one,
+its times and repeat, an occurrence skipped or moved, its needs, or the meeting deleted); a note's comments file in `vault/.comments/`;
 and the experiment queue in `vault/.queue/` (a job moved, cancelled or retried, the queue paused,
 the GPUs it may use; a job's output is read only with the key). A new note from **Add child**, a note's new type from
 **Change type**, or a move from **Move**, it asks the session that started it to make, and **Ask

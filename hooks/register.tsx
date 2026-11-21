@@ -1,13 +1,13 @@
 // rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-concepts, /rft-literature, /rft-rebalance, /rft-update,
 // /rft-summarize, /rft-artifact, /rft-next, /rft-view), the model's tools (rft_add_node, rft_set_status, rft_set_summary, rft_map, rft_set_digest, rft_artifact, rft_set_artifact, rft_move_node, rft_set_refs, rft_search,
-// rft_graph, rft_supersede, rft_next, rft_suggest_priority, rft_suggest_dates, rft_add_deadline, rft_suggest_deadline, rft_collect_papers, rft_set_tags, rft_set_type, rft_set_concept, rft_concepts, rft_set_repos, rft_code,
+// rft_graph, rft_supersede, rft_next, rft_suggest_priority, rft_suggest_dates, rft_add_deadline, rft_add_meeting, rft_suggest_deadline, rft_collect_papers, rft_set_tags, rft_set_type, rft_set_concept, rft_concepts, rft_set_repos, rft_code,
 // rft_set_code, rft_set_notebook, rft_run_notebook, rft_tags, rft_tree, rft_validate, rft_sync, rft_comments, rft_comment, rft_suggest), the operating rules
 // injected into the system prompt, the outline pane, and the web view: /rft starts a local
 // server (server/rft_server.py) for the interactive tree page (web/), makes the notes that
 // page adds, retypes or moves (fromView), and asks Claude to answer the threads the user asks
 // it to (askFromView). Claude's own edits of a locked note are refused (lockedEdit), and so are
 // its writes of a note's priority, the user's alone (priorityEdit), and of the dates, the user's too
-// (datesEdit): a note's due:, start: and est:, and a deadline's due:; its writes of a concept's artifact by
+// (datesEdit): a note's due:, start: and est:, a deadline's due:, and a meeting's times; its writes of a concept's artifact by
 // hand, which only rft_set_artifact writes, stamped with the results it was written from (artifactEdit); and of
 // a note's reproduced:, which only rft_run_notebook writes, so it says what a notebook's run did (reproducedEdit).
 // Everything is
@@ -32,7 +32,7 @@ import { changesPriority, priorityText, suggestPriority } from './lib/priority'
 import { changesVerified, dismissVerified, keepVerified, toReview, verifiedText, verifyNote } from './lib/verify'
 import { markReviewed, manuscriptReport, manuscriptWarnings, migrateManuscript, newDocument, readManuscript, reviewCopy, setDocument, setSnippet } from './lib/manuscript'
 import { BLOCKS_FILE, DOCUMENTS_DIR, GENERATED, KINDS, SNIPPETS_DIR, isDocumentLocked, isSnippetLocked, readDocsRegistry, readRegistry } from './lib/snippets'
-import { addDeadline, changesDates, checkDeadline, datesText, deadlineQuestion, deadlinesLine, suggestDates, suggestDeadline } from './lib/schedule'
+import { MEETING_FIELDS, addDeadline, addMeeting, changesDates, checkDeadline, checkMeeting, datesText, deadlineQuestion, deadlinesLine, meetingQuestion, suggestDates, suggestDeadline } from './lib/schedule'
 import { RECALL_HINT, searchesVault } from './lib/recall'
 import { FEATURE_TOOLS, eagerTools, featuresInUse } from './lib/tools'
 import { matches, shellWrites } from './lib/shell'
@@ -47,7 +47,7 @@ import { MACHINE_FILE, machinePrompt, probeText, readMachine, statusText } from 
 import type { MachineStatus, Probe } from './lib/machine'
 import { QUEUE_CLI, QUEUE_FILE, addedText, cancelledText, jobEvents, jobsNext, jobsReport, movedText, queueLine, readQueue, retriedText, toStart } from './lib/queue'
 import type { Job, QueueView } from './lib/queue'
-import { CONFIG_PATH, LEGEND, MARK, NODE_TYPES, bodyOf, isLiterature, counts, countsLine, isAbsolute, join, locate, readConfig, lacksNotebook, repoAbs, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
+import { CONFIG_PATH, LEGEND, MARK, MEETINGS, NODE_TYPES, bodyOf, isLiterature, counts, countsLine, isAbsolute, join, locate, readConfig, lacksNotebook, repoAbs, resolveId, resolvePath, rooted, setField, signatureOf, sync, validate } from './lib/vault'
 
 const PANE = 'rft-tree'
 const TITLE = 'Reasoning tree'
@@ -228,15 +228,31 @@ const TOOLS = {
   },
   rft_add_deadline: {
     description:
-      'Add a deadline the user gave you (a meeting, a submission they named, a talk, a thesis chapter): a milestone in the vault\'s milestones/, outside the tree, with the notes it needs done first. The plugin asks the user to confirm it in a dialog you cannot answer; if they decline, nothing is added: do not try again unless they ask. Never add a deadline the user did not give you: for a paper submission you think fits, use rft_suggest_deadline.',
+      'Add a deadline the user gave you (a submission they named, a talk, a thesis chapter): a milestone in the vault\'s milestones/, outside the tree, with the notes it needs done first. A meeting (a supervisor meeting, a reading group, a call), once or recurring, is rft_add_meeting instead. The plugin asks the user to confirm it in a dialog you cannot answer; if they decline, nothing is added: do not try again unless they ask. Never add a deadline the user did not give you: for a paper submission you think fits, use rft_suggest_deadline.',
     inputSchema: {
       type: 'object',
       properties: {
-        title: { type: 'string', description: 'What is due, e.g. "Workshop paper", "Supervisor meeting".' },
+        title: { type: 'string', description: 'What is due, e.g. "Workshop paper", "Thesis chapter 3".' },
         due: { type: 'string', description: 'When: 2026-11-13 (the day), 2026-11-13 14:00 (local time), or 2026-11-13 23:59 AoE (AoE, UTC or +01:00).' },
         needs: { type: 'array', items: { type: 'string' }, description: 'Ids of the notes that must be done before it (experiments, mostly).' },
       },
       required: ['title', 'due'],
+    },
+  },
+  rft_add_meeting: {
+    description:
+      'Add a meeting the user gave you, once or recurring (a weekly supervisor meeting, a reading group every other Thursday, a call on the first Tuesday of each month): one note in the vault\'s meetings/, outside the tree, shown in the tree view\'s Calendar. With needs, it is a deadline too: those notes must be done by its next occurrence. The plugin asks the user to confirm it in a dialog you cannot answer; if they decline, nothing is added: do not try again unless they ask. The user skips or moves a single occurrence in the Calendar; never write a meeting\'s file yourself.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'E.g. "Supervisor meeting", "Reading group".' },
+        when: { type: 'string', description: 'The (first) occurrence: 2026-11-24 14:00 (local time), 2026-11-24 16:00 UTC (or +01:00, AoE), or a day alone for one all day.' },
+        duration: { type: 'string', description: 'How long: 1h, 45m, 1h30m.' },
+        every: { type: 'string', description: 'For a recurring one, how often from when on: day, week, 2 weeks, month (the same date), month on the first Tuesday (second, third, fourth, fifth, last; any weekday). Leave out for a single meeting.' },
+        until: { type: 'string', description: 'The last day a recurring one may fall on: 2027-06-30. Leave out for no end.' },
+        needs: { type: 'array', items: { type: 'string' }, description: 'Ids of the notes that must be done by its next occurrence, when the user said so (e.g. "I need E12 for the meeting").' },
+      },
+      required: ['title', 'when'],
     },
   },
   rft_suggest_deadline: {
@@ -961,6 +977,15 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       } catch { /* dismissed, or no one to ask */ }
       if (answer !== 'Add it') return `The user did not add it: no deadline was written. Do not try again unless the user asks.`
       return addDeadline(io, loaded, d)
+    }
+    case 'rft_add_meeting': {
+      const d = checkMeeting(loaded, { title: i.title, when: i.when, duration: i.duration, every: i.every, until: i.until, needs: i.needs })
+      let answer = ''
+      try {
+        answer = await $.ui.ask(meetingQuestion(d), { options: ['Add it', "Don't add"], header: 'Meeting' })
+      } catch { /* dismissed, or no one to ask */ }
+      if (answer !== 'Add it') return `The user did not add it: no meeting was written. Do not try again unless the user asks.`
+      return addMeeting(io, loaded, d)
     }
     case 'rft_suggest_priority':
       return suggestPriority(io, loaded, String(i.id ?? ''), i.priority, i.why)
@@ -1696,11 +1721,14 @@ async function priorityEdit($: EngineInterface, e: Record<string, unknown>): Pro
 
 /** A `due:`, `start:` or `est:` line, not `suggested_start:` or `suggested_est:`. */
 const DATE_LINE = /(^|[^\w])(due|start|est)\s*:/m
+/** A line of a meeting's times. */
+const MEETING_LINE = new RegExp(`(^|[^\\w])(${MEETING_FIELDS.join('|')})\\s*:`, 'm')
 
 /**
  * Why Claude may not make this tool call, or null: it would change a date, the user's alone (an
  * Edit or Write of a note or a milestone in the vault that adds, changes or removes `due:`,
- * `start:` or `est:`; a shell command that writes, holds such a line and names the vault or a note).
+ * `start:` or `est:`, or of a meeting that changes its times; a shell command that writes, holds
+ * such a line and names the vault or a note, or a meeting's line and the meetings' folder).
  */
 async function datesEdit($: EngineInterface, e: Record<string, unknown>): Promise<string | null> {
   const tool = String(e.tool)
@@ -1710,6 +1738,11 @@ async function datesEdit($: EngineInterface, e: Record<string, unknown>): Promis
   const vault = resolvePath(s.vault, '.')
   if (tool === 'Bash') {
     const cmd = String(e.command ?? '')
+    // a meeting's times: a command that writes in meetings/, or a script that names it
+    if (MEETING_LINE.test(cmd) && cmd.includes(`${MEETINGS}/`)) {
+      const w = shellWrites(cmd, resolvePath(await $.session.cwd(), '.'))
+      if (w.files.some(f => f.startsWith(`${vault}/${MEETINGS}/`)) || w.script) return datesText(null)
+    }
     if (!DATE_LINE.test(cmd)) return null
     const t = await shellTouches($, cmd, vault, Object.values(s.nodes))
     if (t.notes.length || t.inVault) return datesText(t.notes[0] ?? null)
@@ -1726,7 +1759,7 @@ async function datesEdit($: EngineInterface, e: Record<string, unknown>): Promis
   let before = ''
   try { before = await $.fs.read(abs) } catch { /* a new file */ }
   const after = afterCall(tool, e, before)
-  if (after === null || !changesDates(before, after)) return null
+  if (after === null || !changesDates(before, after, abs.startsWith(`${vault}/${MEETINGS}/`))) return null
   return datesText(Object.values(s.nodes).find(x => join(vault, x.path) === abs) ?? null)
 }
 

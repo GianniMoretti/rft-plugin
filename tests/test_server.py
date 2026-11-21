@@ -861,6 +861,89 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(re.search(r"const DUE_RE = /(.*)/i\n", js).group(1), rft_server.DUE_RE.pattern)
         self.assertEqual(tuple(re.findall(r"'(\w+)'", re.search(r"const MILESTONE_STATUSES = \[(.*?)\]", js).group(1))), rft_server.MILESTONE_STATUSES)
 
+    # ------------------------------------------------------------ meetings
+
+    def meeting(self, payload, **kw):
+        return self.write("POST", "/api/meeting", payload, **kw)
+
+    def meetings_dir(self):
+        d = self.vault / "meetings"
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        return d
+
+    def test_tree_has_the_meetings(self):
+        d = self.meetings_dir()
+        d.mkdir()
+        (d / "G01 Supervisor meeting.md").write_text('---\nid: G01\ntype: meeting\nwhen: 2026-11-10 14:00\nduration: 1h\nevery: week\nuntil: 2027-06-29\n'
+                                                     'skip: [2026-12-22, "2026-12-29"]\nmoved: ["2026-12-01 → 2026-12-02 10:00"]\n'
+                                                     'needs: ["[[E01 First run]]", "[[E99 Gone]]"]\n---\n\n# G01 · Supervisor meeting\n')
+        (d / "G02 Talk.md").write_text("---\nid: G02\ntype: meeting\nwhen: 2026-12-03 10:30 AoE\n---\n\n# G02 · Talk\n")
+        tree = json.loads(self.get("/api/tree")[2])
+        self.assertEqual(tree["meetings"], [
+            {"id": "G01", "name": "G01 Supervisor meeting", "title": "Supervisor meeting", "path": "meetings/G01 Supervisor meeting.md",
+             "when": "2026-11-10 14:00", "duration": "1h", "every": "week", "until": "2027-06-29", "skip": ["2026-12-22", "2026-12-29"],
+             "moved": ["2026-12-01 → 2026-12-02 10:00"], "needs": ["E01"], "missing": ["E99 Gone"]},
+            {"id": "G02", "name": "G02 Talk", "title": "Talk", "path": "meetings/G02 Talk.md", "when": "2026-12-03 10:30 AoE",
+             "skip": [], "moved": [], "needs": [], "missing": []},
+        ])
+
+    def test_meeting_added_changed_and_deleted(self):
+        d = self.meetings_dir()
+        status, res = self.meeting({"title": " Supervisor: meeting ", "when": "2026-11-10 14:00", "duration": "1h", "every": "week", "needs": ["E01"]})
+        self.assertEqual((status, res), (201, {"id": "G01", "name": "G01 Supervisor meeting"}))
+        p = d / "G01 Supervisor meeting.md"
+        self.assertEqual(p.read_text(), '---\nid: G01\ntype: meeting\nwhen: 2026-11-10 14:00\nduration: 1h\nevery: week\nneeds: ["[[E01 First run]]"]\n'
+                                        '---\n\n# G01 · Supervisor meeting\n')
+        # an occurrence skipped and one moved (the lists whole, as the page works them out), the last day: each in its place
+        self.assertEqual(self.meeting({"id": "G01", "skip": ["2026-12-29", "2026-12-22", "2026-12-22"], "moved": ["2026-12-01 → 2026-12-02 10:00"],
+                                       "until": "2027-06-29"}), (200, {"id": "G01"}))
+        self.assertEqual(p.read_text(), '---\nid: G01\ntype: meeting\nwhen: 2026-11-10 14:00\nduration: 1h\nevery: week\nuntil: 2027-06-29\n'
+                                        'skip: [2026-12-22, 2026-12-29]\nmoved: ["2026-12-01 → 2026-12-02 10:00"]\nneeds: ["[[E01 First run]]"]\n'
+                                        '---\n\n# G01 · Supervisor meeting\n')
+        # changed in place; null and an empty list take a line away
+        self.meeting({"id": "G01", "when": "2026-11-10 15:00", "every": "2 weeks", "duration": None, "skip": [], "moved": [], "needs": []})
+        self.assertEqual(p.read_text(), "---\nid: G01\ntype: meeting\nwhen: 2026-11-10 15:00\nevery: 2 weeks\nuntil: 2027-06-29\n---\n\n# G01 · Supervisor meeting\n")
+        self.meeting({"id": "G01", "every": None, "until": None, "duration": "45m"})
+        self.assertEqual(p.read_text(), "---\nid: G01\ntype: meeting\nwhen: 2026-11-10 15:00\nduration: 45m\n---\n\n# G01 · Supervisor meeting\n")
+        # ids are never reused: the next one after every meeting on disk
+        self.assertEqual(self.meeting({"title": "Lab", "when": "2026-12-01 10:00", "every": "month on the first Tuesday"})[1]["id"], "G02")
+        self.assertIn("every: month on the first Tuesday\n", (d / "G02 Lab.md").read_text())
+        self.assertEqual(self.meeting({"id": "G01", "delete": True}), (200, {"id": "G01", "deleted": True}))
+        self.assertFalse(p.exists())
+        self.assertEqual([m["id"] for m in json.loads(self.get("/api/tree")[2])["meetings"]], ["G02"])
+        self.assertEqual(self.meeting({"title": "Talk", "when": "2026-12-03"})[1]["id"], "G03")
+
+    def test_meeting_bad_requests(self):
+        d = self.meetings_dir()
+        for payload in ({"title": "Talk"}, {"title": "Talk", "when": "soon"}, {"title": " ?? ", "when": "2026-12-03"},
+                        {"title": "Talk", "when": "2026-12-03", "every": "fortnightly"}, {"title": "Talk", "when": "2026-12-03", "duration": "long"},
+                        {"title": "Talk", "when": "2026-12-03", "until": "2027-01-01"}, {"title": "Talk", "when": "2026-12-03", "every": "week", "until": "2026-12-01"},
+                        {"title": "Talk", "when": "2026-12-03", "needs": ["E99"]}, {"when": "2026-12-03"}):
+            self.assertEqual(self.meeting(payload)[0], 400, payload)
+        self.assertFalse(d.exists())
+        self.assertEqual(self.meeting({"title": "Talk", "when": "2026-12-03"}, key=None)[0], 403)
+        self.assertEqual(self.meeting({"title": "Talk", "when": "2026-12-03"}, origin="http://evil.example")[0], 403)
+        self.assertEqual(self.meeting({"id": "G09", "when": "2026-12-03"})[0], 404)
+        self.assertEqual(self.meeting({"title": "Talk", "when": "2026-12-03 10:00", "every": "week"})[0], 201)
+        before = (d / "G01 Talk.md").read_text()
+        for payload in ({"id": "G01"}, {"id": "G01", "when": None}, {"id": "G01", "when": "soon"}, {"id": "G01", "skip": ["soon"]}, {"id": "G01", "skip": "2026-12-10"},
+                        {"id": "G01", "moved": ["2026-12-10 to 2026-12-11"]}, {"id": "G01", "moved": ["2026-12-10 → soon"]}, {"id": "G01", "every": "2 weekly"},
+                        {"id": "G01", "status": "done"}, {"id": "G01", "delete": "yes"}, {"id": "G01", "until": "end"}):
+            self.assertEqual(self.meeting(payload)[0], 400, payload)
+        self.assertEqual((d / "G01 Talk.md").read_text(), before)
+
+    def test_meetings_read_as_the_page_reads_them(self):
+        """DURATION_RE, EVERY_RE and MOVED_RE, as web/schedule.js has them."""
+        js = (Path(__file__).resolve().parents[1] / "web" / "schedule.js").read_text()
+        for name in ("DURATION_RE", "EVERY_RE"):
+            self.assertEqual(re.search(rf"const {name} = /(.*)/i\n", js).group(1), getattr(rft_server, name).pattern, name)
+        self.assertEqual(re.search(r"const MOVED_RE = /(.*)/\n", js).group(1), rft_server.MOVED_RE.pattern)
+        for v in ("week", "2 weeks", "1w", "weekly", "every 2 weeks", "month on the first Tuesday", "2 months on the last fri", "day"):
+            self.assertTrue(rft_server.every_ok(v), v)
+        for v in ("fortnightly", "2 weekly", "0 weeks", "week on the first Tuesday", "month on the first monkey", ""):
+            self.assertFalse(rft_server.every_ok(v), v)
+        self.assertEqual([rft_server.duration_ok(v) for v in ("1h", "45m", "1h30m", "90 min", "", "h", "0m", "1.5h")], [True] * 4 + [False] * 4)
+
     def test_add_node_asks_the_session_and_answers_the_new_id(self):
         self.session(self.plugin)
         status, res = self.post({"parent": "E01", "type": "direction", "title": "  Then this  "})

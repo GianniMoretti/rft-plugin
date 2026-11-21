@@ -7,7 +7,8 @@ accepted suggestion); the `locked:` line of its frontmatter; its `priority:` lin
 alone (which also answers Claude's `suggested_priority:`); its dates, the user's too (`due:`,
 `start:`, `est:`, which also answer Claude's suggested ones); the deadlines in vault/milestones/
 (a new one, its due date, the notes it needs, its status, and Claude's suggested ones accepted or
-dismissed); its discussion, the comments and suggestions on parts of its text, in
+dismissed); the meetings in vault/meetings/ (a new one, its times, how often it comes back, an
+occurrence skipped or moved, the notes it needs, or the meeting deleted); its discussion, the comments and suggestions on parts of its text, in
 vault/.comments/<id>.json (as hooks/lib/comments.ts reads it); and the user's scratchpad, quick
 notes and to-dos in vault/Scratchpad.md. It serves each concept's artifact (vault/artifacts/<id> <name>.html,
 written by Claude with rft_set_artifact) read-only, as a page of its own in a sandbox (GET api/artifact?concept=<id>):
@@ -20,13 +21,13 @@ answer a thread (a model turn). It binds 127.0.0.1 only, takes requests only for
 host name (so a web page elsewhere cannot reach it through DNS rebinding), serves nothing but an
 allow-list of page files, and reads or writes a note only by its id, in a markdown file that
 resolves inside one of the vault's note folders (experiments/, directions/, references/,
-theory/), a deadline only in milestones/, and the scratchpad only as a plain file at the vault's
+theory/), a deadline only in milestones/, a meeting only in meetings/, and the scratchpad only as a plain file at the vault's
 top. It shows the experiment queue (GET api/queue: the GPUs, the jobs waiting and running, the
 history; rft_queue.py beside it) and takes the user's changes to it (POST api/queue: a job moved,
 cancelled or retried, the queue paused, the GPUs it may use); a job's output (GET api/queue/output)
 goes only to a request carrying the key; all three answer 404 until this machine is paired with
 the queue (rft_queue.py machine add), so the page shows no monitor. A write (PUT api/note, PUT api/scratchpad, POST api/node, api/type, api/comment, api/lock, api/verify,
-api/priority, api/dates, api/milestone, api/queue) must also come from the page itself (its
+api/priority, api/dates, api/milestone, api/meeting, api/queue) must also come from the page itself (its
 Origin) and carry the vault's key, which is in the address the server prints, so neither
 another web page nor another user of the machine can change a note. The key is kept in the
 user's cache, readable by them alone, so it stays the same across restarts.
@@ -37,7 +38,7 @@ the note, in the vault and then in the Obsidian vault around it (the folder that
 `.obsidian/`). Only image files, and one outside the vault only for a request carrying the key.
 
     python3 rft_server.py --vault /abs/project/vault --web /abs/plugin/web [--port 0] [--project NAME]
-        [--config /abs/project/.rft/config.json]   (read for `gpus:` and the last milestone id)
+        [--config /abs/project/.rft/config.json]   (read for `gpus:` and the last milestone and meeting ids)
 
 It prints `RFT_SERVER_URL http://127.0.0.1:<port>/?token=<key>` once listening, and exits when
 its parent process goes away (or, with --watch-stdin, closes its stdin). When a fixed --port is
@@ -177,6 +178,16 @@ DAY_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 DUE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}):(\d{2}))?(?:\s*(AoE|UTC|Z|[+-]\d{2}:?\d{2}))?$", re.I)
 EST_RE = re.compile(r"^(\d+)\s*([dw])?$", re.I)
 DATE_FIELDS = ("due", "start", "est")
+# the meetings, outside the tree: once at `when:`, or coming back `every:` day, week or month up to
+# `until:`, but on the days in `skip:`, with occurrences `moved:` elsewhere; as web/schedule.js reads
+# them (the same patterns), which also says on which days they fall
+MEETINGS = "meetings"
+MEETING_RE = re.compile(r"^G(\d+)$")
+DURATION_RE = re.compile(r"^(?:(\d+)\s*h)?\s*(?:(\d+)\s*m(?:in)?)?$", re.I)
+EVERY_RE = re.compile(r"^(?:every\s+)?(?:(\d+)\s*)?(d|w|m|days?|weeks?|months?|daily|weekly|monthly)(?:\s+on\s+the\s+(first|second|third|fourth|fifth|last)\s+([a-z]{3,}))?$", re.I)
+MOVED_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\s*(?:→|->)\s*(.+)$")
+MEETING_FIELDS = ("when", "duration", "every", "until", "skip", "moved", "needs")
+WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 # the user's quick notes and to-dos: one markdown file at the vault's top, outside the tree (no
 # note folder holds it, so neither the tree nor its version sees it), as web/scratchpad.js shows it
 SCRATCHPAD = "Scratchpad.md"
@@ -547,6 +558,34 @@ def due_ok(value: str | None) -> bool:
     return bool(m) and day_of(m.group(1)) is not None and (m.group(2) is None or (int(m.group(2)) <= 23 and int(m.group(3)) <= 59))
 
 
+def duration_ok(value: str | None) -> bool:
+    """Whether `value` is a meeting's length: 1h, 45m, 1h30m."""
+    m = DURATION_RE.match(unquote(value))
+    return bool(m) and (m.group(1) is not None or m.group(2) is not None) and 60 * int(m.group(1) or 0) + int(m.group(2) or 0) > 0
+
+
+def every_ok(value: str | None) -> bool:
+    """Whether `value` says how often a meeting comes back: week, 2 weeks, month, month on the first Tuesday."""
+    m = EVERY_RE.match(re.sub(r"\s+", " ", unquote(value)))
+    if not m or (m.group(2).lower().endswith("ly") and m.group(1) is not None) or not 1 <= int(m.group(1) or 1) <= 99:
+        return False
+    return not m.group(3) or (m.group(2).lower()[0] == "m" and any(d.startswith(m.group(4).lower()) for d in WEEKDAYS))
+
+
+def moved_ok(value: str | None) -> bool:
+    """Whether `value` is an occurrence moved: `2026-12-01 → 2026-12-02 10:00`."""
+    m = MOVED_RE.match(unquote(value))
+    return bool(m) and day_of(m.group(1)) is not None and due_ok(m.group(2))
+
+
+def list_items(value: str | None) -> list[str]:
+    """The items of a one-line list as written: `[2026-12-22, "2026-12-29"]`."""
+    v = (value or "").strip()
+    if v.startswith("[") and v.endswith("]"):
+        v = v[1:-1]
+    return [x for x in (unquote(p) for p in v.split(",")) if x]
+
+
 def est_of(value: str | None) -> int | None:
     """An estimate in whole days (3d, 2w, 4), or None."""
     m = EST_RE.match(unquote(value))
@@ -621,7 +660,7 @@ class Vault:
                 for f in sorted(d.glob("*.md")):
                     st = f.stat()
                     parts.append(f"{sub}/{f.name}:{st.st_mtime_ns}:{st.st_size}")
-        for sub, pattern in ((COMMENTS, "*.json"), (MILESTONES, "*.md"), (ARTIFACTS, "*.html")):
+        for sub, pattern in ((COMMENTS, "*.json"), (MILESTONES, "*.md"), (MEETINGS, "*.md"), (ARTIFACTS, "*.html")):
             d = self.root / sub
             if d.is_dir():
                 for f in sorted(d.glob(pattern)):
@@ -762,9 +801,10 @@ class Vault:
         tags = [{"tag": t, "count": c} for t, c in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
         concepts = compute_concepts(nodes, roots, self.project, decl, repos_only)
         milestones = self._milestones(by_name, nodes)
+        meetings = self._meetings(by_name, nodes)
         artifacts = self._artifacts(nodes, roots, texts)
         return {"project": self.project, "version": sig, "nodes": list(nodes.values()), "roots": roots, "tags": tags,
-                "concepts": concepts, "milestones": milestones, "artifacts": artifacts, "gpus": self._config().get("gpus") if count_of(str(self._config().get("gpus", ""))) else None}
+                "concepts": concepts, "milestones": milestones, "meetings": meetings, "artifacts": artifacts, "gpus": self._config().get("gpus") if count_of(str(self._config().get("gpus", ""))) else None}
 
     def _config(self) -> dict:
         """The project's .rft/config.json, or {} when there is none to read."""
@@ -862,6 +902,35 @@ class Vault:
                 m["source"] = unquote(fm.get("source"))
             if unquote_json(fm.get("why")):
                 m["why"] = unquote_json(fm.get("why"))
+            out.append(m)
+        return out
+
+    def _meetings(self, by_name: dict[str, str], nodes: dict[str, dict]) -> list[dict]:
+        """The meetings in meetings/: their fields as written, the notes they need by id and the names
+        that are none, as hooks/lib/vault.ts loads them."""
+        out: list[dict] = []
+        d = self.root / MEETINGS
+        if not d.is_dir():
+            return out
+        for f in sorted(d.glob("*.md"), key=lambda p: natural_key(p.name)):
+            fm = front(f.read_text(encoding="utf-8", errors="replace"))
+            name = f.name[:-3]
+            gid = unquote(fm.get("id")) or id_of(name)
+            if any(m["id"] == gid for m in out):
+                continue
+            needs, missing = [], []
+            for ref in link_targets(fm.get("needs")):
+                nid = by_name.get(ref) or (id_of(ref) if id_of(ref) in nodes else None)
+                if nid and nid not in needs:
+                    needs.append(nid)
+                elif not nid:
+                    missing.append(ref)
+            m = {"id": gid, "name": name, "title": name[len(id_of(name)):].strip(), "path": f"{MEETINGS}/{f.name}",
+                 "when": unquote(fm.get("when")), "skip": list_items(fm.get("skip")), "moved": list_items(fm.get("moved")),
+                 "needs": needs, "missing": missing}
+            for k in ("duration", "every", "until"):
+                if unquote(fm.get(k)):
+                    m[k] = unquote(fm.get(k))
             out.append(m)
         return out
 
@@ -1242,6 +1311,117 @@ class Vault:
                     fields.insert(after, line)
             self._write_note(path, text, frame % "\n".join(fields), body)
         return 200, {"id": mid}
+
+    def meeting_path(self, gid: str) -> Path | None:
+        """A meeting's file, only when it resolves to a markdown file in meetings/."""
+        if not MEETING_RE.match(gid or ""):
+            return None
+        m = next((x for x in self.tree()["meetings"] if x["id"] == gid), None)
+        if m is None:
+            return None
+        path = (self.root / m["path"]).resolve()
+        return path if path.parent == (self.root / MEETINGS).resolve() and path.suffix == ".md" and path.is_file() else None
+
+    def _meeting_lines(self, req: dict, new: bool) -> tuple[dict[str, str | None], str | None]:
+        """The frontmatter lines a meeting's request gives (None: the line goes), or an error."""
+        lines: dict[str, str | None] = {}
+        if "when" in req or new:
+            if not isinstance(req.get("when"), str) or not due_ok(req["when"]):
+                return {}, "when must be a date and a time: 2026-11-24 14:00 (a day alone for all day; AoE, UTC or +01:00 after the time)"
+            lines["when"] = f"when: {req['when'].strip()}"
+        for key, ok, what in (("duration", duration_ok, "a length: 1h, 45m, 1h30m"),
+                              ("every", every_ok, "how often it comes back: week, 2 weeks, month, month on the first Tuesday"),
+                              ("until", lambda v: day_of(v) is not None, "a day: 2027-06-30")):
+            if key not in req or (new and req[key] in (None, "")):
+                continue
+            if req[key] is None:
+                lines[key] = None
+            elif not isinstance(req[key], str) or not ok(req[key]):
+                return {}, f"{key} must be {what}"
+            else:
+                lines[key] = f"{key}: {req[key].strip()}"
+        if "skip" in req:
+            if not isinstance(req["skip"], list) or not all(isinstance(x, str) and day_of(x) for x in req["skip"]):
+                return {}, "skip must be a list of days: [\"2026-12-22\"]"
+            days = sorted(dict.fromkeys(x.strip() for x in req["skip"]))
+            lines["skip"] = f"skip: [{', '.join(days)}]" if days else None
+        if "moved" in req:
+            if not isinstance(req["moved"], list) or not all(isinstance(x, str) and moved_ok(x) for x in req["moved"]):
+                return {}, "moved must be a list of occurrences moved: [\"2026-12-01 → 2026-12-02 10:00\"]"
+            items = sorted({x.strip()[:10]: x.strip() for x in req["moved"]}.values())
+            lines["moved"] = f"moved: [{', '.join(json.dumps(x, ensure_ascii=False) for x in items)}]" if items else None
+        if "needs" in req:
+            line, err = self._needs_line(req["needs"])
+            if err:
+                return {}, err
+            lines["needs"] = line
+        return lines, None
+
+    def add_meeting(self, title: str, req: dict) -> tuple[int, dict]:
+        """A new meeting the user adds: the next free G id (after the config's last one and every
+        meeting on disk), in meetings/."""
+        title = clean_title(title)
+        if not title:
+            return 400, {"error": "give the meeting a title"}
+        lines, err = self._meeting_lines(req, new=True)
+        if err:
+            return 400, {"error": err}
+        if lines.get("until") and not lines.get("every"):
+            return 400, {"error": "until is the last day of a meeting that comes back: give every too"}
+        if lines.get("until") and req["until"].strip() < req["when"].strip()[:10]:
+            return 400, {"error": "until is before its first day"}
+        with self._write_lock:
+            last = self._config().get("lastId", {}).get("G", 0) if isinstance(self._config().get("lastId"), dict) else 0
+            taken = [int(m.group(1)) for x in self.tree()["meetings"] if (m := MEETING_RE.match(x["id"]))]
+            num = max([last if isinstance(last, int) else 0, *taken]) + 1
+            gid = f"G{num:02d}"
+            d = self.root / MEETINGS
+            d.mkdir(exist_ok=True)
+            fields = [f"id: {gid}", "type: meeting"] + [lines[k] for k in MEETING_FIELDS if lines.get(k)]
+            (d / f"{gid} {title}.md").write_text("---\n" + "\n".join(fields) + f"\n---\n\n# {gid} · {title}\n", encoding="utf-8")
+        return 201, {"id": gid, "name": f"{gid} {title}"}
+
+    def update_meeting(self, gid: str, req: dict) -> tuple[int, dict]:
+        """Changes a meeting: its `when`, `duration`, `every`, `until` (a value, or None to take it
+        away), the days it `skip`s and the occurrences `moved` (each list whole, as the page has worked
+        it out), the notes it `needs`; or `delete: true` removes it."""
+        path = self.meeting_path(gid)
+        if path is None:
+            return 404, {"error": "no such meeting"}
+        if req.get("delete") is True:
+            with self._write_lock:
+                path.unlink()
+            return 200, {"id": gid, "deleted": True}
+        if req.get("when", "") is None:
+            return 400, {"error": "a meeting keeps its when: delete it instead"}
+        lines, err = self._meeting_lines(req, new=False)
+        if err:
+            return 400, {"error": err}
+        if not lines:
+            return 400, {"error": "nothing to change: give when, duration, every, until, skip, moved or needs, or delete"}
+        with self._write_lock:
+            text = path.read_text(encoding="utf-8")
+            parts = self._fields(text)
+            if parts is None:
+                return 422, {"error": "the meeting has no frontmatter"}
+            fields, frame, body = parts
+            for key in MEETING_FIELDS:
+                if key not in lines:
+                    continue
+                line = lines[key]
+                at = next((i for i, l in enumerate(fields) if re.match(rf"{key}\s*:", l)), None)
+                if at is not None:
+                    if line is None:
+                        del fields[at]
+                    else:
+                        fields[at] = line
+                elif line is not None:
+                    # after the fields that come before it, in their order
+                    before = MEETING_FIELDS[:MEETING_FIELDS.index(key)] + ("type", "id")
+                    after = max((i + 1 for i, l in enumerate(fields) if any(re.match(rf"{k}\s*:", l) for k in before)), default=len(fields))
+                    fields.insert(after, line)
+            self._write_note(path, text, frame % "\n".join(fields), body)
+        return 200, {"id": gid}
 
     # ------------------------------------------------------------ the scratchpad
 
@@ -2120,7 +2300,10 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             PRIORITIES or null} or {"id": "<id>", "dismiss": true} (Claude's suggestion only); POST
             api/dates {"id": "<id>", "due"?, "start"?, "est"?: a value or null} or {"id", "dismiss": true}
             (Claude's suggested dates only); POST api/milestone {"title", "due", "needs"?: [ids]} (a new
-            deadline), {"id": "M..", "due"?, "needs"?, "status"?} or {"id", "accept" | "dismiss": true}.
+            deadline), {"id": "M..", "due"?, "needs"?, "status"?} or {"id", "accept" | "dismiss": true}; POST
+            api/meeting {"title", "when", "duration"?, "every"?, "until"?, "needs"?} (a new meeting), {"id": "G..",
+            "when"?, "duration"?, "every"?, "until"?, "skip"?: [days], "moved"?: ["<day> → <when>"], "needs"?} or
+            {"id", "delete": true}.
             POST api/notebook {"id": "<id>"}: the address of the experiment's notebook in its repo's
             marimo editor ({"url"}, under notebook/ on this server), the editor started first if need be."""
             if self.path.startswith(NOTEBOOK_PREFIX):
@@ -2173,6 +2356,18 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 if not isinstance(req["id"], str) or not all(isinstance(req.get(k, False), bool) for k in ("accept", "dismiss")):
                     return self._json(400, {"error": "expected {id, due?, needs?, status?} or {id, accept: true} or {id, dismiss: true}"})
                 return self._json(*vault.update_milestone(req["id"], req))
+            if route == "/api/meeting":
+                got = self._write_request("/api/meeting", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                _, req = got
+                if "id" not in req:
+                    if not isinstance(req.get("title"), str) or not isinstance(req.get("when"), str):
+                        return self._json(400, {"error": "expected {title, when, duration?, every?, until?, needs?} for a new meeting"})
+                    return self._json(*vault.add_meeting(req["title"], req))
+                if not isinstance(req["id"], str) or not isinstance(req.get("delete", False), bool) or any(k not in (*MEETING_FIELDS, "id", "delete") for k in req):
+                    return self._json(400, {"error": "expected {id, when?, duration?, every?, until?, skip?, moved?, needs?} or {id, delete: true}"})
+                return self._json(*vault.update_meeting(req["id"], req))
             if route == "/api/comment":
                 got = self._write_request("/api/comment", MAX_COMMENT_BYTES)
                 if got is None:
@@ -2390,7 +2585,7 @@ def main(argv=None):
     ap.add_argument("--web", required=True)
     ap.add_argument("--port", type=int, default=0)
     ap.add_argument("--project", default="project")
-    ap.add_argument("--config", default=None, help="the project's .rft/config.json (gpus:, the last milestone id)")
+    ap.add_argument("--config", default=None, help="the project's .rft/config.json (gpus:, the last milestone and meeting ids)")
     ap.add_argument("--no-watch", action="store_true", help="do not exit with the parent (for manual runs)")
     ap.add_argument("--watch-stdin", action="store_true", help="also exit when stdin is closed")
     a = ap.parse_args(argv)

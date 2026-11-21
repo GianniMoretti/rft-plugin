@@ -22,7 +22,7 @@ describe('tool list', () => {
     const w = world(on, demoFiles())
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
     // no machine paired with the experiment queue: its tools are not there at all, rft_machine waits to pair one
-    expect(w.tools).toHaveLength(38)
+    expect(w.tools).toHaveLength(39)
     expect(inPrompt(w)).toEqual([...CORE_TOOLS].sort())
     for (const t of Object.values(FEATURE_TOOLS).flat()) {
       if (FEATURE_TOOLS.queue.includes(t as never)) expect(w.tools).not.toContain(t)
@@ -95,7 +95,7 @@ describe('rules on demand', () => {
 
   test('a vault with none of the features: one short line instead of the four rules', async ($, on) => {
     const rules = await rulesOf($ as never, on as never, demoFiles())
-    expect(rules).toContain("These are the user's to set, never yours: priorities (`priority:`), dates (`due:`, `start:`, `est:`, deadlines in `vault/milestones/`), the text of a note with `locked: true`, verifying a note (`status: verified`: rft_set_status verified only suggests it).")
+    expect(rules).toContain("These are the user's to set, never yours: priorities (`priority:`), dates (`due:`, `start:`, `est:`, deadlines in `vault/milestones/`, meetings in `vault/meetings/`), the text of a note with `locked: true`, verifying a note (`status: verified`: rft_set_status verified only suggests it).")
     expect(rules).not.toContain('A verified note (')
     expect(rules).not.toContain('rft_suggest_priority')
     expect(rules).not.toContain('rft_suggest_dates')

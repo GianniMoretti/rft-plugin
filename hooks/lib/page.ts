@@ -4,7 +4,7 @@
 // (`RFT_DATA.artifacts`, their images as placeholders), with the frame's runtime and base style
 // (`RFT_DATA.frame`), for the page to show them read-only.
 
-import type { Milestone } from './dates'
+import type { Meeting, Milestone } from './dates'
 import type { Tree } from './vault'
 import { bodyOf, conceptOrder, tagCounts } from './vault'
 
@@ -31,22 +31,22 @@ export const ASSET_PATHS = {
   katexCss: 'web/vendor/katex.v0.16.22.min.css',
 } as const
 
-/** The tree as the server's `api/tree` answers it, with the deadlines and the GPUs the runs share. */
-export const treeJson = (tree: Tree, project: string, version: string, milestones: Milestone[] = [], gpus?: number, artifacts: Record<string, unknown>[] = []) => ({
+/** The tree as the server's `api/tree` answers it, with the deadlines, the meetings and the GPUs the runs share. */
+export const treeJson = (tree: Tree, project: string, version: string, milestones: Milestone[] = [], gpus?: number, artifacts: Record<string, unknown>[] = [], meetings: Meeting[] = []) => ({
   project, version, nodes: Object.values(tree.nodes), roots: tree.roots, tags: tagCounts(tree),
   concepts: conceptOrder(tree.concepts ?? {}),
-  milestones: milestones.map(m => ({ ...m, due: m.dueText })), gpus: gpus ?? null, artifacts,
+  milestones: milestones.map(m => ({ ...m, due: m.dueText })), meetings, gpus: gpus ?? null, artifacts,
 })
 
 const script = (code: string) => `<script>${code.replace(/<\/script/gi, '<\\/script')}</script>`
 
 /** `comments`: each note's threads, placed in its body as the server's api/note places them, shown read-only. */
 /** `artifacts`: the concepts' artifacts, their state for the tree and each page by concept id. */
-export function staticPage(a: PageAssets, tree: Tree, texts: Record<string, string>, project: string, version: string, comments: Record<string, unknown[]> = {}, schedule: { milestones?: Milestone[]; gpus?: number } = {}, artifacts: { list: Record<string, unknown>[]; pages: Record<string, string> } = { list: [], pages: {} }): string {
+export function staticPage(a: PageAssets, tree: Tree, texts: Record<string, string>, project: string, version: string, comments: Record<string, unknown[]> = {}, schedule: { milestones?: Milestone[]; meetings?: Meeting[]; gpus?: number } = {}, artifacts: { list: Record<string, unknown>[]; pages: Record<string, string> } = { list: [], pages: {} }): string {
   const bodies: Record<string, string> = {}
   for (const id of Object.keys(tree.nodes)) bodies[id] = bodyOf(texts[id] ?? '')
   const data = JSON.stringify({
-    tree: treeJson(tree, project, version, schedule.milestones, schedule.gpus, artifacts.list), bodies, comments,
+    tree: treeJson(tree, project, version, schedule.milestones, schedule.gpus, artifacts.list, schedule.meetings), bodies, comments,
     // the frame's scripts as the server puts them in: its tables' LaTeX, then its runtime
     artifacts: artifacts.pages, frame: { js: `${a.latex ?? ''}\n;\n${a.frame}`, css: a.frameCss },
   }).replace(/</g, '\\u003c')

@@ -2489,10 +2489,11 @@
 
   // ---------------------------------------------------------------- the calendar (web/schedule.js)
 
-  // the deadlines (milestones, and notes' own due dates) and the experiments' runs, as a timeline
-  // (one row per experiment, the deadlines as lines across them, the GPUs below) or a month (the
-  // deadlines on their days, the runs across them). The dates are the user's alone: set here (drag
-  // a bar or its end, + Deadline, a deadline's edit) and in the note's drawer, which also answer
+  // the deadlines (milestones, and notes' own due dates), the meetings and the experiments' runs, as
+  // a timeline (a row per meeting and per experiment, the deadlines as lines across them, the GPUs
+  // below) or a month (the deadlines and the meetings on their days, the runs across them). The
+  // dates are the user's alone: set here (drag a bar or its end, + Deadline, + Meeting, a deadline's
+  // or a meeting's edit, an occurrence skipped or moved) and in the note's drawer, which also answer
   // Claude's suggested ones. The filters and the concept focus choose the rows, as on the kanban.
   const S = window.RftSchedule
   const CAL_MODES = ['timeline', 'month']
@@ -2507,7 +2508,8 @@
   let calMonth = null // the month shown, YYYY-MM
   let calDrag = null // a bar being dragged: nothing is redrawn under it
   let calScroll = null // where the timeline was scrolled to, kept across redraws: { from, left }
-  let calOpen = null // the deadline whose editor is open
+  let calOpen = null // the deadline or the meeting whose editor is open
+  let calOcc = null // with a meeting open, the occurrence chosen (the day its rule gives it), or null for the meeting itself
   let plans = [] // every deadline planned (S.plan), for the whole tree
   let planOf = new Map() // a note → the nearest deadline that needs it, and its plan for the note
 
@@ -2526,7 +2528,7 @@
 
   /** The deadlines planned again: after every read of the tree. */
   function planAll() {
-    plans = S.plan(tree.nodes, tree.milestones || [], todayStr())
+    plans = S.plan(tree.nodes, tree.milestones || [], todayStr(), tree.meetings || [])
     planOf = new Map()
     for (const p of plans) for (const i of p.items) if (!planOf.has(i.id)) planOf.set(i.id, { plan: p, item: i })
   }
@@ -2604,6 +2606,7 @@
   }
   const setDates = (id, dates, what = 'Dates not set') => calWrite('api/dates', { id, ...dates }, what)
   const writeMilestone = (body, what = 'Deadline not changed') => calWrite('api/milestone', body, what)
+  const writeMeeting = (body, what = 'Meeting not changed') => calWrite('api/meeting', body, what)
 
   // ---------------------------------------------------------------- the deadlines strip
 
@@ -2611,24 +2614,35 @@
     calDeadlines.replaceChildren()
     for (const p of plans.filter(p => p.daysLeft >= 0 || p.atRisk)) calDeadlines.appendChild(deadlineCard(p))
     for (const m of (tree.milestones || []).filter(m => m.status === 'suggested')) calDeadlines.appendChild(suggestedDeadline(m))
+    // the meetings of the next 7 days, once each (one that needs notes is above, as a deadline),
+    // and the one whose editor is open, wherever it falls
+    const shown = new Set(plans.filter(p => p.kind === 'meeting').map(p => p.id))
+    for (const { meeting: m } of S.upcoming(tree.meetings || [], d.today, S.addDays(d.today, 7))) {
+      if (shown.has(m.id)) continue
+      shown.add(m.id)
+      calDeadlines.appendChild(meetingCard(m, d.today))
+    }
+    const open = meetingOf(calOpen)
+    if (open && !shown.has(open.id)) calDeadlines.appendChild(meetingCard(open, d.today))
     if (!calDeadlines.childElementCount) {
-      calDeadlines.innerHTML = `<span class="muted">No deadline ahead.${EMBED ? '' : ' <b>+ Deadline</b> adds one; Claude suggests paper submissions when you name a venue.'}</span>`
+      calDeadlines.innerHTML = `<span class="muted">No deadline or meeting ahead.${EMBED ? '' : ' <b>+ Deadline</b> and <b>+ Meeting</b> add one (or click a day of the Month); Claude suggests paper submissions when you name a venue.'}</span>`
     }
   }
 
   const milestoneOf = id => (tree.milestones || []).find(m => m.id === id)
 
-  /** A deadline: when, how much room is left or what puts it at risk, the notes it needs; a milestone's own editor. */
+  /** A deadline: when, how much room is left or what puts it at risk, the notes it needs; a milestone's or a meeting's own editor. */
   function deadlineCard(p) {
     const el = document.createElement('article')
-    el.className = `cal-dl${p.atRisk ? ' risk' : ''}${p.slack !== null && p.slack > 0 && p.slack <= 3 ? ' tight' : ''}`
+    const open = p.kind !== 'note' && calOpen === p.id && !EMBED
+    el.className = `cal-dl${p.kind === 'meeting' ? ' cal-mt' : ''}${p.atRisk ? ' risk' : ''}${p.slack !== null && p.slack > 0 && p.slack <= 3 ? ' tight' : ''}${open && p.kind === 'meeting' ? ' open' : ''}`
     el.dataset.id = p.id
     const head = document.createElement('div')
     head.className = 'cal-dl-head'
     const name = document.createElement('a')
     name.className = 'cal-dl-name'
     name.textContent = p.name
-    name.title = p.kind === 'note' ? 'Open the note' : 'Edit this deadline'
+    name.title = p.kind === 'note' ? 'Open the note' : p.kind === 'meeting' ? 'Edit this meeting (it needs these notes by its next occurrence)' : 'Edit this deadline'
     name.addEventListener('click', () => (p.kind === 'note' ? go(p.id) : toggleEditor(p.id)))
     head.append(name)
     const here = localOf(p.at)
@@ -2642,12 +2656,15 @@
       t.title = detail
       el.appendChild(t)
     }
-    if (p.kind === 'milestone' && calOpen === p.id && !EMBED) el.appendChild(milestoneEditor(milestoneOf(p.id)))
+    if (p.kind === 'milestone' && open) el.appendChild(milestoneEditor(milestoneOf(p.id)))
+    if (p.kind === 'meeting' && open && meetingOf(p.id)) el.appendChild(meetingEditor(meetingOf(p.id)))
     return el
   }
 
+  /** A deadline's or a meeting's editor opened in its card, or closed. */
   function toggleEditor(id) {
     calOpen = calOpen === id ? null : id
+    calOcc = null
     drawCalendar()
   }
 
@@ -2710,6 +2727,216 @@
     el.querySelector('.cal-dl-head').appendChild(bar)
     return el
   }
+
+  // ---------------------------------------------------------------- the meetings
+
+  const meetingOf = id => (id && /^G\d+$/.test(id) ? (tree.meetings || []).find(m => m.id === id) : null) || null
+  const ZONES = ['', 'UTC', 'AoE']
+  const zoneOptions = zone => [...ZONES, ...(zone && !ZONES.includes(zone) ? [zone] : [])]
+    .map(z => `<option value="${escH(z)}"${(zone || '') === z ? ' selected' : ''}>${z ? escH(z) : 'local time'}</option>`).join('')
+  /** `1st`, `2nd`, `23rd`. */
+  const ordinal = n => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th'}`
+  /** The time a meeting of `minutes` that starts at `time` ends: `15:30`. */
+  const endOf = (time, minutes) => { const t = (60 * +time.slice(0, 2) + +time.slice(3, 5) + minutes) % 1440; return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}` }
+  /** An occurrence's day and hours: `Tue 1 Dec, 14:00–15:00`, `Fri 13 Nov, all day`. */
+  const occWhen = (at, minutes) => `${shortDay(at.day)}, ${at.time ? `${at.time}${minutes ? `–${endOf(at.time, minutes)}` : ''}${at.zone ? ` ${at.zone}` : ''}` : 'all day'}`
+  /** A meeting's `when:` from a day, a time and a zone (a zone only with a time). */
+  const whenOf = (day, time, zone) => [day, time, time && zone ? zone : ''].filter(Boolean).join(' ')
+  const idsIn = text => text.split(/[\s,]+/).filter(Boolean)
+
+  /** A meeting's editor opened in the strip, on one of its occurrences (`orig`, the day its rule gives it) or on itself. */
+  function openMeeting(id, orig) {
+    calOpen = id
+    calOcc = orig || null
+    drawCalendar()
+    calDeadlines.querySelector(`[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }
+
+  /** A meeting in the strip: its next occurrence, how it comes back, and its editor when open. */
+  function meetingCard(m, today) {
+    const next = S.nextOccurrence(m, today)
+    const minutes = S.parseDuration(m.duration)
+    const open = calOpen === m.id && !EMBED
+    const el = document.createElement('article')
+    el.className = `cal-dl cal-mt${open ? ' open' : ''}`
+    el.dataset.id = m.id
+    const head = document.createElement('div')
+    head.className = 'cal-dl-head'
+    const name = document.createElement('a')
+    name.className = 'cal-dl-name'
+    name.textContent = m.name
+    name.title = EMBED ? m.name : 'Edit this meeting'
+    name.addEventListener('click', () => toggleEditor(m.id))
+    head.append(name)
+    const here = next ? localOf(next.at) : ''
+    head.insertAdjacentHTML('beforeend', `<span class="cal-dl-when"${here ? ` title="${escH(here)}"` : ''}>${next ? `${escH(occWhen(next.at, minutes))} · <b>${escH(S.when(S.between(today, next.day)))}</b>` : 'none ahead'}</span>`)
+    el.appendChild(head)
+    const detail = document.createElement('div')
+    detail.className = 'cal-dl-detail'
+    detail.textContent = [S.repeatText(m), next && next.moved ? `this one moved from ${shortDay(next.orig)}` : ''].filter(Boolean).join(' · ')
+    el.appendChild(detail)
+    if (open) el.appendChild(meetingEditor(m))
+    return el
+  }
+
+  /** A meeting's editor: the occurrence chosen (moved, skipped, the last one), then the meeting or its series. */
+  function meetingEditor(m) {
+    const box = document.createElement('div')
+    box.className = 'cal-mt-edit'
+    if (m.every && calOcc) box.appendChild(occurrenceForm(m, calOcc))
+    box.appendChild(seriesForm(m))
+    box.addEventListener('keydown', ev => { if (ev.key === 'Escape') { calOpen = null; calOcc = null; drawCalendar() } })
+    return box
+  }
+
+  /** What to do with one occurrence of a meeting that comes back: move it, skip it, bring it back, end the series with it. */
+  function occurrenceForm(m, orig) {
+    const start = S.parseDue(m.when) || { day: orig }
+    const skip = m.skip || [], moved = m.moved || []
+    const skipped = skip.includes(orig)
+    const away = moved.map(x => S.parseMoved(x, start)).find(x => x && x.from === orig)
+    const at = away ? away.to : { ...start, day: orig }
+    const others = moved.filter(x => { const mv = S.parseMoved(x, start); return !mv || mv.from !== orig })
+    const f = document.createElement('form')
+    f.className = 'cal-dl-edit cal-occ'
+    const what = `${skipped ? 'Skipped' : 'This one'}, ${escH(occWhen({ ...start, day: orig }, 0))}${away ? ` (moved to ${escH(occWhen(at, 0))})` : ''}`
+    if (skipped) {
+      f.innerHTML = `<span><b>${what}</b></span><span class="cal-dl-buttons"><button type="submit" class="primary" title="It takes place again, as the rule gives it">Bring it back</button></span>`
+      f.addEventListener('submit', ev => { ev.preventDefault(); writeMeeting({ id: m.id, skip: skip.filter(d => d !== orig) }, 'Not brought back') })
+      return f
+    }
+    f.innerHTML = `<span><b>${what}</b></span>
+      <label>Move to <input name="day" type="date" value="${escH(at.day)}" required></label><input name="time" type="time" value="${escH(at.time || '')}" aria-label="The time">
+      <span class="cal-dl-buttons"><button type="submit" class="primary">Move</button>${away ? `<button type="button" data-act="back" title="Back to its own day and time">Back</button>` : ''}<button type="button" data-act="skip" title="It does not take place this time">Skip</button><button type="button" data-act="last" title="End the series with this one">Last one</button></span>`
+    f.addEventListener('submit', async ev => {
+      ev.preventDefault()
+      const day = f.day.value, time = f.time.value
+      if (!S.isDay(day)) return notify('Give the day it moves to.')
+      const to = S.parseDue(whenOf(day, time, start.zone))
+      const home = day === orig && (time || '') === (start.time || '')
+      await writeMeeting({ id: m.id, moved: home ? others : [...others, S.formatMoved(orig, to)] }, 'Not moved')
+    })
+    f.querySelector('[data-act="back"]')?.addEventListener('click', () => writeMeeting({ id: m.id, moved: others }, 'Not moved back'))
+    f.querySelector('[data-act="skip"]').addEventListener('click', () => writeMeeting({ id: m.id, skip: [...skip, orig], moved: others }, 'Not skipped'))
+    f.querySelector('[data-act="last"]').addEventListener('click', () => writeMeeting({
+      id: m.id, until: orig, skip: skip.filter(d => d <= orig),
+      moved: moved.filter(x => { const mv = S.parseMoved(x, start); return mv && mv.from <= orig }),
+    }, 'Not ended'))
+    return f
+  }
+
+  /**
+   * How often a meeting comes back, as a menu worked out from its day (every week on Tuesday, every
+   * month on the fourth Tuesday, on the last Tuesday) and Custom…, which takes any rule as written
+   * (3 weeks, 2 months on the first Friday). `onChange(repeats)` when it changes.
+   */
+  function repeatPicker(day, every, onChange = () => {}) {
+    const el = document.createElement('span')
+    el.className = 'cal-repeat'
+    const sel = document.createElement('select')
+    sel.setAttribute('aria-label', 'How often it comes back')
+    const custom = document.createElement('input')
+    custom.type = 'text'
+    custom.size = 18
+    custom.placeholder = '3 weeks, 2 months on the last Friday'
+    custom.setAttribute('aria-label', 'How often it comes back, as written')
+    custom.hidden = true
+    el.append(sel, custom)
+    const optionsFor = d => {
+      const out = [{ kind: 'once', value: '', label: 'Does not repeat' }]
+      if (S.isDay(d)) {
+        const wd = S.WEEKDAY_NAMES[S.weekday(d)]
+        const { nth, last } = S.nthOf(d)
+        out.push({ kind: 'day', value: 'day', label: 'Every day' }, { kind: 'week', value: 'week', label: `Every week on ${wd}` },
+          { kind: '2 weeks', value: '2 weeks', label: `Every 2 weeks on ${wd}` }, { kind: 'date', value: 'month', label: `Every month on the ${ordinal(+d.slice(8))}` },
+          { kind: 'nth', value: `month on the ${S.ORDINALS[nth - 1]} ${wd}`, label: `Every month on the ${S.ORDINALS[nth - 1]} ${wd}` })
+        if (last) out.push({ kind: 'last', value: `month on the last ${wd}`, label: `Every month on the last ${wd}` })
+      }
+      out.push({ kind: 'custom', value: null, label: 'Custom…' })
+      return out
+    }
+    let options = []
+    const fill = (d, kind) => {
+      options = optionsFor(d)
+      sel.replaceChildren(...options.map(o => { const x = document.createElement('option'); x.value = o.kind; x.textContent = o.label; return x }))
+      sel.value = options.some(o => o.kind === kind) ? kind : kind === 'last' ? 'nth' : 'once'
+      custom.hidden = sel.value !== 'custom'
+    }
+    // the rule as written, among the day's choices, or as Custom…
+    const canon = every ? S.formatEvery(S.parseEvery(every)) || every : ''
+    const found = optionsFor(day).find(o => o.value === canon)
+    fill(day, found ? found.kind : canon ? 'custom' : 'once')
+    if (!found && canon) custom.value = every
+    sel.addEventListener('change', () => { custom.hidden = sel.value !== 'custom'; if (!custom.hidden) custom.focus(); onChange(sel.value !== 'once') })
+    return {
+      el,
+      /** The rule to write: '' for none. */
+      value: () => (sel.value === 'custom' ? custom.value.trim() : (options.find(o => o.kind === sel.value) || {}).value || ''),
+      /** The day changed: the same kind of choice for it. */
+      setDay: d => fill(d, sel.value),
+      repeats: () => sel.value !== 'once',
+    }
+  }
+
+  /** A meeting's own fields: its (first) day and time, how long, how often and until when, what it needs; Save, Delete. */
+  function seriesForm(m) {
+    const start = S.parseDue(m.when) || {}
+    const f = document.createElement('form')
+    f.className = 'cal-dl-edit'
+    f.innerHTML = `<span><b>${m.every ? 'The series' : 'The meeting'}</b></span>
+      <label>${m.every ? 'From' : 'On'} <input name="day" type="date" value="${escH(start.day || '')}" required></label>
+      <input name="time" type="time" value="${escH(start.time || '')}" aria-label="The time (none: all day)" title="The time (none: all day)">
+      <select name="zone" aria-label="The time zone">${zoneOptions(start.zone)}</select>
+      <label>for <input name="duration" type="text" size="6" value="${escH(m.duration || '')}" placeholder="1h" title="How long: 1h, 45m, 1h30m"></label>
+      <span data-slot="repeat"></span>
+      <label data-slot="until">until <input name="until" type="date" value="${escH(m.until || '')}" title="The last day it may fall on (none: no end)"></label>
+      <label>Needs <input name="needs" type="text" value="${escH((m.needs || []).join(', '))}" placeholder="E03" list="cal-ids" title="The notes it needs done by its next occurrence"></label>
+      <span class="cal-dl-buttons"><button type="submit" class="primary">Save</button><button type="button" data-act="delete">Delete</button><button type="button" data-act="cancel">Cancel</button></span>`
+    const untilBox = f.querySelector('[data-slot="until"]')
+    const picker = repeatPicker(start.day, m.every || '', repeats => { untilBox.hidden = !repeats })
+    f.querySelector('[data-slot="repeat"]').replaceWith(picker.el)
+    untilBox.hidden = !picker.repeats()
+    f.day.addEventListener('change', () => picker.setDay(f.day.value))
+    f.addEventListener('submit', async ev => {
+      ev.preventDefault()
+      const when = whenOf(f.day.value, f.time.value, f.zone.value)
+      const every = picker.value()
+      const until = every ? f.until.value : ''
+      const body = { id: m.id, when, duration: f.duration.value.trim() || null, every: every || null, until: until || null, needs: idsIn(f.needs.value) }
+      // the occurrences skipped or moved that the new rule no longer gives go
+      const draft = { ...m, when, every, until }
+      const begin = S.parseDue(when)
+      const skip = every ? (m.skip || []).filter(d => S.isOccurrence(draft, d)) : []
+      const moved = every ? (m.moved || []).filter(x => { const mv = S.parseMoved(x, begin); return mv && S.isOccurrence(draft, mv.from) }) : []
+      if (skip.length !== (m.skip || []).length) body.skip = skip
+      if (moved.length !== (m.moved || []).length) body.moved = moved
+      if (await writeMeeting(body)) { calOpen = null; calOcc = null }
+      drawCalendar()
+    })
+    f.querySelector('[data-act="delete"]').addEventListener('click', async () => {
+      if (!window.confirm(`Delete ${m.name}${m.every ? ' and all its occurrences' : ''}?`)) return
+      if (await writeMeeting({ id: m.id, delete: true }, 'Not deleted')) { calOpen = null; calOcc = null }
+      drawCalendar()
+    })
+    f.querySelector('[data-act="cancel"]').addEventListener('click', () => { calOpen = null; calOcc = null; drawCalendar() })
+    return f
+  }
+
+  /** The meetings that fall from `from` up to `to` (excluded), their skipped occurrences too in the page that edits: each with the deadline it is, when it needs notes. */
+  function meetingsIn(from, to) {
+    const planFor = new Map(plans.filter(p => p.kind === 'meeting').map(p => [p.id, p]))
+    return (tree.meetings || []).map(m => ({
+      meeting: m,
+      occ: S.occurrences(m, from, to, { skipped: !EMBED }).map(o => {
+        const p = planFor.get(m.id)
+        return { ...o, plan: p && p.orig === o.orig && !o.skipped ? p : null }
+      }),
+    })).filter(x => x.occ.length)
+  }
+
+  /** An occurrence's tooltip: the meeting, when, how it comes back, moved or skipped, and the deadline it is. */
+  const occTitle = (m, o) => [`${m.name}: ${occWhen(o.at, S.parseDuration(m.duration))}${localOf(o.at) ? ` (${localOf(o.at)})` : ''}`, S.repeatText(m),
+    o.moved ? `moved from ${shortDay(o.orig)}` : '', o.skipped ? 'skipped (click to bring it back)' : '', o.plan ? S.deadlineLine(o.plan) : ''].filter(Boolean).join(' · ')
 
   // ---------------------------------------------------------------- the timeline
 
@@ -2799,7 +3026,7 @@
       f.style.top = `${2 + 18 * (lane++ % 2)}px`
       f.textContent = p.name
       f.title = S.deadlineLine(p)
-      f.addEventListener('click', () => (p.kind === 'note' ? go(p.id) : toggleEditor(p.id)))
+      f.addEventListener('click', () => (p.kind === 'note' ? go(p.id) : p.kind === 'meeting' ? openMeeting(p.id, p.orig) : toggleEditor(p.id)))
       flags.lastChild.appendChild(f)
     }
     head.append(months, daysRow, flags)
@@ -2818,6 +3045,10 @@
       lines.insertAdjacentHTML('beforeend', `<span class="tl-dline${p.atRisk ? ' risk' : ''}" style="left:${x(p.due)}px"></span>`)
     }
     grid.appendChild(lines)
+
+    // the meetings, a row each, above the experiments
+    const mrows = meetingRows({ from, to, dayW, days, x })
+    for (const r of mrows) grid.appendChild(r)
 
     // the rows, by concept
     const byConcept = new Map()
@@ -2842,6 +3073,7 @@
       const empty = document.createElement('p')
       empty.className = 'tl-empty muted'
       empty.style.left = `${labelW}px`
+      if (mrows.length) empty.style.top = `${Math.round((90 + 26 * mrows.length) * font)}px`
       empty.textContent = 'No experiment has dates yet: give one a start and an estimate in its drawer, or a deadline the notes it needs (+ Deadline).'
       grid.appendChild(empty)
     }
@@ -2853,6 +3085,41 @@
     if (keep && keep.from === from) { scroll.scrollLeft = keep.left; scroll.scrollTop = keep.top }
     else if (keep) { scroll.scrollLeft = keep.left + S.between(from, keep.from) * dayW; scroll.scrollTop = keep.top }
     else scrollToDay(scroll, d.today)
+  }
+
+  /** The meetings on the timeline: a row each (its title, how it comes back), a mark on each day it falls on; under a Meetings heading. */
+  function meetingRows(g) {
+    const list = meetingsIn(g.from, S.addDays(g.to, 1))
+    if (!list.length) return []
+    const head = document.createElement('div')
+    head.className = 'tl-row tl-group'
+    head.innerHTML = `<div class="tl-label">Meetings</div><div class="tl-track" style="width:${g.days * g.dayW}px"></div>`
+    const out = [head]
+    for (const { meeting: m, occ } of list) {
+      const row = document.createElement('div')
+      row.className = 'tl-row tl-mtrow'
+      row.dataset.meeting = m.id
+      const label = document.createElement('div')
+      label.className = 'tl-label'
+      label.title = `${m.name} · ${S.repeatText(m)}${EMBED ? '' : ' (click to edit)'}`
+      label.innerHTML = `<span class="tl-title">${escH(m.title || m.name)}</span><span class="muted tl-mt-rep">${escH(S.repeatText(m))}</span>`
+      label.addEventListener('click', () => openMeeting(m.id, null))
+      const track = document.createElement('div')
+      track.className = 'tl-track'
+      track.style.width = `${g.days * g.dayW}px`
+      for (const o of occ) {
+        const t = document.createElement('span')
+        t.className = `tl-mt${o.moved ? ' moved' : ''}${o.skipped ? ' skipped' : ''}${o.plan && o.plan.atRisk ? ' risk' : ''}${calOpen === m.id && calOcc === o.orig ? ' open' : ''}`
+        t.style.left = `${g.x(o.day) + 1}px`
+        t.style.width = `${Math.max(6, g.dayW - 2)}px`
+        t.title = occTitle(m, o)
+        t.addEventListener('click', () => openMeeting(m.id, m.every ? o.orig : null))
+        track.appendChild(t)
+      }
+      row.append(label, track)
+      out.push(row)
+    }
+    return out
   }
 
   function scrollToDay(scroll, day) {
@@ -3036,13 +3303,17 @@
     const weeks = S.monthWeeks(y, m)
     const notes = new Map(tree.nodes.map(n => [n.id, n]))
     const wins = d.wins.filter(w => boardSet.has(w.id))
-    const deadlines = new Map() // day → what falls due on it
+    const deadlines = new Map() // day → what falls due on it, then the meetings on it
     const at = (day, item) => { if (!deadlines.has(day)) deadlines.set(day, []); deadlines.get(day).push(item) }
-    for (const p of plans) at(p.due, { plan: p })
+    // a meeting that needs notes is drawn as the meeting, red when at risk
+    for (const p of plans) if (p.kind !== 'meeting') at(p.due, { plan: p })
     for (const ms of tree.milestones || []) {
       const due = S.parseDue(ms.due)
       if (due && (ms.status === 'suggested' || ms.status === 'done')) at(due.day, { milestone: ms, due })
     }
+    const meetings = meetingsIn(weeks[0][0], S.addDays(weeks[weeks.length - 1][6], 1)).flatMap(x => x.occ.map(o => ({ meeting: x.meeting, occ: o })))
+    meetings.sort((a, b) => (a.occ.at.time || '').localeCompare(b.occ.at.time || '') || a.meeting.id.localeCompare(b.meeting.id, 'en', { numeric: true }))
+    for (const it of meetings) at(it.occ.day, it)
     const box = document.createElement('div')
     box.className = 'mo'
     const headRow = document.createElement('div')
@@ -3065,8 +3336,8 @@
         for (const it of deadlines.get(day) || []) list.appendChild(monthChip(it))
         cell.appendChild(list)
         if (!EMBED) {
-          cell.title = `${shortDay(day)}: click to add a deadline on this day`
-          cell.addEventListener('click', ev => { if (ev.target === cell || ev.target.classList.contains('mo-num') || ev.target === list) openDeadlineAdder(day) })
+          cell.title = `${shortDay(day)}: click to add a deadline or a meeting on this day`
+          cell.addEventListener('click', ev => { if (ev.target === cell || ev.target.classList.contains('mo-num') || ev.target === list) dayMenu(cell, day) })
         }
         row.appendChild(cell)
       }
@@ -3088,10 +3359,18 @@
     document.getElementById('cal-range').textContent = monthName(calMonth)
   }
 
-  /** A deadline on its day in the month: at risk in red, Claude's suggestion dashed, a done one faded. */
+  /** A deadline on its day in the month: at risk in red, Claude's suggestion dashed, a done one faded; a meeting, moved ones in italics, skipped ones struck through. */
   function monthChip(it) {
     const el = document.createElement('button')
     el.type = 'button'
+    if (it.occ) {
+      const { meeting: m, occ: o } = it
+      el.className = `mo-dl mo-mt${o.moved ? ' moved' : ''}${o.skipped ? ' skipped' : ''}${o.plan && o.plan.atRisk ? ' risk' : ''}${calOpen === m.id && calOcc === o.orig ? ' open' : ''}`
+      el.textContent = `${o.at.time ? `${o.at.time}${o.at.zone ? ` ${o.at.zone}` : ''} ` : ''}${m.title || m.name}`
+      el.title = occTitle(m, o)
+      el.addEventListener('click', ev => { ev.stopPropagation(); openMeeting(m.id, m.every ? o.orig : null) })
+      return el
+    }
     if (it.plan) {
       const p = it.plan
       el.className = `mo-dl${p.atRisk ? ' risk' : ''}`
@@ -3106,6 +3385,26 @@
       el.addEventListener('click', ev => ev.stopPropagation())
     }
     return el
+  }
+
+  /** What to add on a day of the month: a deadline or a meeting. */
+  function dayMenu(cell, day) {
+    calBody.querySelectorAll('.mo-add').forEach(x => x.remove())
+    const menu = document.createElement('span')
+    menu.className = 'mo-add'
+    const close = () => { menu.remove(); document.removeEventListener('pointerdown', away, true) }
+    const away = ev => { if (!menu.contains(ev.target)) close() }
+    for (const [label, open] of [['+ Deadline', openDeadlineAdder], ['+ Meeting', openMeetingAdder]]) {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.textContent = label
+      b.addEventListener('click', ev => { ev.stopPropagation(); close(); open(day) })
+      menu.appendChild(b)
+    }
+    menu.addEventListener('keydown', ev => { if (ev.key === 'Escape') close() })
+    cell.appendChild(menu)
+    menu.firstChild.focus()
+    document.addEventListener('pointerdown', away, true)
   }
 
   // ---------------------------------------------------------------- the calendar's controls
@@ -3147,7 +3446,7 @@
   document.getElementById('cal-zoom-in').addEventListener('click', () => zoomBy(1))
   document.getElementById('cal-zoom-out').addEventListener('click', () => zoomBy(-1))
   document.getElementById('cal-ics').addEventListener('click', ev => {
-    const text = S.ics({ project: tree.project, nodes: tree.nodes, milestones: tree.milestones || [], stamp: new Date().toISOString() }).text
+    const text = S.ics({ project: tree.project, nodes: tree.nodes, milestones: tree.milestones || [], meetings: tree.meetings || [], stamp: new Date().toISOString() }).text
     const a = ev.currentTarget
     if (a.href) URL.revokeObjectURL(a.href)
     a.href = URL.createObjectURL(new Blob([text], { type: 'text/calendar' }))
@@ -3158,6 +3457,7 @@
   // notes it needs; the server writes it in milestones/
   function openDeadlineAdder(day) {
     if (EMBED) return
+    closeMeetingAdder()
     calAdder.hidden = false
     if (day) document.getElementById('cal-add-day').value = day
     document.getElementById('cal-add-title').focus()
@@ -3179,6 +3479,44 @@
     if (ok) closeDeadlineAdder()
   })
   if (EMBED) document.getElementById('cal-add').hidden = true
+
+  // + Meeting: what, its (first) day and time, how long, how often (a menu worked out from the day)
+  // and until when, the notes it needs by its next one; the server writes it in meetings/
+  const mtAdder = document.getElementById('cal-mt-adder')
+  const mtDay = document.getElementById('cal-mt-day')
+  const mtUntil = document.getElementById('cal-mt-until-label')
+  let mtPicker = null
+  function openMeetingAdder(day) {
+    if (EMBED) return
+    closeDeadlineAdder()
+    mtAdder.hidden = false
+    if (day) mtDay.value = day
+    mtPicker = repeatPicker(mtDay.value, '', repeats => { mtUntil.hidden = !repeats })
+    document.getElementById('cal-mt-repeat').replaceChildren(mtPicker.el)
+    mtUntil.hidden = true
+    document.getElementById('cal-mt-title').focus()
+  }
+  function closeMeetingAdder() {
+    mtAdder.hidden = true
+    mtAdder.reset()
+  }
+  mtDay.addEventListener('change', () => mtPicker && mtPicker.setDay(mtDay.value))
+  document.getElementById('cal-mt-add').addEventListener('click', () => (mtAdder.hidden ? openMeetingAdder(null) : closeMeetingAdder()))
+  document.getElementById('cal-mt-cancel').addEventListener('click', closeMeetingAdder)
+  mtAdder.addEventListener('keydown', ev => { if (ev.key === 'Escape') closeMeetingAdder() })
+  mtAdder.addEventListener('submit', async ev => {
+    ev.preventDefault()
+    const val = id => document.getElementById(id).value.trim()
+    const body = { title: val('cal-mt-title'), when: whenOf(mtDay.value, val('cal-mt-time'), val('cal-mt-zone')) }
+    if (val('cal-mt-duration')) body.duration = val('cal-mt-duration')
+    const every = mtPicker ? mtPicker.value() : ''
+    if (every) body.every = every
+    if (every && val('cal-mt-until')) body.until = val('cal-mt-until')
+    const needs = idsIn(val('cal-mt-needs'))
+    if (needs.length) body.needs = needs
+    if (await writeMeeting(body, 'Meeting not added')) closeMeetingAdder()
+  })
+  if (EMBED) document.getElementById('cal-mt-add').hidden = true
 
   // ---------------------------------------------------------------- a note's dates, in the drawer
 

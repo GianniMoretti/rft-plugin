@@ -11,7 +11,7 @@
   --theory: light-dark(#3b5bdb, #5c7cfa); --literature: light-dark(#0c8599, #22b8cf); --done: light-dark(#2f9e44, #40c057);
   --running: light-dark(#e8590c, #fd7e14); --planned: light-dark(#e8a400, #fab005);
   --idea: light-dark(#f2c94c, #ffe066); --dropped: light-dark(#e03131, #fa5252); --discussed: #868e96;
-  --moved: light-dark(#1c7ed6, #4dabf7);
+  --moved: light-dark(#1c7ed6, #4dabf7); --meeting: light-dark(#0b7285, #3bc9db);
   /* priorities, the user's alone: a colour each, low as quiet as the text around it */
   --p-urgent: light-dark(#c92a2a, #ff6b6b); --p-high: light-dark(#d9480f, #ff922b);
   --p-medium: light-dark(#1971c2, #74c0fc); --p-low: var(--muted);
@@ -494,10 +494,15 @@ main:has(#drawer:not([hidden])) #calendar { right: min(var(--drawer-w), 92vw); }
 .cal-adder { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 12px; padding: 8px; border: 1px solid var(--line);
   border-radius: 8px; background: var(--panel); }
 .cal-adder[hidden] { display: none; }
-.cal-adder input, .cal-adder select, .cal-dl-edit input, .dates-form input { font: inherit; padding: 3px 6px; border-radius: 6px;
+.cal-adder input, .cal-adder select, .cal-dl-edit input, .cal-dl-edit select, .dates-form input { font: inherit; padding: 3px 6px; border-radius: 6px;
   border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
 #cal-add-title { flex: 1 1 14em; }
 #cal-add-needs { flex: 0 1 12em; }
+#cal-mt-title { flex: 1 1 12em; }
+#cal-mt-needs { flex: 0 1 13em; }
+.cal-mt-for, #cal-mt-until-label { color: var(--muted); }
+.cal-repeat { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.cal-repeat input[hidden], .cal-dl-edit label[hidden] { display: none; }
 /* the deadlines: a card each, the nearest first; red when at risk, dashed when Claude suggests it */
 .cal-deadlines { display: flex; gap: 8px; padding: 4px 12px 8px; overflow-x: auto; flex: none; }
 .cal-dl { flex: 0 0 auto; max-width: 28em; min-width: 14em; padding: 6px 9px; border: 1px solid var(--line); border-left: 3px solid var(--accent);
@@ -516,6 +521,16 @@ a.cal-dl-name:hover { text-decoration: underline; }
 .cal-dl-edit input[name="due"] { width: 13em; }
 .cal-dl-edit input[name="needs"] { width: 9em; }
 .cal-dl-buttons { display: inline-flex; gap: 4px; }
+/* a meeting: its card, its editor (the occurrence chosen, then the meeting or the series) */
+.cal-dl.cal-mt { border-left-color: var(--meeting); }
+.cal-dl.cal-mt.risk { border-left-color: var(--risk); }
+.cal-dl.open { max-width: none; }
+.cal-mt-edit { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.cal-mt-edit .cal-dl-edit { margin-top: 0; }
+.cal-mt-edit .cal-occ { padding-bottom: 6px; border-bottom: 1px dashed var(--line); }
+.cal-mt-edit label { color: var(--muted); }
+.cal-mt-edit input[name="day"] { width: auto; }
+.cal-mt-edit input[name="duration"] { width: 5em; }
 .cal-body { flex: 1; min-height: 0; position: relative; }
 
 /* the timeline: one scrolling grid, the titles kept at the left and the days at the top */
@@ -573,6 +588,18 @@ a.cal-dl-name:hover { text-decoration: underline; }
 .tl-tip { position: absolute; left: 100%; margin-left: 6px; padding: 1px 6px; border-radius: 4px; background: var(--fg); color: var(--bg);
   font-size: 0.85em; white-space: nowrap; pointer-events: none; }
 .tl-empty { position: absolute; top: calc(90px * var(--font-scale)); padding: 0 12px; }
+/* the meetings: a row each, a mark on each day it falls on (moved dashed, skipped faint) */
+.tl-mtrow .tl-label { cursor: pointer; }
+.tl-mtrow .tl-label:hover .tl-title { text-decoration: underline; }
+.tl-mtrow .tl-track { border-bottom: 1px solid color-mix(in oklab, var(--line) 45%, transparent); }
+.tl-mtrow .tl-title { flex: none; max-width: 70%; }
+.tl-mt-rep { flex: 1 1 0; min-width: 0; font-size: 0.8em; overflow: hidden; text-overflow: ellipsis; }
+.tl-mt { position: absolute; top: 5px; bottom: 5px; min-width: 6px; box-sizing: border-box; border-radius: 4px; cursor: pointer; z-index: 1;
+  border: 1px solid var(--meeting); background: color-mix(in oklab, var(--meeting) 55%, var(--bg)); }
+.tl-mt.moved { border-style: dashed; background: color-mix(in oklab, var(--meeting) 25%, var(--bg)); }
+.tl-mt.skipped { border-style: dotted; background: transparent; opacity: 0.55; }
+.tl-mt.risk { border-color: var(--risk); background: color-mix(in oklab, var(--risk) 45%, var(--bg)); }
+.tl-mt.open { box-shadow: 0 0 0 1.5px var(--fg); }
 /* the GPUs taken each day: a bar per day, half the row at the capacity, red above it */
 .tl-gpus { height: calc(36px * var(--font-scale)); border-top: 1px solid var(--line); }
 .tl-gpus .tl-label { color: var(--muted); font-size: 0.9em; }
@@ -599,6 +626,14 @@ a.cal-dl-name:hover { text-decoration: underline; }
 .mo-dl.risk { border-color: var(--risk); color: var(--risk); font-weight: 600; background: color-mix(in oklab, var(--risk) 12%, var(--bg)); }
 .mo-dl.suggested { border-style: dashed; border-left-width: 1px; background: transparent; }
 .mo-dl.done { opacity: 0.5; text-decoration: line-through; }
+.mo-dl.mo-mt { border-color: var(--meeting); background: color-mix(in oklab, var(--meeting) 12%, var(--bg)); cursor: pointer; }
+.mo-dl.mo-mt.moved { font-style: italic; border-style: dashed; border-left-style: solid; }
+.mo-dl.mo-mt.skipped { opacity: 0.45; text-decoration: line-through; background: transparent; }
+.mo-dl.mo-mt.risk { border-color: var(--risk); color: var(--risk); font-weight: 600; background: color-mix(in oklab, var(--risk) 12%, var(--bg)); }
+.mo-dl.open { box-shadow: 0 0 0 1.5px var(--fg); }
+/* a day clicked: what to add on it */
+.mo-add { position: absolute; z-index: 4; top: calc(20px * var(--font-scale)); left: 4px; display: flex; flex-direction: column; gap: 3px; padding: 4px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 2px 8px color-mix(in oklab, var(--fg) 18%, transparent); }
 .mo-bar { position: absolute; height: calc(16px * var(--font-scale)); border-radius: 4px; padding: 0 5px; overflow: hidden; white-space: nowrap;
   text-overflow: ellipsis; font-size: 0.82em; line-height: calc(16px * var(--font-scale)); cursor: pointer; z-index: 1;
   background: color-mix(in oklab, var(--hue) var(--i), var(--tone-base)); color: var(--bg); }

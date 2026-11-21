@@ -252,10 +252,10 @@
       </div>
     </div>
   </section>
-  <section id="calendar" hidden aria-label="The deadlines and the runs">
+  <section id="calendar" hidden aria-label="The deadlines, the meetings and the runs">
     <div class="cal-bar">
       <span class="seg" role="group" aria-label="Calendar">
-        <button data-cal-mode="timeline" title="One row per experiment: its run as a bar, the deadlines as lines, the GPUs below">Timeline</button><button data-cal-mode="month" title="The month: the deadlines on their days, the runs across them">Month</button>
+        <button data-cal-mode="timeline" title="One row per experiment: its run as a bar, the deadlines as lines, the GPUs below">Timeline</button><button data-cal-mode="month" title="The month: the deadlines and the meetings on their days, the runs across them">Month</button>
       </span>
       <span class="seg" role="group" aria-label="Move">
         <button id="cal-prev" title="Earlier" aria-label="Earlier">‹</button><button id="cal-today" title="Go to today">Today</button><button id="cal-next" title="Later" aria-label="Later">›</button>
@@ -264,8 +264,9 @@
       <span class="seg cal-timeline-only" role="group" aria-label="Zoom">
         <button id="cal-zoom-out" title="Narrower days" aria-label="Narrower days">−</button><button id="cal-zoom-in" title="Wider days" aria-label="Wider days">+</button>
       </span>
-      <button id="cal-add" class="cal-edit" title="Add a deadline: a submission, a meeting, a talk">+ Deadline</button>
-      <a id="cal-ics" class="cal-ics" download="rft.ics" title="The deadlines and the planned runs as a calendar file, for any calendar app (the suggestions left out)">.ics</a>
+      <button id="cal-add" class="cal-edit" title="Add a deadline: a submission, a talk, a thesis chapter">+ Deadline</button>
+      <button id="cal-mt-add" class="cal-edit" title="Add a meeting, once or recurring">+ Meeting</button>
+      <a id="cal-ics" class="cal-ics" download="rft.ics" title="The deadlines, the meetings and the planned runs as a calendar file, for any calendar app (the suggestions left out)">.ics</a>
       <span id="cal-gpus" class="cal-gpus muted"></span>
     </div>
     <form id="cal-adder" class="cal-adder" hidden>
@@ -280,7 +281,21 @@
       <button type="submit" class="primary">Add</button>
       <button type="button" id="cal-add-cancel">Cancel</button>
     </form>
-    <div id="cal-deadlines" class="cal-deadlines" aria-label="The deadlines"></div>
+    <form id="cal-mt-adder" class="cal-adder" hidden>
+      <input id="cal-mt-title" type="text" autocomplete="off" placeholder="Meeting" aria-label="The meeting" required>
+      <input id="cal-mt-day" type="date" aria-label="The (first) day" required>
+      <input id="cal-mt-time" type="time" aria-label="The time (none: all day)" title="The time (none: all day)">
+      <select id="cal-mt-zone" aria-label="The time zone" title="The time's zone: local, or another's">
+        <option value="">local time</option><option value="UTC">UTC</option><option value="AoE">AoE</option>
+      </select>
+      <label class="cal-mt-for">for <input id="cal-mt-duration" type="text" size="6" autocomplete="off" value="1h" placeholder="1h" aria-label="How long (1h, 45m, 1h30m)" title="How long: 1h, 45m, 1h30m"></label>
+      <span id="cal-mt-repeat"></span>
+      <label id="cal-mt-until-label" hidden>until <input id="cal-mt-until" type="date" aria-label="The last day it may fall on (none: no end)" title="The last day it may fall on (none: no end)"></label>
+      <input id="cal-mt-needs" type="text" autocomplete="off" placeholder="Needs by the next one (e.g. E03)" aria-label="The notes it needs done by its next occurrence" list="cal-ids">
+      <button type="submit" class="primary">Add</button>
+      <button type="button" id="cal-mt-cancel">Cancel</button>
+    </form>
+    <div id="cal-deadlines" class="cal-deadlines" aria-label="The deadlines and the meetings ahead"></div>
     <div id="cal-body" class="cal-body"></div>
   </section>
   <aside id="drawer" hidden>

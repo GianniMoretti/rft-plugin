@@ -351,7 +351,7 @@ low has no limit, and a note that is done, dropped, discussed or moved does not 
 
 ## Deadlines and dates
 
-Deadlines of any kind (a submission, a rebuttal, a meeting, a talk, a thesis chapter) are
+Deadlines of any kind (a submission, a rebuttal, a talk, a thesis chapter) are
 **milestones**: one note each in the vault's `milestones/` folder, outside the reasoning tree,
 with `due:` and the notes that must be done first (`needs:`). Experiments carry the plan of their
 run: `start:` (a day) and `est:` (whole days or weeks: `3d`, `2w`); any note can have a `due:` of
@@ -364,9 +364,17 @@ its own. A due date is a day, a local time, or a time in a zone:
 - **Suggest a start or an estimate** when you can say why (a deadline needs the run done by then,
   it waits for another run, the GPUs are taken until then, the code shows how long a run takes):
   `rft_suggest_dates {id, start, est, why}`. The user accepts or dismisses it.
-- **A deadline the user gives you** ("supervisor meeting Friday at 14:00, I need E12 by then"):
+- **A deadline the user gives you** ("the thesis chapter is due Friday, I need E12 in it"):
   `rft_add_deadline {title, due, needs}`. The plugin asks the user to confirm it in a dialog you
   cannot answer; if they decline, leave it.
+- **A meeting the user gives you**, once or recurring ("supervisor meeting every Tuesday at 14:00
+  until June", "reading group on the first Thursday of each month", "the talk on 3 Dec at 10:30"):
+  `rft_add_meeting {title, when, duration, every, until, needs}`, confirmed in a dialog as a
+  deadline is. It is a note in `meetings/`: `when:` (the first one), `duration:` (1h, 45m),
+  `every:` (day, week, 2 weeks, month on the same date, month on the first Tuesday … the last
+  Friday), `until:` (its last day), `skip:` and `moved:` (single occurrences, which the user sets
+  in the Calendar). With `needs:` ("I need E12 for the meeting") it is a deadline too, at its next
+  occurrence. Its times are the user's: never write them, nor a meeting's file.
 - **Paper submissions**: only when the user names a venue or asks which deadlines fit, find the
   venue's official dates page and read it now (web search, fetch), never from memory: dates move
   every year, and extensions happen. Suggest one milestone per date (abstract, paper,
@@ -386,8 +394,9 @@ its own. A due date is a day, a local time, or a time in a zone:
   deadlines first, nearest first, with what puts each at risk; session start names the ones of the
   next 14 days at risk. When one is at risk, say so and propose what would save it (a suggested
   start, a smaller run, a priority suggestion), without changing the dates.
-- The vault's `rft.ics` holds the deadlines and the planned runs (never the suggestions), for any
-  calendar app to import; `rft_sync` keeps it current.
+- `rft_next` also lists the meetings of the next 7 days.
+- The vault's `rft.ics` holds the deadlines, the meetings and the planned runs (never the
+  suggestions), for any calendar app to import; `rft_sync` keeps it current.
 
 ## The experiment queue
 
@@ -575,10 +584,11 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 | `rft_manuscript` | snippets (state, basis, the documents using each) and documents (each copy's state), the verified notes still to write; a snippet in full, with what its notes saved; a document's outline |
 | `rft_set_snippet` | a new snippet, a building block resting on verified notes (a stub while locked); or, unlocked, a snippet's text or edits |
 | `rft_set_document` | a placement the user agreed to: a copy of a snippet placed in a document after a copy or a heading, moved, or removed |
-| `rft_next` | the deadlines (nearest first, what puts them at risk) and GPU clashes, the user's priorities, then what is still open by concept: running, planned, unexplored directions, open questions; the queue's jobs and the results to record |
+| `rft_next` | the deadlines (nearest first, what puts them at risk), GPU clashes and the meetings of the next 7 days, the user's priorities, then what is still open by concept: running, planned, unexplored directions, open questions; the queue's jobs and the results to record |
 | `rft_suggest_priority` | suggest a priority for a note, with why; the user accepts or dismisses it (never set `priority:` yourself) |
 | `rft_suggest_dates` | suggest an experiment's start and/or estimate, with why; the user accepts or dismisses it (never set `start:`, `est:` or `due:` yourself) |
 | `rft_add_deadline` | add a deadline the user gave you (title, due, needs); they confirm it in a dialog |
+| `rft_add_meeting` | add a meeting the user gave you, once or recurring (title, when, duration, every, until, needs); they confirm it in a dialog |
 | `rft_suggest_deadline` | suggest a paper submission read now from the venue's official dates page (`source`), with why |
 | `rft_move_node` | move a note and its subtree under another parent, keeping its origin, after the user agrees |
 | `rft_set_refs` | replace the reference notes a note builds on (`refs:`) |

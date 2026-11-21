@@ -1,12 +1,17 @@
 // Dates and deadlines as pure functions, one copy for the tree view's Calendar (its Month and
 // Timeline) and for the plugin (hooks/lib/dates.ts loads it): reading `due:`, `start:` and
 // `est:`, planning backwards from each deadline, the days the runs need more GPUs than the
-// machine has, the windows a calendar draws, and the text of an .ics file. It sets
-// `globalThis.RftSchedule` and touches nothing else.
+// machine has, the windows a calendar draws, the meetings' occurrences, and the text of an .ics
+// file. It sets `globalThis.RftSchedule` and touches nothing else.
 //
 // Days are `YYYY-MM-DD`, counted whole. A run of `est` days from `start` holds the days `start`
 // to `start + est - 1`, and ends (its next free day) at `start + est`. A deadline's needs must
 // end by its due day, which is left for what comes after them (the writing).
+//
+// A meeting (vault/meetings/) happens once, at `when:`, or comes back `every:` day, week or
+// month (`2 weeks`, `month on the first Tuesday`) from `when:` up to `until:` (a day, included),
+// but on the days in `skip:`; `moved:` takes one occurrence elsewhere (`2026-12-01 → 2026-12-02
+// 10:00`). A meeting with `needs:` is a deadline too, at its next occurrence.
 (function (root) {
   'use strict'
 
@@ -14,6 +19,10 @@
   // a day, a time and a zone: `2026-11-13`, `2026-11-13 23:59`, `2026-11-13 23:59 AoE` (server/rft_server.py has the same)
   const DUE_RE = /^(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}):(\d{2}))?(?:\s*(AoE|UTC|Z|[+-]\d{2}:?\d{2}))?$/i
   const EST_RE = /^(\d+)\s*([dw])?$/i
+  // a meeting's length, how often it comes back and an occurrence moved (server/rft_server.py has the same)
+  const DURATION_RE = /^(?:(\d+)\s*h)?\s*(?:(\d+)\s*m(?:in)?)?$/i
+  const EVERY_RE = /^(?:every\s+)?(?:(\d+)\s*)?(d|w|m|days?|weeks?|months?|daily|weekly|monthly)(?:\s+on\s+the\s+(first|second|third|fourth|fifth|last)\s+([a-z]{3,}))?$/i
+  const MOVED_RE = /^(\d{4}-\d{2}-\d{2})\s*(?:→|->)\s*(.+)$/
   const MS_DAY = 86400000
   // a note that no longer needs doing (its result is in, or it will not be done)
   const GONE = ['dropped', 'discussed', 'moved']
@@ -169,9 +178,10 @@
    * to do: its latest start and end (the due day, or the latest start of a needed note that comes
    * `after:` it), its slack (from its earliest start, or for a running one from its expected end),
    * and for a run over its estimate how far over. A deadline's slack is its smallest; it is at
-   * risk at 0 days or less, or when a needed note was dropped, superseded or is missing.
+   * risk at 0 days or less, or when a needed note was dropped, superseded or is missing. A meeting
+   * with `needs:` is planned for at its next occurrence.
    */
-  function plan(nodes, milestones, today) {
+  function plan(nodes, milestones, today, meetings) {
     const list = nodesOf(nodes)
     const byId = new Map(list.map(n => [n.id, n]))
 
@@ -258,6 +268,11 @@
       const due = n.due ? parseDue(n.due) : null
       if (due && usable(n)) out.push(one(n.id, n.name, 'note', due, [n.id], []))
     }
+    for (const m of meetings || []) {
+      if (!(m.needs || []).length && !(m.missing || []).length) continue
+      const occ = nextOccurrence(m, today)
+      if (occ) out.push({ ...one(m.id, m.name, 'meeting', occ.at, m.needs || [], m.missing), orig: occ.orig })
+    }
     return out.sort((a, b) => a.due.localeCompare(b.due) || (a.at.time || '24').localeCompare(b.at.time || '24') || naturally(a.id, b.id))
   }
 
@@ -295,6 +310,193 @@
   const clashLine = (c, capacity) =>
     `${c.from === c.to ? c.from : `${c.from}→${c.to}`}, ${andList(c.notes.map(x => `${x.id} (${x.gpus} GPU${x.gpus === 1 ? '' : 's'})`))} need ${c.need} of ${capacity}`
 
+  // ---------------------------------------------------------------- the meetings
+
+  const WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+  const ORDINALS = ['first', 'second', 'third', 'fourth', 'fifth']
+
+  /** A meeting's length in minutes: `1h`, `45m`, `1h30m`, `90 min`; null when it is none, or not above 0. */
+  function parseDuration(v) {
+    if (typeof v === 'number') return Number.isInteger(v) && v > 0 ? v : null
+    const m = typeof v === 'string' ? DURATION_RE.exec(unquote(v)) : null
+    if (!m || (m[1] === undefined && m[2] === undefined)) return null
+    const min = 60 * +(m[1] || 0) + +(m[2] || 0)
+    return min > 0 ? min : null
+  }
+
+  /** Minutes as they are written back: `1h30m`, `45m`, `2h`. */
+  const formatDuration = min => (min > 0 ? `${Math.floor(min / 60) ? `${Math.floor(min / 60)}h` : ''}${min % 60 ? `${min % 60}m` : ''}` : '')
+
+  /**
+   * How often a meeting comes back, as written in `every:`: `week`, `2 weeks`, `day`, `month`
+   * (the same date), `month on the first Tuesday` (`second` … `fifth`, `last`), also `1w`,
+   * `weekly`, `every 2 weeks`. `{unit: 'day' | 'week' | 'month', n}`, with `nth` (1-5, -1 for the
+   * last) and `wd` (Monday 0 … Sunday 6) for a weekday of the month; null when it is none.
+   */
+  function parseEvery(v) {
+    const m = typeof v === 'string' ? EVERY_RE.exec(unquote(v).replace(/\s+/g, ' ')) : null
+    if (!m) return null
+    const word = m[2].toLowerCase()
+    if (word.endsWith('ly') && m[1] !== undefined) return null
+    const unit = { d: 'day', w: 'week', m: 'month' }[word[0]]
+    const n = m[1] === undefined ? 1 : +m[1]
+    if (!(n >= 1 && n <= 99)) return null
+    if (!m[3]) return { unit, n }
+    const wd = WEEKDAY_NAMES.findIndex(d => d.toLowerCase().startsWith(m[4].toLowerCase()))
+    if (unit !== 'month' || wd < 0) return null
+    const ord = m[3].toLowerCase()
+    return { unit, n, nth: ord === 'last' ? -1 : ORDINALS.indexOf(ord) + 1, wd }
+  }
+
+  /** A rule as it is written back: `week`, `2 weeks`, `month on the first Tuesday`. */
+  function formatEvery(r) {
+    if (!r) return ''
+    const base = r.n === 1 ? r.unit : `${r.n} ${r.unit}s`
+    return r.nth ? `${base} on the ${r.nth === -1 ? 'last' : ORDINALS[r.nth - 1]} ${WEEKDAY_NAMES[r.wd]}` : base
+  }
+
+  /** The items of a one-line list as written (`[2026-12-22, "2026-12-29"]`), or the list itself. */
+  function listItems(v) {
+    if (Array.isArray(v)) return v.map(x => unquote(String(x))).filter(Boolean)
+    if (typeof v !== 'string') return []
+    const s = v.trim().replace(/^\[(.*)\]$/, '$1')
+    return s.split(',').map(x => unquote(x)).filter(Boolean)
+  }
+
+  const days = (y, m) => new Date(Date.UTC(y, m, 0)).getUTCDate()
+  const ymd = (y, m, d) => `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+
+  /** The day of a month (1-12) that is its `nth` weekday `wd` (-1: the last); null when it has none (a fifth). */
+  function nthWeekday(y, m, nth, wd) {
+    const dim = days(y, m)
+    if (nth === -1) {
+      const last = ymd(y, m, dim)
+      return ymd(y, m, dim - ((weekday(last) - wd + 7) % 7))
+    }
+    const d = 1 + ((wd - weekday(ymd(y, m, 1)) + 7) % 7) + 7 * (nth - 1)
+    return d <= dim ? ymd(y, m, d) : null
+  }
+
+  /** Which weekday of its month a day is: `{wd, nth}` (1-5) and whether it is the last one (`last`). */
+  const nthOf = day => ({ wd: weekday(day), nth: Math.ceil(+day.slice(8) / 7), last: +day.slice(8) + 7 > days(+day.slice(0, 4), +day.slice(5, 7)) })
+
+  /**
+   * A meeting read: its first occurrence (`start`, a due date), its length in minutes, how often it
+   * comes back (`rule`), its last day (`until`), the days skipped and each occurrence moved (its
+   * day → where it went, which keeps the meeting's time and zone when it gives none); null
+   * without a `when:`.
+   */
+  function meetingOf(m) {
+    const start = parseDue(m && m.when)
+    if (!start) return null
+    const moved = new Map()
+    for (const item of listItems(m.moved)) {
+      const x = parseMoved(item, start)
+      if (x) moved.set(x.from, x.to)
+    }
+    return {
+      start, minutes: parseDuration(m.duration), rule: m.every ? parseEvery(m.every) : null, badRule: Boolean(m.every) && !parseEvery(m.every),
+      until: parseDay(m.until), skip: new Set(listItems(m.skip).filter(isDay)), moved,
+    }
+  }
+
+  /** `2026-12-01 → 2026-12-02 10:00` read: `{from, to}`; a `to` with no time takes the meeting's, one with no zone its zone. */
+  function parseMoved(v, start) {
+    const m = typeof v === 'string' ? MOVED_RE.exec(unquote(v)) : null
+    const to = m && isDay(m[1]) ? parseDue(m[2]) : null
+    if (!to) return null
+    if (start && start.time && !to.time) Object.assign(to, { time: start.time }, start.zone ? { zone: start.zone } : {})
+    else if (start && start.zone && to.time && !to.zone) to.zone = start.zone
+    return { from: m[1], to }
+  }
+
+  /** An occurrence moved, as it is written back: `2026-12-01 → 2026-12-02 10:00`. */
+  const formatMoved = (from, to) => `${from} → ${formatDue(to)}`
+
+  /** The days the rule falls on from `from` up to `to` (excluded), from the first one on and up to `until`. */
+  function ruleDays(mt, from, to) {
+    const out = []
+    const first = mt.start.day
+    const end = mt.until && addDays(mt.until, 1) < to ? addDays(mt.until, 1) : to
+    from = later(from, first)
+    if (from >= end) return out
+    const r = mt.rule
+    if (!r) return first >= from && first < end ? [first] : out
+    if (r.unit !== 'month') {
+      const step = r.n * (r.unit === 'week' ? 7 : 1)
+      for (let d = addDays(first, Math.ceil(between(first, from) / step) * step); d < end; d = addDays(d, step)) out.push(d)
+      return out
+    }
+    const y0 = +first.slice(0, 4), m0 = +first.slice(5, 7)
+    const at = 12 * y0 + m0 - 1
+    const dom = +first.slice(8)
+    for (let k = Math.max(0, Math.floor((12 * +from.slice(0, 4) + +from.slice(5, 7) - 1 - at) / r.n)); ; k++) {
+      const i = at + k * r.n
+      const y = Math.floor(i / 12), mo = (i % 12) + 1
+      if (ymd(y, mo, 1) >= end) break
+      const d = r.nth ? nthWeekday(y, mo, r.nth, r.wd) : dom <= days(y, mo) ? ymd(y, mo, dom) : null
+      if (d && d >= from && d < end) out.push(d)
+    }
+    return out
+  }
+
+  /** Whether `day` is one of the meeting's occurrences by its rule (skipped or moved ones too). */
+  function isOccurrence(m, day) {
+    const mt = m && m.start ? m : meetingOf(m)
+    return Boolean(mt) && isDay(day) && ruleDays(mt, day, addDays(day, 1)).length === 1
+  }
+
+  /**
+   * A meeting's occurrences from `from` up to `to` (excluded), in order: `{day, at, orig}`, `at`
+   * its day, time and zone, `orig` the day its rule gives (`moved` when it went elsewhere); the
+   * skipped ones only with `skipped` (`{day, at, orig, skipped: true}`).
+   */
+  function occurrences(m, from, to, opts = {}) {
+    const mt = meetingOf(m)
+    if (!mt) return []
+    const out = []
+    const at = day => ({ ...mt.start, day })
+    for (const d of ruleDays(mt, from, to)) {
+      if (mt.skip.has(d)) { if (opts.skipped) out.push({ day: d, at: at(d), orig: d, skipped: true }); continue }
+      if (!mt.moved.has(d)) out.push({ day: d, at: at(d), orig: d })
+    }
+    for (const [orig, dest] of mt.moved) {
+      if (mt.skip.has(orig) || !(dest.day >= from && dest.day < to) || !isOccurrence(mt, orig)) continue
+      out.push({ day: dest.day, at: dest, orig, moved: true })
+    }
+    return out.sort((a, b) => a.day.localeCompare(b.day) || (a.at.time || '').localeCompare(b.at.time || ''))
+  }
+
+  /** A meeting's next occurrence from `today` on (today's too), or null when there is none left. */
+  function nextOccurrence(m, today) {
+    for (let f = today, i = 0; i < 10; f = addDays(f, 400), i++) {
+      const o = occurrences(m, f, addDays(f, 400))
+      if (o.length) return o[0]
+    }
+    return null
+  }
+
+  /** The meetings' occurrences from `from` up to `to` (excluded), in order: `{meeting, occ}`. */
+  function upcoming(meetings, from, to) {
+    const out = []
+    for (const m of meetings || []) for (const occ of occurrences(m, from, to)) out.push({ meeting: m, occ })
+    return out.sort((a, b) => a.occ.day.localeCompare(b.occ.day) || (a.occ.at.time || '').localeCompare(b.occ.at.time || '') || naturally(a.meeting.id, b.meeting.id))
+  }
+
+  /** How a meeting comes back, in words: `once`, `every week`, `every 2 weeks until 2027-06-30`. */
+  function repeatText(m) {
+    const mt = meetingOf(m)
+    if (!mt || !mt.rule) return 'once'
+    return `every ${formatEvery(mt.rule)}${mt.until ? ` until ${mt.until}` : ''}`
+  }
+
+  /** An occurrence in one line: `G01 Supervisor meeting · 2026-11-24 14:00 (in 4d) · 1h, every week`. */
+  function meetingLine(m, occ, today) {
+    const mt = meetingOf(m)
+    const what = [mt && mt.minutes ? formatDuration(mt.minutes) : '', repeatText(m), occ.moved ? `moved from ${occ.orig}` : ''].filter(Boolean).join(', ')
+    return `${m.name} · ${formatDue(occ.at)} (${when(between(today, occ.day))}) · ${what}`
+  }
+
   // ---------------------------------------------------------------- the calendar file
 
   const icsText = s => String(s).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n')
@@ -317,11 +519,68 @@
     return `DTSTART;VALUE=DATE:${icsDay(due.day)}`
   }
 
+  const ICS_DAYS = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU']
+  const icsOffset = min => `${min < 0 ? '-' : '+'}${String(Math.floor(Math.abs(min) / 60)).padStart(2, '0')}${String(Math.abs(min) % 60).padStart(2, '0')}`
+
+  /**
+   * How a meeting's time is written: a day (`;VALUE=DATE`), a local time (floating), a time in UTC;
+   * one in another zone, for a meeting that comes back, in that zone (`;TZID=`, kept in `tz`: its
+   * rule then counts days and weekdays there, not in UTC), else in UTC. `{param, value}`.
+   */
+  function icsAt(at, recurring, tz) {
+    if (!at.time) return { param: ';VALUE=DATE', value: icsDay(at.day) }
+    const local = `${icsDay(at.day)}T${at.time.replace(':', '')}00`
+    if (!at.zone) return { param: '', value: local }
+    const off = offsetOf(at.zone)
+    if (!recurring || off === 0) return { param: '', value: utcOf(at).replace(/[-:]/g, '') }
+    // a whole hour has its IANA name (Etc/GMT-1 is UTC+01:00), which every calendar app knows
+    const id = off % 60 === 0 ? `Etc/GMT${off === 0 ? '' : off > 0 ? '-' : '+'}${Math.abs(off) / 60}` : `UTC${at.zone}`
+    tz.set(id, off)
+    return { param: `;TZID=${id}`, value: local }
+  }
+
+  /**
+   * A meeting as events: one, or a series (RRULE, its skipped days as EXDATE) with each occurrence
+   * moved as an event of its own (RECURRENCE-ID). Its first event is the rule's first day.
+   */
+  function icsMeeting(m, ctx) {
+    const mt = meetingOf(m)
+    if (!mt) return
+    const r = mt.rule
+    const first = ruleDays(mt, mt.start.day, addDays(mt.start.day, r ? 372 * r.n : 1))[0]
+    if (!first) return
+    const at = day => ({ ...mt.start, day })
+    const put = (prop, a) => { const x = icsAt(a, Boolean(r), ctx.tz); return `${prop}${x.param}:${x.value}` }
+    const needs = (m.needs || []).map(id => (ctx.byId.get(id) ? ctx.byId.get(id).name : id))
+    const tail = [
+      ...(mt.start.time && mt.minutes ? [`DURATION:PT${Math.floor(mt.minutes / 60) ? `${Math.floor(mt.minutes / 60)}H` : ''}${mt.minutes % 60 ? `${mt.minutes % 60}M` : ''}`] : []),
+      `SUMMARY:${icsText(m.name)}`,
+      ...(needs.length ? [`DESCRIPTION:${icsText(`Needs ${needs.join(', ')}`)}`] : []),
+    ]
+    const uid = `UID:${m.id}@${ctx.host}`
+    if (!r) return ctx.event([uid, ctx.stamp, put('DTSTART', at(first)), ...tail])
+    const rule = [`FREQ=${{ day: 'DAILY', week: 'WEEKLY', month: 'MONTHLY' }[r.unit]}`]
+    if (r.n > 1) rule.push(`INTERVAL=${r.n}`)
+    if (r.unit === 'month') rule.push(r.nth ? `BYDAY=${r.nth}${ICS_DAYS[r.wd]}` : `BYMONTHDAY=${+mt.start.day.slice(8)}`)
+    if (mt.until) {
+      const x = icsAt(at(mt.until), true, ctx.tz)
+      rule.push(`UNTIL=${!mt.start.time ? x.value : !mt.start.zone ? `${icsDay(mt.until)}T235959` : utcOf({ day: mt.until, time: '23:59', zone: mt.start.zone }).replace(/[-:]/g, '').replace(/00Z$/, '59Z')}`)
+    }
+    const skipped = [...mt.skip].filter(d => isOccurrence(mt, d)).sort()
+    const ex = skipped.map(d => icsAt(at(d), true, ctx.tz))
+    ctx.event([uid, ctx.stamp, put('DTSTART', at(first)), `RRULE:${rule.join(';')}`,
+      ...(ex.length ? [`EXDATE${ex[0].param}:${ex.map(x => x.value).join(',')}`] : []), ...tail])
+    for (const [orig, dest] of [...mt.moved].sort((a, b) => a[0].localeCompare(b[0]))) {
+      if (mt.skip.has(orig) || !isOccurrence(mt, orig)) continue
+      ctx.event([uid, ctx.stamp, put('RECURRENCE-ID', at(orig)), put('DTSTART', dest), ...tail])
+    }
+  }
+
   /**
    * The deadlines (the milestones but the suggested and dismissed ones, and the notes' own due
-   * dates) and the experiments' planned and past runs as an iCalendar file, for any calendar to
-   * import. Claude's suggestions are left out. `stamp`: when it was made (ISO). Nothing in it
-   * depends on today, so the file changes only when the dates do.
+   * dates), the meetings and the experiments' planned and past runs as an iCalendar file, for any
+   * calendar to import. Claude's suggestions are left out. `stamp`: when it was made (ISO).
+   * Nothing in it depends on today, so the file changes only when the dates do.
    */
   function ics(o) {
     const stamp = `DTSTAMP:${String(o.stamp).replace(/\.\d+Z$/, 'Z').replace(/[-:]/g, '')}`
@@ -341,6 +600,8 @@
       const due = n.due ? parseDue(n.due) : null
       if (due && usable(n)) event([`UID:${n.id}-due@${host}`, stamp, icsStart(due), `SUMMARY:${icsText(`${n.name} (due)`)}`])
     }
+    const tz = new Map()
+    for (const m of o.meetings || []) icsMeeting(m, { host, stamp, byId, tz, event })
     // the runs as planned: a running one from its start for its estimate, none without an end
     for (const w of windows(nodes, '1970-01-01')) {
       const n = byId.get(w.id)
@@ -349,7 +610,10 @@
       event([`UID:${n.id}@${host}`, stamp, `DTSTART;VALUE=DATE:${icsDay(w.from)}`, `DTEND;VALUE=DATE:${icsDay(to)}`,
         `SUMMARY:${icsText(n.name)}`, `DESCRIPTION:${icsText(`${n.status}${n.gpus > 1 ? `, ${n.gpus} GPUs` : ''}`)}`])
     }
-    const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', `PRODID:-//rft//${icsText(o.project)}//EN`, 'CALSCALE:GREGORIAN', fold(`X-WR-CALNAME:${icsText(o.project)}`), ...events, 'END:VCALENDAR']
+    // the fixed offsets the meetings' times are in
+    const zones = [...tz].sort((a, b) => a[0].localeCompare(b[0])).flatMap(([id, off]) => ['BEGIN:VTIMEZONE', `TZID:${id}`, 'BEGIN:STANDARD', 'DTSTART:19700101T000000',
+      `TZOFFSETFROM:${icsOffset(off)}`, `TZOFFSETTO:${icsOffset(off)}`, `TZNAME:UTC${icsOffset(off).replace(/(\d\d)$/, ':$1')}`, 'END:STANDARD', 'END:VTIMEZONE'])
+    const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', `PRODID:-//rft//${icsText(o.project)}//EN`, 'CALSCALE:GREGORIAN', fold(`X-WR-CALNAME:${icsText(o.project)}`), ...zones, ...events, 'END:VCALENDAR']
     return { text: lines.join('\r\n') + '\r\n', events: events.filter(l => l === 'BEGIN:VEVENT').length }
   }
 
@@ -384,8 +648,10 @@
   }
 
   root.RftSchedule = {
-    MILESTONE_STATUSES, DUE_EXAMPLES, DUE_RE,
+    MILESTONE_STATUSES, DUE_EXAMPLES, DUE_RE, DURATION_RE, EVERY_RE, MOVED_RE, WEEKDAY_NAMES, ORDINALS,
     isDay, parseDay, addDays, between, weekday, parseDue, formatDue, utcOf, parseEst,
     windows, gpuLoad, gpuDays, plan, when, detail, deadlineLine, clashLine, andList, ics, monthWeeks, weekBars,
+    parseDuration, formatDuration, parseEvery, formatEvery, listItems, parseMoved, formatMoved, nthOf, nthWeekday,
+    meetingOf, isOccurrence, occurrences, nextOccurrence, upcoming, repeatText, meetingLine,
   }
 })(typeof globalThis !== 'undefined' ? globalThis : window)
