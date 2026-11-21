@@ -730,6 +730,23 @@ node), forward the port and open the address on your own machine:
 ssh -L 41234:127.0.0.1:41234 user@remote
 ```
 
+**From a terminal**, the view stays up with no chat open: in the project's folder (or any folder
+below it, or a repository whose config links to the tree), run
+
+```bash
+python3 /path/to/rft-plugin/server/rft_serve.py        # [folder] [--port N]; Ctrl+C stops it
+```
+
+It prints the address `/rft` prints, key included, on the config's `webPort` (set one so the
+address, and a bookmark of it, stay the same; with none it takes a free port). Reading, editing,
+comments, the kanban, the calendar, the scratchpad and the queue work as from a chat. What the
+page asks of the session (**Add child**, **Change type**, **Move**, **Verify**, the Manuscript's
+changes, **Ask Claude**) a chat makes: `/rft` in a chat on the same tree shows the terminal's
+address and makes them from there, and the terminal says when a chat connects or leaves. With no
+chat, they are refused at once, saying so. A chat already serving the tree on that port keeps it,
+and the terminal serves it once the chat ends; a terminal that stops while a chat is open leaves
+the address to that chat. A second terminal on the same tree says where the first serves it.
+
 On a **phone** (a screen up to 700 px wide; `web/phone.js`), the pages are tabs along the bottom,
 the bar is the search and **⋯** (layout, fit, fold, text size, the concept overlay, Came from,
 Filters, the theme), and a note, the filters, the scratchpad, the queue and a notebook each take

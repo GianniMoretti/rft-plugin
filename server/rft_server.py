@@ -46,6 +46,12 @@ its parent process goes away (or, with --watch-stdin, closes its stdin). When a 
 held by another session's server for the same vault, it prints that address, whose key is the
 same, and takes the port over once that server stops; when something else holds it, it serves
 on a free port instead.
+
+With --terminal (rft_serve.py, which reads the project's config) it runs from a terminal and has no
+session: api/id says so, its port is recorded in the user's cache (rft/hosts/<vault id>), and what
+the page asks of the session is handed to a chat's server, which finds it on its port or by the
+record, prints its address, and takes those requests (GET api/session/next, with the key, every
+RELAY_POLL_S) for its plugin; with no chat taking them, they are refused at once (Relay).
 """
 from __future__ import annotations
 
@@ -125,6 +131,8 @@ MAX_NOTE_BYTES = 2_000_000
 MAX_NODE_BYTES = 10_000
 NODE_WAIT_S = 10.0  # how long a new note may take the session to make
 SETTLE_S = 0.3  # how long the notes stay as they are before a new one counts as made
+RELAY_POLL_S = 0.25  # how often a chat asks the terminal's server for what the page asks of the session
+RELAY_ALIVE_S = 2.0  # how long after it last asked a chat still counts as there
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
                ".webp": "image/webp", ".avif": "image/avif", ".bmp": "image/bmp", ".svg": "image/svg+xml"}
 MAX_IMAGE_BYTES = 50_000_000
@@ -1597,8 +1605,8 @@ class Vault:
                         return 409, {"error": "the thread is closed: reopen it first", **self.note(nid)}
                     try:
                         ask("RFT_ASK", {"id": nid, "thread": t["id"]})
-                    except (OSError, ValueError):
-                        return 503, {"error": "the Claude Code session that ran /rft is gone"}
+                    except (OSError, ValueError) as err:
+                        return 503, {"error": gone(err)}
                     t["asked"] = now
                 else:
                     return 400, {"error": "action must be new, reply, resolve, reopen, accept, reject or ask"}
@@ -1637,8 +1645,8 @@ class Vault:
                 return 404, {"error": "no such parent note"}
             try:
                 ask("RFT_ADD_NODE", {"parent": parent, "type": kind, "title": title})
-            except (OSError, ValueError):
-                return 503, {"error": "the Claude Code session that ran /rft is gone"}
+            except (OSError, ValueError) as err:
+                return 503, {"error": gone(err)}
 
             def found(nodes):
                 new = [n for n in nodes if n["id"] not in before and n["parent"] == parent and n["type"] == kind]
@@ -1666,8 +1674,8 @@ class Vault:
                 return 400, {"error": "the root of the tree stays a direction"}
             try:
                 ask("RFT_SET_TYPE", {"id": nid, "type": kind})
-            except (OSError, ValueError):
-                return 503, {"error": "the Claude Code session that ran /rft is gone"}
+            except (OSError, ValueError) as err:
+                return 503, {"error": gone(err)}
 
             def found(nodes):
                 if any(n["id"] == nid for n in nodes):
@@ -1836,8 +1844,8 @@ class Vault:
         with self._ask_lock:
             try:
                 ask("RFT_MANUSCRIPT", {k: v for k, v in req.items() if k in ("action", "id", "kind", "title", "basis", "name", "after")})
-            except (OSError, ValueError):
-                return 503, {"error": "the Claude Code session that ran /rft is gone"}
+            except (OSError, ValueError) as err:
+                return 503, {"error": gone(err)}
             deadline = time.monotonic() + NODE_WAIT_S
             while time.monotonic() < deadline:
                 time.sleep(0.1)
@@ -1953,8 +1961,8 @@ class Vault:
                 return 400, {"error": "Claude suggested no verification for this note"}
             try:
                 ask("RFT_VERIFY", {"id": nid, "action": action})
-            except (OSError, ValueError):
-                return 503, {"error": "the Claude Code session that ran /rft is gone"}
+            except (OSError, ValueError) as err:
+                return 503, {"error": gone(err)}
 
             def found(nodes):
                 m = next((m for m in nodes if m["id"] == nid), None)
@@ -1990,8 +1998,8 @@ class Vault:
                 p = nodes[p]["parent"] if p in nodes else None
             try:
                 ask("RFT_MOVE_NODE", {"id": nid, "parent": parent, **({"unlock": True} if unlock else {})})
-            except (OSError, ValueError):
-                return 503, {"error": "the Claude Code session that ran /rft is gone"}
+            except (OSError, ValueError) as err:
+                return 503, {"error": gone(err)}
             deadline = time.monotonic() + NODE_WAIT_S
             while time.monotonic() < deadline:
                 time.sleep(0.1)
@@ -2026,11 +2034,84 @@ def ask_session(verb: str, request: dict) -> None:
     print(f"{verb} {json.dumps(request)}", flush=True)
 
 
+class NoSession(OSError):
+    """A server run from a terminal, and no chat that ran /rft on its tree to make what the page asks."""
+
+
+NO_SESSION = ("this needs a Claude Code chat on this tree, and the view is served from a terminal: "
+              "run /rft in a chat, which then makes it")
+
+
+def gone(err: Exception) -> str:
+    """Why a request for the session failed, as the page shows it."""
+    return str(err) if isinstance(err, NoSession) else "the Claude Code session that ran /rft is gone"
+
+
+class Relay:
+    """What the page asks of the session, when the server runs from a terminal (rft_serve.py) and has
+    no session of its own: the server of a chat that ran /rft on the same tree takes the requests
+    (GET api/session/next) every RELAY_POLL_S and prints them for its plugin, as if the page had
+    asked it. A chat counts as there for RELAY_ALIVE_S after it last asked."""
+
+    def __init__(self):
+        self._cond = threading.Condition()
+        self._pending: list[dict] = []
+        self._seen = float("-inf")
+
+    def alive(self) -> bool:
+        return time.monotonic() - self._seen < RELAY_ALIVE_S
+
+    def ask(self, verb: str, request: dict) -> None:
+        """Answers once a chat has taken the request; NoSession at once when no chat is there, or
+        when none takes it in time (it is then dropped, so no chat makes it later)."""
+        item = {"verb": verb, "request": request}
+        with self._cond:
+            if not self.alive():
+                raise NoSession(NO_SESSION)
+            self._pending.append(item)
+            end = time.monotonic() + RELAY_ALIVE_S
+            while any(x is item for x in self._pending):
+                left = end - time.monotonic()
+                if left <= 0:
+                    self._pending = [x for x in self._pending if x is not item]
+                    raise NoSession(NO_SESSION)
+                self._cond.wait(left)
+
+    def take(self) -> list[dict]:
+        """The requests waiting for a chat, handed to the one asking."""
+        with self._cond:
+            self._seen = time.monotonic()
+            got, self._pending = self._pending, []
+            self._cond.notify_all()
+            return got
+
+
+def follow(port: int, token: str, ask=ask_session) -> None:
+    """Hands this session what the page asks of it through the terminal's server on `port`, as its
+    own server would; returns once that server stops answering."""
+    while True:
+        try:
+            c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            c.request("GET", "/api/session/next", headers={"X-RFT-Token": token})
+            r = c.getresponse()
+            body = r.read()
+            c.close()
+            if r.status != 200:
+                return
+            for item in json.loads(body)["requests"]:
+                ask(item["verb"], item["request"])
+        except (OSError, http.client.HTTPException, ValueError, KeyError, TypeError):
+            # the terminal's server stopped, mid-answer too (IncompleteRead is no OSError)
+            return
+        time.sleep(RELAY_POLL_S)
+
+
 # ------------------------------------------------------------------ http
 
-def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_session, editors=None):
+def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_session, editors=None, relay=None):
     """The request handler; without a `token` it never writes. `ask` hands a new note to the session;
-    `editors` serves the experiments' notebooks (rft_notebook.Editors)."""
+    `editors` serves the experiments' notebooks (rft_notebook.Editors); a `relay` (a server run from a
+    terminal) hands the requests for the session to the chats that ask for them."""
     web = web.resolve()
     editors = editors if editors is not None else rft_notebook.Editors()
 
@@ -2286,7 +2367,16 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             if route == "/api/tree":
                 return self._json(200, vault.tree(), head_only)
             if route == "/api/id":
-                return self._json(200, {"vault": vault.ident}, head_only)
+                return self._json(200, {"vault": vault.ident, **({"terminal": True} if relay else {})}, head_only)
+            if route == "/api/session/next":
+                # a chat's server takes what the page asked of the session (Relay): never a page,
+                # which sends an Origin, and only with the key
+                if relay is None:
+                    return self._send(404, b"not found", "text/plain", head_only)
+                given = self.headers.get("X-RFT-Token") or ""
+                if self.headers.get("Origin") or not token or not secrets.compare_digest(given, token):
+                    return self._json(403, {"error": "the key is missing or out of date"}, head_only)
+                return self._json(200, {"requests": [] if head_only else relay.take()}, head_only)
             if route == "/api/note":
                 nid = (parse_qs(url.query).get("id") or [""])[0]
                 note = vault.note(nid)
@@ -2639,10 +2729,15 @@ def queue_change(q, req: dict) -> tuple[int, dict]:
     return 400, {"error": QUEUE_OPS}
 
 
+def cache_root() -> Path:
+    """The plugin's folder in the user's cache (XDG_CACHE_HOME, else ~/.cache)."""
+    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "rft"
+
+
 def vault_key(vault: Path) -> str:
     """The key for writes to this vault, kept in the user's cache readable by them alone (XDG_CACHE_HOME,
     else ~/.cache), so an address with it, or a browser that remembers it, still works after a restart."""
-    keys = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "rft" / "keys"
+    keys = cache_root() / "keys"
     path = keys / hashlib.sha1(str(vault.resolve()).encode()).hexdigest()[:16]
     try:
         if path.stat().st_mode & 0o077 == 0:
@@ -2668,17 +2763,65 @@ def bind(port: int, handler):
     return server
 
 
-def vault_on(port: int) -> str | None:
-    """The vault id of the rft server listening on `port`, or None when it is not one."""
+def id_on(port: int) -> dict:
+    """What the rft server listening on `port` says it is (GET api/id), or {} when it is not one."""
     try:
         c = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
         c.request("GET", "/api/id")
         r = c.getresponse()
         body = r.read()
         c.close()
-        return json.loads(body).get("vault") if r.status == 200 else None
+        got = json.loads(body) if r.status == 200 else {}
+        return got if isinstance(got, dict) else {}
+    except (OSError, http.client.HTTPException, ValueError):
+        return {}
+
+
+def vault_on(port: int) -> str | None:
+    """The vault id of the rft server listening on `port`, or None when it is not one."""
+    return id_on(port).get("vault")
+
+
+def host_record(vault: Vault) -> Path:
+    """Where the terminal's server of `vault` writes its port, for the chats on the tree to find it
+    on a port of its own (no `webPort`)."""
+    return cache_root() / "hosts" / vault.ident
+
+
+def write_host_record(vault: Vault, port: int) -> None:
+    path = host_record(vault)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        tmp = path.with_name(f"{path.name}.{os.getpid()}")
+        tmp.write_text(json.dumps({"port": port, "pid": os.getpid()}))
+        os.replace(tmp, path)
+    except OSError:
+        pass  # the chats find it on the configured port only
+
+
+def drop_host_record(vault: Vault) -> None:
+    """Removes the record, when it is this process's."""
+    path = host_record(vault)
+    try:
+        if json.loads(path.read_text()).get("pid") == os.getpid():
+            path.unlink()
     except (OSError, ValueError, AttributeError):
-        return None
+        pass
+
+
+def terminal_host(vault: Vault, ports) -> int | None:
+    """The port of a server of `vault` run from a terminal: the one its record names, else one of
+    `ports`; None when there is none (a record left by one that was killed counts for nothing)."""
+    try:
+        recorded = int(json.loads(host_record(vault).read_text())["port"])
+    except (OSError, ValueError, KeyError, TypeError):
+        recorded = None
+    for port in dict.fromkeys([recorded, *ports]):
+        if port:
+            got = id_on(port)
+            if got.get("vault") == vault.ident and got.get("terminal") is True:
+                return port
+    return None
 
 
 def take_over(port: int, handler, every: float = 1.0):
@@ -2723,6 +2866,89 @@ def watch_parent(server, watch_stdin: bool, on_exit=None):
         threading.Thread(target=by_stdin, daemon=True).start()
 
 
+def serve_session(a, vault: Vault, token: str, handler, announce):
+    """The server of a chat that ran /rft, bound, after it printed its address. When the tree is
+    served from a terminal, its address is the chat's: the chat makes what the page asks of the
+    session there (follow), and serves it itself once the terminal stops. When another chat serves
+    the tree on the configured port, its address is the chat's too, and its port once it ends."""
+    at = None  # the port of the address printed
+    while True:
+        host = terminal_host(vault, [a.port, at])
+        if host:
+            if at is None:
+                announce(host)
+                at = host
+            follow(host, token)
+            time.sleep(RELAY_POLL_S)
+            continue
+        port = at if at is not None else a.port
+        try:
+            server = bind(port, handler)
+        except OSError as err:
+            if not port or err.errno != errno.EADDRINUSE:
+                raise
+            if at is not None:
+                # the address printed is the one the plugin shows: the port is waited for, whoever
+                # holds it a moment (as take_over waits for it)
+                time.sleep(1.0)
+                continue
+            if vault_on(port) == vault.ident:
+                # another chat's server of this vault, with the same key: its address is ours, and
+                # its port once it stops (or a terminal's server that takes it over meanwhile)
+                announce(port)
+                at = port
+                time.sleep(1.0)
+                continue
+            print(f"rft: port {port} is taken, serving on a free port", file=sys.stderr, flush=True)
+            server = bind(0, handler)
+            announce(server.server_address[1])
+            return server
+        if at is None:
+            announce(server.server_address[1])
+        return server
+
+
+def serve_terminal(a, vault: Vault, handler, url, say):
+    """The server run from a terminal (rft_serve.py), bound; None when another terminal serves the
+    tree already. A chat's server on the configured port keeps it until that chat ends."""
+    other = terminal_host(vault, [a.port])
+    if other:
+        say(f"rft: {a.project} is already served from another terminal, at {url(other)}")
+        return None
+    try:
+        server = bind(a.port, handler)
+    except OSError as err:
+        if not a.port or err.errno != errno.EADDRINUSE:
+            raise
+        if vault_on(a.port) == vault.ident:
+            say(f"rft: a Claude Code chat serves {a.project} at {url(a.port)}; this terminal serves it once that chat ends")
+            server = take_over(a.port, handler)
+        else:
+            say(f"rft: port {a.port} is taken, serving on a free port")
+            server = bind(0, handler)
+    port = server.server_address[1]
+    write_host_record(vault, port)
+    say(f"rft: the tree view of {a.project} is at {url(port)}  (Ctrl+C stops it)")
+    return server
+
+
+CHAT_ON = ("a Claude Code chat on this tree is connected: it makes what the page asks of the session "
+           "(Add child, Change type, Move, Verify, the Manuscript's changes, Ask Claude)")
+CHAT_OFF = ("no Claude Code chat is connected: the page's Add child, Change type, Move, Verify, "
+            "Manuscript changes and Ask Claude are refused until /rft runs in one")
+
+
+def watch_chats(relay: Relay, say, every: float = 0.5) -> None:
+    """Says in the terminal when a chat starts or stops making what the page asks of the session."""
+    was = False
+    while True:
+        time.sleep(every)
+        now = relay.alive()
+        if now != was:
+            say(f"rft {time.strftime('%H:%M')}: {CHAT_ON if now else CHAT_OFF}")
+            was = now
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--vault", required=True)
@@ -2732,41 +2958,50 @@ def main(argv=None):
     ap.add_argument("--config", default=None, help="the project's .rft/config.json (gpus:, the last milestone and meeting ids)")
     ap.add_argument("--no-watch", action="store_true", help="do not exit with the parent (for manual runs)")
     ap.add_argument("--watch-stdin", action="store_true", help="also exit when stdin is closed")
+    ap.add_argument("--terminal", action="store_true",
+                    help="run from a terminal (rft_serve.py): a chat that runs /rft on the tree makes what the page asks of the session")
     a = ap.parse_args(argv)
     vault = Vault(Path(a.vault), a.project, Path(a.config) if a.config else None)
     token = vault_key(Path(a.vault))
     editors = rft_notebook.Editors()
-    handler = make_handler(vault, Path(a.web), token, editors=editors)
+    relay = Relay() if a.terminal else None
+    handler = make_handler(vault, Path(a.web), token, ask=relay.ask if relay else ask_session, editors=editors, relay=relay)
     if not a.no_watch:
         watch_parent(None, a.watch_stdin, on_exit=editors.stop_all)
-    # stopped from outside: the editors run in process groups of their own, so stop them too
-    signal.signal(signal.SIGTERM, lambda *_: (editors.stop_all(), os._exit(0)))
 
-    def announce(port: int):
-        print(f"RFT_SERVER_URL http://127.0.0.1:{port}/?token={token}", flush=True)
+    def leave(*_):
+        # the editors run in process groups of their own, so they are stopped too
+        editors.stop_all()
+        if relay:
+            drop_host_record(vault)
+        os._exit(0)
+
+    # stopped from outside, or (from a terminal) the terminal closed, unless run to outlive it (nohup)
+    signal.signal(signal.SIGTERM, leave)
+    if a.terminal and signal.getsignal(signal.SIGHUP) is not signal.SIG_IGN:
+        signal.signal(signal.SIGHUP, leave)
+
+    def url(port: int) -> str:
+        return f"http://127.0.0.1:{port}/?token={token}"
+
+    def say(text: str):
+        print(text, flush=True)
 
     try:
-        server = bind(a.port, handler)
-    except OSError as err:
-        if not a.port or err.errno != errno.EADDRINUSE:
-            raise
-        if vault_on(a.port) == vault.ident:
-            # another session serves this vault there, with the same key: its address is ours, and
-            # its port once it stops
-            announce(a.port)
-            server = take_over(a.port, handler)
+        if relay:
+            server = serve_terminal(a, vault, handler, url, say)
+            if server is None:
+                return
+            threading.Thread(target=watch_chats, args=(relay, say), daemon=True).start()
         else:
-            print(f"rft: port {a.port} is taken, serving on a free port", file=sys.stderr, flush=True)
-            server = bind(0, handler)
-            announce(server.server_address[1])
-    else:
-        announce(server.server_address[1])
-    try:
+            server = serve_session(a, vault, token, handler, lambda port: print(f"RFT_SERVER_URL {url(port)}", flush=True))
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         editors.stop_all()
+        if relay:
+            drop_host_record(vault)
 
 
 if __name__ == "__main__":
