@@ -385,7 +385,9 @@ details.history .thread { opacity: 0.85; }
 body[data-page="kanban"] .tree-only, body[data-page="kanban"] #legend, body[data-page="kanban"] #legend-toggle,
 body[data-page="calendar"] .tree-only, body[data-page="calendar"] #legend, body[data-page="calendar"] #legend-toggle,
 body[data-page="manuscript"] .tree-only, body[data-page="manuscript"] #legend,
-body[data-page="manuscript"] #legend-toggle { display: none !important; }
+body[data-page="manuscript"] #legend-toggle,
+body[data-page="slides"] .tree-only, body[data-page="slides"] #legend,
+body[data-page="slides"] #legend-toggle { display: none !important; }
 /* the page switch: three joined buttons, the current one marked */
 .pages { gap: 0; }
 #bar .pages button { padding: 5px 9px; border-radius: 0; margin-left: -1px; }
@@ -950,3 +952,104 @@ main:has(#drawer:not([hidden])) #manuscript { right: min(var(--drawer-w), 92vw);
 .ms-doc-kinds { display: inline-flex; }
 .ms-doc-kinds button[aria-checked="true"] { font-weight: 600; background: var(--bg); border-color: var(--accent); color: var(--accent); }
 .ms-doc-hint { font-size: 11.5px; }
+
+/* the slide decks (web/decks.js): the decks on the left, the deck's text in the editor, the slide
+   the cursor is in on the right with its notes and every slide below; it makes room for the drawer,
+   which a note linked from a slide opens in */
+#slides { position: absolute; inset: 0; display: flex; flex-direction: column; min-width: 0; background: var(--bg);
+  font-size: calc(13px * var(--font-scale)); }
+#slides[hidden] { display: none; }
+main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
+.sl-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.sl-bar [hidden] { display: none; }
+.sl-name { font-size: 13px; }
+.sl-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(170px, 240px) minmax(0, 1fr) minmax(0, 1.15fr); }
+.sl-body[hidden] { display: none; }
+.sl-list ul { list-style: none; margin: 0; padding: 0; }
+.sl-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 0 6px; align-items: baseline; padding: 4px 10px; cursor: pointer; }
+.sl-item:hover { background: color-mix(in oklab, var(--accent) 8%, transparent); }
+.sl-item.open { background: color-mix(in oklab, var(--accent) 16%, transparent); }
+.sl-item .ico { width: 12px; height: 12px; color: var(--muted); align-self: center; }
+.sl-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--muted); }
+.sl-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sl-when { grid-column: 2 / 4; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sl-sub { padding: 10px 10px 2px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+.sl-cm .cm-s-default .cm-meta { color: var(--muted); }
+.sl-cm .cm-s-default .cm-rft-sep { color: var(--accent); font-weight: 700; }
+.sl-cm .cm-s-default .cm-rft-opt { color: var(--theory); }
+.sl-cm .cm-s-default .cm-rft-note { color: var(--muted); font-style: italic; }
+.sl-cm .cm-s-default .cm-header { font-weight: 700; color: var(--fg); }
+.sl-cm .cm-s-default .cm-link { color: var(--accent); text-decoration: none; }
+.sl-cm .cm-s-default .cm-string { color: var(--running); }
+.sl-side { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; overflow: auto; padding: 10px; }
+.sl-stage { position: relative; flex: none; width: 100%; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 6px;
+  background: color-mix(in oklab, var(--fg) 8%, var(--bg)); box-shadow: 0 0 0 1px var(--line); }
+.sl-notes { flex: none; white-space: pre-wrap; padding: 6px 8px; border-left: 3px solid var(--line); color: var(--muted); font-size: 12px; }
+.sl-notes[hidden] { display: none; }
+.sl-thumbs { display: flex; flex-wrap: wrap; gap: 8px; }
+.sl-thumb { position: relative; padding: 0; width: 132px; height: 76px; border: 2px solid var(--line); border-radius: 4px; overflow: hidden; background: #fff; }
+.sl-thumb.on { border-color: var(--accent); }
+.sl-thumb-box { position: absolute; left: 0; top: 0; width: 128px; height: 72px; overflow: hidden; pointer-events: none; }
+.sl-thumb-n { position: absolute; right: 3px; bottom: 1px; font-size: 10px; color: #656d76; background: rgba(255, 255, 255, 0.8); padding: 0 3px; border-radius: 3px; }
+
+/* a slide: 1920 × 1080, scaled to fit wherever it is shown (an inline transform). It keeps its own
+   colours, light whatever the page's theme, as a projector shows it */
+.slide { --slide-bg: #ffffff; --slide-fg: #1f2328; --slide-muted: #656d76; --slide-accent: #7048e8; --slide-line: #d8dde4; --slide-code: #f4f5f7;
+  --slide-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+  position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0; overflow: hidden; box-sizing: border-box;
+  display: flex; flex-direction: column; padding: 80px 110px; background: var(--slide-bg); color: var(--slide-fg);
+  font: 40px/1.4 var(--slide-font); text-align: left; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.slide h1, .slide h2, .slide h3 { margin: 0 0 0.45em; line-height: 1.12; font-weight: 700; }
+.slide h1 { font-size: 88px; font-weight: 800; }
+.slide h2 { font-size: 64px; }
+.slide h3 { font-size: 48px; }
+.slide p { margin: 0 0 0.6em; }
+.slide ul, .slide ol { margin: 0 0 0.6em; padding-left: 1.3em; }
+.slide li { margin: 0 0 0.3em; }
+.slide li::marker { color: var(--slide-accent); }
+.slide table { border-collapse: collapse; font-size: 32px; margin: 0 0 0.6em; }
+.slide td { padding: 10px 24px; border-bottom: 2px solid var(--slide-line); }
+.slide tr:first-child td { font-weight: 700; border-bottom-color: var(--slide-fg); }
+.slide pre { margin: 0 0 0.6em; padding: 24px 28px; border-radius: 12px; background: var(--slide-code); font: 28px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap; }
+.slide code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em; background: var(--slide-code); padding: 0 0.2em; border-radius: 6px; }
+.slide a { color: var(--slide-accent); text-decoration: none; }
+.slide a[data-go] { border-bottom: 3px solid color-mix(in oklab, var(--slide-accent) 35%, transparent); cursor: pointer; }
+.slide .missing { color: var(--slide-muted); }
+.slide mark.hl { background: #fff3bf; color: inherit; padding: 0 0.1em; }
+.slide img { max-width: 100%; max-height: 820px; vertical-align: middle; }
+.slide .math-block { margin: 0 0 0.6em; }
+.slide .slide-content, .slide .slide-col, .slide .slide-caption { min-height: 0; }
+.slide.layout-title { justify-content: center; align-items: center; text-align: center; }
+.slide.layout-title h1 { font-size: 104px; }
+.slide.layout-title p { color: var(--slide-muted); font-size: 44px; }
+.slide.layout-section { justify-content: center; background: var(--slide-accent); color: #fff; }
+.slide.layout-section h1, .slide.layout-section h2 { font-size: 100px; }
+.slide.layout-section a { color: #fff; }
+.slide .slide-cols { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 80px; }
+.slide.layout-figure .slide-figure { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+.slide.layout-figure .slide-figure p { margin: 0; }
+.slide.layout-figure .slide-figure img { height: 700px; width: auto; max-width: 1700px; object-fit: contain; }
+.slide.layout-figure .slide-caption { text-align: center; color: var(--slide-muted); font-size: 32px; }
+
+/* the deck presented: full screen, black around the slide */
+.sl-show { position: fixed; inset: 0; z-index: 1000; background: #000; cursor: pointer; }
+.sl-show[hidden] { display: none; }
+.sl-show-stage { position: absolute; inset: 0; overflow: hidden; }
+.sl-show-n { position: absolute; right: 14px; bottom: 10px; font-size: 12px; color: #868e96; }
+.sl-show-close { position: absolute; right: 10px; top: 8px; border: 0; background: transparent; color: #868e96; font-size: 22px; opacity: 0; }
+.sl-show:hover .sl-show-close { opacity: 1; }
+
+/* the deck printed: one 16:9 page a slide, the slide's own size (set while it prints), nothing else */
+.sl-print { display: none; }
+@media print {
+  body.sl-printing { display: block; height: auto; overflow: visible; background: #fff; }
+  body.sl-printing > :not(#sl-print) { display: none !important; }
+  body.sl-printing #sl-print { display: block; }
+  .sl-page { position: relative; width: 1920px; height: 1080px; overflow: hidden; break-after: page; }
+  .sl-page:last-child { break-after: auto; }
+}
+/* a meeting's occurrence's or a deadline's decks, in its editor; a month's meeting with one */
+.cal-decks { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 4px 0 2px; }
+.cal-decks:empty { display: none; }
+.mo-deck { width: 11px; height: 11px; margin-right: 3px; vertical-align: -1px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }

@@ -39,6 +39,9 @@
     <button data-show="manuscript" id="show-manuscript" aria-pressed="false" aria-label="Manuscript" title="Manuscript: LaTeX snippets resting on verified notes, assembled into documents, and their PDF">
       <!-- a page resting on a verified note (ringed, as in the tree) -->
       <svg class="page-ico" viewBox="0 0 32 32" aria-hidden="true"><path class="ln" d="M8 3h10l7 7v6M14 29H8a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3M18 3v7h7"/><path class="ln text" d="M10 15h8M10 20h5"/><circle class="tone direction s-done" cx="23" cy="24" r="4.2"/><circle class="tone direction ring" cx="23" cy="24" r="6.6"/></svg></button>
+    <button data-show="slides" id="show-slides" aria-pressed="false" aria-label="Slides" title="Slides: decks for meetings and talks, edited as text, presented full screen, printed as a PDF">
+      <!-- a slide on a stand, a chart on it in the tree's colours -->
+      <svg class="page-ico" viewBox="0 0 32 32" aria-hidden="true"><rect class="ln" x="3" y="4" width="26" height="17" rx="2.5"/><path class="ln" d="M16 21v3.5M10.5 29.5l5.5-5 5.5 5"/><rect class="tone experiment s-done" x="8" y="13" width="4" height="4.5" rx="1"/><rect class="tone direction s-done" x="14" y="10.5" width="4" height="7" rx="1"/><rect class="tone reference s-done" x="20" y="8" width="4" height="9.5" rx="1"/></svg></button>
   </div>
   <div class="group tree-only" role="group" aria-label="View">
     <!-- each toggle shows the symbol of its state (or of what a click does); its tooltip names it -->
@@ -252,6 +255,42 @@
       </div>
     </div>
   </section>
+  <section id="slides" hidden aria-label="The slide decks">
+    <div class="sl-bar">
+      <button id="sl-new" type="button" title="A new deck: for a meeting's occurrence, a deadline (a talk), or nothing yet">+ Deck</button>
+      <strong id="sl-name" class="sl-name sl-needs"></strong>
+      <button id="sl-lock" class="icon-btn cycle sl-needs" type="button" aria-pressed="true" aria-label="Lock">
+        <svg class="ico lock-open" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.6-1.7"/></svg>
+        <svg class="ico lock-closed on" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+      </button>
+      <span id="sl-status" class="muted sl-needs" role="status"></span>
+      <span class="ms-spacer"></span>
+      <button id="sl-pdf" class="sl-needs" type="button" title="The deck as a PDF, one 16:9 page a slide, the speaker notes left out: Save as PDF in the print dialog">PDF</button>
+      <button id="sl-present" class="primary sl-needs" type="button" title="Full screen from the slide in view: → or space next, ← back, Esc out">Present</button>
+    </div>
+    <form id="sl-new-form" class="ms-new-form" hidden aria-label="A new deck">
+      <select id="sl-new-for" aria-label="What it is for"></select>
+      <input id="sl-new-title" type="text" autocomplete="off" placeholder="Title, e.g. Weekly wrap-up" aria-label="Title" required>
+      <button type="submit" class="primary">Create</button><button id="sl-new-cancel" type="button" title="Esc">Cancel</button>
+    </form>
+    <div id="sl-empty" class="ms-empty" hidden>
+      <p>No decks yet. A <b>deck</b> is a Markdown file in the vault (<code>decks/</code>): its slides separated by a line <code>---</code>, as Obsidian's Slides read them, with the notes' links, math and figures. It can be for a meeting (this week's wrap-up with your supervisors), a talk, or nothing yet; the Calendar shows it on that day.</p>
+      <p>Decks are yours to write: Claude proposes an outline, and writes one only once you unlock it.</p>
+      <button id="sl-start" type="button" class="primary">Start a deck</button>
+    </div>
+    <div id="sl-body" class="sl-body" hidden>
+      <nav id="sl-list" class="ms-list sl-list" aria-label="Decks"></nav>
+      <div class="ms-editor">
+        <div id="sl-problems" class="ms-errors" hidden></div>
+        <div id="sl-cm" class="ms-cm sl-cm"></div>
+      </div>
+      <div class="sl-side">
+        <div id="sl-preview" class="sl-stage" aria-label="The slide the cursor is in"></div>
+        <div id="sl-notes" class="sl-notes" hidden title="Speaker notes: not on the slide, nor in the PDF"></div>
+        <div id="sl-thumbs" class="sl-thumbs" aria-label="The slides"></div>
+      </div>
+    </div>
+  </section>
   <section id="calendar" hidden aria-label="The deadlines, the meetings and the runs">
     <div class="cal-bar">
       <span class="seg" role="group" aria-label="Calendar">
@@ -461,6 +500,10 @@
     aria-label="Width of the note" title="Drag to resize the note (double-click: back to the default width)"></div>
 </main>
 <div id="tooltip" hidden></div>
+<!-- a deck presented, full screen (web/decks.js) -->
+<div id="sl-show" class="sl-show" hidden><div class="sl-show-stage"></div><span class="sl-show-n"></span><button type="button" class="sl-show-close" title="Esc" aria-label="Stop presenting">×</button></div>
+<!-- a deck as it is printed to a PDF: filled only while it prints -->
+<div id="sl-print" class="sl-print"></div>
 <script src="vendor/d3.v7.9.0.min.js" data-rft-inline></script>
 <script src="vendor/katex.v0.16.22.min.js" data-rft-inline></script>
 <script src="filters.js" data-rft-inline></script>
@@ -473,6 +516,8 @@
 <script src="queue.js"></script>
 <script src="vendor/codemirror.v5.65.16.min.js"></script>
 <script src="manuscript.js"></script>
+<script src="slides.js"></script>
+<script src="decks.js"></script>
 <script src="artifacts.js" data-rft-inline></script>
 <script src="app.js" data-rft-inline></script>
 </body>

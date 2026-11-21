@@ -64,8 +64,9 @@
   let showOrigins = false
   let retyping = false
   const K = window.RftKanban
-  const PAGES = ['tree', 'concepts', 'kanban', 'calendar', 'manuscript']
+  const PAGES = ['tree', 'concepts', 'kanban', 'calendar', 'manuscript', 'slides']
   let manuscriptView = null // web/manuscript.js, mounted on the live page only
+  let slidesView = null // web/decks.js, the same
   let boardSet = new Set() // the notes on the kanban: those that match, in the focused concept when there is one
   let kanbanOrder = 'priority' // priority | date
   let kanbanOpen = new Set() // the folded columns opened
@@ -1679,8 +1680,10 @@
     document.getElementById('kanban').hidden = v !== 'kanban'
     calSection.hidden = v !== 'calendar'
     document.getElementById('manuscript').hidden = v !== 'manuscript'
+    document.getElementById('slides').hidden = v !== 'slides'
     syncConceptButtons()
     if (v === 'manuscript' && manuscriptView) void manuscriptView.show()
+    if (v === 'slides' && slidesView) void slidesView.show()
     if (v === 'concepts') drawConceptTree()
     if (v === 'kanban') drawKanban()
     if (v === 'calendar') drawCalendar()
@@ -2656,7 +2659,12 @@
       t.title = detail
       el.appendChild(t)
     }
-    if (p.kind === 'milestone' && open) el.appendChild(milestoneEditor(milestoneOf(p.id)))
+    if (p.kind === 'milestone' && open) {
+      const m = milestoneOf(p.id)
+      el.appendChild(milestoneEditor(m))
+      const due = S.parseDue(m.due)
+      el.appendChild(deckRow(m.id, '', m.title || m.name.replace(/^M\d+\s*/, ''), due ? shortDay(due.day) : ''))
+    }
     if (p.kind === 'meeting' && open && meetingOf(p.id)) el.appendChild(meetingEditor(meetingOf(p.id)))
     return el
   }
@@ -2779,11 +2787,54 @@
     return el
   }
 
+  /**
+   * The slide decks of a meeting's occurrence (`orig`, its rule's day; '' for a once-only meeting)
+   * or of a deadline, each opened in the Slides tab, and + Slides, a new deck for it (`title`,
+   * `subtitle` its title slide's second line). Nothing when there is no Slides tab.
+   */
+  function deckRow(id, orig, title, subtitle) {
+    const row = document.createElement('div')
+    row.className = 'cal-decks'
+    if (!slidesView) return row
+    const label = document.createElement('span')
+    label.className = 'muted'
+    label.textContent = 'Slides'
+    row.append(label)
+    for (const d of slidesView.decksFor(id, orig)) {
+      const a = document.createElement('button')
+      a.type = 'button'
+      a.className = 'linkish'
+      a.textContent = d.name
+      a.title = 'Open this deck in the Slides tab'
+      a.addEventListener('click', () => { setView('slides'); void slidesView.openDeck(d.id) })
+      row.append(a)
+    }
+    const add = document.createElement('button')
+    add.type = 'button'
+    add.textContent = '+ Slides'
+    add.title = `A new deck for ${orig ? `this occurrence (${shortDay(orig)})` : 'it'}, opened in the Slides tab`
+    add.addEventListener('click', async () => {
+      setView('slides')
+      await slidesView.newFor(window.RftSlides.forItem(id, orig), title, subtitle)
+    })
+    row.append(add)
+    return row
+  }
+
   /** A meeting's editor: the occurrence chosen (moved, skipped, the last one), then the meeting or its series. */
   function meetingEditor(m) {
     const box = document.createElement('div')
     box.className = 'cal-mt-edit'
     if (m.every && calOcc) box.appendChild(occurrenceForm(m, calOcc))
+    // the decks of this occurrence (a once-only meeting's: its own), and a new one for it
+    const start = S.parseDue(m.when)
+    const orig = m.every ? calOcc : start && start.day
+    if (orig && !(m.skip || []).includes(orig)) {
+      const t = m.title || m.name
+      // the day it takes place on, which a move may have changed
+      const occ = S.occurrences(m, S.addDays(orig, -366), S.addDays(orig, 366)).find(x => x.orig === orig)
+      box.appendChild(deckRow(m.id, m.every ? orig : '', m.every ? `${t} ${orig}` : t, `${t} · ${shortDay(occ ? occ.day : orig)}`))
+    }
     box.appendChild(seriesForm(m))
     box.addEventListener('keydown', ev => { if (ev.key === 'Escape') { calOpen = null; calOcc = null; drawCalendar() } })
     return box
@@ -3368,6 +3419,11 @@
       el.className = `mo-dl mo-mt${o.moved ? ' moved' : ''}${o.skipped ? ' skipped' : ''}${o.plan && o.plan.atRisk ? ' risk' : ''}${calOpen === m.id && calOcc === o.orig ? ' open' : ''}`
       el.textContent = `${o.at.time ? `${o.at.time}${o.at.zone ? ` ${o.at.zone}` : ''} ` : ''}${m.title || m.name}`
       el.title = occTitle(m, o)
+      const decks = slidesView && !o.skipped ? slidesView.decksFor(m.id, m.every ? o.orig : '') : []
+      if (decks.length) {
+        el.insertAdjacentHTML('afterbegin', '<svg class="mo-deck" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2" width="13" height="9" rx="1.5"/><path d="M8 11v2.5M5 15l3-1.5 3 1.5"/></svg>')
+        el.title += ` · slides: ${decks.map(d => d.name).join(', ')}`
+      }
       el.addEventListener('click', ev => { ev.stopPropagation(); openMeeting(m.id, m.every ? o.orig : null) })
       return el
     }
@@ -4555,6 +4611,22 @@
     } else {
       document.getElementById('show-manuscript').hidden = true
       if (view === 'manuscript') view = 'tree'
+    }
+    // the slide decks' tab: only on the server too; the Calendar asks it which decks an occurrence has
+    if (!EMBED && window.RftDecks) {
+      slidesView = window.RftDecks.mount({
+        key: editKey, store, notify,
+        open: id => { if (byId.has(id)) select(id) },
+        nodes: () => byId,
+        visible: () => view === 'slides',
+        wanted: () => view === 'slides' || view === 'calendar',
+        meetings: () => tree.meetings || [],
+        milestones: () => tree.milestones || [],
+        changed: () => { if (view === 'calendar' && !calSection.contains(document.activeElement)) drawCalendar() },
+      })
+    } else {
+      document.getElementById('show-slides').hidden = true
+      if (view === 'slides') view = 'tree'
     }
     render(false)
     hasView = true
