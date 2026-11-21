@@ -136,7 +136,9 @@
       for (const c of pdfPages.children) if (c.dataset.drawn) void drawPage(c)
     }).observe(pdfPages)
     let compiling = false
-    let composing = null // { kind, anchor }
+    let composing = null // { kind, anchor, msg?, repl?: what is typed so far }
+    const replies = new Map() // a thread's reply being typed, by its id
+    let threadsShown = '' // what the discussion was drawn from: drawn again only when it changes
     let marks = []
     let copyLines = [] // the editor's line classes on the copies
     let focusCopy = null // the copy shown in the document's head
@@ -683,15 +685,18 @@
     // ---------------------------------------------------------------- the discussion
 
     async function loadThreads() {
-      clearMarks()
       const id = subject()
-      if (!file || !id) { note = null; threadsEl.replaceChildren(); threadsEl.hidden = true; return }
+      if (!file || !id) { clearMarks(); note = null; threadsShown = ''; threadsEl.replaceChildren(); threadsEl.hidden = true; return }
       try {
         const r = await api(`api/note?id=${encodeURIComponent(id)}`)
         note = r.ok ? r.data : null
       } catch { note = null }
-      renderThreads()
+      // the threads read again every few seconds: the same, the discussion stays as it is (a box being
+      // typed in keeps its text, its cursor and the phone's keyboard)
+      if (threadsKey() !== threadsShown) renderThreads()
     }
+
+    const threadsKey = () => JSON.stringify([subject(), file && file.version, dirty, (note && note.threads) || [], composing && [composing.kind, composing.anchor]])
 
     function clearMarks() {
       for (const m of marks) m.clear()
@@ -699,6 +704,11 @@
     }
 
     function renderThreads() {
+      threadsShown = threadsKey()
+      // a box being typed in, found again once drawn (what is typed is kept in composing and replies)
+      const active = document.activeElement
+      const typing = active && threadsEl.contains(active) && active.dataset.draft
+        ? { draft: active.dataset.draft, from: active.selectionStart, to: active.selectionEnd } : null
       clearMarks()
       threadsEl.replaceChildren()
       const threads = (note && note.threads) || []
@@ -714,12 +724,16 @@
       const closed = threads.filter(t => t.state !== 'open')
       if (closed.length) threadsEl.append(el('details', { class: 'ms-history' }, el('summary', { text: `History (${closed.length})` }), closed.map(t => threadEl(t))))
       threadsEl.hidden = !threadsEl.childNodes.length
+      const again = typing && [...threadsEl.querySelectorAll('[data-draft]')].find(b => b.dataset.draft === typing.draft)
+      if (again) { again.focus({ preventScroll: true }); try { again.setSelectionRange(typing.from, typing.to) } catch { /* not a text box */ } }
     }
 
     function threadEl(t) {
       const isOpen = t.state === 'open'
       const id = subject()
-      const reply = el('textarea', { rows: 1, placeholder: 'Reply…', 'aria-label': 'Reply' })
+      const reply = el('textarea', { rows: 1, placeholder: 'Reply…', 'aria-label': 'Reply', 'data-draft': `reply:${t.id}` })
+      reply.value = replies.get(t.id) || ''
+      reply.addEventListener('input', () => { if (reply.value) replies.set(t.id, reply.value); else replies.delete(t.id) })
       const act = (action, extra = {}) => async () => {
         if (!canWrite()) { needKey('discuss it'); return }
         const text = reply.value.trim()
@@ -730,7 +744,7 @@
         if (action !== 'reply' || text) {
           const r = await api('api/comment', { method: 'POST', body: { id, action, thread: t.id, ...(action === 'reply' ? { text } : {}), ...extra } })
           if (!r.ok) notify(r.data.error || `Not done (${r.status})`)
-          else note = r.data
+          else { note = r.data; replies.delete(t.id) }
         }
         if (action === 'accept') await openFile(file.path, true)
         else renderThreads()
@@ -767,9 +781,14 @@
     function composer() {
       const c = composing
       const id = subject()
-      const msg = el('textarea', { rows: 2, placeholder: c.kind === 'comment' ? 'Your comment' : 'Why, or what should change (optional when you write the new text)' })
-      const repl = c.kind === 'suggestion' ? el('textarea', { rows: 3, class: 'ms-repl-box', 'aria-label': 'New text' }) : null
-      if (repl) repl.value = c.anchor.quote
+      const msg = el('textarea', { rows: 2, 'data-draft': 'msg', placeholder: c.kind === 'comment' ? 'Your comment' : 'Why, or what should change (optional when you write the new text)' })
+      const repl = c.kind === 'suggestion' ? el('textarea', { rows: 3, class: 'ms-repl-box', 'aria-label': 'New text', 'data-draft': 'repl' }) : null
+      msg.value = c.msg || ''
+      msg.addEventListener('input', () => { c.msg = msg.value })
+      if (repl) {
+        repl.value = c.repl != null ? c.repl : c.anchor.quote
+        repl.addEventListener('input', () => { c.repl = repl.value })
+      }
       const post = askClaude => async () => {
         if (!canWrite()) { needKey('discuss it'); return }
         const r = await api('api/comment', { method: 'POST', body: { id, action: 'new', kind: c.kind, ...c.anchor, text: msg.value.trim(), ...(repl ? { replacement: repl.value } : {}) } })

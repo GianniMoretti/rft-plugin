@@ -390,6 +390,29 @@ class PhoneTest(unittest.TestCase):
         self.assertIn("documentclass", got[2])
         self.assertGreaterEqual(got[1], got[0] - 0.5, f"its text starts at x {got[1]}, under the line numbers (to x {got[0]})")
 
+    def test_suggestion_keeps_what_is_typed(self):
+        # the Manuscript reads its threads again every 4 s: a suggestion being written keeps its text and the keyboard
+        self.b.size(412, 915)
+        self.screen(MS_PDF[:3] + ["document.querySelector('.phone-panes[data-for=ms-body] [data-pane=text]').click()",
+                                  "document.querySelector('#ms-cm .CodeMirror').CodeMirror.setSelection({ line: 3, ch: 0 }, { line: 3, ch: 9 })",
+                                  "document.querySelector('.ms-sel-btn[data-kind=suggestion]').click()"])
+        self.assertTrue(self.b.js("!!document.querySelector('.ms-composer')"), "no composer")
+        self.b.js("document.querySelector('.ms-composer textarea:not(.ms-repl-box)').focus()")
+        self.b.call("Input.insertText", text="Say wh")
+        time.sleep(5)  # a poll of the threads
+        self.b.call("Input.insertText", text="ich page")
+        typed = ("(() => { const m = document.querySelector('.ms-composer textarea:not(.ms-repl-box)'), r = document.querySelector('.ms-composer .ms-repl-box');"
+                 " return m && [m.value, r && r.value, document.activeElement === m, m.selectionStart] })()")
+        self.assertEqual(self.b.js(typed), ["Say which page", "The first", True, 14])
+        # a thread posted meanwhile (Claude's, another tab's): the discussion is drawn again, what is typed and the cursor kept
+        token = re.search(r"token=([^&#]+)", self.url).group(1)
+        posted = self.b.js("fetch('api/comment', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-RFT-Token': %s },"
+                           " body: JSON.stringify({ id: 'two-pages', action: 'new', kind: 'comment', quote: 'second', prefix: 'The ', suffix: ' page.', text: 'elsewhere' }) }).then(r => r.status)"
+                           % json.dumps(token))
+        self.assertEqual(posted, 200)
+        self.assertTrue(self.b.wait("document.querySelectorAll('#ms-threads .ms-thread').length === 1", 8), "the new thread is not shown")
+        self.assertEqual(self.b.js(typed), ["Say which page", "The first", True, 14])
+
     def test_back_closes_what_is_open(self):
         w, h = SIZES[0]
         self.back_closes(w, h, [page("tree"), tap_node("D00")], "!document.getElementById('drawer').hidden", "a note")
