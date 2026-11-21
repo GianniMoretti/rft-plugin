@@ -894,6 +894,8 @@ main:has(#drawer:not([hidden])) #manuscript { right: min(var(--drawer-w), 92vw);
 .ms-head { display: flex; flex-direction: column; gap: 4px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
 .ms-head-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .ms-spacer { flex: 1; }
+/* Comment, Suggest and Save: together, on a row of their own only when the row has no room for the three */
+.ms-acts { display: inline-flex; gap: 6px; margin-left: auto; }
 .ms-chip { display: inline-flex; align-items: center; gap: 3px; padding: 1px 7px; }
 .ms-chip.missing { color: var(--dropped); }
 .ms-cm { flex: 1; min-height: 0; }
@@ -945,6 +947,10 @@ main:has(#drawer:not([hidden])) #manuscript { right: min(var(--drawer-w), 92vw);
 .ms-warn { color: var(--p-high); font-size: 11.5px; }
 @media (max-width: 900px) { .ms-body { grid-template-columns: 1fr; grid-auto-rows: minmax(160px, auto); overflow: auto; } }
 .ms-levels { display: inline-flex; }
+/* the Manuscript's buttons: a symbol and a word; on a phone (below) the symbol alone, the word its name */
+.ms-ib { display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+.ms-ib .ico { width: 15px; height: 15px; flex: none; }
+.ms-ib[hidden] { display: none; }
 .ms-levels button[aria-pressed="true"] { font-weight: 600; background: var(--panel); border-color: var(--accent); color: var(--accent); }
 .ms-pad { padding: 8px 10px; margin: 0; }
 .ms-used { flex: none; font-size: 10px; color: var(--muted); }
@@ -1240,4 +1246,7 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
   .ms-list, .ms-editor { border-right: 0; }
   .ms-item, .sl-item { min-height: 44px; align-items: center; padding: 6px 14px; }
   .ms-bar, .sl-bar { gap: 6px 8px; }
+  .ms-ib .lbl { display: none; }
+  .ms-ib, .ms-levels .ms-ib, .phone-panes .ms-ib { width: 44px; padding: 0; }
+  .ms-ib .ico { width: 21px; height: 21px; }
 }

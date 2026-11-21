@@ -736,7 +736,8 @@ Filters, the theme), and a note, the filters, the scratchpad, the queue and a no
 the whole page, the note's actions a row of named chips above it. The phone's **Back** closes
 what was opened last, and in a note reached by a link shows the note it was in. The kanban
 shows a column at a time, swiped; the Manuscript and the Slides a pane at a time (the list, the
-text, the PDF or slide). On any touch screen, controls are 44 px targets, fields' text 16 px, and
+text, the PDF or slide), the Manuscript's buttons their symbols alone (a symbol and a word on a
+wider screen). On any touch screen, controls are 44 px targets, fields' text 16 px, and
 a selection made with a long press gets its Comment, Suggest and Footnote bar at the bottom. A
 browser that shows no PDF in a frame (Chrome on Android), and any touch screen, gets the
 Manuscript's PDF drawn by pdf.js, page by page as they come near the screen.

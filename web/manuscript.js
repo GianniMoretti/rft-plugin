@@ -11,6 +11,13 @@
 (function (root) {
   'use strict'
 
+  // the head's buttons' symbols (24 px boxes, stroked as .ico draws them); the toolbar's are in index.html
+  const ICONS = {
+    comment: '<path d="M4 5h16v11H10l-6 4.5z"/>',
+    suggestion: '<path d="M15 4.5l4.5 4.5L9 19.5H4.5V15z"/><path d="M12.5 7l4.5 4.5"/>',
+    save: '<path d="M12 4v10"/><path d="M8 10l4 4 4-4"/><path d="M4.5 15v4.5h15V15"/>',
+  }
+
   /** The characters kept on each side of a quote, to find it again (CONTEXT in hooks/lib/comments.ts). */
   const CONTEXT = 40
   const KINDS = ['definition', 'theorem', 'lemma', 'proposition', 'corollary', 'proof', 'method', 'result', 'related-work', 'motivation', 'discussion', 'figure', 'table']
@@ -243,7 +250,9 @@
         ? (locked ? 'Snippets locked: you write them; Claude proposes stubs, comments and suggests (click: let Claude write them too)' : 'Snippets unlocked: Claude may write their text too (click: lock them)')
         : (locked ? 'Documents locked: their text is yours; Claude places copies you agree to, comments and suggests (click: let Claude edit their text too)' : 'Documents unlocked: Claude may edit their text too (click: lock them)')
       compileBtn.disabled = !ms.latexmk || (level === 'snippets' ? !sid : !doc)
-      compileBtn.textContent = level === 'snippets' ? 'Compile snippet' : 'Compile'
+      const compileWord = level === 'snippets' ? 'Compile snippet' : 'Compile'
+      compileBtn.querySelector('.lbl').textContent = compileWord
+      compileBtn.setAttribute('aria-label', compileWord)
       compileBtn.title = !ms.latexmk ? 'latexmk is not on PATH: install a TeX distribution (TeX Live) to compile'
         : level === 'snippets' ? 'Compile this snippet alone, in a minimal article (Ctrl/Cmd+S saves and compiles)' : `Compile ${doc} with latexmk (Ctrl/Cmd+S saves and compiles)`
       renderList()
@@ -308,7 +317,7 @@
         headEl.append(el('span', { class: 'muted', text: level === 'snippets' ? 'Open a snippet on the left.' : 'No document open.' }))
         return
       }
-      const saveBtn = el('button', { type: 'button', class: 'primary', text: 'Save', title: 'Save (Ctrl/Cmd+S also compiles)', onclick: () => save(false) })
+      const saveBtn = iconBtn('save', 'Save', { class: 'primary', title: 'Save (Ctrl/Cmd+S also compiles)', onclick: () => save(false) })
       if (level === 'snippets') {
         const s = theSnippet()
         if (!s) { headEl.append(el('strong', { text: file.path }), el('span', { class: 'ms-spacer' }), saveBtn); return }
@@ -323,7 +332,7 @@
               title: s.locked ? 'Yours to write: Claude only suggests (click: let Claude write this snippet)' : 'Claude may write this snippet (click: yours again)',
               onclick: () => setLock('snippets', !s.locked, s.id),
             }, lockIcon(s.locked)) : null,
-            el('span', { class: 'ms-spacer' }), selButton('comment'), selButton('suggestion'), saveBtn),
+            el('span', { class: 'ms-spacer' }), el('span', { class: 'ms-acts' }, selButton('comment'), selButton('suggestion'), saveBtn)),
           el('div', { class: 'ms-head-row ms-basis' },
             el('span', { class: 'muted', text: 'Rests on' }),
             s.basis.length ? s.basis.map(chip) : el('span', { class: 'muted', text: 'no note: give it a % basis: line' }),
@@ -346,7 +355,7 @@
             title: d.locked ? 'Its text is yours: Claude places copies you agree to and suggests (click: let Claude edit it)' : 'Claude may edit its text (click: yours again)',
             onclick: () => setLock('documents', !d.locked, d.name),
           }, lockIcon(d.locked)) : null,
-          el('span', { class: 'ms-spacer' }), selButton('comment'), selButton('suggestion'), saveBtn))
+          el('span', { class: 'ms-spacer' }), el('span', { class: 'ms-acts' }, selButton('comment'), selButton('suggestion'), saveBtn)))
         const extra = focusCopy ? copyPanel(focusCopy) : placeRow()
         if (extra) headEl.append(extra)
       }
@@ -411,11 +420,20 @@
 
     /** The Comment or Suggest button: on the text selected in the editor. */
     function selButton(kind) {
-      return el('button', {
-        type: 'button', class: 'ms-sel-btn', 'data-kind': kind, text: kind === 'comment' ? 'Comment' : 'Suggest',
+      return iconBtn(kind, kind === 'comment' ? 'Comment' : 'Suggest', {
+        class: 'ms-sel-btn', 'data-kind': kind,
         title: kind === 'comment' ? 'A question or remark on the selected text' : 'New text for the selected text, or what should change in words',
         onclick: () => compose(kind),
       })
+    }
+
+    /** A button as a symbol and a word (on a phone the symbol alone, its word its name in aria-label), as the toolbar's are. */
+    function iconBtn(name, word, props) {
+      const b = el('button', { type: 'button', ...props, class: `ms-ib${props.class ? ` ${props.class}` : ''}`, 'aria-label': word })
+      const t = document.createElement('template')
+      t.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`
+      b.append(t.content.firstChild, el('span', { class: 'lbl', text: word }))
+      return b
     }
 
     function renderSelectionButtons() {
