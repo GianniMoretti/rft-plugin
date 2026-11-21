@@ -25,6 +25,7 @@ from urllib.parse import quote
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import rft_decks  # noqa: E402
 import rft_manuscript  # noqa: E402
+import rft_style  # noqa: E402
 import rft_server  # noqa: E402
 
 WEB = Path(__file__).resolve().parents[1] / "web"
@@ -1412,6 +1413,8 @@ class ArtifactTest(unittest.TestCase):
 
     def test_the_page_is_served_in_a_sandbox_of_its_own(self):
         status, ctype, body = self.get("/api/artifact?concept=D04&theme=dark")
+        # the series colours are the project's figure tokens (here the default's) in the light theme
+        self.assertIn("--c1: light-dark(#8E51FF, #9775fa)", body.decode())
         self.assertEqual(status, 200)
         self.assertEqual(ctype, "text/html; charset=utf-8")
         c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
@@ -1864,6 +1867,31 @@ class DeckTest(unittest.TestCase):
         status, ctype, body = self.get(f"/api/image?deck=P01&src={quote('E08_loss.svg')}")
         self.assertEqual((status, ctype), (200, "image/svg+xml"))
         self.assertEqual(self.get(f"/api/image?deck=P09&src={quote('E08_loss.svg')}")[0], 403)
+
+
+
+class StyleRouteTest(unittest.TestCase):
+    """GET api/style: the project's figure tokens (.rft/config.json "style"), the default's where it
+    leaves one out or gives one that is none, for the page's slides."""
+
+    def test_the_project_s_tokens_over_the_default(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / ".rft").mkdir()
+            (root / "vault" / "directions").mkdir(parents=True)
+            (root / "vault" / "directions" / "D00 Root question.md").write_text(note("D00", "direction", "done", "", "Root question"))
+            (root / ".rft" / "config.json").write_text(json.dumps({"vault": "vault", "style": {"accent": "#4D4875", "grid": "faint", "font": "Arial"}}))
+            handler = rft_server.make_handler(rft_server.Vault(root / "vault", "demo"), WEB, KEY)
+            server = rft_server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            self.addCleanup(server.shutdown)
+            c = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+            c.request("GET", "/api/style", headers={"Host": f"127.0.0.1:{server.server_address[1]}"})
+            got = json.loads(c.getresponse().read())
+            c.close()
+            self.assertEqual((got["accent"], got["font"]), ("#4D4875", "Arial"))
+            self.assertEqual(got["grid"], rft_style.DEFAULT["grid"])  # "faint" is no colour
+            self.assertEqual(got["ramp"], rft_style.DEFAULT["ramp"])
 
 
 if __name__ == "__main__":

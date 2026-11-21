@@ -76,6 +76,7 @@ import rft_latex  # the manuscript's LaTeX: its generated files and the compile
 import rft_manuscript  # the manuscript as the page shows it
 import rft_notebook
 import rft_queue  # the experiment queue, beside this file
+import rft_style  # the project's figure tokens, which the artifacts' and the slides' colours follow
 
 # the node types by folder (ID_RE below has their id letters), as TYPES in hooks/lib/vault.ts has them
 SUBDIRS = {"experiments": "experiment", "directions": "direction", "references": "reference", "theory": "theory"}
@@ -1840,6 +1841,13 @@ class Vault:
                     return 200, {"id": got, **self.manuscript()}
         return 504, {"error": f"the Claude Code session did not answer within {NODE_WAIT_S:g} s; is the session that ran /rft still open?"}
 
+    # ---------------------------------------------------------------- the figure style
+
+    def style(self) -> dict:
+        """The project's figure tokens as the notebooks draw with them (rft_style.resolve): the
+        page's artifacts and slides take their colours from them too."""
+        return rft_style.resolve(rft_notebook.project_style(self.root))
+
     # ---------------------------------------------------------------- slide decks
 
     def decks(self) -> dict:
@@ -1995,6 +2003,19 @@ class Vault:
 
 
 
+# an artifact's series colours in the dark theme, as web/frame.css has them: the project's tokens are
+# for a light page, as its figures are
+FRAME_DARK = {"accent": "#9775fa", "series": ["#9775fa", "#20c997", "#fd7e14", "#4dabf7", "#f06595", "#adb5bd"]}
+
+
+def style_css(t: dict) -> str:
+    """The project's tokens as an artifact's colours (frame.css's --accent and --c1 … --c6), in the light theme."""
+    cats = t["categorical"]
+    vars_ = [f"--accent: light-dark({t['accent']}, {FRAME_DARK['accent']})"]
+    vars_ += [f"--c{i + 1}: light-dark({cats[i % len(cats)]}, {d})" for i, d in enumerate(FRAME_DARK["series"])]
+    return "\n/* the project's figure tokens (.rft/config.json \"style\") */\n:root { " + "; ".join(vars_) + "; }\n"
+
+
 def ask_session(verb: str, request: dict) -> None:
     """Hands a request to the plugin, which reads this process's stdout line by line."""
     print(f"{verb} {json.dumps(request)}", flush=True)
@@ -2072,7 +2093,7 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 except OSError:  # a plugin folder without it: the page without it
                     return ""
             # each script ends where the next begins: `;` keeps one's opening ( from calling the last
-            js, css = "\n;\n".join(text(f) for f in FRAME_SCRIPTS), text("frame.css")
+            js, css = "\n;\n".join(text(f) for f in FRAME_SCRIPTS), text("frame.css") + style_css(vault.style())
             doc = wrap_artifact(IMG_SRC_RE.sub(image, page), js, css, theme)
             here = f"http://{(self.headers.get('Host') or '').strip()}"
             self._send(200, doc.encode("utf-8"), "text/html; charset=utf-8", head_only, ARTIFACT_CSP.format(here=here))
@@ -2271,6 +2292,8 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 return self._artifact(parse_qs(url.query), head_only)
             if route == "/api/scratchpad":
                 return self._json(*vault.scratchpad(), head_only)
+            if route == "/api/style":
+                return self._json(200, vault.style(), head_only)
             if route == "/api/decks":
                 return self._json(200, vault.decks(), head_only)
             if route == "/api/deck":

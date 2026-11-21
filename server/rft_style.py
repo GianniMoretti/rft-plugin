@@ -47,8 +47,14 @@ def _valid(key: str, value) -> bool:
     return isinstance(value, str) and bool(_HEX.match(value))
 
 
-#: the tokens in use: the project's where they are valid, else the default's
-TOKENS: dict = {k: (PROJECT[k] if k in PROJECT and _valid(k, PROJECT[k]) else v) for k, v in DEFAULT.items()}
+def resolve(project: dict) -> dict:
+    """The tokens in use: the project's where they are valid, else the default's."""
+    project = project if isinstance(project, dict) else {}
+    return {k: (project[k] if k in project and _valid(k, project[k]) else v) for k, v in DEFAULT.items()}
+
+
+#: the tokens in use
+TOKENS: dict = resolve(PROJECT)
 
 #: each medium's text, lines and figure sizes (inches): a paper's column is 3.25 in wide, a slide
 #: 13.3 in at 1080p; the text keeps the same share of the figure wherever it is scaled to fit

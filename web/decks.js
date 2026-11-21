@@ -577,6 +577,18 @@
     presentBtn.addEventListener('click', present)
     pdfBtn.addEventListener('click', printDeck)
 
+    // the project's figure tokens as the slides' colours and fonts (app.css reads --deck-*)
+    const font = f => `"${String(f).replace(/["\\]/g, '')}", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Arial, sans-serif`
+    api('api/style').then(r => {
+      if (!r.ok || !r.data) return
+      const t = r.data, css = document.documentElement.style
+      const set = (k, v) => { if (typeof v === 'string' && v) css.setProperty(k, v) }
+      set('--deck-fg', t.text); set('--deck-muted', t.muted); set('--deck-accent', t.accent)
+      set('--deck-line', t.grid); set('--deck-fill', t.fill)
+      if (t.font) css.setProperty('--deck-font', font(t.font))
+      if (t.headingFont) css.setProperty('--deck-head-font', font(t.headingFont))
+    }).catch(() => {})
+
     setInterval(() => { if (wanted()) refresh() }, every)
     refresh()
 

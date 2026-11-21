@@ -994,12 +994,16 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
 
 /* a slide: 1920 × 1080, scaled to fit wherever it is shown (an inline transform). It keeps its own
    colours, light whatever the page's theme, as a projector shows it */
-.slide { --slide-bg: #ffffff; --slide-fg: #1f2328; --slide-muted: #656d76; --slide-accent: #7048e8; --slide-line: #d8dde4; --slide-code: #f4f5f7;
-  --slide-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+/* the slide's colours and fonts are the project's figure tokens (api/style, set as --deck-* by
+   web/decks.js), so a figure, its slide and its deck read as one */
+.slide { --slide-bg: #ffffff; --slide-fg: var(--deck-fg, #1f2328); --slide-muted: var(--deck-muted, #656d76); --slide-accent: var(--deck-accent, #7048e8);
+  --slide-line: var(--deck-line, #d8dde4); --slide-code: var(--deck-fill, #f4f5f7);
+  --slide-font: var(--deck-font, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Arial, sans-serif);
+  --slide-head-font: var(--deck-head-font, var(--slide-font));
   position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0; overflow: hidden; box-sizing: border-box;
   display: flex; flex-direction: column; padding: 80px 110px; background: var(--slide-bg); color: var(--slide-fg);
   font: 40px/1.4 var(--slide-font); text-align: left; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-.slide h1, .slide h2, .slide h3 { margin: 0 0 0.45em; line-height: 1.12; font-weight: 700; }
+.slide h1, .slide h2, .slide h3 { margin: 0 0 0.45em; line-height: 1.12; font-weight: 700; font-family: var(--slide-head-font); }
 .slide h1 { font-size: 88px; font-weight: 800; }
 .slide h2 { font-size: 64px; }
 .slide h3 { font-size: 48px; }
@@ -1053,3 +1057,5 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
 .cal-decks { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 4px 0 2px; }
 .cal-decks:empty { display: none; }
 .mo-deck { width: 11px; height: 11px; margin-right: 3px; vertical-align: -1px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+/* a notebook's figure in a note: drawn for a light page, on a light card in the dark theme */
+#drawer img[src*=".svg"] { background: light-dark(transparent, #ffffff); border-radius: 6px; padding: 4px; }
