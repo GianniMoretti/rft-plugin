@@ -35,7 +35,8 @@ button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent);
 button:disabled { opacity: 0.45; cursor: default; }
 button:disabled:hover { border-color: var(--line); }
 /* a toggle holds one symbol per state: the current one shows */
-.icon-btn { display: inline-flex; align-items: center; padding: 3px 6px; }
+/* its symbol in the middle, where a touch target (44 px) is wider than the symbol and its padding */
+.icon-btn { display: inline-flex; align-items: center; justify-content: center; padding: 3px 6px; }
 .icon-btn[hidden] { display: none; }
 .cycle > :not(.on) { display: none; }
 .ico { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
@@ -1152,7 +1153,7 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
   .bar-more-head { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px 10px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
   .bar-more-head .muted { font-size: 13px; }
   #bar-more .group { flex-direction: column; gap: 0; }
-  #bar #bar-more .group > button { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 48px; padding: 0 12px; border: 0;
+  #bar #bar-more .group > button { display: flex; align-items: center; justify-content: flex-start; gap: 14px; width: 100%; min-height: 48px; padding: 0 12px; border: 0;
     border-radius: 10px; background: none; color: var(--fg); font-size: 15px; text-align: left; }
   #bar #bar-more .group > button[aria-pressed="true"] { color: var(--accent); }
   #bar #bar-more .group > button:active { background: color-mix(in oklab, var(--fg) 8%, transparent); }

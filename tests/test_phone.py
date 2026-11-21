@@ -6,6 +6,7 @@ On every page and every sheet (a note, its editor, the filters, the scratchpad, 
     the marks of a drawing (the tree's notes, the calendar's bars) at least 24 px (WCAG 2.5.8),
     links inside running text excepted (WCAG's inline exception);
   - every field's text is at least 16 px;
+  - an icon alone in its button sits at the button's centre;
   - the app's own bars leave the content at least all but 128 px of the screen;
   - every page is a labelled button on screen;
   - the phone's Back closes what is open (a note, the note it came from first, the filters, the
@@ -112,6 +113,19 @@ AUDIT_JS = r"""
     if (w < min - 0.5 || h < min - 0.5) out.push(`${name(el)} is ${Math.round(w)}×${Math.round(h)} px (< ${min})`)
   }
 
+  // an icon alone in its button (a badge or a dot on it aside): at its centre, though the button is wider than the icon
+  const pseudo = (el, p) => { const s = getComputedStyle(el, p); return !/^(none|normal)$/.test(s.content) && s.position !== 'absolute' }
+  for (const el of document.querySelectorAll('button, a.icon-btn')) {
+    if (el.matches(SKIP) || !shown(el) || !reachable(el)) continue
+    const kids = [...el.children].filter(k => shown(k) && getComputedStyle(k).position !== 'absolute')
+    if (!kids.length || kids.some(k => k.tagName.toLowerCase() !== 'svg') || pseudo(el, '::before') || pseudo(el, '::after')) continue
+    if ([...el.childNodes].some(n => n.nodeType === 3 && n.textContent.trim())) continue
+    const r = el.getBoundingClientRect(), ks = kids.map(k => k.getBoundingClientRect())
+    const dx = (Math.min(...ks.map(k => k.left)) + Math.max(...ks.map(k => k.right))) / 2 - (r.left + r.width / 2)
+    const dy = (Math.min(...ks.map(k => k.top)) + Math.max(...ks.map(k => k.bottom))) / 2 - (r.top + r.height / 2)
+    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) out.push(`${name(el)}: its icon is ${dx.toFixed(1)}, ${dy.toFixed(1)} px off the button's centre`)
+  }
+
   for (const el of document.querySelectorAll('input:not([type=hidden]):not([type=checkbox]):not([type=radio]), select, textarea')) {
     if (el.matches(SKIP) || !shown(el) || !reachable(el)) continue
     const px = parseFloat(getComputedStyle(el).fontSize)
@@ -150,8 +164,11 @@ def tap_node(note_id):
 
 
 OPEN_MENU = "(() => { const b = document.getElementById('bar-more-toggle'); if (b) b.click() })()"
+# the queue's button, as web/queue.js shows it where the queue runs (the test's server has no queue), with its count
+QUEUE_BUTTON = ("(() => { document.getElementById('jobs-toggle').hidden = false;"
+                " const b = document.getElementById('jobs-badge'); b.textContent = '17'; b.hidden = false })()")
 SCREENS = [
-    ("tree", [page("tree")]),
+    ("tree", [page("tree"), QUEUE_BUTTON]),
     ("menu", [page("tree"), OPEN_MENU]),
     ("note", [page("tree"), tap_node("D00")]),
     ("note-edit", [page("tree"), tap_node("E07"), "document.getElementById('drawer-edit').click()"]),
