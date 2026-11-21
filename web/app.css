@@ -36,6 +36,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 button:disabled:hover { border-color: var(--line); }
 /* a toggle holds one symbol per state: the current one shows */
 .icon-btn { display: inline-flex; align-items: center; padding: 3px 6px; }
+.icon-btn[hidden] { display: none; }
 .cycle > :not(.on) { display: none; }
 .ico { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 /* the top bar's buttons a little larger than the drawer's */
@@ -154,7 +155,8 @@ main { --drawer-w: calc(480px * var(--font-scale)); }
   font-size: calc(14.5px * var(--font-scale)); line-height: 1.55; }
 #drawer-resize { position: absolute; top: 0; bottom: 0; right: min(var(--drawer-w), 92vw); width: 9px;
   transform: translateX(50%); cursor: col-resize; z-index: 3; touch-action: none; }
-#drawer[hidden] + #drawer-resize { display: none; }
+/* the notebook's pane and its edge come between the drawer and its edge */
+#drawer[hidden] ~ #drawer-resize { display: none; }
 #drawer-resize::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 3px; border-radius: 2px; }
 #drawer-resize:hover::after, #drawer-resize:focus-visible::after, body.resizing #drawer-resize::after { background: var(--accent); }
 #drawer-resize:focus-visible { outline: none; }
@@ -257,7 +259,7 @@ button.linkish { border: 0; background: none; color: var(--accent); padding: 0; 
 /* a status's share of a concept's bar: the concept's colour at that status's strength (.tone) */
 .cbar { fill: color-mix(in oklab, var(--hue) var(--i), var(--tone-base)); fill-opacity: var(--a); }
 .cfocus { fill: var(--accent); font-size: calc(12px * var(--font-scale)); cursor: pointer; }
-.cfocus:hover { text-decoration: underline; }
+.cfocus:hover text { text-decoration: underline; }
 /* a halo behind the concept tree's text, so links that pass under it stay readable */
 .cname, .ccount, .cfocus { paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
 /* the note's discussion: footnotes in the margin, threads marked in the text and listed under it */
@@ -447,9 +449,10 @@ main:has(#drawer:not([hidden])) #kanban { right: min(var(--drawer-w), 92vw); }
 .kb-concept { display: inline-flex; align-items: center; gap: 4px; }
 .kb-concept .swatch { width: 9px; height: 9px; }
 .kb-flag { color: var(--dropped); }
-/* a priority menu, on a card and in the drawer */
+/* a priority menu, on a card and in the drawer: as wide as the priority it shows, not as its longest
+   option ("Medium (full: E20, E21, …)"), and never wider than its card */
 select.prio { font: inherit; font-size: 0.95em; padding: 1px 4px; border-radius: 10px; border: 1px solid var(--line);
-  background: var(--bg); color: var(--muted); cursor: pointer; }
+  background: var(--bg); color: var(--muted); cursor: pointer; field-sizing: content; max-width: 100%; min-width: 0; text-overflow: ellipsis; }
 select.prio:hover { border-color: var(--muted); }
 select.prio:disabled { cursor: default; opacity: 1; }
 select.prio.p-urgent { color: var(--p-urgent); border-color: var(--p-urgent); font-weight: 700; }
@@ -778,11 +781,17 @@ main.artifact-open:has(#drawer:not([hidden])) #concept-canvas { width: calc(100%
 .jobs-exp { color: var(--experiment); font-weight: 600; text-decoration: none; }
 .jobs-exp:hover { text-decoration: underline; }
 .jobs-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.jobs-label { flex: none; font-size: 0.85em; padding: 0 6px; border-radius: 8px; background: color-mix(in oklab, var(--accent) 14%, transparent); }
+.jobs-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.85em; padding: 0 6px; border-radius: 8px;
+  background: color-mix(in oklab, var(--accent) 14%, transparent); }
 .jobs-meta { font-size: 0.88em; overflow-wrap: anywhere; }
-.jobs-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 3px; flex: none; max-width: 45%; }
-.jobs-actions button { padding: 1px 7px; }
-.jobs-actions button.danger { border-color: var(--dropped); color: var(--dropped); }
+/* a job's buttons, each its symbol (web/queue.js JOB_ICON); a cancel armed says so beside it */
+.jobs-actions { display: flex; justify-content: flex-end; gap: 3px; flex: none; }
+.jobs-ico { display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 3px 5px; color: var(--muted); }
+.jobs-ico:hover:not(:disabled) { color: var(--fg); }
+.jobs-ico .ico { width: 15px; height: 15px; }
+.jobs-ico.jobs-more[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+.jobs-ico.jobs-end:hover { color: var(--dropped); }
+.jobs-ico.danger { border-color: var(--dropped); color: var(--dropped); font-weight: 600; }
 .jobs-details { margin-top: 4px; font-size: 0.9em; }
 .jobs-cmd { display: block; white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .jobs-progress { display: grid; gap: 2px; margin-top: 3px; font-size: 0.88em; }
@@ -799,12 +808,28 @@ main.artifact-open:has(#drawer:not([hidden])) #concept-canvas { width: calc(100%
 .jobs-waiting-fold:hover { color: var(--fg); }
 .jobs-log-bar { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 4px; }
 .jobs-log-bar button { padding: 1px 7px; }
+.jobs-log-bar .jobs-ico { color: var(--fg); }
 .jobs-log-err { margin-top: 3px; color: var(--dropped); overflow-wrap: anywhere; }
 .jobs-log { margin: 4px 0 0; height: min(calc(300px * var(--font-scale)), 45vh); min-height: 80px; resize: vertical; overflow: auto; padding: 6px 8px; border-radius: 6px; background: var(--bg);
   border: 1px solid var(--line); font: calc(11.5px * var(--font-scale))/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .jobs-foot { display: flex; align-items: center; gap: 6px; padding: 4px 10px 5px 12px; border-top: 1px solid var(--line); font-size: 0.88em; color: var(--muted); }
 #jobs-msg { flex: 1; min-width: 0; }
 #jobs-msg.error { color: var(--dropped); }
+/* a finger: the symbols larger in their 44 px buttons */
+@media (max-width: 700px), (pointer: coarse) {
+  .jobs-ico .ico { width: 20px; height: 20px; }
+  .jobs-actions { gap: 6px; }
+  .jobs-head #jobs-pause { min-width: 44px; }
+}
+/* a phone: a job's line wraps (its label whole, under its title); a waiting job's five buttons a row
+   of their own under its text, at the right, so its text keeps the width */
+@media (max-width: 700px) {
+  .jobs-line { flex-wrap: wrap; row-gap: 2px; }
+  .jobs-title { min-width: 6em; }
+  .jobs-label { white-space: normal; overflow-wrap: anywhere; }
+  .jobs-row.s-pending { flex-wrap: wrap; }
+  .jobs-row.s-pending .jobs-actions { flex: 1 0 100%; }
+}
 
 /* an experiment's notebook, on the left while its note is open on the right (app.js, "an experiment's
    notebook"); --nb-w: the default width, or the one dragged on its right edge */
@@ -1059,3 +1084,156 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
 .mo-deck { width: 11px; height: 11px; margin-right: 3px; vertical-align: -1px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 /* a notebook's figure in a note: drawn for a light page, on a light card in the dark theme */
 #drawer img[src*=".svg"] { background: light-dark(transparent, #ffffff); border-radius: 6px; padding: 4px; }
+
+/* ---------------------------------------------------------------- a phone, a touch screen
+   (web/phone.js: the ⋯ menu, the panes, Back). Wider than 700 px with a mouse, none of this applies:
+   #bar-more draws no box of its own, so its controls sit in the bar as they always did. */
+#bar-more { display: contents; }
+.bar-more-head, #bar-more-toggle, .phone-panes { display: none; }
+#bar > #search { order: 1; }
+#bar > #bar-more > .bar-theme { order: 2; }
+.node .fold circle.hit, .cfocus .hit { display: none; }
+
+/* a finger: targets of 44 px (Apple's 44 pt, Material's 48 dp), fields' text of 16 px (a phone does not
+   zoom into them), no tooltip a hover would show; the marks of a drawing (a calendar's chips) 24 px */
+@media (max-width: 700px), (pointer: coarse) {
+  button, select, summary { min-height: 44px; }
+  button { min-width: 44px; }
+  input:not([type=checkbox]):not([type=radio]):not([type=range]), select { min-height: 44px; }
+  /* a minimum, over each field's own size */
+  input:not([type=checkbox]):not([type=radio]), select, textarea { font-size: 16px !important; }
+  .CodeMirror textarea { min-height: 0; }
+  label:has(> input[type=checkbox]), label:has(> input[type=radio]) { min-height: 44px; }
+  .cal-ics { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; min-width: 44px; }
+  .cal-dl-name { display: inline-flex; align-items: center; min-height: 44px; }
+  .cal-body button { min-height: 24px; min-width: 0; }
+  .mo-dl { min-height: 24px; }
+  #crumbs a { display: inline-flex; align-items: center; min-height: 44px; }
+  #tooltip { display: none !important; }
+  .node .fold circle.hit, .cfocus .hit { display: inline; fill: transparent; stroke: none; }
+  .legend-mark { min-height: 44px; }
+}
+
+@media (max-width: 700px) {
+  body { padding-bottom: calc(60px + env(safe-area-inset-bottom)); }
+  body.kb-open { padding-bottom: 0; }
+
+  /* the bar: one row, the search and ⋯ (the jobs' button first when the queue runs here) */
+  #bar { position: relative; z-index: 30; flex-wrap: nowrap; gap: 8px; padding: max(6px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) 6px max(10px, env(safe-area-inset-left)); }
+  #bar h1, #bar #counts { display: none; }
+  #bar > #search { order: 1; flex: 1 1 auto; min-width: 0; height: 44px; margin: 0; padding: 0 16px; border-radius: 22px; }
+  #bar > #live { order: 2; flex: none; }
+  #bar-more-toggle { order: 3; display: inline-flex; justify-content: center; position: relative; width: 44px; height: 44px; padding: 0; border-radius: 22px; }
+  #bar #bar-more-toggle .ico { width: 22px; height: 22px; }
+  #bar-more-toggle[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+  /* a filter on: a dot on ⋯, as the Filters button inside is marked */
+  #bar:has(#filter-status:not([hidden])) #bar-more-toggle::after { content: ""; position: absolute; top: 7px; right: 7px; width: 9px; height: 9px;
+    border-radius: 50%; background: var(--accent); }
+
+  /* the pages: tabs along the bottom, in the thumb's reach, each its symbol and its name */
+  #bar .pages { position: fixed; z-index: 30; left: 0; right: 0; bottom: 0; display: flex; gap: 0;
+    padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    background: var(--panel); border-top: 1px solid var(--line); }
+  body.kb-open #bar .pages { display: none; }
+  #bar .pages button, #bar .pages button:first-child, #bar .pages button:last-child { flex: 1 1 0; min-width: 0; height: 60px; margin: 0;
+    padding: 6px 1px 5px; border: 0; border-radius: 0; background: none; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 3px; color: var(--muted); font-size: 11px; font-weight: 500; }
+  #bar .pages button::after { content: attr(aria-label); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.15; }
+  #bar .pages .page-ico { width: 22px; height: 22px; padding: 3px 14px; box-sizing: content-box; border-radius: 15px; }
+  #bar .pages button[aria-pressed="true"] { color: var(--fg); font-weight: 700; }
+  @media (max-width: 380px) { #bar .pages button, #bar .pages button:first-child, #bar .pages button:last-child { font-size: 10.5px; letter-spacing: -0.01em; } }
+  #bar .pages button[aria-pressed="true"] .page-ico { background: color-mix(in oklab, var(--accent) 18%, transparent); }
+
+  /* ⋯: a menu under the bar, a row each: its symbol and what it does */
+  #bar-more { display: none; }
+  #bar-more.open { display: flex; flex-direction: column; gap: 2px; position: absolute; top: calc(100% + 6px); left: 8px; right: 8px; z-index: 31;
+    max-height: calc(100vh - 150px); overflow: auto; padding: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    box-shadow: 0 10px 32px light-dark(#1f232833, #000000aa); font-size: 15px; }
+  .bar-more-head { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px 10px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
+  .bar-more-head .muted { font-size: 13px; }
+  #bar-more .group { flex-direction: column; gap: 0; }
+  #bar #bar-more .group > button { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 48px; padding: 0 12px; border: 0;
+    border-radius: 10px; background: none; color: var(--fg); font-size: 15px; text-align: left; }
+  #bar #bar-more .group > button[aria-pressed="true"] { color: var(--accent); }
+  #bar #bar-more .group > button:active { background: color-mix(in oklab, var(--fg) 8%, transparent); }
+  #bar-more .group > .icon-btn::after, #bar-more #theme::after { content: attr(aria-label); }
+  #bar #bar-more .ico, #bar-more #theme svg { width: 22px; height: 22px; flex: none; }
+  #bar-more .group[aria-label="Text size"] { flex-direction: row; align-items: center; padding-left: 48px; }
+  #bar-more .group[aria-label="Text size"]::before { content: "Text size"; flex: 1; }
+  #bar #bar-more .group[aria-label="Text size"] > button { width: 48px; justify-content: center; padding: 0; font-size: 16px; }
+  #bar-more #font-size { font-size: 14px; }
+  #bar-more .group[aria-label="Filters"] { flex-direction: row; flex-wrap: wrap; align-items: center; }
+  /* labels in one column: after a symbol's room where a row has none */
+  #bar #bar-more #filters-toggle { width: auto; flex: 1 1 auto; padding-left: 48px; }
+  #bar-more .filter-status { padding: 0 12px; font-size: 14px; }
+
+  /* a note, the filters, the scratchpad, the queue, a notebook: each the whole page */
+  #drawer, main.artifact-open #drawer { width: 100%; border-left: 0; padding: 0 16px 24px; }
+  #drawer-resize, #nbpane-resize { display: none !important; }
+  #nbpane { width: 100%; border-right: 0; z-index: 4; }
+  #filters { width: 100%; border-right: 0; z-index: 5; padding: 0 16px 24px; font-size: 15px; }
+  #filters .fhead { position: sticky; top: 0; z-index: 1; margin: 0 -16px 4px; padding: 4px 8px 4px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  #jobs { inset: 0; width: auto; max-height: none; border: 0; border-radius: 0; box-shadow: none; }
+  #corner { left: max(12px, env(safe-area-inset-left)); bottom: 12px; }
+  #pad-toggle { width: 52px; height: 52px; justify-content: center; border-radius: 16px; box-shadow: 0 4px 14px light-dark(#1f232826, #00000088); }
+  #pad-toggle .ico { width: 22px; height: 22px; }
+  #corner:has(> #pad:not([hidden])) { inset: 0; max-height: none; align-items: stretch; z-index: 6; }
+  #corner:has(> #pad:not([hidden])) > .corner-btns { display: none; }
+  #pad { flex: 1 1 auto; width: 100%; height: auto; border: 0; border-radius: 0; box-shadow: none; font-size: 15px; }
+  .pad-head { padding: 4px 8px 4px 16px; }
+  /* under one of them, a page keeps its whole width */
+  main:has(#filters:not([hidden])) :is(#kanban, #calendar), main:has(#nbpane:not([hidden])) :is(#kanban, #calendar),
+  main:has(#drawer:not([hidden])) :is(#kanban, #calendar, #manuscript, #slides),
+  main.artifact-open:has(#drawer:not([hidden])) :is(#kanban, #calendar) { left: 0; right: 0; }
+  main.artifact-open:has(#drawer:not([hidden])) #concept-canvas { width: 100%; }
+  #notice { bottom: calc(72px + env(safe-area-inset-bottom)); }
+
+  /* a note: its actions a row of named chips kept at the top as it scrolls, ✕ first; then its path and line */
+  #drawer:not([hidden]) { display: flex; flex-direction: column; }
+  #drawer > * { flex: none; }
+  #drawer.editing > #editor { flex: 1 1 auto; }
+  #drawer > .drawer-head { display: contents; }
+  #drawer .drawer-actions { gap: 8px; overflow-x: auto; scrollbar-width: none; }
+  #drawer > .drawer-head > .drawer-actions { order: -1; position: sticky; top: 0; z-index: 4; margin: 0 -16px 6px; padding: 8px 12px;
+    background: var(--panel); border-bottom: 1px solid var(--line); }
+  #drawer .drawer-actions > .icon-btn { flex: none; gap: 6px; min-height: 44px; padding: 0 14px; border-radius: 22px; white-space: nowrap; font-size: 14px; }
+  #drawer .drawer-actions > .icon-btn::after { content: attr(aria-label); }
+  #drawer-close, #art-close { order: -1; position: sticky; left: 0; z-index: 1; flex: none; width: 44px; height: 44px; padding: 0;
+    border-radius: 22px; font-size: 17px; background: var(--panel); }
+  #drawer-edit { order: 1; } #drawer-hl { order: 2; } #drawer-add { order: 3; } #drawer-notebook { order: 4; }
+  #drawer-move { order: 5; } #drawer-type { order: 6; } #drawer-lock { order: 7; }
+  #artifact-view .drawer-head { flex-direction: column-reverse; align-items: stretch; }
+  #drawer-meta { margin: 2px 0; }
+  /* the bar on a selection: at the bottom, clear of the phone's own menu over the selection */
+  #drawer .sel-bar { position: fixed; top: auto !important; left: 12px !important; right: 12px; bottom: calc(72px + env(safe-area-inset-bottom));
+    z-index: 40; flex-wrap: wrap; justify-content: center; box-shadow: 0 6px 24px light-dark(#1f232833, #000000aa); }
+
+  /* the kanban: a column a screen, swiped from one to the next, the next one's edge showing */
+  .kb-cols { gap: 10px; scroll-snap-type: x mandatory; scroll-padding-inline: 12px; }
+  .kb-col { flex: 0 0 calc(100% - 36px); min-width: 0; max-width: none; scroll-snap-align: start; }
+  .kb-col.folded { flex: 0 0 48px; width: 48px; }
+  .kb-bar { gap: 4px 12px; }
+
+  /* the calendar: the deadlines' cards swiped one by one; a form's fields a row each */
+  .cal-bar { gap: 6px 8px; }
+  .cal-range { min-width: 0; flex: 1 1 auto; }
+  .cal-gpus { margin-left: 0; }
+  .cal-deadlines { scroll-snap-type: x mandatory; scroll-padding-inline: 12px; }
+  /* the month: seven equal columns, whatever their chips hold */
+  .mo-head, .mo-week { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+  .mo-dl { max-width: 100%; overflow: hidden; text-overflow: clip; white-space: nowrap; }
+  .mo-t { display: none; }
+  .cal-dl { flex: 0 0 min(85%, 28em); min-width: 0; scroll-snap-align: start; }
+  :is(#cal-adder, #cal-mt-adder) > :is(input, select, label, span) { flex: 1 1 100%; }
+  #crumbs { padding: 0 12px; }
+
+  /* the Manuscript and the Slides: one pane at a time (List, its text, its PDF or slide), switched above */
+  .phone-panes { display: inline-flex; }
+  .phone-panes[hidden] { display: none; }
+  .ms-body, .sl-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); grid-auto-rows: 0; overflow: hidden; }
+  .ms-body[data-pane="list"] > :not(.ms-list), .ms-body[data-pane="text"] > :not(.ms-editor), .ms-body[data-pane="pdf"] > :not(.ms-pdf),
+  .sl-body[data-pane="list"] > :not(.sl-list), .sl-body[data-pane="text"] > :not(.ms-editor), .sl-body[data-pane="pdf"] > :not(.sl-side) { display: none; }
+  .ms-list, .ms-editor { border-right: 0; }
+  .ms-item, .sl-item { min-height: 44px; align-items: center; padding: 6px 14px; }
+  .ms-bar, .sl-bar { gap: 6px 8px; }
+}

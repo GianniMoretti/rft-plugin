@@ -96,6 +96,7 @@ PAGE_FILES = {
     "/scratchpad.js": ("scratchpad.js", "text/javascript; charset=utf-8"),
     "/queue.js": ("queue.js", "text/javascript; charset=utf-8"),
     "/artifacts.js": ("artifacts.js", "text/javascript; charset=utf-8"),
+    "/phone.js": ("phone.js", "text/javascript; charset=utf-8"),
     "/manuscript.js": ("manuscript.js", "text/javascript; charset=utf-8"),
     "/slides.js": ("slides.js", "text/javascript; charset=utf-8"),
     "/decks.js": ("decks.js", "text/javascript; charset=utf-8"),

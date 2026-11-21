@@ -218,6 +218,7 @@ describe('commands', () => {
     expect(html).not.toContain('data-rft-inline')
     expect(html).toContain('<style>body { color: red }</style>')
     expect(html).toContain('<script>/* theme */</script>')
+    expect(html).toContain('<script>/* phone */</script>')
     expect(html).toContain('"$&"')
     expect(html).toContain('"<\\/script>"')
     expect(html).toContain('window.RFT_DATA = {"tree":{"project":"demo"')

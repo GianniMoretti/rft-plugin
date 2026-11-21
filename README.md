@@ -448,13 +448,13 @@ session brings it back).
   each GPU (memory, use, temperature, and what holds it: a job of the queue, with its experiment,
   or a process outside the queue), then two tabs:
   - **Queue**: the jobs running (how long, on which GPUs) and those waiting, in their order, each
-    with why it waits ("1st in line: needs 2 GPUs, 1 free"). Drag a job, or use ↑ ↓ and **Top**,
+    with why it waits ("1st in line: needs 2 GPUs, 1 free"). Drag a job, or use its buttons (each a symbol: up, down, first in line),
     to change the order, or ask Claude ("run E17 before E16": one `rft_job` call, answered
-    with the new order in one line); **Stop** / **Cancel** (press twice) ends a job; pause (press twice) starts no new
+    with the new order in one line); **Stop** (■) / **Cancel** (✕) ends a job (press twice: the button says Stop? or Cancel? in between); pause (press twice) starts no new
     job (the running ones go on), resume (one press) lets them start again; Claude can cancel, retry, pause and resume too, when you ask. Untick a GPU to keep it out of the queue (for your own work).
   - **History**: every job that ended, newest first, with its experiment, how it ended (done,
-    failed with its exit code, cancelled), how long it ran, and **Retry** (first in line again).
-  **Log** / **Command** on a job shows its command, the code it ran and its output folder, and its
+    failed with its exit code, cancelled), how long it ran, and **Retry** (↻: first in line again).
+  **Log** (lines of text) / **Command** (`>_`, on a waiting job) shows its command, the code it ran and its output folder, and its
   output: the last 64 KB, then what it writes as it comes (only the new bytes cross an SSH tunnel),
   in a box that follows the end unless you scroll up to read, keeps its place across refreshes, and
   can be made taller; a progress bar shows its last state, colour codes are dropped. **Whole log**
@@ -729,6 +729,16 @@ node), forward the port and open the address on your own machine:
 ```bash
 ssh -L 41234:127.0.0.1:41234 user@remote
 ```
+
+On a **phone** (a screen up to 700 px wide; `web/phone.js`), the pages are tabs along the bottom,
+the bar is the search and **⋯** (layout, fit, fold, text size, the concept overlay, Came from,
+Filters, the theme), and a note, the filters, the scratchpad, the queue and a notebook each take
+the whole page, the note's actions a row of named chips above it. The phone's **Back** closes
+what was opened last, and in a note reached by a link shows the note it was in. The kanban
+shows a column at a time, swiped; the Manuscript and the Slides a pane at a time (the list, the
+text, the PDF or slide). On any touch screen, controls are 44 px targets, fields' text 16 px, and
+a selection made with a long press gets its Comment, Suggest and Footnote bar at the bottom.
+`tests/test_phone.py` checks every page at 360 and 412 px in headless Chromium.
 
 d3 (ISC licence, `web/vendor/LICENSE-d3.txt`), KaTeX (MIT licence,
 `web/vendor/LICENSE-katex.txt`; its fonts inlined in its stylesheet), jsPDF and svg2pdf.js
@@ -1061,7 +1071,9 @@ python3 -m unittest discover -s tests -p "test_*.py"
 claude --plugin-dir .
 ```
 
-The first two check and test the mod, the third tests the server, and the last starts a
+The first two check and test the mod, the third tests the server (and, with Chromium and
+`websocket-client` installed, the page at a phone's size: `tests/test_phone.py`, which
+`RFT_PHONE_SHOTS=<dir>` makes save a screenshot of each screen), and the last starts a
 session with the plugin loaded from this folder.
 
 - `hooks/register.tsx`: the hooks module (commands, tools, prompt injection, the outline pane,

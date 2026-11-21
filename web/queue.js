@@ -158,6 +158,26 @@
     // the pause and resume symbols, drawn (a font may lack ⏸, or draw it as a coloured emoji)
     const PAUSE_ICON = '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><rect x="2" y="1.5" width="3" height="9" rx="0.6" fill="currentColor"/><rect x="7" y="1.5" width="3" height="9" rx="0.6" fill="currentColor"/></svg>'
     const RESUME_ICON = '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M3 1.5v9l7.5-4.5z" fill="currentColor"/></svg>'
+    // a job's buttons, as symbols, drawn as the page's others are (.ico: a 24 px box, stroked)
+    const JOB_ICON = {
+      command: '<path d="M5 7l5 5-5 5"/><path d="M12.5 17.5H19"/>', // >_ : its command
+      log: '<path d="M4.5 6h15M4.5 10h11M4.5 14h15M4.5 18h8"/>', // lines of text: its output
+      stop: '<rect x="6.5" y="6.5" width="11" height="11" rx="1.5" fill="currentColor" stroke="none"/>',
+      cancel: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
+      up: '<path d="M6 14.5l6-6 6 6"/>',
+      down: '<path d="M6 9.5l6 6 6-6"/>',
+      top: '<path d="M5 4.5h14"/><path d="M12 20V9.5"/><path d="M7 14.5l5-5 5 5"/>',
+      retry: '<path d="M18.5 16.25A7.5 7.5 0 1 1 17.3 7.2l2.2 2.3"/><path d="M19.5 4.5v5h-5"/>',
+      save: '<path d="M12 4v11"/><path d="M7 10.5l5 5 5-5"/><path d="M5 20h14"/>',
+    }
+    function ico(name) {
+      const t = document.createElement('template')
+      t.innerHTML = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${JOB_ICON[name]}</svg>`
+      return t.content.firstChild
+    }
+    /** A button drawn as its symbol: `label` names what it does (a screen reader's name, the tooltip unless `props` gives one); `text` beside the symbol. */
+    const iconBtn = (name, label, props, text) =>
+      el('button', { type: 'button', title: label, ...props, 'aria-label': label, class: `jobs-ico${props && props.class ? ` ${props.class}` : ''}` }, ico(name), text ? el('span', { text }) : null)
     let answered = 0 // when the server last answered the queue: a log it does not answer is then refused on the way
     // where a job's output is read: api/queue/output, or api/queue/log on a server started before it
     let outputAt = 'api/queue/output'
@@ -399,7 +419,7 @@
         j.out ? el('div', { class: 'muted', text: `outputs: ${j.out}` }) : null,
         el('div', { class: 'jobs-log-bar' },
           el('span', { class: 'muted', text: j.state === 'running' ? 'Its output, as it comes' : 'Its output' }),
-          canWrite() ? el('button', { type: 'button', title: 'Save its whole output as a file', onclick: () => saveLog(j.id) }, 'Whole log') : null),
+          canWrite() ? iconBtn('save', 'Save its whole output as a file', { onclick: () => saveLog(j.id) }, 'Whole log') : null),
         l.box,
         el('div', { class: 'jobs-log-err', role: 'status', hidden: !l.error, text: l.error }))
       paint(l)
@@ -410,9 +430,10 @@
       if (!canWrite()) return null
       const isArmed = armed && armed.id === j.id && armed.until > Date.now()
       const running = j.state === 'running'
-      return el('button', {
-        type: 'button', class: isArmed ? 'danger' : null,
-        title: running ? 'Stop this job (its whole process group); press twice' : 'Take it off the queue; press twice',
+      // armed, it says so beside its symbol: a second press ends the job
+      return iconBtn(running ? 'stop' : 'cancel', isArmed ? `Press again to ${running ? 'stop' : 'cancel'} ${j.id}` : `${running ? 'Stop' : 'Cancel'} ${j.id} (press twice)`, {
+        class: isArmed ? 'jobs-end danger' : 'jobs-end',
+        title: isArmed ? 'Press again' : running ? 'Stop this job (its whole process group); press twice' : 'Take it off the queue; press twice',
         onclick: () => {
           if (isArmed) {
             armed = null
@@ -423,14 +444,12 @@
           draw()
           setTimeout(() => { if (armed && armed.id === j.id) { armed = null; draw() } }, 4100)
         },
-      }, isArmed ? (running ? 'Stop it?' : 'Cancel it?') : (running ? 'Stop' : 'Cancel'))
+      }, isArmed ? (running ? 'Stop?' : 'Cancel?') : null)
     }
 
-    const moreBtn = j => el('button', {
-      type: 'button', class: 'jobs-more', 'aria-expanded': String(shown.has(j.id)),
-      title: j.state === 'pending' ? 'Its command' : 'Its command and the end of its output',
-      onclick: () => toggle(j),
-    }, j.state === 'pending' ? 'Command' : 'Log')
+    const moreBtn = j => iconBtn(j.state === 'pending' ? 'command' : 'log',
+      j.state === 'pending' ? `${j.id}: its command` : `${j.id}: its command and the end of its output`,
+      { class: 'jobs-more', 'aria-expanded': String(shown.has(j.id)), onclick: () => toggle(j) })
 
     /** A running job's stage, bars and last line. */
     function progressEl(p) {
@@ -459,7 +478,7 @@
             el('span', { class: 'jobs-id', text: j.id }),
             link(j.exp),
             t ? el('span', { class: 'jobs-title', text: t, title: t }) : null,
-            j.label ? el('span', { class: 'jobs-label', text: j.label }) : null),
+            j.label ? el('span', { class: 'jobs-label', text: j.label, title: j.label }) : null),
           el('div', { class: 'jobs-meta muted', text: o.meta }),
           j.state === 'running' ? progressEl(j.progress) : null,
           details(j)),
@@ -519,9 +538,9 @@
         place: i + 1, drag: w, order,
         meta: `${gpuWord(j.gpus)}${j.outlook ? ` · ${j.outlook}` : ''}`,
         actions: [moreBtn(j), ...(w ? [
-          el('button', { type: 'button', title: 'Move up', 'aria-label': `Move ${j.id} up`, disabled: i === 0, onclick: () => change({ op: 'move', ...moveOp(order, j.id, i - 1) }) }, '↑'),
-          el('button', { type: 'button', title: 'Move down', 'aria-label': `Move ${j.id} down`, disabled: i === order.length - 1, onclick: () => change({ op: 'move', ...moveOp(order, j.id, i + 1) }) }, '↓'),
-          el('button', { type: 'button', title: 'First in line', disabled: i === 0, onclick: () => change({ op: 'move', id: j.id, before: 'top' }, `${j.id} first in line`) }, 'Top'),
+          iconBtn('up', `Move ${j.id} up`, { title: 'Move up', disabled: i === 0, onclick: () => change({ op: 'move', ...moveOp(order, j.id, i - 1) }) }),
+          iconBtn('down', `Move ${j.id} down`, { title: 'Move down', disabled: i === order.length - 1, onclick: () => change({ op: 'move', ...moveOp(order, j.id, i + 1) }) }),
+          iconBtn('top', `Put ${j.id} first in line`, { title: 'First in line', disabled: i === 0, onclick: () => change({ op: 'move', id: j.id, before: 'top' }, `${j.id} first in line`) }),
           cancelBtn(j)] : [])],
       })))
       return out
@@ -532,7 +551,7 @@
       return view.history.map(j => row(j, {
         meta: `${j.kind === 'notebook' ? `notebook ${notebookWord(j)}` : endWord(j)}${ranFor(j)}${j.ended ? ` · ${when(j.ended)}` : ''}${j.gpu_ids && j.gpu_ids.length ? ` · ${gpuList(j.gpu_ids)}` : ''}` +
           `${j.state === 'failed' && j.error ? ` · ${String(j.error).trim().split('\n').pop()}` : ''}`,
-        actions: [moreBtn(j), canWrite() ? el('button', { type: 'button', title: 'Queue it again, first in line', onclick: () => change({ op: 'retry', id: j.id }, `${j.id} queued again`) }, 'Retry') : null],
+        actions: [moreBtn(j), canWrite() ? iconBtn('retry', `Retry ${j.id}`, { title: 'Retry: queue it again, first in line', onclick: () => change({ op: 'retry', id: j.id }, `${j.id} queued again`) }) : null],
       }))
     }
 

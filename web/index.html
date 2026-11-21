@@ -2,7 +2,11 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- on a phone: the page under the notch and the home bar (app.css keeps clear of them), and the keyboard
+     shrinks the page rather than covering it, so a field and its buttons stay above it -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<!-- the phone browser's own bar in the page's colour (theme.js sets it to the theme in use) -->
+<meta name="theme-color" content="#ffffff">
 <title>Reasoning tree</title>
 <!-- the tab's symbol: a root note (a direction) and two notes under it (an experiment, a reference), in the tree's colours -->
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 8C16 16 7 15 7 24M16 8C16 16 25 15 25 24' fill='none' stroke='%238b93a3' stroke-width='2.6' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='7.5' r='5' fill='%239775fa'/%3E%3Ccircle cx='7' cy='24.5' r='5' fill='%2320c997'/%3E%3Ccircle cx='25' cy='24.5' r='5' fill='%23f06595'/%3E%3C/svg%3E">
@@ -43,6 +47,10 @@
       <!-- a slide on a stand, a chart on it in the tree's colours -->
       <svg class="page-ico" viewBox="0 0 32 32" aria-hidden="true"><rect class="ln" x="3" y="4" width="26" height="17" rx="2.5"/><path class="ln" d="M16 21v3.5M10.5 29.5l5.5-5 5.5 5"/><rect class="tone experiment s-done" x="8" y="13" width="4" height="4.5" rx="1"/><rect class="tone direction s-done" x="14" y="10.5" width="4" height="7" rx="1"/><rect class="tone reference s-done" x="20" y="8" width="4" height="9.5" rx="1"/></svg></button>
   </div>
+  <!-- the controls a phone keeps behind ⋯ (web/phone.js): on a wider screen this wrapper draws no box of its own,
+       so they sit in the bar as before -->
+  <div id="bar-more" aria-label="View options">
+  <div class="bar-more-head"><strong id="bar-more-title"></strong><span id="bar-more-counts" class="muted"></span></div>
   <div class="group tree-only" role="group" aria-label="View">
     <!-- each toggle shows the symbol of its state (or of what a click does); its tooltip names it -->
     <button id="layout" class="cycle icon-btn" title="Layout: Top-down (click: Left-right)" aria-label="Layout: Top-down (click: Left-right)">
@@ -71,17 +79,23 @@
       <svg data-v="arrows" class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 11.2L18 6M15.4 9.9L18 6l-4.7-.6" stroke="#f783ac"/><path d="M6.5 12.8L18 18M13.3 18.6L18 18l-2.6-3.9" stroke="#3bc9db"/><circle cx="4.5" cy="12" r="2.6" fill="currentColor" stroke="none"/></svg>
     </button>
   </div>
-  <div class="group tree-only">
+  <div class="group tree-only" role="group" aria-label="Came from">
     <button id="origins-toggle" class="icon-btn" aria-pressed="false" aria-label="Came from" title="Came from: dashed links from where each moved note came from">
       <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="17" r="2.6" fill="currentColor" stroke="none"/><path d="M7 14.5C9 7 15 5 18.5 7.5" stroke-dasharray="2.4 2.4"/><circle cx="19" cy="9" r="2.6" fill="currentColor" stroke="none"/></svg>
     </button>
   </div>
-  <div class="group">
+  <div class="group" role="group" aria-label="Filters">
     <button id="filters-toggle" aria-expanded="false" aria-controls="filters">Filters</button>
     <span id="filter-status" class="filter-status" hidden><span id="filter-count"></span> · <button id="filters-clear" class="linkish">Clear</button></span>
   </div>
-  <input id="search" type="search" placeholder="Search notes (Enter: next)" autocomplete="off" spellcheck="false">
+  <div class="group bar-theme" role="group" aria-label="Theme">
   <button id="theme" title="Switch theme" aria-label="Switch theme"><svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg><svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button>
+  </div>
+  </div>
+  <input id="search" type="search" enterkeyhint="search" placeholder="Search notes (Enter: next)" aria-label="Search notes" autocomplete="off" spellcheck="false">
+  <button id="bar-more-toggle" class="icon-btn" type="button" aria-expanded="false" aria-controls="bar-more" aria-label="More: view, text size, filters, theme" title="More: view, text size, filters, theme">
+    <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.8" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.8" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.8" fill="currentColor" stroke="none"/></svg>
+  </button>
 </header>
 <nav id="crumbs" hidden aria-label="Concept focus"></nav>
 <main>
@@ -157,7 +171,7 @@
   </aside>
   </div>
   <aside id="filters" hidden aria-label="Filters">
-    <div class="fhead"><strong>Filters</strong><button id="filters-close" title="Close">✕</button></div>
+    <div class="fhead"><strong>Filters</strong><button id="filters-close" title="Close" aria-label="Close the filters">✕</button></div>
     <section>
       <div class="ftitle">In the tree, notes that do not match are</div>
       <label><input type="radio" name="fmode" value="dim"> dimmed (the tree keeps its shape)</label>
@@ -213,6 +227,7 @@
         <svg class="ico lock-closed on" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
       </button>
       <button id="ms-compile" class="primary ms-needs" type="button">Compile</button>
+      <span class="seg phone-panes ms-needs" role="group" aria-label="Pane" data-for="ms-body"><button type="button" data-pane="list" aria-pressed="true">List</button><button type="button" data-pane="text" aria-pressed="false">LaTeX</button><button type="button" data-pane="pdf" aria-pressed="false">PDF</button></span>
       <span id="ms-status" class="muted" role="status"></span>
     </div>
     <form id="ms-new-form" class="ms-new-form" hidden>
@@ -241,7 +256,7 @@
       <p>Both are yours to write: Claude proposes snippets from verified notes and where to place them, comments and suggests, and writes only where you unlock it.</p>
       <button id="ms-start" type="button" class="primary">Start, with a first document</button>
     </div>
-    <div id="ms-body" class="ms-body" hidden>
+    <div id="ms-body" class="ms-body" data-pane="list" hidden>
       <nav id="ms-list" class="ms-list" aria-label="Snippets"></nav>
       <div class="ms-editor">
         <div id="ms-head" class="ms-head"></div>
@@ -266,6 +281,7 @@
       <span id="sl-status" class="muted sl-needs" role="status"></span>
       <span class="ms-spacer"></span>
       <button id="sl-pdf" class="sl-needs" type="button" title="The deck as a PDF, one 16:9 page a slide, the speaker notes left out: Save as PDF in the print dialog">PDF</button>
+      <span class="seg phone-panes sl-needs" role="group" aria-label="Pane" data-for="sl-body"><button type="button" data-pane="list" aria-pressed="true">Decks</button><button type="button" data-pane="text" aria-pressed="false">Text</button><button type="button" data-pane="pdf" aria-pressed="false">Slide</button></span>
       <button id="sl-present" class="primary sl-needs" type="button" title="Full screen from the slide in view: → or space next, ← back, Esc out">Present</button>
     </div>
     <form id="sl-new-form" class="ms-new-form" hidden aria-label="A new deck">
@@ -278,7 +294,7 @@
       <p>Decks are yours to write: Claude proposes an outline, and writes one only once you unlock it.</p>
       <button id="sl-start" type="button" class="primary">Start a deck</button>
     </div>
-    <div id="sl-body" class="sl-body" hidden>
+    <div id="sl-body" class="sl-body" data-pane="list" hidden>
       <nav id="sl-list" class="ms-list sl-list" aria-label="Decks"></nav>
       <div class="ms-editor">
         <div id="sl-problems" class="ms-errors" hidden></div>
@@ -385,7 +401,7 @@
         <button id="drawer-notebook" class="icon-btn" hidden aria-pressed="false" aria-label="Notebook" title="The experiment's notebook, beside the note: the code that rebuilds its Result">
           <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M10 8.5v7l5.5-3.5z" fill="currentColor" stroke="none"/></svg>
         </button>
-        <button id="drawer-close" title="Close">✕</button>
+        <button id="drawer-close" title="Close" aria-label="Close the note">✕</button>
       </span>
     </div>
     <div id="drawer-priority" class="drawer-priority" hidden></div>
@@ -520,5 +536,6 @@
 <script src="decks.js"></script>
 <script src="artifacts.js" data-rft-inline></script>
 <script src="app.js" data-rft-inline></script>
+<script src="phone.js" data-rft-inline></script>
 </body>
 </html>

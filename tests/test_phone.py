@@ -1,0 +1,374 @@
+"""The web view on a phone: an audit in headless Chromium at two Android sizes (360×780 and 412×915).
+
+On every page and every sheet (a note, its editor, the filters, the scratchpad, the ⋯ menu):
+  - nothing scrolls sideways but what is made to (the kanban's columns, a timeline, a wide formula);
+  - every control on screen is a 44 px touch target (Apple's 44 pt, Material's 48 dp, WCAG 2.5.5),
+    the marks of a drawing (the tree's notes, the calendar's bars) at least 24 px (WCAG 2.5.8),
+    links inside running text excepted (WCAG's inline exception);
+  - every field's text is at least 16 px;
+  - the app's own bars leave the content at least all but 128 px of the screen;
+  - every page is a labelled button on screen;
+  - the phone's Back closes what is open (a note, the note it came from first, the filters, the
+    scratchpad), and never leaves the page.
+No script error on any screen. It needs Chromium (Playwright's, or RFT_CHROME) and the websocket-client
+module, and skips without them. RFT_PHONE_SHOTS=<dir> also saves a screenshot of each screen.
+
+    python3 -m unittest tests.test_phone -v
+"""
+import base64
+import datetime
+import glob
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+import urllib.request
+from pathlib import Path
+
+try:
+    import websocket  # websocket-client
+except ImportError:  # pragma: no cover
+    websocket = None
+
+ROOT = Path(__file__).resolve().parents[1]
+SIZES = [(360, 780), (412, 915)]
+
+
+def find_chrome():
+    if os.environ.get("RFT_CHROME"):
+        return os.environ["RFT_CHROME"]
+    found = sorted(glob.glob(os.path.expanduser("~/.cache/ms-playwright/chromium-*/chrome-linux/chrome")))
+    if found:
+        return found[-1]
+    for name in ("chromium", "chromium-browser", "google-chrome", "google-chrome-stable"):
+        if shutil.which(name):
+            return shutil.which(name)
+    return None
+
+
+CHROME = find_chrome()
+
+# --------------------------------------------------------------------------- the audit, in the page
+
+AUDIT_JS = r"""
+(() => {
+  const W = innerWidth, H = innerHeight, out = []
+  // what is made to scroll sideways
+  const HSCROLL = '.kb-cols, .cal-body, .tl-scroll, .cal-deadlines, #note pre, #note .katex-display, #note .table-wrap, .ms-thread pre, .drawer-actions, .sl-thumbs, .CodeMirror, .jobs-list, .jobs-tabs'
+  // links inside running text: WCAG 2.5.8's inline exception
+  const INLINE = '#note a, .t-text a, .fn-pop a, .drawer-origin a, .drawer-superseded a, .art-summary a, .drawer-concept a, .drawer-code a, .ms-empty a, .art-state a, .hint a, .editor-hint a, .edit-nokey a'
+  // the marks of a drawing: 24 px
+  const DENSE = '#canvas g.node, #canvas g.fold, #canvas .badge, #concept-canvas .cnode, #concept-canvas .cfocus, .cal-body *'
+  const SKIP = '.CodeMirror *, #tooltip, #tooltip *, iframe'
+  const shown = el => {
+    if (el.closest('[hidden]')) return false
+    if (el.checkVisibility && !el.checkVisibility({ checkVisibilityCSS: true })) return false
+    const r = el.getBoundingClientRect()
+    return r.width > 0 && r.height > 0
+  }
+  const name = el => {
+    const t = (el.getAttribute('aria-label') || el.textContent || el.getAttribute('placeholder') || el.getAttribute('title') || '').trim().replace(/\s+/g, ' ').slice(0, 28)
+    const cls = typeof el.className === 'string' && el.className.trim() ? '.' + el.className.trim().split(/\s+/).slice(0, 2).join('.') : ''
+    return `${el.id ? '#' + el.id : el.tagName.toLowerCase() + cls}${t ? ` "${t}"` : ''}`
+  }
+  const inScroller = el => Boolean(el.parentElement && el.parentElement.closest(HSCROLL))
+  // on top at its centre (what a tap there reaches), its centre brought into the screen
+  const reachable = el => {
+    const r = el.getBoundingClientRect()
+    const x = Math.min(Math.max(r.left + r.width / 2, 1), W - 1), y = Math.min(Math.max(r.top + r.height / 2, 1), H - 1)
+    const hit = document.elementFromPoint(x, y)
+    return Boolean(hit && (hit === el || el.contains(hit) || hit.contains(el) || (hit.closest('label') && hit.closest('label') === el.closest('label'))))
+  }
+
+  if (document.documentElement.scrollWidth > W + 1) out.push(`the page scrolls sideways (${document.documentElement.scrollWidth} px wide)`)
+  for (const el of document.querySelectorAll('body *')) {
+    if (el.matches(SKIP) || el.matches(HSCROLL) || !shown(el)) continue
+    const s = getComputedStyle(el)
+    if ((s.overflowX === 'auto' || s.overflowX === 'scroll') && el.scrollWidth > el.clientWidth + 2) out.push(`${name(el)} scrolls sideways (${el.scrollWidth} in ${el.clientWidth} px)`)
+  }
+
+  const CONTROLS = 'button, a[href], a[title], input:not([type=hidden]), select, textarea, summary, [role=tab], [role=button], [role=radio], [tabindex="0"], label, #canvas g.node, #canvas g.fold, #concept-canvas .cnode, #concept-canvas .cfocus'
+  for (const el of document.querySelectorAll(CONTROLS)) {
+    if (el.matches(SKIP) || el.matches(INLINE) || !shown(el)) continue
+    if (el.tagName === 'LABEL' && !el.querySelector('input[type=checkbox], input[type=radio]')) continue
+    if (el.matches('input[type=checkbox], input[type=radio]') && el.closest('label')) continue // its label is the target
+    if (el.matches('input, select, textarea') && el.closest('label') && !el.closest('label').querySelector('input[type=checkbox], input[type=radio]')) { /* a field in a label: its own target */ }
+    const r = el.getBoundingClientRect()
+    const off = r.right > W + 1 || r.left < -1 || r.top < -1 || r.bottom > H + 1
+    if (off && !inScroller(el) && !el.closest('#canvas, #concept-canvas, #drawer, #filters, #pad, #jobs, .kb-cols, .cal-body, .ms-body, .sl-body, #kanban, #calendar, #manuscript, #slides, #legend, #bar-more')) {
+      out.push(`${name(el)} is off the screen (x ${Math.round(r.left)}–${Math.round(r.right)}, y ${Math.round(r.top)}–${Math.round(r.bottom)})`)
+      continue
+    }
+    if (r.right > W + 1 && !inScroller(el)) { out.push(`${name(el)} is cut at the right edge (x ${Math.round(r.left)}–${Math.round(r.right)})`); continue }
+    if (off || !reachable(el)) continue // scrolled away, or under a sheet: not a target now
+    const min = el.matches(DENSE) || el.closest('.cal-body') ? 24 : 44
+    // an SVG group's own box is its drawing; a fold handle's target is its widest circle
+    let w = r.width, h = r.height
+    if (w < min - 0.5 || h < min - 0.5) out.push(`${name(el)} is ${Math.round(w)}×${Math.round(h)} px (< ${min})`)
+  }
+
+  for (const el of document.querySelectorAll('input:not([type=hidden]):not([type=checkbox]):not([type=radio]), select, textarea')) {
+    if (el.matches(SKIP) || !shown(el) || !reachable(el)) continue
+    const px = parseFloat(getComputedStyle(el).fontSize)
+    if (px < 15.5) out.push(`${name(el)}: text ${px} px (< 16)`)
+  }
+
+  const main = document.querySelector('main').getBoundingClientRect()
+  const tabs = [...document.querySelectorAll('[data-show]')]
+  const tabsTop = Math.min(...tabs.filter(shown).map(t => t.getBoundingClientRect().top), H)
+  const content = Math.min(main.bottom, tabsTop >= main.top + 40 ? tabsTop : main.bottom) - main.top
+  if (H - content > 128) out.push(`the app's bars take ${Math.round(H - content)} px of ${H} (> 128)`)
+
+  for (const t of tabs) {
+    if (!shown(t)) { out.push(`page ${t.dataset.show}: no button on screen`); continue }
+    const r = t.getBoundingClientRect()
+    if (r.right > W + 1 || r.left < -1 || r.bottom > H + 1 || r.top < -1) out.push(`page ${t.dataset.show}: its button is off the screen`)
+    const label = (t.innerText || '').trim() || (getComputedStyle(t, '::after').content || '').replace(/^none$|^normal$|^""$/, '')
+    if (!label) out.push(`page ${t.dataset.show}: its button has no visible name`)
+  }
+  return out
+})()
+"""
+
+# --------------------------------------------------------------------------- the page's states
+
+READY = "document.querySelectorAll('#nodes g.node').length > 0"
+
+
+def page(v):
+    return f"document.querySelector('[data-show={v}]').click()"
+
+
+def tap_node(note_id):
+    return ("(() => { const g = [...document.querySelectorAll('#nodes g.node')].find(n => n.__data__ && n.__data__.data.id === %s);"
+            " g.dispatchEvent(new MouseEvent('click', { bubbles: true })); })()" % json.dumps(note_id))
+
+
+OPEN_MENU = "(() => { const b = document.getElementById('bar-more-toggle'); if (b) b.click() })()"
+SCREENS = [
+    ("tree", [page("tree")]),
+    ("menu", [page("tree"), OPEN_MENU]),
+    ("note", [page("tree"), tap_node("D00")]),
+    ("note-edit", [page("tree"), tap_node("E07"), "document.getElementById('drawer-edit').click()"]),
+    ("filters", [page("tree"), "document.getElementById('filters-toggle').click()"]),
+    ("pad", [page("tree"), "document.getElementById('pad-toggle').click()"]),
+    ("concepts", [page("concepts")]),
+    ("kanban", [page("kanban")]),
+    ("timeline", [page("calendar"), "document.querySelector('[data-cal-mode=timeline]').click()"]),
+    ("month", [page("calendar"), "document.querySelector('[data-cal-mode=month]').click()"]),
+    ("manuscript", [page("manuscript")]),
+    ("slides", [page("slides")]),
+    ("slides-text", [page("slides"), "document.querySelector('.sl-item').click()"]),
+]
+
+
+def demo_vault(dst: Path):
+    """The demo project, with what the calendar, the scratchpad and the Slides tab show."""
+    shutil.copytree(ROOT / "examples" / "demo" / "vault", dst)
+    today = datetime.date.today()
+    day = lambda n: (today + datetime.timedelta(days=n)).isoformat()  # noqa: E731
+    for name, start, est in (("E04", day(-3), "1w"), ("E06", day(4), "5d")):
+        p = next((dst / "experiments").glob(f"{name} *.md"))
+        p.write_text(p.read_text().replace("\n---\n", f"\nstart: {start}\nest: {est}\n---\n", 1))
+    (dst / "milestones").mkdir()
+    (dst / "milestones" / "M01 Workshop paper.md").write_text(
+        f'---\nid: M01\ntype: milestone\nstatus: open\ndue: {day(10)} 23:59 AoE\nneeds: ["[[E06 CutMix with cosine schedule on three datasets]]"]\n---\n\n# M01 · Workshop paper\n')
+    (dst / "meetings").mkdir()
+    (dst / "meetings" / "G01 Supervisor meeting.md").write_text(
+        f"---\nid: G01\ntype: meeting\nwhen: {day(-14)} 14:00\nduration: 1h\nevery: week\n---\n\n# G01 · Supervisor meeting\n")
+    (dst / "decks").mkdir()
+    (dst / "decks" / "P01 Weekly wrap-up.md").write_text(
+        "---\nid: P01\ntype: deck\nlocked: true\n---\n\n# Weekly wrap-up\n\n---\n\n## E06 so far\n\n- CutMix holds at 1k\n- next: three seeds\n")
+    (dst / "Scratchpad.md").write_text("- [ ] read the CutMix ablation\n- [x] mail the supervisor\n- a note\n")
+    # urgent and high full (1 and 5 open notes), so a card's priority menu names the notes holding them
+    open_notes = sorted(p for p in dst.glob("*/*.md") if re.search(r"^status: (idea|planned|running)$", p.read_text(), re.M))
+    for p, prio in zip(open_notes, ["urgent"] + ["high"] * 5):
+        p.write_text(p.read_text().replace("\n---\n", f"\npriority: {prio}\n---\n", 1))
+
+
+class Browser:
+    """Headless Chromium over the DevTools protocol, with a phone's screen and touch."""
+
+    def __init__(self, profile: Path):
+        self.proc = subprocess.Popen([CHROME, "--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run",
+                                      "--remote-debugging-port=0", f"--user-data-dir={profile}", "about:blank"],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        port_file = profile / "DevToolsActivePort"
+        for _ in range(100):
+            if port_file.exists() and port_file.read_text().strip():
+                break
+            time.sleep(0.1)
+        port = port_file.read_text().split()[0]
+        for _ in range(50):
+            try:
+                tabs = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/json"))
+                break
+            except OSError:
+                time.sleep(0.1)
+        tab = next(t for t in tabs if t["type"] == "page")
+        self.ws = websocket.create_connection(tab["webSocketDebuggerUrl"], suppress_origin=True, timeout=30)
+        self.n = 0
+        self.errors = []
+        self.call("Runtime.enable")
+        self.call("Page.enable")
+
+    def call(self, method, **params):
+        self.n += 1
+        self.ws.send(json.dumps({"id": self.n, "method": method, "params": params}))
+        while True:
+            m = json.loads(self.ws.recv())
+            if m.get("method") == "Runtime.exceptionThrown":
+                d = m["params"]["exceptionDetails"]
+                self.errors.append((d.get("exception") or {}).get("description") or d.get("text"))
+            if m.get("id") == self.n:
+                if "error" in m:
+                    raise RuntimeError(f"{method}: {m['error']}")
+                return m.get("result", {})
+
+    def js(self, expr):
+        r = self.call("Runtime.evaluate", expression=expr, returnByValue=True, awaitPromise=True)
+        if r.get("exceptionDetails"):
+            raise RuntimeError(f"{expr[:80]}: {r['exceptionDetails'].get('exception', {}).get('description')}")
+        return r.get("result", {}).get("value")
+
+    def wait(self, expr, timeout=8.0):
+        end = time.time() + timeout
+        while time.time() < end:
+            if self.js(expr):
+                return True
+            time.sleep(0.1)
+        return False
+
+    def size(self, w, h):
+        self.call("Emulation.setDeviceMetricsOverride", width=w, height=h, deviceScaleFactor=2, mobile=True)
+        self.call("Emulation.setTouchEmulationEnabled", enabled=True, maxTouchPoints=5)
+
+    def open(self, url):
+        self.call("Page.navigate", url=url)
+        time.sleep(0.3)
+        if not self.wait(READY):
+            raise RuntimeError("the tree did not draw")
+
+    def tap(self, selector):
+        """A finger's tap at the middle of the element."""
+        x, y = self.js("(() => { const r = document.querySelector(%s).getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2] })()" % json.dumps(selector))
+        self.call("Input.dispatchTouchEvent", type="touchStart", touchPoints=[{"x": x, "y": y}])
+        self.call("Input.dispatchTouchEvent", type="touchEnd", touchPoints=[])
+
+    def shot(self, path):
+        Path(path).write_bytes(base64.b64decode(self.call("Page.captureScreenshot", format="png")["data"]))
+
+    def close(self):
+        try:
+            self.ws.close()
+        finally:
+            self.proc.terminate()
+            self.proc.wait(10)
+
+
+@unittest.skipUnless(CHROME and websocket, "needs Chromium (Playwright's, or RFT_CHROME) and websocket-client")
+class PhoneTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp(prefix="rft-phone-"))
+        demo_vault(cls.tmp / "vault")
+        cls.server = subprocess.Popen([sys.executable, str(ROOT / "server" / "rft_server.py"), "--vault", str(cls.tmp / "vault"),
+                                       "--web", str(ROOT / "web"), "--port", "0", "--project", "demo", "--no-watch"],
+                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        line = cls.server.stdout.readline()
+        cls.url = re.search(r"RFT_SERVER_URL (\S+)", line).group(1)
+        (cls.tmp / "profile").mkdir()
+        cls.b = Browser(cls.tmp / "profile")
+        cls.shots = os.environ.get("RFT_PHONE_SHOTS")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.close()
+        cls.server.terminate()
+        cls.server.wait(10)
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def screen(self, steps):
+        # each screen from a fresh start: the page keeps which panels were open
+        self.b.js("try { localStorage.clear() } catch (e) {}")
+        self.b.open(self.url)
+        for s in steps:
+            self.b.js(s)
+            time.sleep(0.45)
+        time.sleep(0.4)
+
+    def test_layout_on_every_screen(self):
+        found = {}
+        for w, h in SIZES:
+            self.b.size(w, h)
+            for name, steps in SCREENS:
+                self.screen(steps)
+                if self.shots:
+                    os.makedirs(self.shots, exist_ok=True)
+                    self.b.shot(os.path.join(self.shots, f"{w}-{name}.png"))
+                for f in self.b.js(AUDIT_JS):
+                    found.setdefault(f"{w}px {name}", []).append(f)
+        if self.b.errors:
+            found["script errors"] = list(self.b.errors)
+        report = "\n".join(f"{k}:\n  " + "\n  ".join(v) for k, v in found.items())
+        n = sum(len(v) for v in found.values())
+        self.assertEqual(n, 0, f"{n} problems on {len(found)} screens\n{report}")
+
+    def back_closes(self, w, h, steps, is_open, label):
+        self.b.size(w, h)
+        self.screen(steps)
+        self.assertTrue(self.b.js(is_open), f"{label}: did not open")
+        self.b.js("history.back()")
+        time.sleep(0.8)
+        here = self.b.js("location.origin + location.pathname")
+        self.assertTrue(self.url.startswith(here or "-"), f"{label}: Back left the page (now at {here})")
+        self.assertFalse(self.b.js(is_open), f"{label}: still open after Back")
+
+    def test_back_closes_what_is_open(self):
+        w, h = SIZES[0]
+        self.back_closes(w, h, [page("tree"), tap_node("D00")], "!document.getElementById('drawer').hidden", "a note")
+        self.back_closes(w, h, [page("tree"), "document.getElementById('filters-toggle').click()"], "!document.getElementById('filters').hidden", "the filters")
+        self.back_closes(w, h, [page("tree"), "document.getElementById('pad-toggle').click()"], "!document.getElementById('pad').hidden", "the scratchpad")
+
+    def test_back_returns_from_a_deck_to_the_decks(self):
+        w, h = SIZES[0]
+        self.back_closes(w, h, [page("slides"), "document.querySelector('.sl-item').click()"],
+                         "document.getElementById('sl-body').dataset.pane === 'text' && !!document.querySelector('#sl-cm .CodeMirror')", "a deck's text")
+        self.assertEqual(self.b.js("document.getElementById('sl-body').dataset.pane"), "list")
+
+    def test_comment_on_a_selection_by_touch(self):
+        """A long press selects (no mouseup), the bar comes once the selection rests, a tap on Comment opens the composer."""
+        w, h = SIZES[0]
+        self.b.size(w, h)
+        self.screen([page("tree"), tap_node("D00")])
+        self.assertTrue(self.b.wait("[...document.querySelectorAll('#note p')].some(p => p.textContent.length > 40)"))
+        self.b.js("""(() => { const p = [...document.querySelectorAll('#note p')].find(p => p.textContent.length > 40);
+            const t = document.createTreeWalker(p, NodeFilter.SHOW_TEXT).nextNode();
+            getSelection().setBaseAndExtent(t, 0, t, Math.min(20, t.length)) })()""")
+        self.assertTrue(self.b.wait("!document.getElementById('sel-bar').hidden"), "no bar under a touch selection")
+        r = self.b.js("(() => { const r = document.getElementById('sel-bar').getBoundingClientRect(); return [r.top, r.bottom] })()")
+        self.assertLessEqual(r[1], h, "the bar is below the screen")
+        self.b.tap("#sel-bar [data-compose=comment]")
+        self.assertTrue(self.b.wait("!document.getElementById('composer').hidden"), "a tap on Comment did not open the composer")
+
+    def test_back_returns_to_the_note_a_link_came_from(self):
+        w, h = SIZES[0]
+        self.b.size(w, h)
+        self.screen([page("tree"), tap_node("D00")])
+        self.assertTrue(self.b.wait("[...document.querySelectorAll('#note a')].some(a => /E01/.test(a.textContent))"))
+        self.b.js("[...document.querySelectorAll('#note a')].find(a => /E01/.test(a.textContent)).click()")
+        self.assertTrue(self.b.wait("/E01/.test(document.querySelector('#note h1') && document.querySelector('#note h1').textContent)"))
+        self.b.js("history.back()")
+        self.assertTrue(self.b.wait("/D00/.test(document.querySelector('#note h1') && document.querySelector('#note h1').textContent)"),
+                        "Back from E01 did not show D00 again")
+        self.b.js("history.back()")
+        self.assertTrue(self.b.wait("document.getElementById('drawer').hidden"), "the second Back did not close the note")
+
+
+if __name__ == "__main__":
+    unittest.main()

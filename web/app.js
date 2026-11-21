@@ -304,6 +304,7 @@
     const fold = nodeIn.append('g').attr('class', 'fold')
       .on('click', (ev, n) => { ev.stopPropagation(); toggle(n.data.id) })
       .on('dblclick', ev => ev.stopPropagation())
+    fold.append('circle').attr('class', 'hit').attr('r', 12)
     fold.append('circle').attr('r', 5.5)
     fold.append('text')
 
@@ -326,7 +327,7 @@
       .attr('display', n => (n.data.children.length ? null : 'none'))
       .attr('transform', n => foldOffset(n.data.id))
     all.select('g.fold text').text(n => (collapsed.has(n.data.id) ? `+${countBelow(n.data.id)}` : '−'))
-    all.select('g.fold circle').attr('r', n => (collapsed.has(n.data.id) ? 8 : 5.5))
+    all.select('g.fold circle:not(.hit)').attr('r', n => (collapsed.has(n.data.id) ? 8 : 5.5))
     all.transition().duration(dur).attr('transform', n => `translate(${pos.get(n.data.id).p})`)
     // a link fades with the note it leads to
     gLinks.selectAll('path.link').attr('class', l => `link ${toneOf(l.target.data)}${matchSet.has(l.target.data.id) ? '' : ' dim'}`)
@@ -375,14 +376,24 @@
     return n ? n.children.reduce((s, c) => s + 1 + countBelow(c), 0) : 0
   }
 
-  function foldOffset(id) {
+  function foldAt(id) {
     const r = sideOf(id)
-    if (layoutKind === 'td') return `translate(${r + 8},${-r - 4})`
-    if (layoutKind === 'lr') return `translate(${-r - 2},${-r - 8})`
+    if (layoutKind === 'td') return [r + 8, -r - 4]
+    if (layoutKind === 'lr') return [-r - 2, -r - 8]
     const p = positions.get(id)
-    if (!p || !p.radius) return `translate(${r + 8},${-r - 4})`
+    if (!p || !p.radius) return [r + 8, -r - 4]
     const len = Math.hypot(p.p[0], p.p[1]) || 1
-    return `translate(${(-p.p[1] / len) * (r + 9)},${(p.p[0] / len) * (r + 9)})`
+    return [(-p.p[1] / len) * (r + 9), (p.p[0] / len) * (r + 9)]
+  }
+  const foldOffset = id => `translate(${foldAt(id)})`
+  // a touch screen (app.css's phone and touch rules): a fold handle keeps its size on screen, as the
+  // labels do, with a target 24 px across (its .hit circle) whose edge stays clear of the note's shape
+  const touchScreen = matchMedia('(max-width: 700px), (pointer: coarse)')
+  function touchFold(id, grow) {
+    const [x, y] = foldAt(id)
+    const len = Math.hypot(x, y) || 1
+    const reach = (sideOf(id) * grow * k + 16) / k
+    return `translate(${(x / len) * reach},${(y / len) * reach}) scale(${1 / k})`
   }
 
   // labels keep a constant size on screen and show as much of the title as the room at this
@@ -431,6 +442,7 @@
       // nodes stay visible when far: a circle at least 3.5 px across on screen, the rest in proportion
       const grow = Math.max(1, 3.5 / (k * R))
       d3.select(this).select('g.mark').attr('transform', grow > 1 ? `scale(${grow})` : null)
+      if (touchScreen.matches && d.children.length) d3.select(this).select('g.fold').attr('transform', touchFold(d.id, grow))
       const side = sideOf(d.id) * grow
       if (layoutKind === 'td') {
         text.attr('x', 0).attr('y', side + 4 + size).attr('text-anchor', 'middle').attr('transform', null)
@@ -512,6 +524,7 @@
     if (n.parent) lastChild.set(n.parent, id)
     const drawer = document.getElementById('drawer')
     drawer.hidden = false
+    document.dispatchEvent(new CustomEvent('rft:note', { detail: id })) // web/phone.js: Back comes back to it
     renderConceptPath(document.getElementById('drawer-concept'), n.concept, "Open this concept's artifact", openArtifact)
     renderOrigin(n)
     renderRefs(n)
@@ -562,6 +575,9 @@
     showEditButton()
     showNote()
   }
+
+  // a note web/phone.js goes back to (Back, from a note reached by a link)
+  document.addEventListener('rft:go', ev => { if (tree && byId.has(ev.detail)) go(ev.detail) })
 
   function go(id) {
     if (editing && editing.id !== id && !leaveEditor()) return
@@ -1749,9 +1765,11 @@
       }
       g.append('rect').attr('width', BAR).attr('height', 9).attr('rx', 2).attr('class', 'cbar-frame')
     })
-    const focusBtn = node.filter(n => n.data.id !== C.ROOT).append('text').attr('class', 'cfocus')
-      .attr('y', n => radius(n.data) + 76).attr('text-anchor', 'middle').text('focus ⤢')
+    const focusBtn = node.filter(n => n.data.id !== C.ROOT).append('g').attr('class', 'cfocus')
       .on('click', (ev, n) => { ev.stopPropagation(); setFocus(n.data.id) })
+    // on a touch screen, a target wider and taller than the word (app.css)
+    focusBtn.append('rect').attr('class', 'hit').attr('x', -60).attr('y', n => radius(n.data) + 50).attr('width', 120).attr('height', 40)
+    focusBtn.append('text').attr('y', n => radius(n.data) + 76).attr('text-anchor', 'middle').text('focus ⤢')
     focusBtn.append('title').text('Show only this concept in the reasoning tree')
     requestAnimationFrame(() => {
       const box = cviewport.node().getBBox()
@@ -1971,6 +1989,7 @@
     markCards()
     artifactShown = cid
     drawer.hidden = false
+    document.dispatchEvent(new CustomEvent('rft:note', { detail: null })) // web/phone.js: a concept's artifact, no note
     drawer.classList.add('artifact-mode')
     mainEl.classList.add('artifact-open')
     artView.hidden = false
@@ -2502,6 +2521,8 @@
   const CAL_MODES = ['timeline', 'month']
   const CAL_ZOOM = [10, 16, 24, 34, 48] // a day's width on the timeline, in px at A 100 %
   const TL_LABEL = 230 // the timeline's column of titles, in px at A 100 %
+  // that column's width: at most 38 % of a narrow screen (a phone), so the days keep the rest
+  const tlLabelW = () => Math.round(Math.min(TL_LABEL, Math.max(120, window.innerWidth * 0.38)) * font)
   const calSection = document.getElementById('calendar')
   const calBody = document.getElementById('cal-body')
   const calDeadlines = document.getElementById('cal-deadlines')
@@ -2993,7 +3014,7 @@
 
   function drawTimeline(d) {
     const dayW = Math.round(CAL_ZOOM[calZoom] * font)
-    const labelW = Math.round(TL_LABEL * font)
+    const labelW = tlLabelW()
     const winOf = new Map(d.wins.map(w => [w.id, w]))
     const shown = n => boardSet.has(n.id)
     const rows = tree.nodes.filter(n => shown(n) && n.type === 'experiment' && !n.supersededBy &&
@@ -3176,7 +3197,7 @@
   function scrollToDay(scroll, day) {
     const from = scroll.dataset.from
     const dayW = Math.round(CAL_ZOOM[calZoom] * font)
-    const labelW = Math.round(TL_LABEL * font)
+    const labelW = tlLabelW()
     scroll.scrollLeft = Math.max(0, S.between(from, day) * dayW - (scroll.clientWidth - labelW) / 4)
   }
 
@@ -3410,6 +3431,18 @@
     document.getElementById('cal-range').textContent = monthName(calMonth)
   }
 
+  /** A month's chip: its time (a phone leaves it out, for the name; app.css), then its name. */
+  function timedChip(el, time, name) {
+    el.textContent = ''
+    if (time) {
+      const t = document.createElement('span')
+      t.className = 'mo-t'
+      t.textContent = `${time} `
+      el.append(t)
+    }
+    el.append(name)
+  }
+
   /** A deadline on its day in the month: at risk in red, Claude's suggestion dashed, a done one faded; a meeting, moved ones in italics, skipped ones struck through. */
   function monthChip(it) {
     const el = document.createElement('button')
@@ -3417,7 +3450,7 @@
     if (it.occ) {
       const { meeting: m, occ: o } = it
       el.className = `mo-dl mo-mt${o.moved ? ' moved' : ''}${o.skipped ? ' skipped' : ''}${o.plan && o.plan.atRisk ? ' risk' : ''}${calOpen === m.id && calOcc === o.orig ? ' open' : ''}`
-      el.textContent = `${o.at.time ? `${o.at.time}${o.at.zone ? ` ${o.at.zone}` : ''} ` : ''}${m.title || m.name}`
+      timedChip(el, o.at.time ? `${o.at.time}${o.at.zone ? ` ${o.at.zone}` : ''}` : '', m.title || m.name)
       el.title = occTitle(m, o)
       const decks = slidesView && !o.skipped ? slidesView.decksFor(m.id, m.every ? o.orig : '') : []
       if (decks.length) {
@@ -3430,13 +3463,13 @@
     if (it.plan) {
       const p = it.plan
       el.className = `mo-dl${p.atRisk ? ' risk' : ''}`
-      el.textContent = `${p.at.time ? `${p.at.time}${p.at.zone ? ` ${p.at.zone}` : ''} ` : ''}${p.name}`
+      timedChip(el, p.at.time ? `${p.at.time}${p.at.zone ? ` ${p.at.zone}` : ''}` : '', p.name)
       el.title = `${S.deadlineLine(p)}${localOf(p.at) ? ` (${localOf(p.at)})` : ''}`
       el.addEventListener('click', ev => { ev.stopPropagation(); if (p.kind === 'note') go(p.id); else { calOpen = p.id; drawCalendar(); calDeadlines.querySelector(`[data-id="${p.id}"]`)?.scrollIntoView({ block: 'nearest' }) } })
     } else {
       const ms = it.milestone
       el.className = `mo-dl ${ms.status}`
-      el.textContent = `${it.due.time ? `${it.due.time} ` : ''}${ms.name}`
+      timedChip(el, it.due.time || '', ms.name)
       el.title = ms.status === 'suggested' ? `Claude suggests ${ms.name}${ms.why ? `: ${ms.why}` : ''} (accept or dismiss it above)` : `${ms.name}: done`
       el.addEventListener('click', ev => ev.stopPropagation())
     }
@@ -3489,7 +3522,7 @@
   }
   const zoomBy = step => {
     const scroll = calBody.querySelector('.tl-scroll')
-    const labelW = Math.round(TL_LABEL * font)
+    const labelW = tlLabelW()
     // the day in the middle stays in the middle
     const before = Math.round(CAL_ZOOM[calZoom] * font)
     const mid = scroll ? (scroll.scrollLeft + (scroll.clientWidth - labelW) / 2) / before : 0
@@ -4139,12 +4172,20 @@
   article.addEventListener('mouseup', () => setTimeout(onSelectionEnd, 0))
   // a selection made with the keyboard: in the highlighter, once Shift is let go
   article.addEventListener('keyup', ev => { if (highlighting ? ev.key === 'Shift' : ev.shiftKey) onSelectionEnd() })
+  let pressingBar = false
+  let selTimer = 0
   document.addEventListener('selectionchange', () => {
     const s = window.getSelection()
-    if (!s || s.isCollapsed) hideSelBar()
+    if (!s || s.isCollapsed) { if (!pressingBar) hideSelBar(); return }
+    // a touch screen: a long press selects, its handles adjust it, and no mouseup ends it
+    if (touchScreen.matches && article.contains(s.anchorNode)) {
+      clearTimeout(selTimer)
+      selTimer = setTimeout(onSelectionEnd, 450)
+    }
   })
-  // a press on the bar keeps the selection
+  // a press on the bar keeps the selection (a mouse), or the bar (a finger, whose tap clears the selection first)
   selBar.addEventListener('mousedown', ev => ev.preventDefault())
+  selBar.addEventListener('pointerdown', () => { pressingBar = true; setTimeout(() => { pressingBar = false }, 800) }, true)
   selBar.addEventListener('click', ev => {
     const b = ev.target.closest('button[data-compose]')
     if (b) openComposer(b.dataset.compose)

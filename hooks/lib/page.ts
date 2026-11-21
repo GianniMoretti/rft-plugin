@@ -8,7 +8,7 @@ import type { Meeting, Milestone } from './dates'
 import type { Tree } from './vault'
 import { bodyOf, conceptOrder, tagCounts } from './vault'
 
-export type PageAssets = { html: string; css: string; js: string; d3: string; katex: string; katexCss: string; filters: string; kanban: string; layout: string; concepts: string; markdown: string; theme: string; schedule: string; scratchpad: string; artifacts: string; latex: string; frame: string; frameCss: string }
+export type PageAssets = { html: string; css: string; js: string; d3: string; katex: string; katexCss: string; filters: string; kanban: string; layout: string; concepts: string; markdown: string; theme: string; schedule: string; scratchpad: string; artifacts: string; phone: string; latex: string; frame: string; frameCss: string }
 
 export const ASSET_PATHS = {
   html: 'web/index.html',
@@ -22,6 +22,7 @@ export const ASSET_PATHS = {
   markdown: 'web/markdown.js',
   scratchpad: 'web/scratchpad.js',
   artifacts: 'web/artifacts.js',
+  phone: 'web/phone.js',
   latex: 'web/latex.js',
   frame: 'web/frame.js',
   frameCss: 'web/frame.css',
@@ -72,4 +73,5 @@ export function staticPage(a: PageAssets, tree: Tree, texts: Record<string, stri
     .replace(/<script src="manuscript\.js"><\/script>\n?/, '')
     .replace(/<script src="artifacts\.js" data-rft-inline><\/script>/, () => script(a.artifacts))
     .replace(/<script src="app\.js" data-rft-inline><\/script>/, () => script(`window.RFT_DATA = ${data};`) + script(a.js))
+    .replace(/<script src="phone\.js" data-rft-inline><\/script>/, () => script(a.phone))
 }
