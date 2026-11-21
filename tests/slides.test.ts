@@ -6,10 +6,15 @@
 // (b) a paper presented to the lab: a deck for a once-only meeting, named by its id alone;
 // (c) a practice talk and the real one: one deck for a meeting's occurrence and a deadline.
 
-import { describe, expect, test } from 'claude-code/testing'
+import type { On } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
+import { describe, expect, mock, test } from 'claude-code/testing'
 
 import '../web/schedule.js'
 import '../web/slides.js'
+import { deckWarnings, readDecks } from '../hooks/lib/decks'
+import { load, readConfig } from '../hooks/lib/vault'
+import { CWD, MemoryFs, demoFiles, world } from './fixture'
 
 type Slide = { n: number; from: number; to: number; layout: string; cls: string; badLayout: string; body: string; bodyLine: number; notes: string }
 type Attachment = { raw: string; kind: string; id: string; name: string; day: string; orig: string; at: { day: string; time?: string } | null; moved: boolean; skipped: boolean; problem: string }
@@ -174,5 +179,57 @@ describe('a slide drawn in its layout', () => {
 
   test('a class that is no class name is left out', () => {
     expect(slide('<!-- slide class="ok x\\" onload=y" -->\nz').cls).toBe('ok')
+  })
+})
+
+describe('in the vault and in a session', () => {
+  const G01_FILE = 'vault/meetings/G01 Supervisor meeting.md'
+  const P01 = 'vault/decks/P01 Weekly wrap-up.md'
+  const P02 = 'vault/decks/P02 Practice talk.md'
+  const files = () => ({
+    ...demoFiles(),
+    [G01_FILE]: '---\nid: G01\ntype: meeting\nwhen: 2026-11-10 14:00\nevery: week\nskip: [2026-12-22]\n---\n\n# G01 · Supervisor meeting\n',
+    [P01]: '---\nid: P01\ntype: deck\nfor: [G01 2026-11-24]\nlocked: true\n---\n\n# Weekly wrap-up\n',
+    [P02]: '---\nid: P02\ntype: deck\nfor: [G01 2026-12-22, M09]\nlocked: false\n---\n\n# Practice talk\n',
+    'vault/decks/notes on decks.md': 'not a deck',
+  })
+
+  test('the decks read from disk, and rft_validate\'s warnings: a skipped occurrence, a deadline that is none', async () => {
+    const fs = new MemoryFs(files())
+    const io = fs.io()
+    const l = await load(io, (await readConfig(io))!)
+    expect((await readDecks(io, 'vault')).map(d => [d.id, d.locked])).toEqual([['P01', true], ['P02', false]])
+    expect(await deckWarnings(io, l)).toEqual([
+      'vault/decks/P02 Practice talk.md: G01 2026-12-22: that occurrence of G01 Supervisor meeting is skipped, so the deck is presented nowhere',
+      'vault/decks/P02 Practice talk.md: M09: there is no deadline M09',
+    ])
+  })
+
+  test('Claude\'s own writes of a locked deck, or of a new deck, are refused; of an unlocked one, they go on', async ($: Engine, on: On) => {
+    mock.clock(on)
+    const w = world(on, files())
+    const ran: string[] = []
+    on('tool.call', (_$, e) => { ran.push(String(e.tool)); return { result: 'ok', text: 'ok' } as never })
+    on('prompt.compose', () => ({ sections: [] }))
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    for (const [call, why] of [
+      [{ tool: 'Edit', file_path: `${CWD}/${P01}`, old_string: '# Weekly wrap-up', new_string: '# Mine' }, 'P01 is locked: the deck is the user\'s to write'],
+      [{ tool: 'Write', file_path: `${CWD}/${P01}`, content: 'x' }, 'P01 is locked'],
+      [{ tool: 'Write', file_path: `${CWD}/vault/decks/P03 New talk.md`, content: '# x' }, 'A new deck is made in the tree view\'s Slides tab'],
+      [{ tool: 'Bash', command: `sed -i 's/locked: true/locked: false/' '${P01}'` }, 'P01 is locked'],
+      [{ tool: 'Bash', command: `python3 -c "open('vault/decks/P01 Weekly wrap-up.md','w').write('x')"` }, 'P01 is locked'],
+    ] as const) {
+      const res = await $.tool.call(call as never)
+      expect({ call, deny: (res as { deny?: string }).deny }).toEqual({ call, deny: expect.stringContaining(why) })
+    }
+    expect(ran).toEqual([])
+    for (const call of [
+      { tool: 'Edit', file_path: `${CWD}/${P02}`, old_string: '# Practice talk', new_string: '# Practice talk\nSub' },
+      { tool: 'Write', file_path: `${CWD}/vault/decks/assets/plot.svg`, content: '<svg/>' },
+      { tool: 'Read', file_path: `${CWD}/${P01}` },
+    ]) expect(((await $.tool.call(call as never)) as { deny?: string }).deny).toBeUndefined()
+    const check = await $.tool.call({ tool: 'mcp__rft__rft_validate' } as never)
+    expect(check.text).toContain('vault/decks/P02 Practice talk.md: M09: there is no deadline M09')
+    expect(w.fs.read(P01)).toContain('# Weekly wrap-up')
   })
 })

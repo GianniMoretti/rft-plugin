@@ -1,7 +1,7 @@
 # Design note: slide decks for meetings and talks
 
-Status: designed 2026-11-21; phase 1 (below) is what gets built first. The user-facing description
-will be the README's "Slides" and Claude's the manual's "Slides".
+Status: designed 2026-11-21; phase 1 built the same day. The user-facing description is the README's
+"Slides", Claude's the manual's "Slides".
 
 ## The problem
 
@@ -31,7 +31,6 @@ nothing ties the deck to the meeting it was made for.
 ---
 id: P03
 type: deck
-title: Weekly wrap-up
 for: [G01 2026-11-24]
 locked: true
 ---
@@ -54,8 +53,8 @@ Since 17 Nov: [[E05]] verified, [[E08]] running
 note: say why 1k and not 10k
 ```
 
-- **Frontmatter**: `id`, `type: deck`, `title`, `for:` (what it is presented at, below),
-  `locked:` (below), and later `theme:`.
+- **Frontmatter**: `id`, `type: deck`, `for:` (what it is presented at, below), `locked:`
+  (below), and later `theme:`. The title is the file's name after the id, as a meeting's is.
 - **Slides**: split at a line that is exactly `---` (outside a code block). A slide may open with
   `<!-- slide layout="…" -->`, an HTML comment so Obsidian's reading view hides it.
 - **Layouts** (phase 1): `default` (a heading, then the content), `title` (centred title and
@@ -114,7 +113,9 @@ A tab after Manuscript, its page icon a slide on an easel.
 - **Present**: full screen from the slide in view (or the first), → ↓ space PageDown next, ← ↑
   PageUp back, Home and End, Esc out; the slide number in a corner.
 - **PDF**: the browser's print of the deck alone, one slide per 16:9 page, speaker notes left out:
-  Save as PDF in the print dialog. No .pptx export.
+  Save as PDF in the print dialog. Each page is the slide's own 1920 × 1080 (20 × 11.25 in): a
+  slide scaled down to a smaller page prints its background and images only in part, in
+  Chromium. No .pptx export.
 
 ## Phases
 

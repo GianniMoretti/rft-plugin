@@ -891,6 +891,61 @@ vault/documents/
     `latexmk` on `PATH` (TeX Live), shell escape off, and the page's key; the PDF goes only to the
     page carrying it. `/rft-view` leaves the tab out.
 
+### Slides
+
+**Slides** (after Manuscript) holds slide decks for meetings and talks: this week's wrap-up with
+your supervisors, a paper presented to the lab, a workshop talk. A deck is one Markdown file in
+`vault/decks/`, e.g. `P01 Weekly wrap-up.md`, its slides separated by a line `---` as Obsidian's
+Slides plugin reads them (the design: `docs/design/presentations.md`).
+
+```markdown
+---
+id: P01
+type: deck
+for: [G01 2026-11-24]      # a meeting's occurrence (G04 alone for a once-only one), or a deadline (M04)
+locked: true
+---
+
+# Weekly wrap-up
+Supervisor meeting · 24 Nov
+
+---
+<!-- slide layout="two-cols" -->
+
+## Accuracy at 1k images
+- [[E05 Mixup and CutMix at 1k images]] done
+::right::
+![[E08_loss.svg]]
+
+note: start with E05
+```
+
+- **Slides**: a slide may open with `<!-- slide layout="…" -->`: `title` (the first slide's
+  default), `default`, `section`, `two-cols` (split at a line `::right::`), `figure` (one image
+  filling the slide). Everything after a line `note:` is the speaker's, never on the slide or in
+  the PDF. The rest is the notes' Markdown: links to notes, KaTeX math, tables, code, `###`
+  headings and numbered lists, and images found as Obsidian finds them, so `![[E08_loss.svg]]` is
+  the figure a notebook saved in `vault/figures/`.
+- **For**: `for:` lists where the deck is presented, one or more: a meeting's occurrence by the
+  day its rule gives it (`G01 2026-11-24`; moved to the 25th, the deck goes with it), a once-only
+  meeting by its id, a deadline by its id. A practice talk and the real one are one deck for both.
+  The Calendar marks those occurrences, and a meeting's occurrence or a deadline opened there lists
+  its decks (**Open**) and offers **+ Slides**, a deck for it. `rft_validate` names a `for:` that
+  is no meeting or deadline, a day the meeting does not fall on, a skipped occurrence (the deck is
+  presented nowhere) and a recurring meeting named with no day.
+- **The tab**: the decks by what they are for, what comes next first, then those for nothing, then
+  the past ones; **+ Deck** (a title, and one of the next occurrences, a deadline, or nothing); the
+  deck's text in an editor, saved as you type (a deck changed on disk meanwhile asks first: take
+  it or keep yours); beside it the slide the cursor is in, drawn as it is presented, its speaker
+  notes, and every slide as a thumbnail (a click goes to its text). **Present** shows it full
+  screen from the slide in view: → space PageDown or a click go on, ← PageUp or a right click go
+  back, Home and End, Esc out. **PDF** prints the deck alone, one 16:9 page a slide, without the
+  notes: choose Save as PDF in the print dialog. A slide keeps its own light colours whatever the
+  page's theme.
+- **Locked**: decks are yours to write. A deck is locked unless it says `locked: false`; the
+  padlock in the tab changes it. Claude's own writes of a locked deck, or of a new deck by hand,
+  are refused: it proposes an outline in the chat instead. `/rft-view` leaves the tab out.
+
 ### Commands
 
 | command | does |
@@ -994,6 +1049,8 @@ session with the plugin loaded from this folder.
 - `hooks/lib/snippets.ts` and `hooks/lib/manuscript.ts`: snippets and documents: their files,
   registries and copies, what a snippet rests on and its state, a copy's state, `rft_manuscript`,
   `rft_set_snippet`, `rft_set_document`.
+- `hooks/lib/decks.ts`: slide decks as the session sees them: their files, their lock, and
+  `rft_validate`'s warnings.
 - `hooks/lib/tools.ts`: which tools sit in the prompt from the start; `hooks/lib/shell.ts` the
   files a shell command writes (the guards' input); `hooks/lib/answers.ts` the subagents that
   answer threads; `hooks/lib/update.ts` `/rft-update` and the vault's format.
@@ -1004,13 +1061,15 @@ session with the plugin loaded from this folder.
   renderer, footnotes and the map from the page back to the note's text; `scratchpad.js` the
   scratchpad's to-dos and lists, and its panel; `queue.js` the experiment queue's monitor;
   `theme.js` the light and
-  dark themes; `manuscript.js` the Manuscript tab; vendored d3 and CodeMirror), one codebase for the live view and `/rft-view`, which shows the
+  dark themes; `manuscript.js` the Manuscript tab; `slides.js` a deck's slides, layouts and what it
+  is for, `decks.js` the Slides tab; vendored d3 and CodeMirror), one codebase for the live view and `/rft-view`, which shows the
   threads read-only.
 - `server/rft_server.py`: the local server (Python standard library); `server/rft_notebook.py` an
   experiment's notebook: the vault's link followed, the run in its repo's uv environment (its
   `RESULTS`, `FIGURES` and `TABLES`), the marimo editors the tree view frames;
   `server/rft_latex.py` the generated LaTeX and the compile of a document or a snippet;
-  `server/rft_manuscript.py` snippets and documents as the page reads them;
+  `server/rft_manuscript.py` snippets and documents as the page reads them; `server/rft_decks.py`
+  the slide decks as the page reads and writes them;
   `server/rft_results.py` what a run leaves in the vault (the Result's table, the check, the saved
   numbers, figures and tables, the artifacts' tables, the stamp); `server/rft_queue.py` the
   experiment queue: its runner, the run records, the notebook run after an experiment's jobs, its

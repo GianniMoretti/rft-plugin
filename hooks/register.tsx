@@ -32,6 +32,7 @@ import { changesPriority, priorityText, suggestPriority } from './lib/priority'
 import { changesVerified, dismissVerified, keepVerified, toReview, verifiedText, verifyNote } from './lib/verify'
 import { markReviewed, manuscriptReport, manuscriptWarnings, migrateManuscript, newDocument, readManuscript, reviewCopy, setDocument, setSnippet } from './lib/manuscript'
 import { BLOCKS_FILE, DOCUMENTS_DIR, GENERATED, KINDS, SNIPPETS_DIR, isDocumentLocked, isSnippetLocked, readDocsRegistry, readRegistry } from './lib/snippets'
+import { DECKS_DIR, NEW_DECK_TEXT, P as Slides, deckLockedText, deckWarnings } from './lib/decks'
 import { MEETING_FIELDS, addDeadline, addMeeting, changesDates, checkDeadline, checkMeeting, datesText, deadlineQuestion, deadlinesLine, meetingQuestion, suggestDates, suggestDeadline } from './lib/schedule'
 import { RECALL_HINT, searchesVault } from './lib/recall'
 import { FEATURE_TOOLS, eagerTools, featuresInUse } from './lib/tools'
@@ -1077,7 +1078,7 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       return treeReport(loaded, { root: str(i.root), depth: typeof i.depth === 'number' ? i.depth : undefined, vault: shownVault(h, loaded.config) })
     case 'rft_validate': {
       const v = await validate(io, loaded, { root: h.root, home: await homeOf($) })
-      v.warnings.push(...(await mapWarnings(io, loaded)), ...(await artifactWarnings(io, loaded)), ...(await manuscriptWarnings(io, loaded)))
+      v.warnings.push(...(await mapWarnings(io, loaded)), ...(await artifactWarnings(io, loaded)), ...(await manuscriptWarnings(io, loaded)), ...(await deckWarnings(io, loaded)))
       const lines = [v.errors.length
         ? `FAILED: ${v.errors.length} error(s), ${v.warnings.length} warning(s).`
         : `OK: no errors, ${v.warnings.length} warning(s).`]
@@ -1863,6 +1864,51 @@ async function manuscriptEdit($: EngineInterface, e: Record<string, unknown>): P
   return null
 }
 
+/**
+ * Why Claude may not make this tool call, or null: it would write a slide deck by hand where it is
+ * not Claude's to (an Edit or Write in vault/decks/, a shell command that writes there): a new deck
+ * (the Slides tab numbers and locks it) or a locked deck. Other files there (images) are not refused.
+ */
+async function deckEdit($: EngineInterface, e: Record<string, unknown>): Promise<string | null> {
+  const tool = String(e.tool)
+  if (!EDIT_TOOLS.has(tool) && tool !== 'Bash') return null
+  const s = await read($, snapshot)
+  if (!s?.isActive || !s.vault) return null
+  const vault = resolvePath(s.vault, '.')
+  const dir = `${vault}/${DECKS_DIR}/`
+  let files: string[] = []
+  let anyLocked = false
+  if (tool === 'Bash') {
+    const cmd = String(e.command ?? '')
+    const w = shellWrites(cmd, resolvePath(await $.session.cwd(), '.'))
+    files = w.files.filter(f => f.startsWith(dir))
+    // a script that names the folder but whose files cannot be told: refused while a deck there is locked
+    if (!files.length && w.script && (cmd.includes(dir) || cmd.includes(`${vault.split('/').pop()}/${DECKS_DIR}/`))) anyLocked = true
+  } else {
+    const raw = e.file_path ?? e.notebook_path
+    if (typeof raw !== 'string') return null
+    const abs = resolvePath(resolvePath(await $.session.cwd(), '.'), raw)
+    if (abs.startsWith(dir)) files = [abs]
+  }
+  if (!files.length && !anyLocked) return null
+  const locked = (text: string) => Slides.isLocked(Slides.frontOf(text.replace(/\r\n/g, '\n')).fields)
+  if (anyLocked) {
+    for (const f of await $.fs.list(dir).catch(() => [])) {
+      if (f.kind === 'file' && f.name.endsWith('.md') && locked(await $.fs.read(`${dir}${f.name}`).catch(() => ''))) return deckLockedText(f.name.split(' ')[0]!)
+    }
+    return null
+  }
+  for (const f of files) {
+    const rel = f.slice(dir.length)
+    if (rel.includes('/') || !rel.endsWith('.md')) continue
+    let text: string | null = null
+    try { text = await $.fs.read(f) } catch { text = null }
+    if (text == null) return NEW_DECK_TEXT
+    if (locked(text)) return deckLockedText(rel.split(' ')[0]!)
+  }
+  return null
+}
+
 /** A `status: verified` or `verified:` line. */
 const VERIFIED_LINE = /(^|[^\w])(status\s*:\s*["']?verified|verified\s*:)/m
 
@@ -2332,7 +2378,7 @@ export const register: Register = (on, options) => {
     }
     if (rules) {
       const call = e as unknown as Record<string, unknown>
-      const why = (await artifactEdit($, call)) ?? (await lockedEdit($, call)) ?? (await priorityEdit($, call)) ?? (await datesEdit($, call)) ?? (await reproducedEdit($, call)) ?? (await verifiedEdit($, call)) ?? (await manuscriptEdit($, call))
+      const why = (await artifactEdit($, call)) ?? (await lockedEdit($, call)) ?? (await priorityEdit($, call)) ?? (await datesEdit($, call)) ?? (await reproducedEdit($, call)) ?? (await verifiedEdit($, call)) ?? (await manuscriptEdit($, call)) ?? (await deckEdit($, call))
       if (why) return { deny: why }
     }
     const ran = await next(e)
