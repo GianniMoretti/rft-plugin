@@ -270,18 +270,27 @@ describe('the run stamp', () => {
   })
 })
 
-describe('every experiment of a concept with code gets a notebook', () => {
-  test('rft_validate names those without one, and rft_next those in work', async () => {
+describe('a notebook is the user\'s choice, per experiment', () => {
+  test('nothing asks for one: rft_validate and rft_next say nothing of experiments without one', async () => {
     const files = project()
     files[PATH.E02] = files[PATH.E02]!.replace('status: done', 'status: running')
     const { io, loaded } = await open(files)
-    const v = await validate(io, loaded, { root: ROOT })
-    expect(v.warnings.find(w => w.startsWith('Experiments in a concept with code and no notebook'))).toContain('(1): E02')
-    expect(await nextReport(io, loaded, '2026-11-16')).toContain('No notebook yet (rft_set_notebook): E02 (running)')
-    // with its notebook, or outside a concept with code, nothing is said
-    const linked = await open(project({ e02: 'notebook: "notebooks/E02.py"' }))
-    expect((await validate(linked.io, linked.loaded, { root: ROOT })).warnings.join('\n')).not.toContain('no notebook')
-    expect(v.warnings.find(w => w.startsWith('Experiments in a concept with code and no notebook'))).not.toContain('E01') // its concept links no code
+    expect((await validate(io, loaded, { root: ROOT })).warnings.join('\n')).not.toContain('notebook')
+    expect(await nextReport(io, loaded, '2026-11-16')).not.toContain('notebook')
+  })
+
+  test('the rules: ask only for results meant to last, in a vault whose concepts link code; `notebook: no` is remembered', async () => {
+    const { loaded } = await open(project())
+    const rules = rulesText(loaded.tree, loaded.config)
+    expect(rules).toContain('Notebooks are the user\'s choice, per experiment')
+    expect(rules).toContain('An exploratory run (does it work, a quick check, development) gets none, and you do not ask.')
+    expect(rules).not.toContain('write it when you plan the experiment')
+    const plain = await open(demoAt(ROOT))
+    expect(rulesText(plain.loaded.tree, plain.loaded.config)).not.toContain('Notebooks are the user')
+    const declined = await open(project({ e02: 'notebook: no' }))
+    const e02 = declined.loaded.tree.nodes.E02!
+    expect(e02.notebook).toBeUndefined()
+    expect(e02.noNotebook).toBe(true)
   })
 
   test("rft_artifact gives a Result's table of RESULTS in one line", () => {
@@ -404,12 +413,12 @@ describe('the notebook tools in a session', () => {
     expect(ran).toEqual(['Edit'])
   })
 
-  test("rft_add_node asks for an experiment's notebook when its concept links code", async ($, on) => {
+  test("rft_add_node does not ask for a notebook, even when its concept links code", async ($, on) => {
     mock.clock(on)
     world(on, project(), { cwd: ROOT })
     await $.session.start({ cwd: ROOT, source: 'startup' } as never)
     const r = await $.tool.call({ tool: 'mcp__rft__rft_add_node', type: 'experiment', title: 'Seed sweep', parent: 'D01', status: 'planned', what: 'Three seeds.', summary: 'Seeds' } as never)
-    expect(String(r.text)).toContain('write its notebook now (rft_set_notebook E03)')
+    expect(String(r.text)).not.toContain('notebook')
     const d = await $.tool.call({ tool: 'mcp__rft__rft_add_node', type: 'direction', title: 'Another idea', parent: 'D01', status: 'idea', idea: 'x', summary: 'x' } as never)
     expect(String(d.text)).not.toContain('notebook')
   })
@@ -443,17 +452,29 @@ describe('the notebook tools in a session', () => {
     expect(spec.cmd).toMatch(/^python3 '.*server\/rft_notebook\.py' backfill --vault '\/work\/demo\/vault'$/)
     expect(text).toContain('Notebooks: 1 experiment notebook, 0 concept notebooks; 1 not run since a run saves its figures, tables and numbers for the artifacts (E02).')
     expect(text).toContain('Queued q31: all 1 run again, one after another')
-    expect(text).toContain('- Variants (D01): 1 experiment with a result and no notebook (E03); no concept notebook to compare its 2 results; its artifact draws 1 chart and types 1 table by hand.')
+    expect(text).toContain('- Variants (D01): 1 experiment with a result and no notebook (E03); no concept notebook to compare its 2 results; its artifact draws 1 chart by hand.')
+    expect(text).toContain('A notebook is written only for the experiments you choose')
     await clock.advance(5000)
     expect(prompts).toHaveLength(0) // no model turn
-    // --write: the same report, and Claude asked to write it
-    expect(String((await run('notebooks --write Variants')).text)).toContain('Claude will start in a moment, concept by concept')
+    // --write alone writes nothing: a notebook is written only for what the user names
+    expect(String((await run('notebooks --write')).text)).toContain('A notebook is written only for what you choose')
+    await clock.advance(5000)
+    expect(prompts).toHaveLength(0)
+    // --write <concept>: the report, and Claude asked for that concept
+    expect(String((await run('notebooks --write Variants')).text)).toContain('Claude will start in a moment on "Variants"')
     expect(calls.filter(c => c[2] === 'add')).toHaveLength(1) // nothing queued
     await clock.advance(5000)
     expect(prompts).toHaveLength(1)
-    expect(prompts[0]).toContain('concept by concept: "Variants"')
+    expect(prompts[0]).toContain('the concept "Variants"')
+    expect(prompts[0]).toContain('never one with notebook: no')
     expect(prompts[0]).toContain('never record over the note\'s numbers')
-    expect(String((await run('notebooks --write Nope')).text)).toContain('is not a concept')
+    // --write <ids>: those experiments only; one that has a notebook is said so
+    expect(String((await run('notebooks --write E03 E02')).text)).toContain('Claude will write the notebook of E03 in a moment')
+    await clock.advance(5000)
+    expect(prompts).toHaveLength(2)
+    expect(prompts[1]).toContain('The user asked for notebooks for E03 ')
+    expect(String((await run('notebooks --write E02')).text)).toContain('E02 already has a notebook')
+    expect(String((await run('notebooks --write Nope')).text)).toContain('is neither a concept nor an experiment id')
   })
 
   test('/rft-update notebooks with no machine paired with the queue queues nothing and says how to run them', async ($, on) => {

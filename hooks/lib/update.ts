@@ -130,6 +130,8 @@ export type NotebookGaps = {
   /** Notebooks whose last run predates what a run saves now (no saved numbers, figures and tables). */
   stale: string[]
   byConcept: ConceptGaps[]
+  /** Whether any concept in scope links code (where a notebook can run). */
+  coded: boolean
 }
 
 const inlineCharts = (html: string) => (html.match(/<svg\b/gi) ?? []).length
@@ -162,12 +164,12 @@ export async function notebookGaps(io: Io, loaded: Loaded, scope?: Concept): Pro
     const own = ownNotes(tree, c.id).filter(n => n.type === 'experiment' && n.hasResult && !n.supersededBy)
     const html = artifacts[c.id]?.html ?? ''
     const g: ConceptGaps = {
-      concept: c, bare: own.filter(n => !n.notebook).map(n => n.id), results: own.length,
+      concept: c, bare: own.filter(n => !n.notebook && !n.noNotebook).map(n => n.id), results: own.length,
       needsConceptNotebook: own.length > 1 && !tree.nodes[c.root!]?.notebook, svg: inlineCharts(html), tables: typedTables(html),
     }
-    if (g.bare.length || g.needsConceptNotebook || g.svg || g.tables) byConcept.push(g)
+    if (g.bare.length || g.needsConceptNotebook || g.svg) byConcept.push(g)
   }
-  return { experiments, concepts: conceptNbs, stale, byConcept }
+  return { experiments, concepts: conceptNbs, stale, byConcept, coded: starts.some(c => codeRepos(concepts, c.id).length > 0) }
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
@@ -183,15 +185,15 @@ export function gapsText(g: NotebookGaps, queued: string | null, scope?: Concept
   } else if (!all) out.push('Nothing to run again: no experiment or concept has a notebook yet.')
   else if (queueOff) out.push(`Not run again: that goes through the experiment queue, which is off until this machine is paired with it (/rft-machine add); meanwhile Claude runs one at a time with rft_run_notebook.`)
   if (g.byConcept.length) {
-    out.push('', 'Still to write, by concept (/rft-update notebooks --write [concept] asks Claude, concept by concept):')
+    out.push('', 'Without a notebook, by concept. A notebook is written only for the experiments you choose: /rft-update notebooks --write <concept, or experiment ids> asks Claude for those; `notebook: no` on a note leaves it off this list.')
     for (const c of g.byConcept) {
       const parts = [
         c.bare.length ? `${plural(c.bare.length, 'experiment')} with a result and no notebook (${c.bare.slice(0, 8).join(', ')}${c.bare.length > 8 ? ', …' : ''})` : '',
         c.needsConceptNotebook ? `no concept notebook to compare its ${c.results} results` : '',
-        c.svg || c.tables ? `its artifact ${[c.svg ? `draws ${plural(c.svg, 'chart')}` : '', c.tables ? `types ${plural(c.tables, 'table')}` : ''].filter(Boolean).join(' and ')} by hand` : '',
+        c.svg ? `its artifact draws ${plural(c.svg, 'chart')} by hand` : '',
       ].filter(Boolean)
       out.push(`- ${c.concept.name} (${c.concept.root ?? c.concept.id}): ${parts.join('; ')}.`)
     }
-  } else out.push('', `Nothing left to write${where}: every experiment with a result in a concept with code has a notebook, each concept with several results has its own, and no artifact draws or types its results by hand.`)
+  } else out.push('', g.coded ? `Nothing without a notebook${where}: every experiment with a result in a concept with code has one (or \`notebook: no\`), and no artifact draws its results by hand.` : `No concept${where} links code, so there is no notebook to write.`)
   return out.join('\n')
 }

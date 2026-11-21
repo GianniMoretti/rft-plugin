@@ -155,7 +155,7 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_set_repos` | links code repositories to a concept (or, on the root note, to the whole project), once you give the path |
   | `rft_code` | a note's code context: its repos by priority, the commit it was last checked against, and the commits and files changed since |
   | `rft_set_code` | writes or updates a note's `## Code` section (how it relates to the code, how to reproduce its results), recording each repo's current commit |
-  | `rft_set_notebook` | gives an experiment its marimo notebook, best when it is planned: written from plain cells in its concept's repo (`notebooks/<id>_<title>.py`, a first cell reading `RUNS`, its runs in the queue) or one already there, linked from `vault/notebooks/<id>.py` and the note (`notebook:`) |
+  | `rft_set_notebook` | gives an experiment its marimo notebook, when you want one (best while it is planned): written from plain cells in its concept's repo (`notebooks/<id>_<title>.py`, a first cell reading `RUNS`, its runs in the queue) or one already there, linked from `vault/notebooks/<id>.py` and the note (`notebook:`) |
   | `rft_run_notebook` | runs the notebook now in its repo's uv environment: its `RESULTS` written in the note's Result as a table, or checked against it (ok, differs, failed), in a few lines; its figures and tables saved for the artifacts; stamps the note (`reproduced:`) |
   | `rft_tree` | prints the tree or a subtree |
   | `rft_validate` | checks ids, types, statuses, titles, parents, broken wikilinks, derived fields |
@@ -753,12 +753,18 @@ time) are bundled, so the page needs no network.
 
 ### Experiment notebooks
 
-An experiment in a concept with code has a **notebook** that makes the numbers of its Result: a
+An experiment in a concept with code can have a **notebook** that makes the numbers of its Result: a
 [marimo](https://marimo.io) notebook in its concept's code repository, which runs in that repo's
 own [uv](https://docs.astral.sh/uv/) environment. It reads its runs' saved outputs after an
-expensive training run, or reruns a short experiment from scratch. Claude writes it when the
-experiment is planned, and its run records the result when the jobs end, so no one copies a
-number by hand. It opens on the **left** of the tree view while the note is open on the right,
+expensive training run, or reruns a short experiment from scratch. Its run records the result when
+the jobs end, so no one copies a number by hand.
+
+**A notebook is your choice, per experiment.** Exploratory runs (does it work, a quick check,
+development) get none, and Claude does not ask. When an experiment's results are meant to last
+(figures or tables for a paper, a thesis or the docs, a result to verify or to cite in a snippet),
+Claude asks you once whether to give it a notebook for reproducibility. If you decline, it writes
+`notebook: no` in the note and does not ask again. Claude never writes one unasked, and nothing
+(`rft_next`, `rft_validate`, `rft_add_node`) reminds you of experiments without one. It opens on the **left** of the tree view while the note is open on the right,
 so you can run it and read the note side by side.
 
 - **Where it is**: `<repo>/notebooks/E02_<title>.py`, in the first repo the concept links (see Code
@@ -819,11 +825,13 @@ so you can run it and read the note side by side.
 - **An older vault**: `/rft-update notebooks` runs every notebook again, one after another, as one
   job of the queue with no GPU, in check mode (a Result's numbers are checked, never written
   over), so each saves what a run saves now; the monitor shows how far it is, and its end names
-  the notebooks that differ or failed. It lists, by concept with code, what is still to write;
-  `/rft-update notebooks --write [concept]` asks Claude to write it: the missing experiment
-  notebooks from what each repo saved (each checked against its note: one that differs is
-  reported, never recorded over it), the concept notebooks, and the artifacts' figures and
-  tables placed instead of drawn.
+  the notebooks that differ or failed. It also lists, by concept with code, the experiments with a
+  result and no notebook (not those with `notebook: no`), for information: a notebook is written
+  only for what you choose. `/rft-update notebooks --write <concept>` asks Claude for that
+  concept's (the missing experiment notebooks from what its repo saved, each checked against its
+  note: one that differs is reported, never recorded over it; its concept notebook; the artifact's
+  figures placed instead of drawn), `--write E05 E07` for those experiments only; `--write` alone
+  writes nothing.
 - It needs `uv` on `PATH`. A vault where no experiment has a notebook sees none of this: the two
   tools wait behind ToolSearch, and their rules are left out.
 
@@ -1010,7 +1018,7 @@ note: start with E05
 | `/rft-manuscript [document] \| new <name> [article\|report]` | start snippets and documents (a first document, `paper`), add a document (`report`: a thesis chapter), or ask Claude what to write next from the verified notes and where to place it, as tables; nothing is written until you pick |
 | `/rft-artifact [concept]` | ask Claude to write a concept's artifact, or, with no concept, every one missing or out of date |
 | `/rft-update [apply] [--sections]` | bring a vault made by an older version up to this one: list what it lacks (the folders and templates of newer note types, the config's format); `apply` writes it and refreshes the derived files. Notes are never changed, except that `--sections` adds the sections their type has gained, as empty headings, to unlocked notes. A session on an older vault starts with a toast pointing here (no model turn) |
-| `/rft-update notebooks [--write] [concept]` | bring an older vault's notebooks up to what the plugin does now: every notebook runs again in the queue (one job, no GPU, in check mode, no model turn; with no machine paired it says so and runs nothing), so each saves its numbers, figures and tables; and a list, by concept with code, of what is still to write (experiments with a result and no notebook, a missing concept notebook, an artifact's hand-drawn charts and typed tables). `--write` asks Claude to write it, concept by concept (a long one-off job; name a concept for one line of research) |
+| `/rft-update notebooks [--write <concept or experiment ids>]` | bring the existing notebooks up to what the plugin does now: every notebook runs again in the queue (one job, no GPU, in check mode, no model turn; with no machine paired it says so and runs nothing), so each saves its numbers, figures and tables; and, for information, a list by concept with code of the experiments with a result and no notebook (not those with `notebook: no`), a missing concept notebook, an artifact's hand-drawn charts. `--write <concept>` asks Claude to write that concept's, `--write E05 E07` those experiments' only; a notebook is never written for what you did not name |
 | `/rft-view` | write `vault/tree.html`: the same tree view as one standalone file, every note inside (images as placeholders), to open anywhere or share |
 
 The plugin registers these commands when a session starts, so the desktop app's slash-command
