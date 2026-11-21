@@ -147,6 +147,15 @@
       extraKeys: { 'Ctrl-S': () => save(true), 'Cmd-S': () => save(true) },
     }) : null
     if (cm) {
+      // measured again whenever its box changes: text set while its pane was hidden (a phone shows one pane
+      // at a time) is otherwise left undrawn, or under the line numbers, until something else redraws it
+      if (root.ResizeObserver) {
+        let size = ''
+        new ResizeObserver(() => {
+          const w = cm.getWrapperElement(), now = `${w.clientWidth}x${w.clientHeight}`
+          if (now !== size) { size = now; if (w.clientWidth) cm.refresh() }
+        }).observe(cm.getWrapperElement())
+      }
       cm.on('change', () => { if (!loading) { dirty = true; renderStatus() } })
       cm.on('cursorActivity', () => {
         renderSelectionButtons()

@@ -380,6 +380,16 @@ class PhoneTest(unittest.TestCase):
             self.assertAlmostEqual(fit[2], 2, delta=0.05, msg=f"{w}px: drawn at {fit[2]}× (the screen's 2×)")
         self.assertEqual(self.b.errors, [])
 
+    def test_latex_pane_draws_its_text(self):
+        # the editor is filled while its pane is hidden (one pane at a time): shown, its text is drawn, clear of the line numbers
+        self.b.size(412, 915)
+        self.screen(MS_PDF[:3] + ["document.querySelector('.phone-panes[data-for=ms-body] [data-pane=text]').click()"])
+        got = self.b.js("(() => { const g = document.querySelector('#ms-cm .CodeMirror-gutters'), l = document.querySelector('#ms-cm .CodeMirror-line');"
+                        " return l ? [g.getBoundingClientRect().right, l.getBoundingClientRect().left, l.textContent] : null })()")
+        self.assertIsNotNone(got, "no line of the document drawn")
+        self.assertIn("documentclass", got[2])
+        self.assertGreaterEqual(got[1], got[0] - 0.5, f"its text starts at x {got[1]}, under the line numbers (to x {got[0]})")
+
     def test_back_closes_what_is_open(self):
         w, h = SIZES[0]
         self.back_closes(w, h, [page("tree"), tap_node("D00")], "!document.getElementById('drawer').hidden", "a note")
