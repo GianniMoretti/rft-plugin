@@ -23,6 +23,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import rft_decks  # noqa: E402
 import rft_manuscript  # noqa: E402
 import rft_server  # noqa: E402
 
@@ -1756,6 +1757,113 @@ class SharedPortTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body, {"vault": rft_server.Vault(self.vaults["one"], "one").ident})
         self.assertRegex(body["vault"], r"^[0-9a-f]{16}$")
+
+
+
+class DeckTest(unittest.TestCase):
+    """Slide decks as the page sees them (docs/design/presentations.md): the list with what each is
+    for and its lock, one read and written (a conflict refused), a new one (the next P id, locked),
+    the lock, the writes refused without the key, and the images a deck shows."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        vault = Path(cls.tmp.name) / "vault"
+        for d in ("directions", "decks", "figures"):
+            (vault / d).mkdir(parents=True)
+        (vault / "directions" / "D00 Root question.md").write_text(note("D00", "direction", "done", "", "Root question"))
+        (vault / "decks" / "P01 Weekly wrap-up.md").write_text(
+            "---\nid: P01\ntype: deck\nfor: [G01 2026-11-24]\nlocked: true\n---\n\n# Weekly wrap-up\n\n---\n\n## Results\n"
+            "```\n---\n```\n![[E08_loss.svg]]\n")
+        (vault / "decks" / "P03 Practice talk.md").write_text("---\nid: P03\nfor:\n  - G03 2026-12-01\n  - M04\nlocked: false\n---\n# Talk\n")
+        (vault / "decks" / "notes about decks.md").write_text("not a deck")
+        (vault / "figures" / "E08_loss.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
+        cls.vault = vault
+        handler = rft_server.make_handler(rft_server.Vault(vault, "demo"), WEB, KEY)
+        cls.server = rft_server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        cls.port = cls.server.server_address[1]
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.tmp.cleanup()
+
+    get = ServerTest.get
+    write = ServerTest.write
+
+    def keep(self, path: Path):
+        before = path.read_bytes()
+        self.addCleanup(path.write_bytes, before)
+
+    def deck(self, did):
+        status, _, body = self.get(f"/api/deck?id={did}")
+        return status, json.loads(body)
+
+    def test_the_list(self):
+        decks = json.loads(self.get("/api/decks")[2])["decks"]
+        self.assertEqual([(d["id"], d["title"], d["for"], d["locked"], d["slides"]) for d in decks], [
+            ("P01", "Weekly wrap-up", ["G01 2026-11-24"], True, 2),  # the --- in a code block splits nothing
+            ("P03", "Practice talk", ["G03 2026-12-01", "M04"], False, 1),
+        ])
+        self.assertEqual(decks[0]["path"], "decks/P01 Weekly wrap-up.md")
+
+    def test_read_and_write_with_the_version(self):
+        path = self.vault / "decks" / "P01 Weekly wrap-up.md"
+        self.keep(path)
+        status, d = self.deck("P01")
+        self.assertEqual(status, 200)
+        self.assertEqual(d["text"], path.read_text())
+        text = d["text"] + "\n---\n\n## Next steps\n"
+        status, out = self.write("PUT", "/api/deck", {"id": "P01", "text": text, "version": d["version"]})
+        self.assertEqual(status, 200)
+        self.assertEqual(path.read_text(), text)
+        self.assertEqual(out["slides"], 3)
+        # written since it was read: refused, with the deck as it is now
+        status, out = self.write("PUT", "/api/deck", {"id": "P01", "text": "lost", "version": d["version"]})
+        self.assertEqual(status, 409)
+        self.assertEqual(out["text"], text)
+        self.assertEqual(path.read_text(), text)
+        self.assertEqual(self.write("PUT", "/api/deck", {"id": "P01", "text": "x", "force": True})[0], 200)
+        self.assertEqual(self.deck("P09")[0], 404)
+        self.assertEqual(self.deck("../P01")[0], 404)
+
+    def test_a_new_deck_is_locked_and_takes_the_next_id(self):
+        status, d = self.write("POST", "/api/deck", {"title": "Supervisor meeting: 2026/12/01", "for": ["G01 2026-12-01"], "subtitle": "Supervisor meeting · 1 Dec"})
+        self.assertEqual(status, 201)
+        path = self.vault / d["path"]
+        self.addCleanup(path.unlink)
+        self.assertEqual((d["id"], d["name"], d["locked"], d["for"]), ("P04", "P04 Supervisor meeting 2026 12 01", True, ["G01 2026-12-01"]))
+        self.assertEqual(path.read_text(), "---\nid: P04\ntype: deck\nfor: [G01 2026-12-01]\nlocked: true\n---\n\n# Supervisor meeting 2026 12 01\nSupervisor meeting · 1 Dec\n")
+        self.assertEqual(self.write("POST", "/api/deck", {"title": " "})[0], 400)
+        self.assertEqual(self.write("POST", "/api/deck", {"title": "x", "for": ["E05"]})[0], 400)
+        self.assertEqual(self.write("POST", "/api/deck", {"title": "x", "for": "G01"})[0], 400)
+
+    def test_the_lock(self):
+        path = self.vault / "decks" / "P03 Practice talk.md"
+        self.keep(path)
+        status, d = self.write("POST", "/api/deck/lock", {"id": "P03", "locked": True})
+        self.assertEqual((status, d["locked"]), (200, True))
+        self.assertIn("\nlocked: true\n", path.read_text())
+        self.assertIn("  - M04\n", path.read_text())  # the rest of the frontmatter as it was
+        self.assertFalse(self.write("POST", "/api/deck/lock", {"id": "P03", "locked": False})[1]["locked"])
+        self.assertEqual(self.write("POST", "/api/deck/lock", {"id": "P09", "locked": False})[0], 404)
+        self.assertEqual(rft_decks.with_lock("# no frontmatter\n", True), "---\nlocked: true\n---\n\n# no frontmatter\n")
+        self.assertEqual(rft_decks.with_lock("---\r\nid: P07\r\n---\r\n# x\r\n", False), "---\r\nid: P07\r\nlocked: false\r\n---\r\n# x\r\n")
+
+    def test_writes_need_the_key_and_the_page(self):
+        path = self.vault / "decks" / "P01 Weekly wrap-up.md"
+        before = path.read_bytes()
+        self.assertEqual(self.write("PUT", "/api/deck", {"id": "P01", "text": "x", "force": True}, key="wrong")[0], 403)
+        self.assertEqual(self.write("PUT", "/api/deck", {"id": "P01", "text": "x", "force": True}, origin="http://evil.example")[0], 403)
+        self.assertEqual(self.write("POST", "/api/deck/lock", {"id": "P01", "locked": False}, key=None)[0], 403)
+        self.assertEqual(self.write("POST", "/api/deck", {"title": "x"}, key="wrong")[0], 403)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_a_decks_images(self):
+        status, ctype, body = self.get(f"/api/image?deck=P01&src={quote('E08_loss.svg')}")
+        self.assertEqual((status, ctype), (200, "image/svg+xml"))
+        self.assertEqual(self.get(f"/api/image?deck=P09&src={quote('E08_loss.svg')}")[0], 403)
 
 
 if __name__ == "__main__":

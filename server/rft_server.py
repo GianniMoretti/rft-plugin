@@ -10,7 +10,8 @@ alone (which also answers Claude's `suggested_priority:`); its dates, the user's
 dismissed); the meetings in vault/meetings/ (a new one, its times, how often it comes back, an
 occurrence skipped or moved, the notes it needs, or the meeting deleted); its discussion, the comments and suggestions on parts of its text, in
 vault/.comments/<id>.json (as hooks/lib/comments.ts reads it); and the user's scratchpad, quick
-notes and to-dos in vault/Scratchpad.md. It serves each concept's artifact (vault/artifacts/<id> <name>.html,
+notes and to-dos in vault/Scratchpad.md; and the slide decks in vault/decks/ (the user's edit of one, a
+new one, its lock: rft_decks.py beside it). It serves each concept's artifact (vault/artifacts/<id> <name>.html,
 written by Claude with rft_set_artifact) read-only, as a page of its own in a sandbox (GET api/artifact?concept=<id>):
 no script of it reaches the network, the page that frames it, or a write; the tree lists the artifacts
 with what changed since they were written. A new note, or a note's new type, it never writes itself: it asks the session that runs it,
@@ -27,7 +28,7 @@ history; rft_queue.py beside it) and takes the user's changes to it (POST api/qu
 cancelled or retried, the queue paused, the GPUs it may use); a job's output (GET api/queue/output)
 goes only to a request carrying the key; all three answer 404 until this machine is paired with
 the queue (rft_queue.py machine add), so the page shows no monitor. A write (PUT api/note, PUT api/scratchpad, POST api/node, api/type, api/comment, api/lock, api/verify,
-api/priority, api/dates, api/milestone, api/meeting, api/queue) must also come from the page itself (its
+api/priority, api/dates, api/milestone, api/meeting, api/queue, PUT and POST api/deck, api/deck/lock) must also come from the page itself (its
 Origin) and carry the vault's key, which is in the address the server prints, so neither
 another web page nor another user of the machine can change a note. The key is kept in the
 user's cache, readable by them alone, so it stays the same across restarts.
@@ -70,6 +71,7 @@ from pathlib import Path
 from html import escape as html_escape, unescape as html_unescape
 from urllib.parse import parse_qs, quote, urlsplit
 
+import rft_decks  # the slide decks as the page reads them
 import rft_latex  # the manuscript's LaTeX: its generated files and the compile
 import rft_manuscript  # the manuscript as the page shows it
 import rft_notebook
@@ -94,6 +96,8 @@ PAGE_FILES = {
     "/queue.js": ("queue.js", "text/javascript; charset=utf-8"),
     "/artifacts.js": ("artifacts.js", "text/javascript; charset=utf-8"),
     "/manuscript.js": ("manuscript.js", "text/javascript; charset=utf-8"),
+    "/slides.js": ("slides.js", "text/javascript; charset=utf-8"),
+    "/decks.js": ("decks.js", "text/javascript; charset=utf-8"),
     # the Manuscript tab's editor
     "/vendor/codemirror.v5.65.16.min.js": ("vendor/codemirror.v5.65.16.min.js", "text/javascript; charset=utf-8"),
     "/vendor/codemirror.v5.65.16.min.css": ("vendor/codemirror.v5.65.16.min.css", "text/css; charset=utf-8"),
@@ -1836,6 +1840,85 @@ class Vault:
                     return 200, {"id": got, **self.manuscript()}
         return 504, {"error": f"the Claude Code session did not answer within {NODE_WAIT_S:g} s; is the session that ran /rft still open?"}
 
+    # ---------------------------------------------------------------- slide decks
+
+    def decks(self) -> dict:
+        """The decks in decks/ (rft_decks.entry each): what each is for, its lock, its slides, its version."""
+        out = []
+        for p in rft_decks.deck_files(self.root):
+            try:
+                data = p.read_bytes()
+            except OSError:
+                continue
+            e = rft_decks.entry(p, data, version_of(data))
+            if not any(x["id"] == e["id"] for x in out):
+                out.append(e)
+        return {"decks": out}
+
+    def deck_path(self, did: str) -> Path | None:
+        """A deck's file: a markdown file directly in decks/ whose name starts with the id `did`."""
+        if not rft_decks.DECK_ID.match(did or ""):
+            return None
+        for p in rft_decks.deck_files(self.root):
+            if rft_decks.id_of(p.stem) == did and not p.is_symlink():
+                return p
+        return None
+
+    def deck(self, did: str) -> tuple[int, dict]:
+        path = self.deck_path(did)
+        if path is None:
+            return 404, {"error": "no such deck"}
+        data = path.read_bytes()
+        return 200, {**rft_decks.entry(path, data, version_of(data)), "text": data.decode("utf-8", errors="replace")}
+
+    def write_deck(self, did: str, text: str, version: str | None) -> tuple[int, dict]:
+        """The user's edit of a deck, refused with the deck as it is now when it changed since
+        `version` (None: write anyway)."""
+        path = self.deck_path(did)
+        if path is None:
+            return 404, {"error": "no such deck"}
+        with self._write_lock:
+            data = path.read_bytes()
+            if version is not None and version != version_of(data):
+                return 409, {"error": "the deck changed since it was opened", **self.deck(did)[1]}
+            self._write_note(path, data.decode("utf-8", errors="replace"), "", text)
+        return self.deck(did)
+
+    def add_deck(self, title: str, items: list[str], subtitle: str = "") -> tuple[int, dict]:
+        """A new deck the user starts: the next free P id (after the config's last one and every deck
+        on disk), in decks/, locked, for what `items` names (as `for:` writes them), its title slide."""
+        title = clean_title(title)
+        if not title:
+            return 400, {"error": "give the deck a title"}
+        if any(not re.fullmatch(r"[GM]\d+(?: \d{4}-\d{2}-\d{2})?", x) for x in items):
+            return 400, {"error": "a deck is for a meeting's occurrence (G01 2026-11-24), a once-only meeting (G04) or a deadline (M04)"}
+        subtitle = re.sub(r"\s+", " ", subtitle or "").strip()[:200]
+        with self._write_lock:
+            cfg = self._config().get("lastId")
+            last = cfg.get("P", 0) if isinstance(cfg, dict) else 0
+            taken = [int(rft_decks.DECK_ID.match(rft_decks.id_of(p.stem)).group(1)) for p in rft_decks.deck_files(self.root)]
+            did = f"P{max([last if isinstance(last, int) else 0, *taken]) + 1:02d}"
+            d = rft_decks.decks_dir(self.root)
+            d.mkdir(exist_ok=True)
+            path = d / f"{did} {title}.md"
+            path.write_text(rft_decks.new_text(did, title, items, subtitle), encoding="utf-8")
+        return 201, self.deck(did)[1]
+
+    def set_deck_lock(self, did: str, locked: bool) -> tuple[int, dict]:
+        """Locks a deck (the user's to write: Claude proposes an outline) or unlocks it (Claude may write it too)."""
+        path = self.deck_path(did)
+        if path is None:
+            return 404, {"error": "no such deck"}
+        with self._write_lock:
+            text = path.read_bytes().decode("utf-8", errors="replace")
+            self._write_note(path, text, "", rft_decks.with_lock(text, locked))
+        return self.deck(did)
+
+    def deck_image(self, did: str, src: str) -> Path | None:
+        """An image a deck shows, found as a note's are, from the decks' folder (then the notebooks' figures)."""
+        path = self.deck_path(did)
+        return None if path is None else self._find_image(path.parent, src, [self.root / FIGURES])
+
     def verify(self, nid: str, action: str, ask) -> tuple[int, dict]:
         """The user verifies a note (`verify`: verified, locked and stamped with a fingerprint of
         its claim), dismisses Claude's suggestion to (`dismiss`), or sends a verified note back to
@@ -1999,7 +2082,8 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             it is in the vault or the request carries the key. Without the key, an image that is
             not in the vault is refused whether it exists or not, so nothing outside can be probed."""
             one = lambda k: (q.get(k) or [""])[0]
-            path = vault.artifact_image(one("artifact"), one("src")) if one("artifact") else vault.image(one("note"), one("src"))
+            path = (vault.artifact_image(one("artifact"), one("src")) if one("artifact")
+                    else vault.deck_image(one("deck"), one("src")) if one("deck") else vault.image(one("note"), one("src")))
             given = one("token").encode()
             keyed = bool(token) and (secrets.compare_digest(given, token.encode()) or secrets.compare_digest(given, image_key(token).encode()))
             if path is None or not (keyed or vault.inside(path)):
@@ -2187,6 +2271,10 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 return self._artifact(parse_qs(url.query), head_only)
             if route == "/api/scratchpad":
                 return self._json(*vault.scratchpad(), head_only)
+            if route == "/api/decks":
+                return self._json(200, vault.decks(), head_only)
+            if route == "/api/deck":
+                return self._json(*vault.deck((parse_qs(url.query).get("id") or [""])[0]), head_only)
             if route == "/api/manuscript":
                 return self._json(200, vault.manuscript(), head_only)
             if route == "/api/manuscript/file":
@@ -2267,6 +2355,16 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 if not isinstance(req.get("path"), str) or not isinstance(req.get("text"), str) or not (force or isinstance(version, str)):
                     return self._json(400, {"error": "expected {path, text, version} or {path, text, force: true}"})
                 return self._json(*vault.write_manuscript_file(req["path"], req["text"], version))
+            if urlsplit(self.path).path == "/api/deck":
+                got = self._write_request("/api/deck", MAX_NOTE_BYTES)
+                if got is None:
+                    return
+                _, req = got
+                force = req.get("force") is True
+                version = None if force else req.get("version")
+                if not isinstance(req.get("id"), str) or not isinstance(req.get("text"), str) or not (force or isinstance(version, str)):
+                    return self._json(400, {"error": "expected {id, text, version} or {id, text, force: true}"})
+                return self._json(*vault.write_deck(req["id"], req["text"], version))
             if urlsplit(self.path).path == "/api/scratchpad":
                 got = self._write_request("/api/scratchpad", MAX_NOTE_BYTES)
                 if got is None:
@@ -2397,6 +2495,24 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 if "priority" not in req or (req["priority"] is not None and req["priority"] not in PRIORITIES):
                     return self._json(400, bad)
                 return self._json(*vault.set_priority(req["id"], req["priority"]))
+            if route == "/api/deck":
+                got = self._write_request("/api/deck", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                _, req = got
+                items = req.get("for", [])
+                if not isinstance(req.get("title"), str) or not isinstance(items, list) or not all(isinstance(x, str) for x in items) \
+                        or not isinstance(req.get("subtitle", ""), str):
+                    return self._json(400, {"error": "expected {title, for?: [items], subtitle?}"})
+                return self._json(*vault.add_deck(req["title"], items, req.get("subtitle", "")))
+            if route == "/api/deck/lock":
+                got = self._write_request("/api/deck/lock", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                _, req = got
+                if not isinstance(req.get("id"), str) or not isinstance(req.get("locked"), bool):
+                    return self._json(400, {"error": "expected {id, locked: true or false}"})
+                return self._json(*vault.set_deck_lock(req["id"], req["locked"]))
             if route == "/api/manuscript/compile":
                 got = self._write_request("/api/manuscript/compile", MAX_NODE_BYTES)
                 if got is None:
