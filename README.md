@@ -115,13 +115,16 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   them. The full manual is the `rft-manual` skill.
 - **Tools** Claude calls to keep the tree consistent. Only the ones a session uses most
   (`rft_add_node`, `rft_set_status`, `rft_set_summary`, `rft_search`, `rft_map`, `rft_graph`,
-  `rft_next`, `rft_move_node`) have their full definition in the prompt from the start. The
-  others are listed by name and loaded when Claude needs one, which keeps every turn cheaper. The
-  date, priority, comment, artifact, queue and manuscript tools join the first group in a vault that
-  uses those features (it has deadlines or dated notes, priorities, comment threads or locked
-  notes, a concept artifact, this machine paired with the experiment queue, or snippets and
-  documents). The queue's three tools are not there at all until a machine is paired (see The
-  experiment queue): only `rft_machine`, which pairs it.
+  `rft_next`, `rft_move_node`, `rft_sync`) have their full definition in the prompt from the
+  start. The others are listed by name and loaded when Claude needs one, which keeps every turn
+  cheaper. The comment, artifact, notebook, queue and manuscript tools join the first group in a
+  vault that uses those features (it has comment threads or locked notes, a concept artifact, an
+  experiment with a notebook, this machine paired with the experiment queue, or snippets and
+  documents). The date and priority tools stay in the second group even then: their rules name
+  them, and a session calls them too seldom to carry their definitions in every request. The
+  queue's three tools are not there at all until a machine is paired (see The experiment queue):
+  only `rft_machine`, which pairs it. `tests/size.test.ts` holds a ceiling on the size of the
+  rules and of the definitions in the prompt.
 
   | tool | does |
   |---|---|
@@ -149,7 +152,7 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_collect_papers` | downloads, in the background, the open-access PDFs of reference notes (arXiv, OpenReview, PMLR, ACL Anthology, NeurIPS/CVF proceedings, ...) into `vault/papers/<concept>/<year> <first author> <title>.pdf`, linked from each note (`pdf:`; in a literature note, a `PDF:` line under each paper); saved PDFs follow their concept. Never from paywalled publishers |
   | `rft_set_tags` | replaces a note's topical tags (lowercase kebab-case), keeping the project, type and status tags |
   | `rft_set_type` | changes the type of a note made with the wrong one: the next free id of the new type, the file moved to that type's folder, the type's sections (no text lost), every link to it renamed |
-  | `rft_tags` | lists the topical tags in use with counts, so Claude reuses them |
+  | `rft_tags` | lists the topical tags in use with counts; the session's rules already name the most used, so Claude reuses them without a call |
   | `rft_set_concept` | sets, renames or removes (name null) the concept a note starts, once you confirm it |
   | `rft_concepts` | prints the concept tree: names, start notes, counts, statuses and linked code |
   | `rft_set_repos` | links code repositories to a concept (or, on the root note, to the whole project), once you give the path |
@@ -159,7 +162,7 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_run_notebook` | runs the notebook now in its repo's uv environment: its `RESULTS` written in the note's Result as a table, or checked against it (ok, differs, failed), in a few lines; its figures and tables saved for the artifacts; stamps the note (`reproduced:`) |
   | `rft_tree` | prints the tree or a subtree |
   | `rft_validate` | checks ids, types, statuses, titles, parents, broken wikilinks, derived fields |
-  | `rft_sync` | regenerates children / up / down, the index tree and the canvas after hand edits |
+  | `rft_sync` | regenerates children / up / down, the index tree and the canvas after hand edits, and answers with the tree's check, so no `rft_validate` follows it |
   | `rft_comments` | a note's comments and suggestions, or the notes with open threads |
   | `rft_comment` | replies in a thread (or closes a suggestion it made in the note), or starts a comment on a quote |
   | `rft_suggest` | proposes new text for a quote, or the text an open suggestion asks for; you accept or reject it |
@@ -693,8 +696,8 @@ Claude writes it; you read it in the tree view.
 - A vault with no artifact sees none of this: no rule, and the two tools wait behind ToolSearch.
   `/rft-view` embeds the artifacts read-only, their images as placeholders.
 
-Every note carries 1–3 **topical tags** besides the project, type and status ones (the manual
-asks Claude to reuse the vocabulary `rft_tags` lists); the tree's `api/tree` JSON lists them with
+Every note carries 1–3 **topical tags** besides the project, type and status ones (the session's
+rules list the ones in use, so that Claude reuses them); the tree's `api/tree` JSON lists them with
 their counts.
 
 The server listens on `127.0.0.1` only, on a free port (or `webPort` in the config). It serves

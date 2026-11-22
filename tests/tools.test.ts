@@ -1,5 +1,6 @@
 // The tool list: only the core tools sit in the prompt from the start; a feature's tools join
-// them when the vault uses that feature, and every other tool waits behind ToolSearch.
+// them when the vault uses that feature, and every other tool waits behind ToolSearch. Dates and
+// priorities bring their rule alone: their tools are called too seldom to be carried all session.
 
 import { describe, expect, mock, test } from 'claude-code/testing'
 
@@ -24,6 +25,9 @@ describe('tool list', () => {
     // no machine paired with the experiment queue: its tools are not there at all, rft_machine waits to pair one
     expect(w.tools).toHaveLength(39)
     expect(inPrompt(w)).toEqual([...CORE_TOOLS].sort())
+    // rft_sync is there (a session in two syncs by hand); rft_validate is not, since rft_sync and rft_add_node answer with the check
+    expect(inPrompt(w)).toEqual(['rft_add_node', 'rft_graph', 'rft_map', 'rft_move_node', 'rft_next', 'rft_search', 'rft_set_status', 'rft_set_summary', 'rft_sync'])
+    expect(w.deferred).toContain('rft_validate')
     for (const t of Object.values(FEATURE_TOOLS).flat()) {
       if (FEATURE_TOOLS.queue.includes(t as never)) expect(w.tools).not.toContain(t)
       else expect(w.deferred).toContain(t)
@@ -31,20 +35,27 @@ describe('tool list', () => {
     expect(w.deferred).toContain('rft_machine')
   })
 
-  test('a deadline or a dated note brings the date tools into the prompt', async ($, on) => {
+  const DATE_TOOLS = ['rft_suggest_dates', 'rft_add_deadline', 'rft_add_meeting', 'rft_suggest_deadline']
+
+  test('a deadline leaves the date tools behind ToolSearch: its rule names them', async ($, on) => {
     mock.clock(on)
     const files = demoFiles()
     files['vault/milestones/M01 Workshop paper.md'] = '---\nid: M01\ntype: milestone\nstatus: open\ndue: 2026-12-01\n---\n\n# M01 · Workshop paper\n'
     const w = world(on, files)
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(inPrompt(w)).toEqual([...CORE_TOOLS, ...FEATURE_TOOLS.dates].sort())
+    expect(inPrompt(w)).toEqual([...CORE_TOOLS].sort())
+    for (const t of DATE_TOOLS) expect(w.deferred).toContain(t)
   })
 
-  test('a note with start: does too; a priority brings the priority tool', async ($, on) => {
+  test('a note with start: and a priority: the date and priority tools stay deferred, and still answer', async ($, on) => {
     mock.clock(on)
     const w = world(on, withE02('start: 2026-12-01\npriority: high'))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(inPrompt(w)).toEqual([...CORE_TOOLS, ...FEATURE_TOOLS.dates, ...FEATURE_TOOLS.priorities].sort())
+    expect(inPrompt(w)).toEqual([...CORE_TOOLS].sort())
+    for (const t of [...DATE_TOOLS, 'rft_suggest_priority']) expect(w.deferred).toContain(t)
+    const r = await $.tool.call({ tool: 'mcp__rft__rft_suggest_priority', id: 'D01', priority: 'medium', why: 'It unblocks E02.' } as never)
+    expect(r.isError).toBeUndefined()
+    expect(w.fs.read(`vault/directions/D01 A better variant.md`)).toContain('suggested_priority: medium')
   })
 
   test('a locked note brings rft_suggest only', async ($, on) => {
@@ -105,7 +116,7 @@ describe('rules on demand', () => {
 
   test('each feature in use brings its full rule, and leaves the short line to the others', async ($, on) => {
     const rules = await rulesOf($ as never, on as never, withE02('priority: high\nlocked: true'))
-    expect(rules).toContain('rft_suggest_priority {id, priority, why}')
+    expect(rules).toContain("suggest one: rft_suggest_priority, or rft_add_node's suggested_priority")
     expect(rules).toContain('asks the user whether to unlock it')
     expect(rules).not.toContain('rft_suggest_dates')
     expect(rules).toContain("These are the user's to set, never yours: dates (")
@@ -117,8 +128,30 @@ describe('rules on demand', () => {
     files['vault/.comments/E02.json'] = JSON.stringify({ note: 'E02', next: 1, threads: [] })
     const rules = await rulesOf($ as never, on as never, files)
     expect(rules).toContain('rft_comments lists them')
-    expect(rules).toContain('rft_suggest_dates {id, start, est, why}')
+    expect(rules).toContain('A start or an estimate you can give a reason for: rft_suggest_dates.')
+    for (const t of ['rft_add_deadline', 'rft_add_meeting', 'rft_suggest_deadline']) expect(rules).toContain(t)
     expect(rules).toContain('A verified note (`status: verified`, ✔) is a claim the user checked')
     expect(rules).not.toContain('never yours')
+  })
+
+  test('with no tag in use the rule on tags gives two examples, and names no tool to list them', async ($, on) => {
+    const none = await rulesOf($ as never, on as never, demoFiles())
+    expect(none).toContain('1-3 short topical tags (lowercase kebab-case, e.g. `ablation`, `optimisation`); rft_set_tags changes them.')
+    expect(none).not.toContain('rft_tags')
+  })
+
+  test('with tags in use the rule lists them, most used first, so no rft_tags is called to reuse one', async ($, on) => {
+    const files = withE02('priority: high')
+    for (const [path, extra] of [[`vault/experiments/${E02}.md`, 'seeds, lr-sweep, '], ['vault/experiments/E01 First check.md', 'seeds, ']] as const) {
+      files[path] = files[path]!.replace('tags: [demo, experiment, ', `tags: [demo, experiment, ${extra}`)
+    }
+    const rules = await rulesOf($ as never, on as never, files)
+    expect(rules).toContain('1-3 short topical tags (lowercase kebab-case), reusing the ones in use before inventing new ones: seeds, lr-sweep; rft_set_tags changes them.')
+  })
+
+  test('after edits by hand one call is asked for: rft_sync, which answers with the check', async ($, on) => {
+    const rules = await rulesOf($ as never, on as never, demoFiles())
+    expect(rules).toContain("After editing notes by hand, run rft_sync (children / up / down, 00 Index.md, the canvas): it answers with the tree's check.")
+    expect(rules).not.toContain('rft_validate')
   })
 })

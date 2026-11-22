@@ -5,7 +5,7 @@
 
 import type { Concept, Io, Loaded, RftNode, Tree } from './vault'
 import { artifactLine, artifactMarks } from './artifacts'
-import { ANSWER_LIMIT, fitList } from './fit'
+import { ANSWER_LIMIT, clip, fitList } from './fit'
 import { LEGEND, MARK, ROOT_CONCEPT, bodyOf, conceptOrder, conceptPath, counts, countsLine, fnv1a, front, join, load, ownNotes, resolveConcept, resolveId, setField, statusSummary, unquote, unquoteJson } from './vault'
 
 export const MAP_DIR = 'map'
@@ -136,8 +136,11 @@ function digestMark(tree: Tree, c: Concept, d: Digest | undefined): string {
   return isStale(tree, d) ? ` [digest out of date, ${d.updated}]` : ''
 }
 
+/** The width of a note in progress in the session's rules: its mark, name, parent and the start of its summary. */
+export const RULES_ACTIVE_WIDTH = 120
+
 /** The project map: each concept with its state, nested as the concepts are, then what is in progress. */
-export function projectMap(loaded: Loaded, digests: Record<string, Digest>, opts: { maxActive?: number; artifacts?: Marks } = {}): string {
+export function projectMap(loaded: Loaded, digests: Record<string, Digest>, opts: { maxActive?: number; artifacts?: Marks; activeWidth?: number } = {}): string {
   const { tree } = loaded
   const concepts = tree.concepts ?? {}
   const out: string[] = []
@@ -154,7 +157,8 @@ export function projectMap(loaded: Loaded, digests: Record<string, Digest>, opts
   const max = opts.maxActive ?? 15
   if (active.length) {
     out.push('', `In progress (${active.length}):`)
-    for (const n of active.slice(0, max)) out.push(noteLine(n, null))
+    // in the session's rules, sent with every request, each is one short line; rft_map gives them whole
+    for (const n of active.slice(0, max)) out.push(opts.activeWidth ? clip(noteLine(n, null), opts.activeWidth) : noteLine(n, null))
     if (active.length > max) out.push(`… ${active.length - max} more (rft_search status running / planned)`)
   }
   return out.join('\n')

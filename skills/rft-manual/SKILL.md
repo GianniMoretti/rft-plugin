@@ -62,8 +62,9 @@ topical tags**: what it is about, so the tree view can filter by them (`ablation
 `cluster`, `radius`).
 
 - Lowercase kebab-case: `radial-rule`, not `Radial rule` or `radial_rule` (the tools convert).
-- **Reuse the vocabulary**: call `rft_tags` first and pick existing tags when they fit; invent
-  a new one only for a genuinely new topic. Prefer a few broad tags over many narrow ones.
+- **Reuse the vocabulary**: the session's rules list the tags in use, most used first
+  (`rft_tags` gives them all, with counts); pick existing tags when they fit and invent a new
+  one only for a genuinely new topic. Prefer a few broad tags over many narrow ones.
 - Pass them as `tags` to `rft_add_node`; change them later with `rft_set_tags` (it replaces the
   topical tags and keeps the project, type and status ones).
 - Do not retro-tag existing notes unless the user asks.
@@ -602,7 +603,7 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 | `rft_collect_papers` | download the open-access PDFs of reference notes into `papers/<concept>/`, in the background |
 | `rft_set_tags` | replace a note's topical tags |
 | `rft_set_type` | change the type of a note made with the wrong one (new id, file moved, links renamed) |
-| `rft_tags` | the topical tags in use, with counts: check before inventing one |
+| `rft_tags` | every topical tag in use, with counts (the session's rules list the most used) |
 | `rft_set_concept` | set, rename or remove (name null) the concept a note starts, after the user confirms |
 | `rft_concepts` | the concept tree: names, start notes, counts, statuses, linked code |
 | `rft_set_repos` | link code repos to a concept (or, on the root note, to the project); an empty list removes them |
@@ -612,7 +613,7 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 | `rft_run_notebook` | run the notebook now in its repo's uv environment: `RESULTS` written in the Result's table (recorded, or `record: true`) or checked against it (ok, differs, failed); `FIGURES` and `TABLES` saved; stamps `reproduced:` |
 | `rft_tree` | the current tree, or the subtree of one node (`root`, `depth`) |
 | `rft_validate` | errors (bad ids, statuses, titles, missing parents, broken links) and warnings |
-| `rft_sync` | regenerate children / up / down, the tree in `00 Index.md`, the canvas |
+| `rft_sync` | regenerate children / up / down, the tree in `00 Index.md`, the canvas; answers with the tree's check |
 | `rft_comments` | a note's comments and suggestions (open ones in full, the history in short), or the notes with open threads |
 | `rft_comment` | reply in a thread (`applied: true` closes a suggestion you made in an unlocked note), or start a comment on a `quote` |
 | `rft_suggest` | propose new text for a `quote`, or the replacement an open suggestion asks for; the user accepts it |
@@ -626,8 +627,9 @@ answer "what did we try on X", look at the map and search first, and read only t
 match.
 
 Editing note bodies (What, Why, Result, ...) with the ordinary file tools is fine. After editing
-notes by hand — above all a `parent:` field — run `rft_sync`, then `rft_validate`, and fix every
-error. Never edit `up:` / `down:` by hand, nor the list under `## The tree` in the index.
+notes by hand — above all a `parent:` field — run `rft_sync`: it answers with the tree's check
+(no `rft_validate` after it); fix every error. Never edit `up:` / `down:` by hand, nor the list
+under `## The tree` in the index.
 
 A note made with the wrong type is fixed with `rft_set_type`, never renamed by hand: its id, its
 folder and every link to it change together.

@@ -128,7 +128,8 @@ describe('tools', () => {
     const check = await $.tool.call({ tool: 'mcp__rft__rft_validate' } as never)
     expect(check.text).toMatch(/^OK: no errors/)
     const sync = await $.tool.call({ tool: 'mcp__rft__rft_sync' } as never)
-    expect(sync.text).toBe('Everything was already in sync.')
+    // a sync answers with the tree's check, so no rft_validate follows it
+    expect(sync.text).toMatch(/^Everything was already in sync\.\nCheck: OK, the tree is valid \(no rft_validate needed\)\. 1 warning\(s\):\n- \d+ note\(s\) have no one-line summary/)
     // one refused note, nothing written
     const refused = await $.tool.call({ tool: 'mcp__rft__rft_add_node', notes: [{ type: 'direction', title: 'Fine', parent: 'D01' }, { type: 'direction', title: 'Lost', parent: 'X9' }] } as never)
     expect(refused.isError).toBe(true)

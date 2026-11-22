@@ -41,7 +41,7 @@ import { matches, shellWrites } from './lib/shell'
 import { Answers, type ThreadJob } from './lib/answers'
 import { applyUpdate, behindLine, gapsText, notebookGaps, planText, planUpdate } from './lib/update'
 import type { Feature } from './lib/tools'
-import { SMALL_TREE, mapGaps, mapReport, mapWarnings, projectMap, readDigests, resolveConcept, setDigest, setSummaries } from './lib/map'
+import { RULES_ACTIVE_WIDTH, SMALL_TREE, mapGaps, mapReport, mapWarnings, projectMap, readDigests, resolveConcept, setDigest, setSummaries } from './lib/map'
 import { ARTIFACTS_DIR, artifactMarks, artifactReport, artifactWarnings, artifactsToWrite, setArtifact } from './lib/artifacts'
 import type { ApplyOutcome, NotebookEnv } from './lib/notebooks'
 import { MAX_TIMEOUT_S, REPRODUCED_LINE, changesReproduced, changesResultsBlock, reproducedEditText, resultsBlockEditText, runNotebook, setNotebook } from './lib/notebooks'
@@ -117,7 +117,7 @@ const TOOLS = {
         result: { type: 'string', description: 'Experiment: real results only (numbers with spread, failures, caveats).' },
         code: { type: 'string', description: 'Experiment: commit, script, results folder, machine.' },
         sections: { type: 'object', additionalProperties: { type: 'string' }, description: 'Other sections by heading, e.g. {"Status": "..."}. A reference has Source, Summary, Method, Key results, Relevance; a theory note Statement, Builds on, Explanation, Open questions.' },
-        tags: { type: 'array', items: { type: 'string' }, description: '1-3 short topical tags, lowercase kebab-case, reused from rft_tags when they fit (the project, type and status tags are added anyway).' },
+        tags: { type: 'array', items: { type: 'string' }, description: '1-3 short topical tags, lowercase kebab-case, reused from the ones in use when they fit (the project, type and status tags are added anyway).' },
         refs: { type: 'array', items: { type: 'string' }, description: 'Ids of the reference notes (R..) it builds on: for an experiment, the paper(s) whose setup it starts from; for a direction, the work it extends. Add missing references first.' },
         summary: { type: 'string', description: 'One line (at most 240 characters) on what the note is about, specific enough to read instead of the note: what is tested and on what, the idea, the paper\'s main claim. Always give it.' },
         suggested_priority: { type: 'string', enum: ['urgent', 'high', 'medium', 'low'], description: 'Optional, only with a clear reason: a priority to suggest; the user accepts or dismisses it.' },
@@ -458,7 +458,7 @@ const TOOLS = {
   },
   rft_set_tags: {
     description:
-      'Replace the topical tags of a node (the project, type and status tags stay). Tags are made lowercase kebab-case; reuse the vocabulary rft_tags lists.',
+      'Replace the topical tags of a node (the project, type and status tags stay). Tags are made lowercase kebab-case; reuse the ones in use (rft_tags lists them all).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -518,7 +518,7 @@ const TOOLS = {
   },
   rft_sync: {
     description:
-      'Regenerate everything derived from the parent fields: children / up / down frontmatter, the tree in 00 Index.md, the Obsidian canvas (and the Mermaid diagram when enabled). Run after editing notes by hand.',
+      'Regenerate everything derived from the parent fields: children / up / down frontmatter, the tree in 00 Index.md, the Obsidian canvas (and the Mermaid diagram when enabled). Run after editing notes by hand. The answer ends with the tree\'s check: no rft_validate after it.',
     inputSchema: {
       type: 'object',
       properties: { relayout: { type: 'boolean', description: 'Discard manual moves of canvas cards.' } },
@@ -564,7 +564,7 @@ const TOOLS = {
   },
   rft_queue: {
     description:
-      'Queue a run of an experiment on this machine\'s GPUs instead of launching it yourself in the background: a runner (a process of its own, it outlives the session) starts it once enough GPUs are free, in the user\'s order (they reorder, pause and cancel it in the tree view), with CUDA_VISIBLE_DEVICES set to its GPUs, and records how it ended. The plugin sets the experiment running when the job starts and tells the user when it ends: do not poll rft_jobs to wait for it. The command runs as `bash -c` in cwd with the session\'s environment only: activate the conda or venv in the command (`source ~/miniconda3/bin/activate env && python train.py ...`) or give the interpreter\'s full path. Create the experiment\'s note first (rft_add_node).',
+      'Queue a run of an experiment on this machine\'s GPUs instead of launching it yourself in the background: a runner (a process of its own, it outlives the session) starts it once enough GPUs are free, in the user\'s order (they reorder, pause and cancel it in the tree view), with CUDA_VISIBLE_DEVICES set to its GPUs, and records how it ended. The command runs as `bash -c` in cwd with the session\'s environment only: activate the conda or venv in the command (`source ~/miniconda3/bin/activate env && python train.py ...`) or give the interpreter\'s full path. Create the experiment\'s note first (rft_add_node).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -585,7 +585,7 @@ const TOOLS = {
       type: 'object',
       properties: {
         id: { type: 'string', description: 'A job (q7) or an experiment (E14).' },
-        log: { type: 'integer', description: 'With a job id: how many of the last lines of its output to show (at most 200).' },
+        log: { type: 'integer', description: 'With a job id: how many of the last lines of its output to show (at most 200). Rarely needed: a job\'s answer shows the commit it ran and, when it failed, the end of its traceback.' },
       },
     },
   },
@@ -709,7 +709,7 @@ async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> 
     let map: string | undefined
     if (loaded && Object.keys(s.nodes).length > SMALL_TREE) {
       try {
-        map = projectMap(loaded, await readDigests(h.io, loaded), { artifacts: await artifactMarks(h.io, loaded) })
+        map = projectMap(loaded, await readDigests(h.io, loaded), { artifacts: await artifactMarks(h.io, loaded), activeWidth: RULES_ACTIVE_WIDTH })
       } catch { /* the list of notes instead */ }
     }
     rules = rulesText(treeOf(s), config, shownVault(h, config), { cwd: h.cwd, root: h.root, home: await homeOf($) }, map, features)
@@ -1117,9 +1117,11 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       return addSuggestion(io, loaded, { id: String(i.id ?? ''), thread: str(i.thread), quote: typeof i.quote === 'string' ? i.quote : undefined, replacement: i.replacement, text: i.text })
     case 'rft_sync': {
       const r = await sync(io, loaded, { relayout: i.relayout === true })
-      return r.changed.length
+      // the check of the vault as the sync left it, so no rft_validate follows
+      const check = checkLine(await vaultCheck($, h, await loadActive(io)), null)
+      return `${r.changed.length
         ? `Updated ${r.changed.length} file(s):\n${r.changed.map(c => `- ${c}`).join('\n')}`
-        : 'Everything was already in sync.'
+        : 'Everything was already in sync.'}\n${check}`
     }
     default:
       throw new Error(`unknown rft tool ${name}`)
