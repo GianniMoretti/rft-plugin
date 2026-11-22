@@ -3,7 +3,7 @@
 
 import { describe, expect, test } from 'claude-code/testing'
 
-import { addNode, initVault, moveNode, setRefs, setStatus, setTags, setType, tagsReport } from '../hooks/lib/ops'
+import { MAX_ADD, addNode, addNodes, checkLine, initVault, moveNode, setRefs, setStatus, setTags, setType, tagsReport } from '../hooks/lib/ops'
 import { LockedChange } from '../hooks/lib/comments'
 import { supersede } from '../hooks/lib/knowledge'
 import { staticPage } from '../hooks/lib/page'
@@ -181,6 +181,62 @@ describe('vault', () => {
     const { io, loaded } = await loadDemo()
     await expect(addNode(io, loaded, { type: 'direction', title: 'x', parent: 'D42', date: '2026-02-01' })).rejects.toThrow(/not a note/)
     await expect(addNode(io, loaded, { type: 'direction', title: 'x', parent: null, date: '2026-02-01' })).rejects.toThrow(/parent is required/)
+  })
+
+  test('several notes in one call: a later one names an earlier one by its place, as parent or reference', async () => {
+    const { fs, io, loaded } = await loadDemo()
+    const made = await addNodes(io, loaded, [
+      { type: 'reference', title: 'The paper', parent: 'E01', date: '2026-02-01' },
+      { type: 'direction', title: 'Its idea here', parent: 'D01', date: '2026-02-01', refs: ['#1'] },
+      { type: 'experiment', title: 'Seed 0', parent: '#2', date: '2026-02-01', refs: ['#1'] },
+      { type: 'experiment', title: 'Seed 1', parent: '#2', date: '2026-02-01' },
+    ])
+    expect(made.map(n => n.id)).toEqual(['R01', 'D02', 'E03', 'E04'])
+    expect(loaded.tree.nodes.E03!.parent).toBe('D02')
+    expect(loaded.tree.nodes.E04!.parent).toBe('D02')
+    expect(loaded.tree.nodes.D02!.children).toEqual(['E03', 'E04'])
+    expect(loaded.tree.nodes.E03!.refs).toEqual(['R01'])
+    expect(fs.read('vault/experiments/E03 Seed 0.md')).toContain('parent: "[[D02 Its idea here]]"')
+    // the vault is left as rft_sync and rft_validate would leave it
+    expect((await sync(io, await load(io, loaded.config))).changed).toEqual([])
+    const v = await validate(io, loaded)
+    expect(v.errors).toEqual([])
+    expect(checkLine(v, made.map(n => n.id))).toMatch(/^Check: OK, the tree is valid and its derived files are in sync/)
+  })
+
+  test('a list with one note that would be refused writes nothing, and says which note', async () => {
+    const { fs, io, loaded } = await loadDemo()
+    const before = [...fs.files.keys()].sort()
+    const note = (title: string, parent: string) => ({ type: 'experiment' as const, title, parent, date: '2026-02-01' })
+    await expect(addNodes(io, loaded, [note('Fine', 'D01'), note('Lost', 'D42')])).rejects.toThrow(/note 2 of 2 \("Lost"\): parent "D42" is not a note.*Nothing was added/)
+    // a note names only the ones before it
+    await expect(addNodes(io, loaded, [note('First', '#2'), note('Second', 'D01')])).rejects.toThrow(/note 1 of 2.*names no earlier note/)
+    await expect(addNodes(io, loaded, [note('First', 'D01'), note('Second', '#2')])).rejects.toThrow(/note 2 of 2.*names no earlier note/)
+    await expect(addNodes(io, loaded, [note('First', 'D01'), { ...note('Second', 'D01'), refs: ['#3'] }])).rejects.toThrow(/reference "#3" names no earlier note/)
+    await expect(addNodes(io, loaded, [note('First', 'D01'), { ...note('Second', '#1'), summary: 'x'.repeat(400) }])).rejects.toThrow(/note 2 of 2.*one line/)
+    await expect(addNodes(io, loaded, [])).rejects.toThrow(/at least one note/)
+    await expect(addNodes(io, loaded, Array.from({ length: MAX_ADD + 1 }, (_, k) => note(`N${k}`, 'D01')))).rejects.toThrow(/at most/)
+    expect([...fs.files.keys()].sort()).toEqual(before)
+    // outside a list a place names nothing
+    await expect(addNode(io, loaded, note('Alone', '#1'))).rejects.toThrow(/names no earlier note/)
+  })
+
+  test('the check line: every error, the warnings on the notes just written, the others counted', () => {
+    const warnings = ['E03: no references (refs:)', 'E030: tag(s) X not lowercase kebab-case', 'experiments/E03 Seed 0.md: date "x" is not YYYY-MM-DD', 'D01: something else']
+    const line = checkLine({ errors: [], warnings }, ['E03'])
+    expect(line).toContain('Check: OK')
+    expect(line).toContain('2 warning(s) on E03; 2 warning(s) on other notes (rft_validate lists them):')
+    expect(line).toContain('- E03: no references (refs:)')
+    expect(line).toContain('- experiments/E03 Seed 0.md: date')
+    expect(line).not.toContain('E030')
+    expect(line).not.toContain('D01: something else')
+    expect(checkLine({ errors: [], warnings: [] }, ['E03'])).toBe('Check: OK, the tree is valid and its derived files are in sync (no rft_sync or rft_validate needed).')
+    expect(checkLine({ errors: [], warnings: ['D01: something else'] }, ['E03', 'E04'])).toBe('Check: OK, the tree is valid and its derived files are in sync (no rft_sync or rft_validate needed); 1 warning(s) on other notes (rft_validate lists them).')
+    const failed = checkLine({ errors: Array.from({ length: 12 }, (_, k) => `error ${k}`), warnings }, ['E03'])
+    expect(failed.split('\n')[0]).toBe('Check: FAILED, 12 error(s); 2 warning(s) on other notes (rft_validate lists them).')
+    expect(failed).toContain('- error 7')
+    expect(failed).not.toContain('- error 8')
+    expect(failed).toContain('… 4 more (rft_validate lists them)')
   })
 
   test('a status change updates the frontmatter, the tag, the status line and the note', async () => {

@@ -125,7 +125,7 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
 
   | tool | does |
   |---|---|
-  | `rft_add_node` | creates a note with the next free id, a sanitised title (no `^ # \| [ ]`), the template sections, and links it under its parent, with no priority (Claude may suggest one); it answers with the notes already in the tree close to the new one ("have we tried this?") |
+  | `rft_add_node` | creates a note with the next free id, a sanitised title (no `^ # \| [ ]`), the template sections, and links it under its parent, with no priority (Claude may suggest one); it answers with the notes already in the tree close to the new one ("have we tried this?"); `notes` adds several in one call (a later one names an earlier one as parent or reference by its place, `#1` the first; a field given beside the list holds for every note; one refused note and nothing is written); the answer ends with the check `rft_validate` runs, the derived files already synced |
   | `rft_set_status` | changes a status (frontmatter, tag, Status line), optionally appending results or the reason |
   | `rft_move_node` | moves a note and its subtree under another parent, after you agree; the note keeps its past parents (`origin:`) and a dated `## History` line |
   | `rft_set_refs` | replaces the reference notes a note builds on (`refs:`); `rft_add_node` takes `refs` too |

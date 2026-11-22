@@ -19,10 +19,10 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { RftSnapshot } from '../types'
 import { COMMENTS_DIR, LockedChange, answerThread, askText, comment as addComment, commentsReport, isLocked, readComments, subagentAskText, subjectOf, suggest as addSuggestion } from './lib/comments'
-import type { CodeEnv, Git } from './lib/ops'
-import { QUEUE_RULE, addNode, codeReport, conceptsReport, exportHtml, initVault, loadActive, lockedText, moveNode, rulesText, setCode, setConcept, setRefs, setRepos, setStatus, setTags, setType, tagsReport, today, treeReport } from './lib/ops'
+import type { AddInput, CodeEnv, Git } from './lib/ops'
+import { QUEUE_RULE, addNodes, checkLine, codeReport, conceptsReport, exportHtml, initVault, loadActive, lockedText, moveNode, rulesText, setCode, setConcept, setRefs, setRepos, setStatus, setTags, setType, tagsReport, today, treeReport } from './lib/ops'
 import { ASSET_PATHS } from './lib/page'
-import type { Config, Io, Loaded, NodeType, Tree } from './lib/vault'
+import type { Config, Io, Loaded, NodeType, Tree, Validation } from './lib/vault'
 import { OPEN_HOSTS, jobNote, planPapers, withEntryPdf } from './lib/papers'
 import { searchReport, similarNotes } from './lib/search'
 import { graphReport } from './lib/graph'
@@ -102,7 +102,7 @@ const treeOf = (s: RftSnapshot): Tree => ({ nodes: s.nodes, roots: s.roots, conc
 const TOOLS = {
   rft_add_node: {
     description:
-      'Add a node to the reasoning tree: an experiment (something run or computed), a direction (an idea, question or hypothesis, rejected ones included), a reference (a paper, method or literature review that was read, summarised and commented, with a source that can be checked) or a theory note (a definition, method, taxonomy or argument of the project\'s own, built on the other notes). Assigns the id and links it under its parent. Create an experiment BEFORE launching it (status planned or running). In a concept that links code, the note gets a ## Code section with the repos\' commits: pass sections.Code after reading the code, or use rft_set_code later.',
+      'Add a node to the reasoning tree: an experiment (something run or computed), a direction (an idea, question or hypothesis, rejected ones included), a reference (a paper, method or literature review that was read, summarised and commented, with a source that can be checked) or a theory note (a definition, method, taxonomy or argument of the project\'s own, built on the other notes). Assigns the id and links it under its parent. Create an experiment BEFORE launching it (status planned or running). In a concept that links code, the note gets a ## Code section with the repos\' commits: pass sections.Code after reading the code, or use rft_set_code later. Several notes go in ONE call (notes), never one call each. The answer ends with the tree\'s check, synced: no rft_sync or rft_validate after it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -121,8 +121,8 @@ const TOOLS = {
         summary: { type: 'string', description: 'One line (at most 240 characters) on what the note is about, specific enough to read instead of the note: what is tested and on what, the idea, the paper\'s main claim. Always give it.' },
         suggested_priority: { type: 'string', enum: ['urgent', 'high', 'medium', 'low'], description: 'Optional, only with a clear reason: a priority to suggest; the user accepts or dismisses it.' },
         priority_why: { type: 'string', description: 'With suggested_priority: why, in one line (what it unblocks, what makes it pressing or not).' },
+        notes: { type: 'array', items: { type: 'object' }, description: 'Several notes at once, added in order: each an object with the fields above (a field given beside notes holds for every note that does not give its own, e.g. a shared type, parent or refs). A later note names an earlier one of the list as parent, or among its refs, by its place: "#1" is the first.' },
       },
-      required: ['type', 'title'],
     },
   },
   rft_set_repos: {
@@ -893,25 +893,49 @@ async function unlocking($: EngineInterface, change: (unlock: boolean) => Promis
  * carries beyond the tool's input (that the user agreed there to unlock the note); never the
  * model's.
  */
+/** One note of an rft_add_node call, as addNode takes it. */
+function addInput(i: Record<string, unknown>): AddInput {
+  const sections: Record<string, string> = {}
+  for (const [k, v] of Object.entries((i.sections as Record<string, unknown> | undefined) ?? {})) if (str(v)) sections[k] = String(v)
+  if (str(i.what)) sections.What = String(i.what)
+  if (str(i.why)) sections.Why = String(i.why)
+  if (str(i.idea)) sections.Idea = String(i.idea)
+  if (str(i.result)) sections.Result = String(i.result)
+  return {
+    type: i.type as NodeType, title: String(i.title ?? ''), parent: str(i.parent) ?? null,
+    status: str(i.status), date: today(), sections, code: str(i.code), tags: strings(i.tags), refs: strings(i.refs), summary: str(i.summary),
+    suggestedPriority: str(i.suggested_priority), priorityWhy: str(i.priority_why),
+  }
+}
+
+/** What rft_validate reports: the vault's check with the map's, the artifacts', the manuscript's and the decks' warnings. */
+async function vaultCheck($: EngineInterface, h: Here, loaded: Loaded): Promise<Validation> {
+  const v = await validate(h.io, loaded, { root: h.root, home: await homeOf($) })
+  v.warnings.push(...(await mapWarnings(h.io, loaded)), ...(await artifactWarnings(h.io, loaded)), ...(await manuscriptWarnings(h.io, loaded)), ...(await deckWarnings(h.io, loaded)))
+  return v
+}
+
 async function runTool($: EngineInterface, name: string, i: Record<string, unknown>, view: { unlock?: boolean } = {}): Promise<string> {
   const h = await mustHere($)
   const io = h.io
   const loaded = await loadActive(io)
   switch (name) {
     case 'rft_add_node': {
-      const sections: Record<string, string> = {}
-      for (const [k, v] of Object.entries((i.sections as Record<string, unknown> | undefined) ?? {})) if (str(v)) sections[k] = String(v)
-      if (str(i.what)) sections.What = String(i.what)
-      if (str(i.why)) sections.Why = String(i.why)
-      if (str(i.idea)) sections.Idea = String(i.idea)
-      if (str(i.result)) sections.Result = String(i.result)
-      const node = await addNode(io, loaded, {
-        type: i.type as NodeType, title: String(i.title ?? ''), parent: str(i.parent) ?? null,
-        status: str(i.status), date: today(), sections, code: str(i.code), tags: strings(i.tags), refs: strings(i.refs), summary: str(i.summary),
-        suggestedPriority: str(i.suggested_priority), priorityWhy: str(i.priority_why),
-      }, await codeEnv($, h))
-      const similar = similarNotes(loaded, node.id)
-      return `${node.report}\nId: ${node.id}\nNote: ${join(shownVault(h, loaded.config), node.path)}${similar ? `\n${similar}` : ''}`
+      // one note, or a list whose notes take the fields given beside it unless they give their own
+      const { notes, ...shared } = i
+      const list = Array.isArray(notes)
+        ? notes.map(n => (n && typeof n === 'object' ? { ...shared, ...(n as Record<string, unknown>) } : shared))
+        : [i]
+      const nodes = await addNodes(io, loaded, list.map(addInput), await codeEnv($, h))
+      const ids = nodes.map(n => n.id)
+      const vault = shownVault(h, loaded.config)
+      return [
+        ...nodes.map(node => {
+          const similar = similarNotes(loaded, node.id, 3, ids)
+          return `${node.report}\nId: ${node.id}\nNote: ${join(vault, node.path)}${similar ? `\n${similar}` : ''}`
+        }),
+        checkLine(await vaultCheck($, h, loaded), ids),
+      ].join(nodes.length > 1 ? '\n\n' : '\n')
     }
     case 'rft_set_repos':
       return setRepos(io, loaded, await codeEnv($, h), String(i.id ?? ''), strings(i.repos))
@@ -1074,8 +1098,7 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
     case 'rft_tree':
       return treeReport(loaded, { root: str(i.root), depth: typeof i.depth === 'number' ? i.depth : undefined, vault: shownVault(h, loaded.config) })
     case 'rft_validate': {
-      const v = await validate(io, loaded, { root: h.root, home: await homeOf($) })
-      v.warnings.push(...(await mapWarnings(io, loaded)), ...(await artifactWarnings(io, loaded)), ...(await manuscriptWarnings(io, loaded)), ...(await deckWarnings(io, loaded)))
+      const v = await vaultCheck($, h, loaded)
       const lines = [v.errors.length
         ? `FAILED: ${v.errors.length} error(s), ${v.warnings.length} warning(s).`
         : `OK: no errors, ${v.warnings.length} warning(s).`]

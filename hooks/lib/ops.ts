@@ -5,7 +5,7 @@
 import { LockedChange, isLocked, locate as locateThread, readComments, renameComments } from './comments'
 import type { PageAssets } from './page'
 import { staticPage } from './page'
-import type { CodeRepo, Concept, Config, Io, Loaded, NodeType, RftNode, Tree } from './vault'
+import type { CodeRepo, Concept, Config, Io, Loaded, NodeType, RftNode, Tree, Validation } from './vault'
 import {
   CANVAS, CODE, CONFIG_PATH, ID_RE, INDEX, LEGEND, MARK, MERMAID, NODE_TYPES, ROOT_CONCEPT, STATUSES, SUBDIR,
   TEMPLATES, TYPES, bodyOf, codeRepos, codeSection, compactTree, conceptOrder, conceptPath, counts, countsLine,
@@ -145,28 +145,59 @@ function refNames(tree: Tree, refs: string[]): string[] {
   return out
 }
 
+/** `#2`: the second note of the list of one rft_add_node call, named by a later one as its parent or among its refs. */
+const placeOf = (ref: string | null | undefined): number | null => {
+  const m = /^#(\d+)$/.exec((ref ?? '').trim())
+  return m ? Number(m[1]) : null
+}
+
+type Checked = { title: string; status: string; parent: string | null; refs: string[]; summary?: string; suggestion: ReturnType<typeof checkSuggestion> | null }
+
 /**
- * `env`: how to reach the code; with it, an experiment or direction in a concept that links code
- * gets a `## Code` section with each repo's current commit (`sections.Code` is its description).
+ * Everything a new note is refused for, checked before anything is written. `earlier`: how many
+ * notes of the same call come before it; a parent or ref that names one of them (`#k`) is not in
+ * the tree yet, so it is checked by its place alone.
  */
-export async function addNode(io: Io, loaded: Loaded, input: AddInput, env?: CodeEnv): Promise<RftNode & { report: string }> {
-  const { tree, config } = loaded
+function checkAdd(tree: Tree, input: AddInput, earlier = 0): Checked {
   if (!isNodeType(input.type)) throw new RftError(`type must be ${orList(NODE_TYPES.map(t => `"${t}"`))}`)
   const title = sanitiseTitle(input.title ?? '')
   if (!title) throw new RftError('the title is empty once the characters that break links are removed')
   const status = input.status ?? TYPES[input.type].status
   if (!(STATUSES as readonly string[]).includes(status)) throw new RftError(`status must be one of ${STATUSES.join(', ')}`)
   if (status === 'verified' || status === 'review') throw new RftError(`a new note is never ${status}: only the user verifies a note once its claim is checked (suggest it later with rft_set_status verified)`)
-  const isEmpty = Object.keys(tree.nodes).length === 0
+  const inList = (ref: string, what: string) => {
+    const k = placeOf(ref)
+    if (k === null) return false
+    if (k < 1 || k > earlier) throw new RftError(`${what} "${ref}" names no earlier note of this call (a note of the list can name only the ones before it, #1 being the first)`)
+    return true
+  }
+  const isEmpty = Object.keys(tree.nodes).length === 0 && earlier === 0
   let parent: string | null = null
   if (input.parent) {
-    parent = resolveId(tree, input.parent)
-    if (!parent) throw new RftError(`parent "${input.parent}" is not a note of the tree (give its id, e.g. D03)`)
+    if (!inList(input.parent, 'parent')) {
+      parent = resolveId(tree, input.parent)
+      if (!parent) throw new RftError(`parent "${input.parent}" is not a note of the tree (give its id, e.g. D03)`)
+    }
   } else if (!isEmpty) {
     throw new RftError('parent is required: every note but the root D00 comes from a parent note')
   } else if (input.type !== 'direction') {
     throw new RftError('the root of the tree must be a direction (D00, the starting question)')
   }
+  const refs = refNames(tree, (input.refs ?? []).filter(r => !inList(r, 'reference')))
+  const summary = input.summary?.trim() ? cleanSummary(input.summary) : undefined
+  const suggestion = input.suggestedPriority !== undefined ? checkSuggestion(input.suggestedPriority, input.priorityWhy) : null
+  return { title, status, parent, refs, summary, suggestion }
+}
+
+export type Added = RftNode & { report: string }
+
+/**
+ * `env`: how to reach the code; with it, an experiment or direction in a concept that links code
+ * gets a `## Code` section with each repo's current commit (`sections.Code` is its description).
+ */
+export async function addNode(io: Io, loaded: Loaded, input: AddInput, env?: CodeEnv): Promise<Added> {
+  const { tree, config } = loaded
+  const { title, status, parent, refs, summary, suggestion } = checkAdd(tree, input)
   // another session on the same tree may have added notes since `loaded` was read
   const id = await freshId(io, loaded, input.type)
   const name = `${id} ${title}`
@@ -185,9 +216,6 @@ export async function addNode(io: Io, loaded: Loaded, input: AddInput, env?: Cod
       ? ` The ${CODE} section holds your description, checked against these commits.`
       : ' Read the code as it is now (the current commit and uncommitted changes) and write how this note relates to it with rft_set_code.')
   }
-  const refs = refNames(tree, input.refs ?? [])
-  const summary = input.summary?.trim() ? cleanSummary(input.summary) : undefined
-  const suggestion = input.suggestedPriority !== undefined ? checkSuggestion(input.suggestedPriority, input.priorityWhy) : null
   const text = noteText(id, { ...input, sections, title, status, refs, summary, suggestedPriority: suggestion?.priority, suggestedWhy: suggestion?.why }, config.project, parentName)
   await io.write(join(config.vault, path), text)
   const prefix = TYPES[input.type].prefix
@@ -208,6 +236,63 @@ export async function addNode(io: Io, loaded: Loaded, input: AddInput, env?: Cod
     report: `Created ${path}${parent ? ` under ${parentName}` : ' as the root'} (status ${status}). Updated ${report.changed.length} derived file(s).${codeSaid}${summary ? '' : ' It has no summary: give it one line with rft_set_summary.'}` +
       (suggestion ? ` It has no priority: your suggestion (${suggestion.priority}) waits for the user to accept or dismiss it in the tree view.${fullText(fresh.tree, node, suggestion.priority)}` : ''),
   }
+}
+
+/** How many notes one rft_add_node call adds at most. */
+export const MAX_ADD = 20
+
+/**
+ * Several notes in one call, in order. A later one names an earlier one as its parent (or among
+ * its refs) by its place in the list, `#1` being the first. Every note is checked before the first
+ * is written, so a refused list writes nothing.
+ */
+export async function addNodes(io: Io, loaded: Loaded, inputs: AddInput[], env?: CodeEnv): Promise<Added[]> {
+  if (!inputs.length) throw new RftError('notes is empty: give at least one note')
+  if (inputs.length > MAX_ADD) throw new RftError(`at most ${MAX_ADD} notes in one call (this one has ${inputs.length})`)
+  if (inputs.length > 1) {
+    inputs.forEach((input, k) => {
+      try {
+        checkAdd(loaded.tree, input, k)
+      } catch (err) {
+        throw new RftError(`note ${k + 1} of ${inputs.length}${input.title ? ` ("${input.title}")` : ''}: ${err instanceof Error ? err.message : String(err)}. Nothing was added.`)
+      }
+    })
+  }
+  const made: Added[] = []
+  const real = (ref: string) => {
+    const k = placeOf(ref)
+    return k !== null && made[k - 1] ? made[k - 1]!.id : ref
+  }
+  for (const input of inputs) {
+    try {
+      made.push(await addNode(io, loaded, { ...input, parent: input.parent ? real(input.parent) : null, refs: input.refs?.map(real) }, env))
+    } catch (err) {
+      // past the checks only the disk or the code's repository fails: say what exists by now
+      if (!made.length) throw err
+      throw new RftError(`${err instanceof Error ? err.message : String(err)}. Added before it: ${made.map(n => n.id).join(', ')}; note ${made.length + 1} and the ones after it were not.`)
+    }
+  }
+  return made
+}
+
+const MAX_CHECK_LINES = 8
+
+/**
+ * The vault's check at the end of an answer that wrote notes, so no rft_validate follows it: every
+ * error, the warnings that name the notes just written (`ids`), and how many others there are.
+ */
+export function checkLine(v: Validation, ids: string[]): string {
+  const cut = (lines: string[]) => lines.length > MAX_CHECK_LINES
+    ? [...lines.slice(0, MAX_CHECK_LINES).map(x => `- ${x}`), `… ${lines.length - MAX_CHECK_LINES} more (rft_validate lists them)`]
+    : lines.map(x => `- ${x}`)
+  const names = new RegExp(`(^|[^A-Za-z0-9])(${ids.join('|')})(?![0-9])`)
+  const own = ids.length ? v.warnings.filter(w => names.test(w)) : []
+  const others = v.warnings.length - own.length
+  const rest = others ? `${others} warning(s) on other notes (rft_validate lists them)` : ''
+  if (v.errors.length) return [`Check: FAILED, ${v.errors.length} error(s)${rest ? `; ${rest}` : ''}.`, ...cut(v.errors)].join('\n')
+  const head = 'Check: OK, the tree is valid and its derived files are in sync (no rft_sync or rft_validate needed)'
+  if (!own.length) return `${head}${rest ? `; ${rest}` : ''}.`
+  return [`${head}. ${own.length} warning(s) on ${ids.length > 1 ? 'these notes' : ids[0]}${rest ? `; ${rest}` : ''}:`, ...cut(own)].join('\n')
 }
 
 /** The ids of the notes in a folder of the vault, as it is on disk now. */

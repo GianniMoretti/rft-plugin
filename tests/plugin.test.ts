@@ -98,6 +98,43 @@ describe('tools', () => {
     const bad = await $.tool.call({ tool: 'mcp__rft__rft_add_node', type: 'direction', title: 'Orphan', parent: 'X9' } as never)
     expect(bad.isError).toBe(true)
   })
+
+  test('rft_add_node: the answer ends with the check; a list adds every note in one call, sharing the fields given beside it', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, demoFiles())
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const one = await $.tool.call({ tool: 'mcp__rft__rft_add_node', type: 'direction', title: 'A question', parent: 'E02', idea: 'Why.', summary: 'Why it holds' } as never)
+    expect(one.isError).toBeUndefined()
+    expect(one.text!.split('\n').pop()).toMatch(/^Check: OK, the tree is valid and its derived files are in sync \(no rft_sync or rft_validate needed\)/)
+    const many = await $.tool.call({
+      tool: 'mcp__rft__rft_add_node', type: 'experiment', parent: '#1', status: 'planned', tags: ['seeds'],
+      notes: [
+        { type: 'direction', title: 'Sweep the seeds', parent: 'D02', status: 'idea', idea: 'Three seeds.', summary: 'Seeds 0 to 2' },
+        { title: 'Seed 0', what: 'Seed 0.', summary: 'Seed 0 of the sweep' },
+        { title: 'Seed 1', what: 'Seed 1.', summary: 'Seed 1 of the sweep' },
+        { title: 'Seed 2', what: 'Seed 2.', summary: 'Seed 2 of the sweep', tags: ['last'] },
+      ],
+    } as never)
+    expect(many.isError).toBeUndefined()
+    expect(many.text).toContain('Id: D03')
+    for (const id of ['E03', 'E04', 'E05']) expect(many.text).toContain(`Id: ${id}`)
+    expect(w.fs.read('vault/experiments/E04 Seed 1.md')).toContain('parent: "[[D03 Sweep the seeds]]"')
+    expect(w.fs.read('vault/experiments/E04 Seed 1.md')).toContain('tags: [demo, experiment, seeds, planned]')
+    expect(w.fs.read('vault/experiments/E05 Seed 2.md')).toContain('tags: [demo, experiment, last, planned]')
+    expect(w.fs.read('vault/experiments/E03 Seed 0.md')).toContain('Seed 0.')
+    // the notes of one call are not each other's earlier work
+    expect(many.text).not.toContain('have we tried this?')
+    expect(many.text!.split('\n').pop()).toMatch(/^Check: OK/)
+    const check = await $.tool.call({ tool: 'mcp__rft__rft_validate' } as never)
+    expect(check.text).toMatch(/^OK: no errors/)
+    const sync = await $.tool.call({ tool: 'mcp__rft__rft_sync' } as never)
+    expect(sync.text).toBe('Everything was already in sync.')
+    // one refused note, nothing written
+    const refused = await $.tool.call({ tool: 'mcp__rft__rft_add_node', notes: [{ type: 'direction', title: 'Fine', parent: 'D01' }, { type: 'direction', title: 'Lost', parent: 'X9' }] } as never)
+    expect(refused.isError).toBe(true)
+    expect(refused.text).toContain('note 2 of 2 ("Lost")')
+    expect(w.fs.exists('vault/directions/D04 Fine.md')).toBe(false)
+  })
 })
 
 describe('concepts', () => {

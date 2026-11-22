@@ -182,11 +182,14 @@ export function searchReport(loaded: Loaded, query: string, filter: SearchFilter
   return out.join('\n')
 }
 
-/** Notes already in the tree close to a new one (its title and summary), to ask "have we tried this?". */
-export function similarNotes(loaded: Loaded, id: string, limit = 3): string {
+/**
+ * Notes already in the tree close to a new one (its title and summary), to ask "have we tried
+ * this?". `skip`: the other notes made by the same call, which are not earlier work.
+ */
+export function similarNotes(loaded: Loaded, id: string, limit = 3, skip: Iterable<string> = []): string {
   const n = loaded.tree.nodes[id]
   if (!n || n.type === 'reference') return ''
-  const near = new Set([id, n.parent ?? ''])
+  const near = new Set([id, n.parent ?? '', ...skip])
   const hits = search(loaded, `${n.title} ${n.summary ?? ''}`, {}, limit + near.size)
     .filter(h => !near.has(h.id) && h.coverage >= 0.5 && loaded.tree.nodes[h.id]!.type !== 'reference')
     .slice(0, limit)
