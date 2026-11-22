@@ -847,7 +847,7 @@ main { --nb-w: min(calc(640px * var(--font-scale)), 46vw); }
 .nb-run.r-differs, .nb-run.r-failed { color: var(--dropped); }
 .nb-msg { margin: 0; padding: 8px 12px; }
 .nb-frame { flex: 1; min-height: 0; border-top: 1px solid var(--line); }
-.nb-frame iframe { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
+.nb-frame iframe { display: block; width: 100%; height: 100%; border: 0; background: var(--bg); }
 #nbpane-resize { position: absolute; top: 0; bottom: 0; left: min(var(--nb-w), 92vw); width: 9px;
   transform: translateX(-50%); cursor: col-resize; z-index: 4; touch-action: none; }
 #nbpane[hidden] + #nbpane-resize { display: none; }

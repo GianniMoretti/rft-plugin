@@ -69,6 +69,49 @@
     return `${r.state === 'ok' ? 'Reproduced' : 'Last run'} ${parts.join(' · ')}`
   }
 
+  /** The notebook editor's address in the page's theme: marimo reads its light or dark from `theme`. */
+  function notebookSrc(url, theme) {
+    return `${url}${url.includes('?') ? '&' : '?'}theme=${theme === 'dark' ? 'dark' : 'light'}`
+  }
+
+  /** marimo's own variables, which its editor is drawn from, as the page's (`--rft-<token>`, a token of app.css). */
+  const NOTEBOOK_VARS = {
+    '--background': 'var(--rft-bg)', '--foreground': 'var(--rft-fg)',
+    '--card': 'var(--rft-panel)', '--card-foreground': 'var(--rft-fg)',
+    '--popover': 'var(--rft-panel)', '--popover-foreground': 'var(--rft-fg)',
+    '--muted': 'color-mix(in srgb, var(--rft-line) 45%, var(--rft-bg))', '--muted-foreground': 'var(--rft-muted)',
+    '--secondary': 'color-mix(in srgb, var(--rft-line) 45%, var(--rft-bg))', '--secondary-foreground': 'var(--rft-fg)',
+    '--border': 'var(--rft-line)', '--input': 'var(--rft-line)',
+    '--primary': 'var(--rft-accent)', '--primary-foreground': 'var(--rft-panel)',
+    '--accent': 'color-mix(in srgb, var(--rft-accent) 14%, var(--rft-bg))', '--accent-foreground': 'var(--rft-accent)',
+    '--ring': 'var(--rft-accent)', '--link': 'var(--rft-accent)',
+    '--cm-background': 'var(--rft-panel)',
+    '--color-blue-500': 'var(--rft-accent)', // a slider's track, a progress bar
+    '--radius': '6px',
+  }
+  /** The fonts marimo takes when they are set: the page's own. */
+  const NOTEBOOK_FONTS = {
+    '--marimo-text-font': 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif',
+    '--marimo-heading-font': 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif',
+    '--marimo-monospace-font': 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+  }
+  const NOTEBOOK_TOKENS = ['bg', 'panel', 'fg', 'muted', 'line', 'accent']
+
+  /**
+   * The stylesheet the page puts in the notebook's frame, so marimo's editor is drawn in the page's
+   * colours and fonts: `tokens` are the page's (bg, panel, fg, muted, line, accent, each as app.css
+   * has it, a light-dark() pair), which marimo's own light or dark then picks a side of. Its
+   * selectors are the ones marimo sets these variables on, so this one, later in the page, wins.
+   */
+  function notebookStyle(tokens) {
+    const clean = v => String(v || '').replace(/[;{}<>]/g, '').trim()
+    const own = NOTEBOOK_TOKENS.filter(k => clean(tokens[k])).map(k => `--rft-${k}: ${clean(tokens[k])};`).join(' ')
+    const vars = Object.entries({ ...NOTEBOOK_VARS, ...NOTEBOOK_FONTS }).map(([k, v]) => `${k}: ${v};`).join(' ')
+    return `:root { ${own} }\n:root, body, .marimo, .marimo:is(.dark *) { ${vars} }\n`
+      // a figure drawn for a light page with no background of its own: on a light card in the dark theme, as in a note
+      + '.output img { background: light-dark(transparent, #ffffff); border-radius: 6px; }\n'
+  }
+
   /** How a link to a note is marked, from the tree as it is now: its status, superseded, or missing; an experiment's notebook run. */
   function decoration(byId, id) {
     const n = byId.get(id)
@@ -108,5 +151,5 @@
     return `<!doctype html><html><head>${pre}</head><body>${html}</body></html>`
   }
 
-  root.RftArtifacts = { entry, describe, stateText, subConcepts, linkTarget, decoration, reproducedText, frameSrc, wrap }
+  root.RftArtifacts = { entry, describe, stateText, subConcepts, linkTarget, decoration, reproducedText, frameSrc, wrap, notebookSrc, notebookStyle, NOTEBOOK_VARS }
 })(typeof globalThis !== 'undefined' ? globalThis : window)

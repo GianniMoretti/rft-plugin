@@ -824,7 +824,11 @@ so you can run it and read the note side by side.
   The page reaches the editor through the tree view's own port (under `/notebook/…`), so the one
   `ssh -L` forward above is enough on a remote machine. Opening one runs code, so it needs the page's key, as an edit does. ✕ closes the pane
   and the note's notebook button opens it again; drag its right edge to resize it; ↗ opens it in a
-  tab of its own.
+  tab of its own. The editor is drawn in the view's colours and fonts and follows its light and
+  dark (the theme's button loads it again, its kernel as it was; marimo says "Reconnected"); a
+  stylesheet of the notebook's own (`css_file`) has the last word, and a figure with no
+  background sits on a light card in the dark theme, as in a note. In a tab of its own it takes
+  the view's light or dark and keeps marimo's colours.
 - **A concept's notebook**, on the note that starts it (Claude writes it with `rft_set_notebook <its id>`), makes the
   figures and tables that compare the concept's experiments: its first cell (written for you)
   gives `EXPERIMENTS`, each of its experiments' `RESULTS` by id, read from what their notebooks
@@ -1103,8 +1107,9 @@ claude --plugin-dir .
 
 The first two check and test the mod, the third tests the server (and, with Chromium and
 `websocket-client` installed, the page at a phone's size: `tests/test_phone.py`, which
-`RFT_PHONE_SHOTS=<dir>` makes save a screenshot of each screen), and the last starts a
-session with the plugin loaded from this folder.
+`RFT_PHONE_SHOTS=<dir>` makes save a screenshot of each screen; and, with uv, the notebook's
+editor in the view's theme against the marimo uv installs: `tests/test_notebook_theme.py`), and
+the last starts a session with the plugin loaded from this folder.
 
 - `hooks/register.tsx`: the hooks module (commands, tools, prompt injection, the outline pane,
   the server's lifecycle).

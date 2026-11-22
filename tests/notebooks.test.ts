@@ -334,6 +334,30 @@ describe('where the notebooks show', () => {
     expect(A.reproducedText({ date: '2026-11-14', state: 'failed' })).toBe('Last run 2026-11-14 · failed')
     expect(A.reproducedText(null)).toBe('Not run yet')
   })
+
+  test("the editor's address carries the page's theme, and its stylesheet the page's tokens", () => {
+    const A = (globalThis as unknown as { RftArtifacts: { notebookSrc: (url: string, theme: string) => string; notebookStyle: (tokens: Record<string, string>) => string; NOTEBOOK_VARS: Record<string, string> } }).RftArtifacts
+    expect(A.notebookSrc('notebook/ab12/?access_token=k&file=notebooks%2FE02.py', 'dark')).toBe('notebook/ab12/?access_token=k&file=notebooks%2FE02.py&theme=dark')
+    expect(A.notebookSrc('notebook/ab12/', 'light')).toBe('notebook/ab12/?theme=light')
+    // anything but dark is light: marimo's own default would be the reader's system
+    expect(A.notebookSrc('notebook/ab12/', '')).toBe('notebook/ab12/?theme=light')
+    const css = A.notebookStyle({ bg: ' light-dark(#fbfbfd, #0f1115)', accent: 'light-dark(#7048e8, #9775fa)', fg: '#1f2328', panel: '#fff', muted: '#656d76', line: '#d8dde4' })
+    expect(css).toContain('--rft-bg: light-dark(#fbfbfd, #0f1115);')
+    expect(css).toContain('--rft-accent: light-dark(#7048e8, #9775fa);')
+    // marimo's own variables, on the selectors it sets them on, a widget's shadow root too
+    expect(css).toContain(':root, body, .marimo, .marimo:is(.dark *) {')
+    expect(css).toContain('--background: var(--rft-bg);')
+    expect(css).toContain('--primary: var(--rft-accent);')
+    expect(css).toContain('--marimo-text-font: ui-sans-serif')
+    for (const [k, v] of Object.entries(A.NOTEBOOK_VARS)) expect(css).toContain(`${k}: ${v};`)
+    // a figure with no background of its own: a light card in the dark theme
+    expect(css).toContain('.output img { background: light-dark(transparent, #ffffff)')
+    // a token is a value and nothing else; one that is missing is left to marimo
+    const odd = A.notebookStyle({ bg: 'red; } body { display: none', fg: '' })
+    expect(odd).toContain('--rft-bg: red  body  display: none;')
+    expect(odd).not.toContain('--rft-fg:')
+    expect(odd.split('}').length).toBe(css.split('}').length)
+  })
 })
 
 describe('the notebook tools in a session', () => {

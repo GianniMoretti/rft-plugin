@@ -1793,6 +1793,7 @@
 
   // ---------------------------------------------------------------- pages in a frame
 
+  const themeNow = () => (document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
   // a page of its own in a frame inside `box`: made once, loaded again only when `version` changes
   // (a page the frame was not made for: made anew), its messages taken only from that frame
   const frames = new Map() // box → { frame, version, sandbox, onMessage }
@@ -1890,11 +1891,70 @@
 
   /** The notebook framed: its editor, through this page's own server (notebook/<name>/), the one address a tunnel to it reaches. */
   function showNbFrame(n, url) {
+    const src = A.notebookSrc(url, themeNow())
     nbMsg.hidden = true
     nbFrame.hidden = false
-    nbTab.href = url
-    openFrame(nbFrame, url, { title: `The notebook of ${n.id}`, allow: 'clipboard-read; clipboard-write' })
+    nbTab.href = src
+    const shown = frames.get(nbFrame)?.version
+    const frame = openFrame(nbFrame, src, { title: `The notebook of ${n.id}`, allow: 'clipboard-read; clipboard-write' })
+    if (shown === src) return // the page it already shows
+    if (!frame.dataset.themed) {
+      frame.dataset.themed = '1'
+      frame.addEventListener('load', () => themeNotebook(frame))
+    }
+    // the page on its way: styled once its document is there, before its scripts run (each widget
+    // of marimo's copies the page's stylesheets when it is made, so a later one would miss them)
+    let before = null
+    try { before = frame.contentDocument } catch (e) { /* not this page's */ }
+    clearInterval(nbStyling)
+    const until = Date.now() + 30000
+    nbStyling = setInterval(() => {
+      let doc = null
+      try { doc = frame.contentDocument } catch (e) { /* not this page's */ }
+      if ((doc && doc !== before && themeNotebook(frame)) || Date.now() > until || !frame.isConnected) clearInterval(nbStyling)
+    }, 20)
   }
+  let nbStyling = 0
+
+  /** The editor in the page's colours and fonts (A.notebookStyle): a stylesheet in its document,
+      which the page's own server serves, so the page may. Under the name of marimo's own custom
+      stylesheets, since those are what it carries into its widgets, and the first of them, since
+      of several under one name it carries the first: so a notebook's own (`css_file`) comes after
+      it and has the last word, and is copied into it for the widgets. True once it is there. */
+  function themeNotebook(frame) {
+    let doc = null
+    try { doc = frame.contentDocument } catch (e) { /* not this page's to style */ }
+    if (!doc || !doc.head || !doc.body) return false
+    if (doc.querySelector('style[data-rft]')) return true
+    const page = getComputedStyle(document.documentElement)
+    const tokens = {}
+    for (const k of ['bg', 'panel', 'fg', 'muted', 'line', 'accent']) tokens[k] = page.getPropertyValue(`--${k}`)
+    const style = doc.createElement('style')
+    style.dataset.rft = 'theme'
+    style.title = 'marimo-custom'
+    style.textContent = A.notebookStyle(tokens)
+    const theirs = () => [...doc.querySelectorAll('style[title="marimo-custom"]:not([data-rft])')]
+    const first = theirs()[0]
+    if (first) first.before(style)
+    else doc.head.appendChild(style)
+    const fold = () => {
+      for (const s of theirs()) {
+        if (s.dataset.rftFolded) continue
+        s.dataset.rftFolded = '1'
+        style.textContent += `\n${s.textContent}`
+      }
+    }
+    fold()
+    // the rest of the page still on its way: once it is read, before its scripts run
+    if (doc.readyState === 'loading') doc.addEventListener('readystatechange', fold)
+    return true
+  }
+  // the theme's button: the notebook shown follows it (its frame loads again, the kernel as it was);
+  // one that is closed takes the page's theme when it is opened next
+  new MutationObserver(() => {
+    const n = nbShown && byId.get(nbShown)
+    if (n && !nbFrame.hidden && nbUrls.has(n.id)) showNbFrame(n, nbUrls.get(n.id))
+  }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
 
   function showNbMsg(text) {
     nbMsg.textContent = text
@@ -1967,7 +2027,6 @@
   const artView = document.getElementById('artifact-view')
   const artFrame = document.getElementById('art-frame')
   const artScroll = new Map() // concept → where its artifact was scrolled to
-  const themeNow = () => (document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
   let imageKey = '' // the key the frame gets for its images, which writes nothing (image_key in server/rft_server.py)
   async function deriveImageKey() {
     const key = editKey()
