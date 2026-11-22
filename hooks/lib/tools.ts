@@ -60,3 +60,13 @@ export function eagerTools(features: Set<Feature>): Set<string> {
   for (const f of features) for (const t of FEATURE_TOOLS[f]) out.add(t)
   return out
 }
+
+/**
+ * The tools that only report: none writes a file of the vault, so after one the snapshot of the
+ * tree is read again only if a note changed meanwhile (the `tool.call` hook of register.tsx). A
+ * tool that writes, even in one of its uses, is not one of them.
+ */
+export const REPORT_TOOLS: ReadonlySet<string> = new Set([
+  'rft_search', 'rft_map', 'rft_graph', 'rft_next', 'rft_tree', 'rft_validate', 'rft_concepts', 'rft_tags',
+  'rft_code', 'rft_artifact', 'rft_manuscript', 'rft_comments', 'rft_jobs',
+])

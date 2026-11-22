@@ -1170,8 +1170,8 @@ the last starts a session with the plugin loaded from this folder.
   `rft_validate`'s warnings.
 - `hooks/lib/handoff.ts`: the handoff a session leaves for the next one in its folder: its file,
   who gets it in full, the repositories checked for uncommitted work.
-- `hooks/lib/tools.ts`: which tools sit in the prompt from the start; `hooks/lib/shell.ts` the
-  files a shell command writes (the guards' input); `hooks/lib/answers.ts` the subagents that
+- `hooks/lib/tools.ts`: which tools sit in the prompt from the start, and which only report;
+  `hooks/lib/shell.ts` the files a shell command writes (the guards' input); `hooks/lib/answers.ts` the subagents that
   answer threads; `hooks/lib/update.ts` `/rft-update` and the vault's format.
 - `web/`: the tree view (`index.html`, `app.js`, `app.css`; `filters.js`, `kanban.js`, `layout.js` and
   `concepts.js` hold the pure filter, kanban, radial layout and concept logic; `artifacts.js` a

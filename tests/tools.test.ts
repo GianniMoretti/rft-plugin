@@ -4,8 +4,9 @@
 
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { CORE_TOOLS, FEATURE_TOOLS } from '../hooks/lib/tools'
-import { CWD, E02, demoFiles, world } from './fixture'
+import { CORE_TOOLS, FEATURE_TOOLS, REPORT_TOOLS } from '../hooks/lib/tools'
+import type { World } from './fixture'
+import { CWD, D01, E02, demoFiles, paneProps, world } from './fixture'
 
 const inPrompt = (w: { tools: string[]; deferred: string[] }) => w.tools.filter(t => !w.deferred.includes(t)).sort()
 
@@ -153,5 +154,82 @@ describe('rules on demand', () => {
     const rules = await rulesOf($ as never, on as never, demoFiles())
     expect(rules).toContain("After editing notes by hand, run rft_sync (children / up / down, 00 Index.md, the canvas): it answers with the tree's check.")
     expect(rules).not.toContain('rft_validate')
+  })
+})
+
+// A tool call loads the vault to answer. A tool that wrote loads it again for the snapshot the
+// pane and the guards read; one that only reports does not, unless a note changed meanwhile.
+describe('report tools', () => {
+  const PANE = { plugin: 'rft', component: 'Pane', requestId: 'rft-tree', props: paneProps() } as const
+  const NOTE = `vault/experiments/${E02}.md`
+
+  /** How often a file is read from here on. */
+  const readsOf = (w: World, path: string) => {
+    let n = 0
+    const read = w.fs.read.bind(w.fs)
+    w.fs.read = p => {
+      if (w.fs.norm(p) === path) n++
+      return read(p)
+    }
+    return () => n
+  }
+
+  const INPUT: Record<string, Record<string, unknown>> = {
+    rft_search: { query: 'variant' }, rft_graph: { id: 'E02' }, rft_code: { id: 'E02' }, rft_comments: { id: 'E02' },
+  }
+  // these need what the demo vault has not (a concept with an artifact, a paired machine): they answer with why
+  const NEEDS_MORE = ['rft_artifact', 'rft_jobs']
+
+  test('each answers, and leaves every file of the vault as it was', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, demoFiles())
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const state = () => JSON.stringify([...w.fs.files].sort(([a], [b]) => a.localeCompare(b)))
+    for (const tool of REPORT_TOOLS) {
+      const before = state()
+      const r = await $.tool.call({ tool: `mcp__rft__${tool}`, ...(INPUT[tool] ?? {}) } as never)
+      if (!NEEDS_MORE.includes(tool)) expect(`${tool}: ${r.isError === true ? r.text : 'answered'}`).toBe(`${tool}: answered`)
+      expect(`${tool}: ${state() === before ? 'no file changed' : 'a file changed'}`).toBe(`${tool}: no file changed`)
+    }
+  })
+
+  test('one reads each note once; after a tool that writes the notes are read again', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, demoFiles())
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const reads = readsOf(w, NOTE)
+    // (rft_validate is left out: its check of the links reads every file itself)
+    for (const [i, tool] of ['rft_search', 'rft_map', 'rft_tree', 'rft_next', 'rft_graph'].entries()) {
+      await $.tool.call({ tool: `mcp__rft__${tool}`, ...(INPUT[tool] ?? {}) } as never)
+      expect(`${tool}: ${reads()} read(s)`).toBe(`${tool}: ${i + 1} read(s)`)
+    }
+    const before = reads()
+    await $.tool.call({ tool: 'mcp__rft__rft_set_tags', id: 'D01', tags: ['seeds'] } as never)
+    expect(reads() - before).toBeGreaterThan(1)
+  })
+
+  test('a note written outside meanwhile is in the tree after one', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, demoFiles())
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    w.fs.write('vault/directions/D02 New idea.md', demoFiles()[`vault/directions/${D01}.md`]!
+      .replace('id: D01', 'id: D02').replace('"[[E01 First check]]"', `"[[${E02}]]"`))
+    await $.tool.call({ tool: 'mcp__rft__rft_tree' } as never)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ text: /3 directions/ })).toBeDefined()
+    expect(await ui.find({ key: 'node-D02' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('what a tool wrote is in the tree after it', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, demoFiles())
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const r = await $.tool.call({ tool: 'mcp__rft__rft_add_node', type: 'direction', parent: 'E02', title: 'New idea', summary: 'One line.' } as never)
+    expect(r.isError).toBeUndefined()
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ text: /3 directions/ })).toBeDefined()
+    await ui.unmount()
+    expect(w.fs.exists('vault/directions/D02 New idea.md')).toBe(true)
   })
 })

@@ -32,7 +32,7 @@ import { markReviewed, manuscriptReport, manuscriptWarnings, migrateManuscript, 
 import { deckWarnings } from './lib/decks'
 import { addDeadline, addMeeting, checkDeadline, checkMeeting, deadlineQuestion, deadlinesLine, meetingQuestion, suggestDates, suggestDeadline } from './lib/schedule'
 import { RECALL_HINT, searchesVault } from './lib/recall'
-import { FEATURE_TOOLS, eagerTools, featuresInUse } from './lib/tools'
+import { FEATURE_TOOLS, REPORT_TOOLS, eagerTools, featuresInUse } from './lib/tools'
 import { TOOLS } from './lib/specs'
 import { isGuarded, refusal } from './lib/guards'
 import { Answers, type ThreadJob } from './lib/answers'
@@ -1559,7 +1559,8 @@ export const register: Register = (on, options) => {
       try {
         const name = tool.slice('mcp__rft__'.length)
         const out = await runTool($, name, e as unknown as Record<string, unknown>)
-        await refresh($, true)
+        // a tool that wrote: the vault is read again; one that only reports: only if a note changed meanwhile
+        await refresh($, !REPORT_TOOLS.has(name))
         // no answer over its limit: it is sent again with every later request of the conversation
         return answer(ceiling(name, out))
       } catch (err) {
