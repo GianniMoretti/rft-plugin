@@ -234,7 +234,7 @@ export const TOOLS = {
   },
   rft_artifact: {
     description:
-      "What a concept's artifact (vault artifacts/: one HTML page of the results of its own experiments, shown in the tree view) is written from: where it is and whether it is up to date, the page's outline, each result that is new or changed since the page was written in full (every one before there is a page) and the others by id, the experiments without a result, its sub-concepts, and how to write the page. Call it before rft_set_artifact.",
+      "What a concept's artifact (vault artifacts/: one HTML page of the results of its own experiments, shown in the tree view) is written from: where it is and whether it is up to date, the page (whole while it is short, else its outline), each result that is new or changed since the page was written in full (every one before there is a page) and the others by id, the experiments without a result, its sub-concepts, and how to write the page. Call it before rft_set_artifact.",
     inputSchema: {
       type: 'object',
       properties: {

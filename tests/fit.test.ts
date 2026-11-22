@@ -111,4 +111,29 @@ describe('fit: the answers that grew with the vault', () => {
     expect(long).toMatch(/… cut here, at this answer's limit of 4000 characters: \d+ more of this part\. .* from line 7\./)
     await expect(artifactReport(io, l, 'D01', { section: 'nowhere' })).rejects.toThrow('no part of the page is headed "nowhere". Its headings: 1. Better variants; 2. Gap by size')
   })
+
+  test('a page up to a third of the limit is given whole, as it is written, in place of its outline', async () => {
+    const { io, l, ids } = await big()
+    const page = (chars: number) => { const open = '<h1>Better variants</h1>\n<p>Lead.</p>\n\n\n<h2>Gap by size</h2>\n<p>'; return `${open}${'x'.repeat(chars - open.length - 4)}</p>` }
+    const report = async (html: string) => {
+      await setArtifact(io, l, 'D01', { html: `${html}\n` }, '2026-03-01')
+      Object.assign(l, await load(io, l.config))
+      return artifactReport(io, l, 'D01')
+    }
+    const third = Math.floor(ARTIFACT_LIMIT / 3)
+    const short = page(third)
+    const got = await report(short)
+    // its blank lines too: an edit's old_str is taken from it
+    expect(got).toContain(`On the page now (4.0k characters), whole and as it is written, for an edit's old_str: no need to read the file.\n${short}\n\nExperiments with a result (41):`)
+    expect(got).not.toContain('its parts by heading')
+    expect(got.length).toBeLessThanOrEqual(ARTIFACT_LIMIT)
+    expect(got).toContain('PDF download')
+    // results asked for by id come without the page, and a part of it can still be asked for
+    expect(await artifactReport(io, l, 'D01', { notes: [ids[1]!] })).not.toContain('On the page now')
+    expect(await artifactReport(io, l, 'D01', { section: '2' })).toContain('<h2>Gap by size</h2>\n<p>xxx')
+    // one character more: its outline
+    const long = await report(page(third + 1))
+    expect(long).toContain('On the page now (4.0k characters), its parts by heading, each with its size:\n1. Better variants (4.0k)\n  2. Gap by size (4.0k)')
+    expect(long).not.toContain('xxx')
+  })
 })

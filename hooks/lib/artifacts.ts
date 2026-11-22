@@ -376,6 +376,16 @@ function outline(a: Artifact): string[] {
   ]
 }
 
+/** A page up to this share of the answer's limit is given whole: asking for a part of it would cost a call more than the page does. */
+const WHOLE_PAGE = 1 / 3
+
+/** The page as the report gives it: whole while it is short, else its outline. */
+function pageNow(a: Artifact, limit: number): { lines: string[]; whole: string | null } {
+  const whole = a.html.trimEnd()
+  if (!whole.trim() || whole.length > Math.floor(limit * WHOLE_PAGE)) return { lines: outline(a), whole: null }
+  return { lines: ['', `On the page now (${kilo(whole.length)} characters), whole and as it is written, for an edit's old_str: no need to read the file.`], whole }
+}
+
 /** One part of the page as it is written, by its number in the outline or its heading. */
 function partReport(a: Artifact, ref: string, limit: number): string {
   const parts = pageParts(a.html)
@@ -444,14 +454,15 @@ export async function artifactReport(io: Io, loaded: Loaded, ref: string, opts: 
   }
 
   const path = conceptPath(tree.concepts ?? {}, c.id).map(id => tree.concepts![id]!.name).join(' › ')
+  const now = a && !asked ? pageNow(a, limit) : null
   const top = asked
     ? [`# ${path} · ${inFull.length} of its results, as asked`]
     : [
       `# ${path}${c.root ? ` (from ${c.root})` : ''} · ${a ? `artifact: ${artifactLine(loaded, a)}` : `No artifact yet: rft_set_artifact writes ${join(ARTIFACTS_DIR, fileName(c))}`}`,
       ...(c.summary ? [c.summary] : []),
-      ...(a ? outline(a) : []),
-      '', `Experiments with a result (${results.length}):`,
+      ...(now?.lines ?? []),
     ]
+  const mid = asked ? [] : ['', `Experiments with a result (${results.length}):`]
   const tail: string[] = []
   if (!asked) {
     if (!results.length) tail.push('(none yet: nothing to put on the page)')
@@ -479,7 +490,7 @@ export async function artifactReport(io: Io, loaded: Loaded, ref: string, opts: 
 
   // the results in full, in order, while they fit in what the rest leaves; the others are named, to ask for
   const HELD_NOTE = 400
-  let room = limit - top.join('\n').length - tail.join('\n').length - HELD_NOTE
+  let room = limit - top.join('\n').length - (now?.whole?.length ?? 0) - mid.join('\n').length - tail.join('\n').length - HELD_NOTE
   const shown: string[] = []
   const held: RftNode[] = []
   for (const b of blocks) {
@@ -493,7 +504,12 @@ export async function artifactReport(io: Io, loaded: Loaded, ref: string, opts: 
     held.shift()
   }
   if (held.length) shown.push(`Not given here, over this answer's limit of ${limit} characters (${held.length}): ${clip(held.map(n => n.id).join(', '), MAX_NAMES)}. rft_artifact with notes: [${held.slice(0, 3).map(n => `"${n.id}"`).join(', ')}${held.length > 3 ? ', …' : ''}] gives them, as many as fit in one answer.`, '')
-  return ceiling('rft_artifact', [...top, ...shown, ...tail].join('\n').replace(/\n{3,}/g, '\n\n').trimEnd(), limit)
+  // blank lines are closed up everywhere but in the page, which stays as it is written
+  const close = (lines: string[]) => lines.join('\n').replace(/\n{3,}/g, '\n\n')
+  const text = now?.whole
+    ? `${close(top)}\n${now.whole}\n${close([...mid, ...shown, ...tail])}`
+    : close([...top, ...mid, ...shown, ...tail])
+  return ceiling('rft_artifact', text.trimEnd(), limit)
 }
 
 // ---------------------------------------------------------------- the tree says when they go out of date
