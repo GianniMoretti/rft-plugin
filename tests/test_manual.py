@@ -40,8 +40,8 @@ def index_rows():
 
 
 def tools():
-    """The tools the plugin registers: the keys of TOOLS in hooks/register.tsx."""
-    return re.findall(r"(?m)^  (rft_[a-z_]+): \{$", text(ROOT / 'hooks/register.tsx'))
+    """The tools the plugin registers: the keys of TOOLS in hooks/lib/specs.ts."""
+    return re.findall(r"(?m)^  (rft_[a-z_]+): \{$", text(ROOT / 'hooks/lib/specs.ts'))
 
 
 def headings(part):
@@ -99,7 +99,7 @@ class Manual(unittest.TestCase):
         self.assertIn('Writing a job the monitor can read', headings('queue'))
         self.assertIn('"Writing a job the monitor can read" (queue.md)', text(ROOT / 'hooks/lib/ops.ts'))
         self.assertIn('Figures', headings('notebooks'))
-        self.assertIn("notebooks.md, Figures", text(ROOT / 'hooks/register.tsx'))
+        self.assertIn("notebooks.md, Figures", text(ROOT / 'hooks/lib/specs.ts'))
 
     def test_no_part_points_at_a_section_that_moved(self):
         """A "(see X)" names a heading of the same file; another file is cited by its name."""

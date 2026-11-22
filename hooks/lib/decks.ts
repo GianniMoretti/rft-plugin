@@ -2,7 +2,7 @@
 // the vault's decks/ folder, `P03 Weekly wrap-up.md`, for a meeting's occurrence, a once-only
 // meeting or a deadline (`for:`). The decks are the user's: one is locked unless its frontmatter
 // says `locked: false`, and Claude's own writes of a locked deck, or of a new deck by hand, are
-// refused (register.tsx), so Claude proposes an outline instead. The deck's logic itself is
+// refused (guards.ts), so Claude proposes an outline instead. The deck's logic itself is
 // web/slides.js, shared with the tree view's Slides tab; the tab writes the decks through the
 // server (server/rft_decks.py).
 

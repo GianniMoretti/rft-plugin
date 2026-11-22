@@ -1,7 +1,7 @@
 // Deadlines and the schedule, as Claude's tools see them. Dates are the user's: `due:` on any
 // note and on a milestone, `start:` and `est:` on an experiment; they set them in the tree view's
 // Calendar or the note's drawer, and Claude's own writes that change them are refused
-// (register.tsx). Claude suggests a start and an estimate (rft_suggest_dates), suggests a paper
+// (guards.ts). Claude suggests a start and an estimate (rft_suggest_dates), suggests a paper
 // submission read from its official dates page (rft_suggest_deadline, a milestone with status
 // `suggested`), and adds a deadline or a meeting the user gives it once they confirm
 // (rft_add_deadline, rft_add_meeting). The planning itself is web/schedule.js, shared with the

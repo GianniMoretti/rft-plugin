@@ -1150,7 +1150,10 @@ editor in the view's theme against the marimo uv installs: `tests/test_notebook_
 the last starts a session with the plugin loaded from this folder.
 
 - `hooks/register.tsx`: the hooks module (commands, tools, prompt injection, the outline pane,
-  the server's lifecycle).
+  the server's lifecycle). `hooks/lib/specs.ts`: the tools' descriptions and input schemas, as
+  the model is sent them; `hooks/lib/prompts.ts`: what the commands ask of Claude;
+  `hooks/lib/guards.ts`: the guards on Claude's own edits and shell commands (what only the user
+  or a tool may write), each call taken apart once and read by all of them.
 - `hooks/lib/vault.ts`: the vault model; `hooks/lib/ops.ts` the operations; `hooks/lib/page.ts`
   the standalone page.
 - `hooks/lib/comments.ts`: comments, suggestions and locked notes, as Claude's tools see them.
