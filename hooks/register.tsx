@@ -25,6 +25,7 @@ import { ASSET_PATHS } from './lib/page'
 import type { Config, Io, Loaded, NodeType, Tree, Validation } from './lib/vault'
 import { OPEN_HOSTS, jobNote, planPapers, withEntryPdf } from './lib/papers'
 import { searchReport, similarNotes } from './lib/search'
+import { ceiling } from './lib/fit'
 import { graphReport } from './lib/graph'
 import { candidates, candidatesReport } from './lib/rebalance'
 import { nextReport, supersede } from './lib/knowledge'
@@ -326,12 +327,14 @@ const TOOLS = {
   },
   rft_artifact: {
     description:
-      "What a concept's artifact (vault artifacts/: one HTML page of the results of its own experiments, shown in the tree view) is written from: where it is and whether it is up to date, each experiment with a result (in full when new or changed since the page was written), the experiments without one, its sub-concepts, and how to write the page. Call it before rft_set_artifact.",
+      "What a concept's artifact (vault artifacts/: one HTML page of the results of its own experiments, shown in the tree view) is written from: where it is and whether it is up to date, the page's outline, each result that is new or changed since the page was written in full (every one before there is a page) and the others by id, the experiments without a result, its sub-concepts, and how to write the page. Call it before rft_set_artifact.",
     inputSchema: {
       type: 'object',
       properties: {
         concept: { type: 'string', description: 'The concept, by name or the id of the note that starts it.' },
-        full: { type: 'boolean', description: 'Every result in full, not only the new and changed ones.' },
+        full: { type: 'boolean', description: 'Every result in full, not only the new and changed ones: as many as fit one answer, the rest named.' },
+        notes: { type: 'array', items: { type: 'string' }, description: 'Only these results (ids), in full: the ones an answer named and did not give.' },
+        section: { type: 'string', description: "Only this part of the page as it is written, by its number or heading in the outline: the exact text for an edit's old_str." },
       },
       required: ['concept'],
     },
@@ -1083,7 +1086,7 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
     case 'rft_set_digest':
       return setDigest(io, loaded, String(i.concept ?? ''), String(i.state ?? ''), String(i.text ?? ''), today())
     case 'rft_artifact':
-      return artifactReport(io, loaded, String(i.concept ?? ''), { full: i.full === true })
+      return artifactReport(io, loaded, String(i.concept ?? ''), { full: i.full === true, notes: strings(i.notes), section: str(i.section) })
     case 'rft_set_artifact':
       return setArtifact(io, loaded, String(i.concept ?? ''), { html: i.html, edits: i.edits }, today())
     case 'rft_manuscript':
@@ -2404,9 +2407,11 @@ export const register: Register = (on, options) => {
     if (tool.startsWith('mcp__rft__')) {
       if (recall && /^mcp__rft__rft_(search|map|graph)$/.test(tool)) recall.used = true
       try {
-        const out = await runTool($, tool.slice('mcp__rft__'.length), e as unknown as Record<string, unknown>)
+        const name = tool.slice('mcp__rft__'.length)
+        const out = await runTool($, name, e as unknown as Record<string, unknown>)
         await refresh($, true)
-        return answer(out)
+        // no answer over its limit: it is sent again with every later request of the conversation
+        return answer(ceiling(name, out))
       } catch (err) {
         return answer(err instanceof Error ? err.message : String(err), true)
       }
