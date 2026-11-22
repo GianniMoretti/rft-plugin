@@ -1,7 +1,7 @@
 // rft: the Reasoning Flow Tree plugin. Commands (/rft, /rft-init, /rft-concepts, /rft-literature, /rft-rebalance, /rft-update,
-// /rft-summarize, /rft-artifact, /rft-next, /rft-view), the model's tools (rft_add_node, rft_set_status, rft_set_summary, rft_map, rft_set_digest, rft_artifact, rft_set_artifact, rft_move_node, rft_set_refs, rft_search,
+// /rft-summarize, /rft-artifact, /rft-next, /rft-view, /rft-handoff), the model's tools (rft_add_node, rft_set_status, rft_set_summary, rft_map, rft_set_digest, rft_artifact, rft_set_artifact, rft_move_node, rft_set_refs, rft_search,
 // rft_graph, rft_supersede, rft_next, rft_suggest_priority, rft_suggest_dates, rft_add_deadline, rft_add_meeting, rft_suggest_deadline, rft_collect_papers, rft_set_tags, rft_set_type, rft_set_concept, rft_concepts, rft_set_repos, rft_code,
-// rft_set_code, rft_set_notebook, rft_run_notebook, rft_tags, rft_tree, rft_validate, rft_sync, rft_comments, rft_comment, rft_suggest), the operating rules
+// rft_set_code, rft_set_notebook, rft_run_notebook, rft_tags, rft_tree, rft_validate, rft_sync, rft_comments, rft_comment, rft_suggest, rft_handoff), the operating rules
 // injected into the system prompt, the outline pane, and the web view: /rft starts a local
 // server (server/rft_server.py) for the interactive tree page (web/), makes the notes that
 // page adds, retypes or moves (fromView), and asks Claude to answer the threads the user asks
@@ -47,6 +47,7 @@ import type { ApplyOutcome, NotebookEnv } from './lib/notebooks'
 import { MAX_TIMEOUT_S, REPRODUCED_LINE, changesReproduced, changesResultsBlock, reproducedEditText, resultsBlockEditText, runNotebook, setNotebook } from './lib/notebooks'
 import { MACHINE_FILE, machinePrompt, probeText, readMachine, statusText } from './lib/machine'
 import { cite, manualDir } from './lib/manual'
+import { clearHandoff, handoffPrompt, handoffRules, hasHandoffs, leaveHandoff, showHandoff, sizeToast, toTell, uncommittedIn } from './lib/handoff'
 import type { MachineStatus, Probe } from './lib/machine'
 import { QUEUE_CLI, QUEUE_FILE, addedText, cancelledText, jobEvents, jobsNext, jobsReport, movedText, queueLine, readQueue, retriedText, toStart } from './lib/queue'
 import type { Job, QueueView } from './lib/queue'
@@ -502,6 +503,20 @@ const TOOLS = {
     description: 'List the topical tags in use in the vault, with how many notes carry each: check it before inventing a new tag.',
     inputSchema: { type: 'object', properties: {} },
   },
+  rft_handoff: {
+    description:
+      'Leave a handoff for the next session in this folder, which starts from it and the tree (a new session, or this one after /clear): done, next and unrecorded, 2,000 characters at most in all. Bring the notes up to date first: it points at notes by id and does not repeat them. Its answer lists the repositories with uncommitted changes. With no field it shows the handoff.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        done: { type: 'string', description: 'What this session did and decided, by note id.' },
+        next: { type: 'string', description: 'What to do first, in order; what is running, where its output goes and what to check in it.' },
+        unrecorded: { type: 'string', description: 'What neither a note nor a commit holds: uncommitted code, a log half read, a decision not written down. "nothing" when there is none.' },
+        folder: { type: 'string', description: "To show another session folder's handoff." },
+        clear: { type: 'boolean', description: "Remove this folder's handoff." },
+      },
+    },
+  },
   rft_tree: {
     description: 'Show the current reasoning tree as an indented list with status marks, the whole tree or the subtree of one node.',
     inputSchema: {
@@ -633,6 +648,8 @@ let poller: { cancel: () => void } | null = null
 const pendingPrompts: string[] = []
 // each registered tool and whether it waits behind ToolSearch, so a new placement registers it again
 const registeredTools = new Map<string, boolean>()
+// the largest session size (lib/handoff TELL_AT) the user was told of, once each per session
+let toldAt = 0
 
 const EMPTY: RftSnapshot = { isActive: false, vault: '', project: '', nodes: {}, roots: [], concepts: {}, signature: '', problems: [], error: null }
 
@@ -680,6 +697,7 @@ async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> 
   let config: Config | null = null
   let h: Here | null = null
   recall = null
+  toldAt = 0
   try {
     s = await refresh($, true)
     h = await mustHere($)
@@ -696,7 +714,7 @@ async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> 
       const threads = (await h.io.list(join(config.vault, COMMENTS_DIR)).catch(() => [])).some(f => f.name.endsWith('.json'))
       // no queue until this machine is paired with it (.queue/machine.json): no queue tool, rule or runner
       const machine = await readMachine(h.io, config.vault)
-      features = featuresInUse(loaded, threads, machine !== null)
+      features = featuresInUse(loaded, threads, machine !== null, await hasHandoffs(h.io, config.vault))
       if (!machine && await h.io.exists(join(config.vault, QUEUE_FILE)).catch(() => false)) {
         $.ui.toast('rft: the experiment queue is off until this machine is paired with it: /rft-machine add (its jobs and history are kept)')
       }
@@ -728,6 +746,11 @@ async function activate($: EngineInterface, shouldOpen: boolean): Promise<void> 
       const line = v && loaded ? queueLine(v, await loadActive(h.io), await nowS($)) : null
       if (line) rules += `\n\n${line}`
       if (v?.jobs.some(j => j.state === 'running' || (j.state === 'pending' && !v.paused))) void queueCli($, h, config, ['ensure']).catch(() => undefined)
+    } catch { /* the rules without it */ }
+    // what the session before left for this folder: the work goes on from it and the tree
+    try {
+      const block = await handoffRules(h.io, config.vault, { folder: h.cwd, session: await sessionId($), now: await nowS($) })
+      if (block) rules += `\n\n${block}`
     } catch { /* the rules without it */ }
     recall = { vault: resolvePath(h.root, vaultOf(h, config)), cwd: h.cwd, used: false }
   }
@@ -793,6 +816,7 @@ async function registerCommands($: EngineInterface): Promise<void> {
   await attempt('rft-artifact', () => $.command.register({ name: 'rft-artifact', description: "Ask Claude to write a concept's artifact, the page of its experiments' results (no concept: every one missing or out of date)", argumentHint: '[concept]' }))
   await attempt('rft-update', () => $.command.register({ name: 'rft-update', description: 'Bring a vault made by an older version up to this one: shows what it adds; apply writes it. notebooks: run every notebook again in the queue and list what is still to write (--write: ask Claude to write it)', argumentHint: '[apply] [--sections] | notebooks [--write] [concept]' }))
   await attempt('rft-view', () => $.command.register({ name: 'rft-view', description: 'Write a standalone HTML view of the tree to <vault>/tree.html' }))
+  await attempt('rft-handoff', () => $.command.register({ name: 'rft-handoff', description: 'Ask Claude to leave a handoff, so the work goes on in a new session (or after /clear) and not in a long one (show: print it; clear: remove it; no model turn)', argumentHint: '[show|clear|a note for the next session]' }))
   if (failed.length) reportFailures($, failed)
 }
 
@@ -824,6 +848,15 @@ async function homeOf($: EngineInterface): Promise<string | undefined> {
     return (await $.env.get('HOME')) || undefined
   } catch {
     return undefined
+  }
+}
+
+/** The session's id, or '' where the host gives none. */
+async function sessionId($: EngineInterface): Promise<string> {
+  try {
+    return (await $.session.id()) || ''
+  } catch {
+    return ''
   }
 }
 
@@ -972,6 +1005,16 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       return conceptsReport(loaded)
     case 'rft_tags':
       return tagsReport(loaded)
+    case 'rft_handoff': {
+      const vault = loaded.config.vault
+      if (i.clear === true) return clearHandoff(io, vault, h.cwd)
+      const now = await nowS($)
+      if (!str(i.done) && !str(i.next) && !str(i.unrecorded)) return showHandoff(io, vault, str(i.folder)?.trim() ?? h.cwd, now)
+      // what the plugin checks itself: the session's folder, the tree's and the concepts' code
+      const repos = Object.values(loaded.tree.concepts ?? {}).flatMap(c => c.repos ?? [])
+      const uncommitted = async () => uncommittedIn(io, await codeEnv($, h), [h.cwd, h.root, ...repos])
+      return leaveHandoff(io, vault, { done: str(i.done), next: str(i.next), unrecorded: str(i.unrecorded) }, { folder: h.cwd, session: await sessionId($), now, uncommitted })
+    }
     case 'rft_set_status':
       return unlocking($, unlock => setStatus(io, loaded, String(i.id ?? ''), String(i.status ?? ''), str(i.note), str(i.summary), today(), unlock))
     case 'rft_manuscript_view': {
@@ -2100,6 +2143,17 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // every request carries the whole session: past 200k and 400k tokens the user is told, once
+  // each, that a handoff and a new session cost less
+  on('session.measure', async ($, e, next) => {
+    const tell = rules ? toTell(e.context.tokens ?? 0, toldAt) : null
+    if (tell) {
+      toldAt = tell
+      $.ui.toast(sizeToast(e.context.tokens ?? tell))
+    }
+    return next(e)
+  })
+
   // the thread agent is the plugin's own: the model is not offered it
   on('agent.offer', { agent: 'rft:thread' }, () => ({ isOffered: false }))
 
@@ -2361,6 +2415,21 @@ export const register: Register = (on, options) => {
       if (doc && !ms.documents.some(d => d.name === doc)) return { text: `"${doc}" is no document (${ms.documents.map(d => d.name).join(', ') || 'none yet'}); /rft-manuscript new ${doc} makes it.` }
       pendingPrompts.push(manuscriptPrompt(doc))
       return { text: `Asked Claude to propose snippets to write and where to place them${doc ? ` in ${doc}` : ''}: tables to choose from; nothing is written until you pick.` }
+    } catch (err) {
+      return { text: message(err) }
+    }
+  })
+
+  on('command.run', { command: 'rft-handoff' }, async ($, e) => {
+    try {
+      const h = await mustHere($)
+      const config = await readConfig(h.io)
+      if (!config) return { text: NOT_ACTIVE }
+      const arg = e.args.trim()
+      if (arg === 'show') return { text: await showHandoff(h.io, config.vault, h.cwd, await nowS($)) }
+      if (arg === 'clear') return { text: await clearHandoff(h.io, config.vault, h.cwd) }
+      pendingPrompts.push(handoffPrompt(arg))
+      return { text: 'Claude will write the handoff in a moment: the notes brought up to date first, then what was done, what to do first and what no note or commit holds. After it, /clear (or a new session in this folder) goes on from the handoff and the tree; /rft-handoff show prints it.' }
     } catch (err) {
       return { text: message(err) }
     }

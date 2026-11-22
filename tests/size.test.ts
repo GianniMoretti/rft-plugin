@@ -19,12 +19,12 @@ const FEATURES = Object.keys(FEATURE_TOOLS) as Feature[]
 const RULES_CORE = 8400
 /** The most each feature's rule adds. */
 const RULE: Record<Feature, number> = {
-  dates: 700, priorities: 450, verify: 550, locks: 600, comments: 330, artifacts: 680, notebooks: 1100, queue: 1250, manuscript: 980,
+  dates: 700, priorities: 450, verify: 550, locks: 600, comments: 330, artifacts: 680, notebooks: 1100, queue: 1250, manuscript: 980, handoff: 300,
 }
 /** The most characters of the core tools' schemas, and of those each feature brings. */
 const EAGER_CORE = 9400
 const EAGER: Record<Feature, number> = {
-  dates: 0, priorities: 0, verify: 0, locks: 1050, comments: 2600, artifacts: 2550, notebooks: 3950, queue: 3100, manuscript: 2900,
+  dates: 0, priorities: 0, verify: 0, locks: 1050, comments: 2600, artifacts: 2550, notebooks: 3950, queue: 3100, manuscript: 2900, handoff: 1100,
 }
 /** The most characters of one tool, name, description and schema. */
 const ONE_TOOL = 3700
@@ -62,5 +62,5 @@ test('the schemas of the tools in the prompt stay under their ceilings', async (
   // every feature at once: rft_suggest is brought by two of them and counted once
   const all = sum([...eagerTools(new Set(FEATURES))])
   expect(all).toBeLessThanOrEqual(EAGER_CORE + FEATURES.reduce((total, f) => total + EAGER[f], 0) - one('rft_suggest'))
-  expect(Object.keys(w.specs)).toHaveLength(42)
+  expect(Object.keys(w.specs)).toHaveLength(43)
 })

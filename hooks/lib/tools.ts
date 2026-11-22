@@ -8,8 +8,9 @@
 // artifact tools once the vault has a concept artifact, the notebook tools once an experiment has
 // a notebook, the queue tools once this machine is paired with the experiment queue
 // (`.queue/machine.json`; never registered before), the manuscript tools once it has snippets
-// (`snippets/snippets.json`). Dates, priorities and verification bring their rule alone: the rule
-// names their tools, which a session calls too seldom to carry (no call or one session in 14).
+// (`snippets/snippets.json`), rft_handoff once a session left a handoff (`.handoff/`). Dates,
+// priorities and verification bring their rule alone: the rule names their tools, which a session
+// calls too seldom to carry (no call or one session in 14).
 // The rules for all these features enter the session's rules on the same condition (ops.ts rulesText).
 
 import type { Loaded } from './vault'
@@ -31,12 +32,13 @@ export const FEATURE_TOOLS = {
   notebooks: ['rft_set_notebook', 'rft_run_notebook'],
   queue: ['rft_queue', 'rft_jobs', 'rft_job'],
   manuscript: ['rft_manuscript', 'rft_set_snippet', 'rft_set_document'],
+  handoff: ['rft_handoff'],
 } as const
 
 export type Feature = keyof typeof FEATURE_TOOLS
 
-/** The features this vault uses; `threads`: whether any note has a comment thread; `queue`: whether it has an experiment queue. */
-export function featuresInUse(loaded: Loaded, threads: boolean, queue = false): Set<Feature> {
+/** The features this vault uses; `threads`: whether any note has a comment thread; `queue`: whether it has an experiment queue; `handoff`: whether a session left a handoff. */
+export function featuresInUse(loaded: Loaded, threads: boolean, queue = false, handoff = false): Set<Feature> {
   const nodes = Object.values(loaded.tree.nodes)
   const out = new Set<Feature>()
   if ((loaded.milestones ?? []).length || (loaded.meetings ?? []).length || nodes.some(n => n.due || n.start)) out.add('dates')
@@ -48,6 +50,7 @@ export function featuresInUse(loaded: Loaded, threads: boolean, queue = false): 
   if (nodes.some(n => n.notebook)) out.add('notebooks')
   if (queue) out.add('queue')
   if (loaded.hasManuscript) out.add('manuscript')
+  if (handoff) out.add('handoff')
   return out
 }
 

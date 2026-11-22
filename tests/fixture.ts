@@ -179,7 +179,7 @@ export type ProcessAnswer = (argv: readonly string[]) => { exitCode: number; std
 export type GitAnswer = (dir: string, args: string[]) => { ok: boolean; out: string; err: string }
 
 /** A repo as the fake git sees it: its commit and branch now, dirty files, and its history. */
-export type FakeRepo = { commit: string; branch?: string; dirty?: number; log?: string[]; stat?: string[]; known?: string[] }
+export type FakeRepo = { commit: string; branch?: string; dirty?: number; /** files git does not track, listed only when asked for (`--untracked-files=normal`) */ untracked?: number; log?: string[]; stat?: string[]; known?: string[] }
 
 /**
  * A git that knows the repos by folder: `status` gives the commit, branch and dirty files,
@@ -196,7 +196,7 @@ export function fakeGit(repos: Record<string, FakeRepo>): GitAnswer & { calls: s
       case 'status':
         return {
           ok: true, err: '',
-          out: [`# branch.oid ${r.commit}`, `# branch.head ${r.branch ?? 'main'}`, ...Array.from({ length: r.dirty ?? 0 }, (_, i) => `1 .M N... 100644 100644 100644 aaa bbb f${i}.py`)].join('\n') + '\n',
+          out: [`# branch.oid ${r.commit}`, `# branch.head ${r.branch ?? 'main'}`, ...Array.from({ length: r.dirty ?? 0 }, (_, i) => `1 .M N... 100644 100644 100644 aaa bbb f${i}.py`), ...Array.from({ length: args.includes('--untracked-files=normal') ? r.untracked ?? 0 : 0 }, (_, i) => `? new${i}.py`)].join('\n') + '\n',
         }
       case 'cat-file': {
         const c = args[2]!.replace('^{commit}', '')

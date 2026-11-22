@@ -121,10 +121,10 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   (`rft_add_node`, `rft_set_status`, `rft_set_summary`, `rft_search`, `rft_map`, `rft_graph`,
   `rft_next`, `rft_move_node`, `rft_sync`) have their full definition in the prompt from the
   start. The others are listed by name and loaded when Claude needs one, which keeps every turn
-  cheaper. The comment, artifact, notebook, queue and manuscript tools join the first group in a
+  cheaper. The comment, artifact, notebook, queue, manuscript and handoff tools join the first group in a
   vault that uses those features (it has comment threads or locked notes, a concept artifact, an
-  experiment with a notebook, this machine paired with the experiment queue, or snippets and
-  documents). The date and priority tools stay in the second group even then: their rules name
+  experiment with a notebook, this machine paired with the experiment queue, snippets and
+  documents, or a handoff a session left). The date and priority tools stay in the second group even then: their rules name
   them, and a session calls them too seldom to carry their definitions in every request. The
   queue's three tools are not there at all until a machine is paired (see The experiment queue):
   only `rft_machine`, which pairs it. `tests/size.test.ts` holds a ceiling on the size of the
@@ -167,6 +167,7 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_tree` | prints the tree or a subtree |
   | `rft_validate` | checks ids, types, statuses, titles, parents, broken wikilinks, derived fields |
   | `rft_sync` | regenerates children / up / down, the index tree and the canvas after hand edits, and answers with the tree's check, so no `rft_validate` follows it |
+  | `rft_handoff` | leaves a handoff for the next session in this folder (what was done, what to do first, what neither a note nor a commit holds; 2,000 characters in all), to which the plugin adds the repositories with uncommitted changes; with no field it shows the handoff (see Handoffs) |
   | `rft_comments` | a note's comments and suggestions, or the notes with open threads |
   | `rft_comment` | replies in a thread (or closes a suggestion it made in the note), or starts a comment on a quote |
   | `rft_suggest` | proposes new text for a quote, or the text an open suggestion asks for; you accept or reject it |
@@ -180,6 +181,35 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   the desktop app, VS Code and the terminal. Click a node to read its note, ▾ / ▸ to fold a
   branch. It refreshes by itself when notes change, whoever changed them, and shows the tree
   view's address while its server runs.
+
+### Handoffs: carrying on in a new session
+
+Every request of a session carries the whole session, and a session resumed after an hour is
+read whole again: a session of 400k tokens pays for 400k tokens with each step, a new one starts
+from the rules and the tree. What makes a long session hard to leave is what it holds that the
+notes do not. A handoff is that, written down:
+
+- **`/rft-handoff [a note for the next session]`** asks Claude for one: it first brings the tree
+  up to date (results and statuses of what the session touched, new ideas as directions, the
+  digests of the concepts that changed), then calls `rft_handoff` with three short texts, 2,000
+  characters in all: what was done (by note id), what to do first (what is running, where its
+  output goes, what to check in it), and what neither a note nor a commit holds. The plugin adds
+  what it can check by itself: the repositories with uncommitted or untracked files, among the
+  session's folder, the tree's and the concepts' code. Claude also writes one unasked when you
+  say you stop with work under way.
+- **The next session in that folder** (a new one, or the same one after `/clear`) gets the
+  handoff in its rules, in full, and works from it. The notes stay the record: where a note and
+  the handoff differ, the note holds. A session after that one gets a single line pointing at
+  it, for a week; a handoff left in another folder shows as one line until a session there
+  takes it up.
+- **`/rft-handoff show`** prints this folder's handoff and **`/rft-handoff clear`** removes it,
+  both without a model turn.
+- **A session grown large** is told so once when it passes 200k tokens and once at 400k, with
+  the two commands that end it cheaply (`/rft-handoff`, then `/clear`).
+
+A handoff is one file per session folder in `vault/.handoff/`, kept out of git by its own
+`.gitignore`: it is the state of this machine, like the queue's. The handoff tool and its rule
+are in the prompt only once the vault holds one.
 
 ### The tree view
 
@@ -1047,6 +1077,7 @@ note: start with E05
 | `/rft-artifact [concept]` | ask Claude to write a concept's artifact, or, with no concept, every one missing or out of date |
 | `/rft-update [apply] [--sections]` | bring a vault made by an older version up to this one: list what it lacks (the folders and templates of newer note types, the config's format); `apply` writes it and refreshes the derived files. Notes are never changed, except that `--sections` adds the sections their type has gained, as empty headings, to unlocked notes. A session on an older vault starts with a toast pointing here (no model turn) |
 | `/rft-update notebooks [--write <concept or experiment ids>]` | bring the existing notebooks up to what the plugin does now: every notebook runs again in the queue (one job, no GPU, in check mode, no model turn; with no machine paired it says so and runs nothing), so each saves its numbers, figures and tables; and, for information, a list by concept with code of the experiments with a result and no notebook (not those with `notebook: no`), a missing concept notebook, an artifact's hand-drawn charts. `--write <concept>` asks Claude to write that concept's, `--write E05 E07` those experiments' only; a notebook is never written for what you did not name |
+| `/rft-handoff [show\|clear\|a note for the next session]` | ask Claude to leave a handoff, so the work goes on in a new session (or after `/clear`) and not in a long one; `show` prints it and `clear` removes it (no model turn) |
 | `/rft-view` | write `vault/tree.html`: the same tree view as one standalone file, every note inside (images as placeholders), to open anywhere or share |
 
 The plugin registers these commands when a session starts, so the desktop app's slash-command
@@ -1134,6 +1165,8 @@ the last starts a session with the plugin loaded from this folder.
   `rft_set_snippet`, `rft_set_document`.
 - `hooks/lib/decks.ts`: slide decks as the session sees them: their files, their lock, and
   `rft_validate`'s warnings.
+- `hooks/lib/handoff.ts`: the handoff a session leaves for the next one in its folder: its file,
+  who gets it in full, the repositories checked for uncommitted work.
 - `hooks/lib/tools.ts`: which tools sit in the prompt from the start; `hooks/lib/shell.ts` the
   files a shell command writes (the guards' input); `hooks/lib/answers.ts` the subagents that
   answer threads; `hooks/lib/update.ts` `/rft-update` and the vault's format.

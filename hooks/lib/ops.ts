@@ -533,7 +533,7 @@ export type Git = (dir: string, args: string[]) => Promise<{ ok: boolean; out: s
 export type CodeEnv = { root: string; git: Git; home?: string; date: string }
 
 export type RepoState =
-  | { kind: 'git'; commit: string | null; branch: string; dirty: number }
+  | { kind: 'git'; commit: string | null; branch: string; dirty: number; untracked?: number }
   | { kind: 'plain' }
   | { kind: 'missing' }
   | { kind: 'error'; why: string }
@@ -545,31 +545,35 @@ const MAX_STAT = 40
 
 const firstLine = (s: string) => s.trim().split('\n')[0] ?? ''
 
-/** A repo's state now: its branch, commit and uncommitted changes to tracked files. */
-export async function repoState(io: Io, env: CodeEnv, path: string): Promise<RepoState> {
+/** A repo's state now: its branch, commit and uncommitted changes to tracked files; with `untracked`, the files git does not track too. */
+export async function repoState(io: Io, env: CodeEnv, path: string, opts: { untracked?: boolean } = {}): Promise<RepoState> {
   const abs = repoAbs(env.root, path, env.home)
   if (!(await io.exists(abs))) return { kind: 'missing' }
   // told by the folders, not by git's message, which is in the user's language
   if (!(await isInGit(io, abs))) return { kind: 'plain' }
-  const r = await env.git(abs, ['status', '--porcelain=v2', '--branch', '--untracked-files=no'])
+  const r = await env.git(abs, ['status', '--porcelain=v2', '--branch', `--untracked-files=${opts.untracked ? 'normal' : 'no'}`])
   if (!r.ok) return { kind: 'error', why: firstLine(r.err) || 'git failed' }
   let commit: string | null = null
   let branch = ''
   let dirty = 0
+  let untracked = 0
   for (const line of r.out.split('\n')) {
     const oid = /^# branch\.oid (\S+)/.exec(line)
     const head = /^# branch\.head (\S+)/.exec(line)
     if (oid) commit = /^[0-9a-f]{7,}$/.test(oid[1]!) ? oid[1]!.slice(0, COMMIT_LEN) : null
     else if (head) branch = head[1] === '(detached)' ? 'detached HEAD' : head[1]!
+    else if (line.startsWith('? ')) untracked++
     else if (line.trim() && !line.startsWith('#')) dirty++
   }
-  return { kind: 'git', commit, branch: branch || 'detached HEAD', dirty }
+  return { kind: 'git', commit, branch: branch || 'detached HEAD', dirty, ...(untracked ? { untracked } : {}) }
 }
 
 export function stateText(st: RepoState): string {
   switch (st.kind) {
-    case 'git':
-      return `${st.branch} @ ${st.commit ?? '(no commits yet)'}, ${st.dirty ? `uncommitted changes in ${st.dirty} file(s)` : 'clean'}`
+    case 'git': {
+      const changes = [st.dirty ? `uncommitted changes in ${st.dirty} file(s)` : '', st.untracked ? `${st.untracked} untracked file(s)` : ''].filter(Boolean)
+      return `${st.branch} @ ${st.commit ?? '(no commits yet)'}, ${changes.join(', ') || 'clean'}`
+    }
     case 'plain': return 'not under git (no commit can be recorded)'
     case 'missing': return 'not found'
     case 'error': return `git failed (${st.why})`
@@ -886,8 +890,9 @@ function featureRules(vault: string, features: ReadonlySet<Feature>): string {
     manuscript: `- Two levels turn verified notes into writing: snippets (\`${vault}/snippets/\`, S..: atomic LaTeX resting on notes, written once and reused) and documents (\`${vault}/documents/<name>/\`: copies of snippets, adapted as the user likes, and text of their own). rft_manuscript shows both and the verified notes still to write. Both are the user's while locked (the default): propose snippets only from verified notes, and placements, as tables first, and do only what the user picks (stubs with rft_set_snippet, copies with rft_set_document); then comment and suggest when asked (rft_comment, rft_suggest with the snippet's id or the document's name), never write their text. Never type a number, figure or table a macro gives; when you fill a reference's Source, add its BibTeX in a \`\`\`bibtex block (refs.bib is made from them). A snippet in review rests on a note that changed: say so, and suggest how its text should follow.`,
     comments: `- The user discusses notes in the tree view: comments and suggestions on a part of a note's text (rft_comments lists them). Answer a thread only when the user asks you to: the tree view's Ask Claude sends it to you, and you answer in the thread with rft_comment or rft_suggest, not in the chat.`,
     queue: QUEUE_RULE,
+    handoff: '- A handoff (rft_handoff) carries the work to the next session in this folder, which costs far less than a long session going on. Write one when the user asks (/rft-handoff) or says they stop with work under way, then tell them that /clear, or a new session, goes on from it.',
   }
-  const out = (['priorities', 'dates', 'verify', 'locks', 'comments', 'artifacts', 'notebooks', 'queue', 'manuscript'] as const).filter(f => features.has(f)).map(f => full[f])
+  const out = (['priorities', 'dates', 'verify', 'locks', 'comments', 'artifacts', 'notebooks', 'queue', 'manuscript', 'handoff'] as const).filter(f => features.has(f)).map(f => full[f])
   const absent = [
     features.has('priorities') ? '' : 'priorities (\`priority:\`)',
     features.has('dates') ? '' : `dates (\`due:\`, \`start:\`, \`est:\`, deadlines in \`${vault}/milestones/\`, meetings in \`${vault}/meetings/\`)`,

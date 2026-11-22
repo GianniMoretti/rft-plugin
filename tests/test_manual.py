@@ -64,7 +64,7 @@ class Manual(unittest.TestCase):
 
     def test_every_tool_is_named_and_the_index_sends_to_the_part_that_says_how(self):
         names = tools()
-        self.assertEqual(len(names), 42)
+        self.assertEqual(len(names), 43)
         rows = index_rows()
         core = text(MANUAL / 'SKILL.md')
         # the index lists every tool once: under its part, or as one of the core's own

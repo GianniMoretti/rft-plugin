@@ -1297,13 +1297,16 @@ async function allFiles(io: Io, dir: string, rel = ''): Promise<string[]> {
 export const needsRefs = (n: RftNode) =>
   (n.type === 'experiment' || n.type === 'direction') && !['discussed', 'dropped', 'moved'].includes(n.status)
 
-/** Whether a folder is in a git repository: it or a folder above it holds `.git`. */
-export async function isInGit(io: Io, abs: string): Promise<boolean> {
+/** The git repository a folder is in: the folder, it or one above it, that holds `.git`; null outside any. */
+export async function gitRootOf(io: Io, abs: string): Promise<string | null> {
   for (let dir = abs; ; dir = resolvePath(dir, '..')) {
-    if (await io.exists(join(dir, '.git'))) return true
-    if (resolvePath(dir, '..') === dir) return false
+    if (await io.exists(join(dir, '.git'))) return dir
+    if (resolvePath(dir, '..') === dir) return null
   }
 }
+
+/** Whether a folder is in a git repository. */
+export const isInGit = async (io: Io, abs: string): Promise<boolean> => (await gitRootOf(io, abs)) !== null
 
 /**
  * `root`: the tree's folder, which relative repo paths start from (else they are left to `io`);

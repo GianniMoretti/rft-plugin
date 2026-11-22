@@ -33,8 +33,8 @@ the parts the work at hand needs:
 | `comments.md` | a note is locked; a comment or suggestion of the tree view is to be answered; a note has footnotes or highlights | `rft_comments`, `rft_comment`, `rft_suggest` |
 
 This file's own tools: `rft_add_node`, `rft_set_status`, `rft_set_tags`, `rft_tags`, `rft_set_refs`,
-`rft_set_type`, `rft_tree`, `rft_sync`, `rft_validate`. A tool that is not in the prompt loads
-through ToolSearch by its name; its description says how to call it.
+`rft_set_type`, `rft_tree`, `rft_sync`, `rft_validate`, `rft_handoff`. A tool that is not in the
+prompt loads through ToolSearch by its name; its description says how to call it.
 
 ## Node types
 
@@ -160,6 +160,14 @@ under `## The tree` in the index.
 
 A note made with the wrong type is fixed with `rft_set_type`, never renamed by hand: its id, its
 folder and every link to it change together.
+
+## Handoffs
+
+A long session costs more with every request; a new one starts from the rules and the tree. To
+carry work over, bring the notes up to date, then `rft_handoff {done, next, unrecorded}` (2,000
+characters in all, notes by id): the next session in the folder, or this one after `/clear`,
+gets it in its rules. `unrecorded` is what neither a note nor a commit holds; the plugin adds
+the repositories with uncommitted changes. `/rft-handoff` asks for one.
 
 ## Note layout
 
