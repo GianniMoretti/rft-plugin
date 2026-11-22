@@ -1159,9 +1159,11 @@ the last starts a session with the plugin loaded from this folder.
   its numbers in the note and its table in the artifact, then the same `RESULTS` made again from
   a fresh clone at the recorded commit and patch.
 - `bench/bench.py`: the token benchmark. It runs tasks headless (`claude -p`) on fresh copies of a
-  project, once per plugin folder, and prints the input tokens, output tokens, cost and turns of
+  project, once per plugin folder, and prints the requests, input tokens, output tokens and cost of
   each: `python3 bench/bench.py --project <copy> --tasks tasks.json --plugin old=<folder>
-  --plugin new=. --runs 3`. The project is copied, never changed. A task may name a setup that
+  --plugin new=. --runs 5 --model claude-opus-5-5`. Requests are counted per message id of the
+  transcript (tool calls sent together are one request); `first` is what the first request sent.
+  The project is copied, never changed. A task may name a setup that
   brings the copy to its stage: `bench/lifecycle.json` measures one experiment's lifecycle
   (planned and queued; its jobs ended and its result to record) on the demo with a toy repo
   (`python3 bench/lifecycle.py base --out <dir>` makes the project).
