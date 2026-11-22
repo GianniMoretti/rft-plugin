@@ -21,6 +21,7 @@ import type { Feature } from './tools'
 import { featuresInUse } from './tools'
 import { checkSuggestion, fullText } from './priority'
 import { suggestVerified, toReview } from './verify'
+import { PARTS } from './manual'
 
 /** Why Claude may not change a locked note's text, and what it does instead. */
 export const lockedText = (n: { id: string; name: string }, instead = `propose the change with rft_suggest {id: "${n.id}", quote: the exact text to replace, replacement}`) =>
@@ -863,7 +864,7 @@ export const NOTEBOOK_ASK = `- Notebooks are the user's choice, per experiment: 
 const hasCode = (tree: Tree) => Object.values(tree.concepts ?? {}).some(c => (c.repos ?? []).length > 0)
 
 /** The rule of a session on a machine paired with the experiment queue: every run goes through it. */
-export const QUEUE_RULE = `- This machine is paired with the experiment queue: every run of an experiment's code goes through rft_queue (gpus: 0 for one that needs no GPU), never into the background with Bash (\`&\`, nohup, screen, tmux) nor in the foreground beyond a check of a few seconds, so the user and you see every run and what it holds. The queue's order is the user's: rft_job changes it only when they ask. The plugin sets an experiment running when its job starts and tells the user when one ends: never poll rft_jobs to wait for a job (each call is a turn); read it when the user asks, or when the session starts with a result to record, then write the real result (or the failure, from its error) in the note. Scripts you write for the queue follow the manual's "Writing a job the monitor can read": a tqdm bar with a fixed desc and a total on each long loop, changing numbers in set_postfix (never in the desc), inner loops leave=False, stages appended to \`$RFT_PROGRESS\` (\`{"stage": "train", "i": 2, "n": 3}\`), timestamped lines, results to \`$RFT_OUT\` (the job's own output folder); the monitor and rft_jobs show how far each running job is from them.`
+export const QUEUE_RULE = `- This machine is paired with the experiment queue: every run of an experiment's code goes through rft_queue (gpus: 0 for one that needs no GPU), never into the background with Bash (\`&\`, nohup, screen, tmux) nor in the foreground beyond a check of a few seconds, so the user and you see every run and what it holds. The queue's order is the user's: rft_job changes it only when they ask. The plugin sets an experiment running when its job starts and tells the user when one ends: never poll rft_jobs to wait for a job (each call is a turn); read it when the user asks, or when the session starts with a result to record, then write the real result (or the failure, from its error) in the note. Scripts you write for the queue follow the manual's "Writing a job the monitor can read" (queue.md): a tqdm bar with a fixed desc and a total on each long loop, changing numbers in set_postfix (never in the desc), inner loops leave=False, stages appended to \`$RFT_PROGRESS\` (\`{"stage": "train", "i": 2, "n": 3}\`), timestamped lines, results to \`$RFT_OUT\` (the job's own output folder); the monitor and rft_jobs show how far each running job is from them.`
 
 /**
  * `vault`: where the notes are as the session sees them, when the tree is not in its folder;
@@ -897,7 +898,7 @@ function featureRules(vault: string, features: ReadonlySet<Feature>): string {
   return out.map(l => `${l}\n`).join('')
 }
 
-export function rulesText(tree: Tree, config: Config, vault = config.vault, where: { cwd?: string; root?: string; home?: string } = {}, map?: string, features: ReadonlySet<Feature> = new Set()): string {
+export function rulesText(tree: Tree, config: Config, vault = config.vault, where: { cwd?: string; root?: string; home?: string; manual?: string } = {}, map?: string, features: ReadonlySet<Feature> = new Set()): string {
   let lines = (map ?? groupedTree(tree)).split('\n')
   if (lines.length > MAX_LINES) lines = [...lines.slice(0, MAX_LINES), `… ${lines.length - MAX_LINES} more (${map ? 'rft_map' : 'rft_tree'} shows them)`]
   return `# Reasoning Flow Tree (rft) is active in this project
@@ -926,7 +927,7 @@ ${featureRules(vault, features)}- Before launching an experiment (a training run
 - Code: a concept can link the code repositories its work runs on (\`concept_repos:\` on its starting note; on the root note, the whole project's). Its notes work with its own repos first, then those of the concepts above it. When you create a concept, ask the user whether code for it already exists and where; link it with rft_set_repos (never guess a path), then read the code and give the concept's experiments and directions a ## Code section with rft_set_code.
 - The ## Code section of an experiment or direction says how it relates to the code: entry points, files, functions, configs, what has to change (a short pointer for a direction). Write it from the code as it is now (the current commit and uncommitted changes), not as an older note saw it; rft_set_code records the commit it was checked against. Before working on such an experiment (planning, launching, analysing), call rft_code: it lists what changed since that commit; read the changes and update the references with rft_set_code.
 - Results go in the experiment's own note. An experiment with a notebook (\`notebook:\`) gets them from its run, in the Result as a table with the notebook, commit and runs they come from; you write what they mean, and in rft_set_code's reproduce only what that line does not say (config, data). Without a notebook (most experiments): read the run's outputs, process them (seeds aggregated, tables), write the numbers in Result, and record how to reproduce them (the commit of the run, the command and config, where the raw outputs are, how they were processed) with rft_set_code's reproduce.
-${hasCode(tree) ? NOTEBOOK_ASK : ''}- The rft-manual skill is the full manual; rft_map shows the project map, rft_tree the whole tree.
+${hasCode(tree) ? NOTEBOOK_ASK : ''}- The manual is in parts${where.manual ? `, in ${where.manual}/` : ''}: SKILL.md (the rft-manual skill) is its core, and ${PARTS.slice(0, -1).join(', ')} and ${PARTS[PARTS.length - 1]} (.md) take one subject each. Read only the part the work needs, with Read. rft_map shows the project map, rft_tree the whole tree.
 ${codeContext(tree, where)}
 ${map ? 'The project map at the start of this session (each concept with its state; rft_map <concept> for its notes)' : `The tree at the start of this session${Object.keys(tree.concepts ?? {}).length > 1 ? ', by concept (← parent, when not the line above)' : ''}`}:
 ${lines.join('\n')}`

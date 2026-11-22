@@ -497,6 +497,9 @@ describe('the notebook tools in a session', () => {
     await clock.advance(5000)
     expect(prompts).toHaveLength(2)
     expect(prompts[1]).toContain('The user asked for notebooks for E03 ')
+    // the prompt cites the manual's part by its file, for one Read
+    expect(prompts[1]).toMatch(/\(read the manual's \S*skills\/rft-manual\/notebooks\.md first\)/)
+    expect(prompts[0]).toMatch(/\(read the manual's \S*skills\/rft-manual\/notebooks\.md and the manual's \S*skills\/rft-manual\/artifacts\.md first\)/)
     expect(String((await run('notebooks --write E02')).text)).toContain('E02 already has a notebook')
     expect(String((await run('notebooks --write Nope')).text)).toContain('is neither a concept nor an experiment id')
   })

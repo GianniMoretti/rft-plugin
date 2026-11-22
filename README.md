@@ -112,7 +112,11 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   propose a concept when a new line of research opens (and ask whether code for it exists). A
   session started inside a concept's repo is told which concept that code belongs to. The rules
   for priorities, dates, locked notes and comments are given in full only in a vault that uses
-  them. The full manual is the `rft-manual` skill.
+  them. The manual is the `rft-manual` skill, in parts: a short core (what the notes are, when
+  to create and update them) with an index, and one file per subject beside it (concepts and
+  code, literature, the map, artifacts, notebooks, planning, the queue, writing, comments). The
+  rules and the commands name a part by its file, so Claude reads the one the work needs and
+  never the whole manual.
 - **Tools** Claude calls to keep the tree consistent. Only the ones a session uses most
   (`rft_add_node`, `rft_set_status`, `rft_set_summary`, `rft_search`, `rft_map`, `rft_graph`,
   `rft_next`, `rft_move_node`, `rft_sync`) have their full definition in the prompt from the
@@ -1156,7 +1160,9 @@ the last starts a session with the plugin loaded from this folder.
   command line (what the queue tools call) and what `api/queue` reads and changes.
   `hooks/lib/queue.ts`: the queue as Claude and the session see it; `hooks/lib/machine.ts` the
   machine it runs on (no queue until one is paired).
-- `skills/rft-manual/SKILL.md`: the manual; `tests/`: the mod's tests on an in-memory vault, the
+- `skills/rft-manual/`: the manual, `SKILL.md` (its core and the index of its parts) and one file
+  per part (`hooks/lib/manual.ts` lists them; `tests/test_manual.py` holds the files, the index
+  and what the plugin cites together); `tests/`: the mod's tests on an in-memory vault, the
   outline pane on every surface, and the server's tests; `tests/test_pipeline.py` the end-to-end
   check, with no model: an experiment of the demo queued, run, its notebook run after its jobs,
   its numbers in the note and its table in the artifact, then the same `RESULTS` made again from
