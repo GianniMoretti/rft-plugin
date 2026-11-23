@@ -1225,6 +1225,7 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
 .sl-edit .sl-hit.hollow { fill: none; pointer-events: stroke; }
 .sl-edit .sl-frame { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none; }
 .sl-edit .sl-handle { fill: #fff; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: all; }
+.sl-edit .sl-marquee { fill: color-mix(in oklab, var(--accent) 10%, transparent); stroke: var(--accent); stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
 .sl-edit .sl-guide { stroke: #f03e3e; stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
 /* a slot: taken by a click anywhere in it; selected, framed in dashes; the divide between two columns */
 .sl-edit .sl-slot { fill: transparent; stroke: none; pointer-events: all; cursor: default; }

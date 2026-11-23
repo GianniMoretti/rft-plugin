@@ -852,7 +852,9 @@ class BuildTest(Tools):
         b.js("document.getElementById('sl-present').click()")
         self.assertTrue(b.wait("!!document.querySelector('#sl-show .slide')"))
         self.assertEqual(b.js("document.querySelectorAll('#sl-show .sl-warn, #sl-show .sl-edit').length"), 0)
+        time.sleep(0.4)  # the full screen it asked for has come, or has been refused
         b.js("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))")
+        self.assertTrue(b.wait("document.getElementById('sl-show').hidden && !document.fullscreenElement"), "the presentation did not stop")
         # its height given back to its text
         self.tool("fit")
         self.assertEqual(self.text(), self.orig)
@@ -1055,6 +1057,7 @@ class SlotsTest(Tools):
         self.drag(*self.px(cap[0] + cap[2] / 2, cap[1] + cap[3] / 2), 120, -160)
         self.assertEqual(self.text(), before)
         # Enter opens its Markdown over it
+        self.click(cap[0] + cap[2] / 2, cap[1] + cap[3] / 2)
         self.key("Enter")
         self.assertEqual(self.source(), "Three seeds, mean and spread")
         self.key("a", CTRL, ["selectAll"])
@@ -1128,6 +1131,11 @@ class SlotsTest(Tools):
         left, right = self.slot("left"), self.slot("right")
         sx, sy = self.px(left[0] + left[2] / 2, left[1] + 300)
         ex, ey = self.px(right[0] + right[2] / 2, right[1] + 300)
+        # not yet selected, a drag from it takes nothing of it along
+        self.drag(sx, sy, ex - sx, ey - sy)
+        self.assertEqual(self.text(), COLUMNS)
+        self.click(left[0] + left[2] / 2, left[1] + 300)
+        self.assertIsNotNone(self.slot_selected())
         self.drag(sx, sy, ex - sx, ey - sy, release=False)
         self.assertEqual(b.js("document.querySelectorAll('#sl-preview .sl-drop').length"), 1, "the column it would go to is shown")
         self.mouse("mouseReleased", ex, ey)
@@ -1145,6 +1153,143 @@ class SlotsTest(Tools):
         self.mouse("mousePressed", *link)
         self.mouse("mouseReleased", *link)
         self.assertTrue(b.wait("!document.getElementById('drawer').hidden"), "the note did not open")
+        self.assertEqual(b.errors, [])
+
+
+@unittest.skipUnless(CHROME and websocket, "needs Chromium (Playwright's, or RFT_CHROME) and websocket-client")
+class SeveralTest(Tools):
+    """Several boxes and lines at once: selected by Shift and by a dragged rectangle, moved together, brought in line, spaced evenly."""
+
+    ID, NAME = "P08", "P08 Several.md"
+
+    def label(self, text: str):
+        self.key("Enter")
+        self.assertEqual(self.source(), "")
+        self.type(text)
+        self.key("Escape")
+
+    def test_1_scenario_c_a_diagram_from_nothing(self):
+        b = self.b
+        bare = without_items(self.orig, 3)
+        self.assertNotIn("<!--", slides_of(bare)[2])
+        self.start(3, bare)
+        # three rectangles, each drawn and labelled, neither in line nor evenly apart
+        for name, (x, y) in (("Encoder", (140, 300)), ("Bottleneck", (700, 340)), ("Decoder", (1420, 280))):
+            self.draw("rect", (x, y), (x + 360, y + 160))
+            self.label(name)
+        box = lambda x, y, name: f'<!-- box x="{x}" y="{y}" w="360" h="160" outline="text" align="center" valign="middle" -->\n{name}\n<!-- /box -->'  # noqa: E731
+        tail = bare[len(bare.rstrip("\n")):]  # the blank lines the deck ends with stay where they are
+        drawn = bare.rstrip("\n") + "\n\n" + "\n\n".join([box(140, 300, "Encoder"), box(700, 340, "Bottleneck"), box(1420, 280, "Decoder")]) + tail
+        self.assertEqual(self.text(), drawn)
+        # a rectangle dragged around the three selects them
+        self.drag(*self.px(100, 250), 1750 * self.scale, 300 * self.scale)
+        self.assertEqual(self.selected(), 3)
+        self.assertEqual(b.js("document.querySelectorAll('#sl-preview .sl-handle').length"), 0, "several selected have no handles")
+        # their middles in line: on the middle of the rectangle around them (280 to 500)
+        self.tool("alignMiddle")
+        inline = bare.rstrip("\n") + "\n\n" + "\n\n".join([box(140, 310, "Encoder"), box(700, 310, "Bottleneck"), box(1420, 310, "Decoder")]) + tail
+        self.assertEqual(self.text(), inline)
+        # evenly apart: the outer two stay, 280 between each
+        self.tool("spreadX")
+        even = inline.replace('x="700"', 'x="780"')
+        self.assertEqual(self.text(), even)
+        self.assertEqual(self.selected(), 3, "they stay selected")
+        # each of the two was one step
+        self.key("z", CTRL)
+        self.assertEqual(self.text(), inline)
+        self.key("z", CTRL)
+        self.assertEqual(self.text(), drawn)
+        self.key("z", CTRL | SHIFT)
+        self.key("z", CTRL | SHIFT)
+        self.assertEqual(self.text(), even)
+        # two arrows between them: pressed and let go near the sides' middles, they start and end on them
+        for a, e in ((500, 780), (1140, 1420)):
+            self.draw("arrow", (a + 5, 393), (e - 6, 388), 0)
+        want = even.rstrip("\n") + '\n\n<!-- line from="500 390" to="780 390" arrow="end" -->\n\n<!-- line from="1140 390" to="1420 390" arrow="end" -->' + tail
+        self.assertEqual(self.text(), want)
+        got = self.drawn()
+        self.assertEqual([round(g["rect"][1]) for g in got[:3]], [310, 310, 310])
+        gaps = [got[i + 1]["rect"][0] - (got[i]["rect"][0] + got[i]["rect"][2]) for i in (0, 1)]
+        self.assertAlmostEqual(gaps[0], gaps[1], delta=0.5)
+        self.assertEqual([[round(v) for v in g["tips"][0]] for g in got[3:]], [[780, 390], [1420, 390]])
+        self.assertEqual([g["text"] for g in got[:3]], ["Encoder", "Bottleneck", "Decoder"])
+        if self.shots:
+            b.shot(Path(self.shots) / "scenario-c-built.png")
+        self.assertEqual(b.errors, [])
+
+    def test_2_several_moved_copied_and_removed_together(self):
+        b = self.b
+        self.start(2)
+        before = self.text()
+        text, ellipse, arrow = self.items()
+        # Shift and a click add to what is selected, and take away from it
+        self.click(text["x"] + 60, text["y"] + 30)
+        self.click((arrow["from"][0] + arrow["to"][0]) / 2, (arrow["from"][1] + arrow["to"][1]) / 2, SHIFT)
+        self.assertEqual(self.selected(), 2)
+        self.click(ellipse["x"] + ellipse["w"] / 2, ellipse["y"], SHIFT)
+        self.assertEqual(self.selected(), 3)
+        self.click(ellipse["x"] + ellipse["w"] / 2, ellipse["y"], SHIFT)
+        self.assertEqual(self.selected(), 2)
+        # dragged by one of them, both move by the same whole numbers; the ellipse stays
+        self.drag(*self.px(text["x"] + 60, text["y"] + 30), -70, 35, ALT)
+        dx, dy = round(-70 / self.scale), round(35 / self.scale)
+        f, t = arrow["from"], arrow["to"]
+        moved = before.replace(f'x="{text["x"]}" y="{text["y"]}"', f'x="{text["x"] + dx}" y="{text["y"] + dy}"').replace(
+            f'from="{f[0]} {f[1]}" to="{t[0]} {t[1]}"', f'from="{f[0] + dx} {f[1] + dy}" to="{t[0] + dx} {t[1] + dy}"')
+        self.assertEqual(self.text(), moved)
+        self.assertEqual(self.selected(), 2)
+        # one step of the history for the move of both
+        self.key("z", CTRL)
+        self.assertEqual(self.text(), before)
+        self.key("z", CTRL | SHIFT)
+        self.assertEqual(self.text(), moved)
+        # the arrow keys move both; Ctrl+A takes all three
+        self.key("ArrowDown", SHIFT)
+        self.assertEqual(self.text(), moved.replace(f'y="{text["y"] + dy}"', f'y="{text["y"] + dy + 10}"').replace(
+            f'from="{f[0] + dx} {f[1] + dy}" to="{t[0] + dx} {t[1] + dy}"', f'from="{f[0] + dx} {f[1] + dy + 10}" to="{t[0] + dx} {t[1] + dy + 10}"'))
+        self.key("a", CTRL)
+        self.assertEqual(self.selected(), 3)
+        # copied together, pasted on another slide as their text, a blank line between them
+        self.start(2)
+        self.click(text["x"] + 60, text["y"] + 30)
+        self.click(ellipse["x"] + ellipse["w"] / 2, ellipse["y"], SHIFT)
+        self.key("c", CTRL, ["copy"])
+        self.to(3)
+        b.js("document.getElementById('sl-preview').focus()")
+        self.key("v", CTRL, ["paste"])
+        both = "\n".join([item_line(before, 2, 0), "gap closes here", "<!-- /box -->", "", item_line(before, 2, 1), "<!-- /box -->"])
+        self.assertTrue(b.wait(f"{self.CM}.getValue().endsWith({json.dumps(both)} + '\\n')"), "the two are not pasted")
+        self.assertEqual(self.text(), before.rstrip("\n") + "\n\n" + both + "\n")
+        self.assertEqual(self.selected(), 2, "what was pasted is selected")
+        # Delete removes both
+        self.key("Delete")
+        self.assertEqual(self.text(), before)
+        self.assertEqual(b.errors, [])
+
+    def test_3_a_dragged_rectangle_and_one_alone_in_line_with_the_slide(self):
+        b = self.b
+        self.start(3)
+        its = self.items()
+        # around the two lines at the right: both, though the rectangle holds neither whole
+        self.drag(*self.px(1500, 660), 60 * self.scale, 180 * self.scale, release=False)
+        self.assertEqual(b.js("document.querySelectorAll('#sl-preview .sl-marquee').length"), 1)
+        self.mouse("mouseReleased", *self.px(1560, 840))
+        self.assertEqual(self.selected(), 2)
+        self.assertEqual(b.js("document.querySelectorAll('#sl-preview .sl-marquee').length"), 0)
+        self.assertEqual(sorted(b.js("[...document.querySelectorAll('#sl-preview .sl-frame')].map(f => f.tagName)")), ["line", "line"])
+        # with Shift, a second rectangle adds to them
+        self.drag(*self.px(100, 220), 500 * self.scale, 120 * self.scale, SHIFT)
+        self.assertEqual(self.selected(), 3)
+        # a click on the slide itself selects nothing
+        self.click(1850, 1040)
+        self.assertEqual(self.selected(), 0)
+        # one alone is brought in line with the slide
+        before = self.text()
+        first = its[0]
+        self.click(first["x"] + 30, first["y"] + 20)
+        self.tool("alignCenter")
+        self.changed(before, 0, {"x": (1920 - first["w"]) // 2}, tol=0)
+        self.assertEqual(b.js("document.querySelector('#sl-tools [data-tool=spreadX]').disabled"), True)
         self.assertEqual(b.errors, [])
 
 

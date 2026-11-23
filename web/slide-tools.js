@@ -43,6 +43,14 @@
     color: '<path d="M4.5 10.5L8 2.5l3.5 8M5.8 8h4.4" stroke-width="1.6"/><path class="sl-ink-line" d="M3 13.5h10" stroke-width="2.5"/>',
     figure: '<path d="M2.5 2.5v11h11M5 10.5l2.5-3 2 1.5 3-4.5"/>',
     layout: '<rect x="2" y="3" width="12" height="10" rx="1"/><path d="M2 6.5h12M8 6.5V13"/>',
+    alignLeft: '<path d="M2.5 2v12"/><rect x="4.5" y="4" width="8.5" height="3" rx="0.5"/><rect x="4.5" y="9" width="5" height="3" rx="0.5"/>',
+    alignCenter: '<path d="M8 2v12"/><rect x="3.5" y="4" width="9" height="3" rx="0.5"/><rect x="5.5" y="9" width="5" height="3" rx="0.5"/>',
+    alignRight: '<path d="M13.5 2v12"/><rect x="3" y="4" width="8.5" height="3" rx="0.5"/><rect x="6.5" y="9" width="5" height="3" rx="0.5"/>',
+    alignTop: '<path d="M2 2.5h12"/><rect x="4" y="4.5" width="3" height="8.5" rx="0.5"/><rect x="9" y="4.5" width="3" height="5" rx="0.5"/>',
+    alignMiddle: '<path d="M2 8h12"/><rect x="4" y="3.5" width="3" height="9" rx="0.5"/><rect x="9" y="5.5" width="3" height="5" rx="0.5"/>',
+    alignBottom: '<path d="M2 13.5h12"/><rect x="4" y="3" width="3" height="8.5" rx="0.5"/><rect x="9" y="6.5" width="3" height="5" rx="0.5"/>',
+    spreadX: '<path d="M2.5 2v12M13.5 2v12"/><rect x="6.2" y="4.5" width="3.6" height="7" rx="0.5"/>',
+    spreadY: '<path d="M2 2.5h12M2 13.5h12"/><rect x="4.5" y="6.2" width="7" height="3.6" rx="0.5"/>',
     detach: '<rect x="2" y="2" width="8" height="6" rx="1" stroke-dasharray="2 1.5"/><rect x="6.5" y="8" width="7.5" height="6" rx="1"/><path d="M4 10.5l2 2M6 10.6v1.9H4.1"/>',
     image: '<rect x="2.5" y="3" width="11" height="10" rx="1"/><path d="M2.5 11.5l3-3 2.5 2.5 2-2 3.5 3.5"/><circle cx="10.5" cy="6" r="0.9"/>',
   }
@@ -283,6 +291,21 @@
       })
       if (edits.length) apply(edits)
     }
+
+    /** Those selected moved to where `place` puts their rectangles, each by whole numbers: one step. */
+    function arrange(place) {
+      const ks = selected().filter(k => geom(k)), its = items(), ls = lines()
+      const now = ks.map(k => boundsOf(geom(k))), next = place(now)
+      const edits = []
+      ks.forEach((k, i) => {
+        const dx = Math.round(next[i].x - now[i].x), dy = Math.round(next[i].y - now[i].y)
+        if (dx || dy) edits.push(E.set(ls, its[k], E.at(its[k], dx, dy)))
+      })
+      if (edits.length) apply(edits)
+    }
+    /** Brought in line with each other; one alone, with the slide. */
+    const align = how => arrange(rs => E.aligned(rs, how, rs.length === 1 ? { x: 0, y: 0, w: P.WIDTH, h: P.HEIGHT } : null))
+    const distribute = axis => arrange(rs => E.distributed(rs, axis))
 
     // ---------------------------------------------------------------- a box's Markdown, edited over it
 
@@ -587,6 +610,11 @@
         out.push(mark)
       })
       for (const g of guides) out.push('x' in g ? svg('line', { class: 'sl-guide', x1: g.x, y1: 0, x2: g.x, y2: P.HEIGHT }) : svg('line', { class: 'sl-guide', x1: 0, y1: g.y, x2: P.WIDTH, y2: g.y }))
+      // a rectangle dragged out over the slide: what it touches is selected when it is let go
+      if (drag && drag.type === 'marquee' && drag.to) {
+        const a = drag.at, b = drag.to
+        out.push(svg('rect', { class: 'sl-marquee', x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.abs(b.x - a.x), height: Math.abs(b.y - a.y) }))
+      }
       // what a tool that adds is being dragged out to
       if (drag && drag.type === 'draw' && drag.to) {
         const a = drag.at, b = drag.to
@@ -660,8 +688,10 @@
       if (armed) {
         ev.preventDefault()
         stage.focus({ preventScroll: true })
-        const p = point(ev)
-        drag = { type: 'draw', tool: armed, ks: [], id: ev.pointerId, px: ev.clientX, py: ev.clientY, at: { x: Math.round(p.x), y: Math.round(p.y) }, from: new Map(), moved: false, ...targets([]) }
+        const p = point(ev), near = targets([]), tol = ev.altKey ? -1 : SNAP_PX / scale
+        // it starts on what it is pressed near, as it ends on what it is let go near
+        const at = { x: Math.round(p.x + E.snap([p.x], near.xs, tol).d), y: Math.round(p.y + E.snap([p.y], near.ys, tol).d) }
+        drag = { type: 'draw', tool: armed, ks: [], id: ev.pointerId, px: ev.clientX, py: ev.clientY, at, from: new Map(), moved: false, ...near }
         stage.setPointerCapture(ev.pointerId)
         return
       }
@@ -678,14 +708,20 @@
           const name = slotHit.dataset.slot
           const twice = lastPress && lastPress.k === name && ev.timeStamp - lastPress.t < DOUBLE_MS && Math.hypot(ev.clientX - lastPress.x, ev.clientY - lastPress.y) < 5
           lastPress = twice ? null : { k: name, t: ev.timeStamp, x: ev.clientX, y: ev.clientY }
-          selectSlot(name)
-          drag = { ...base, type: 'slot', name, twice, over: '' }
+          // a column already selected is dragged to the other; any other press on a slot may drag out a rectangle
+          if (slotSel === name && (name === 'left' || name === 'right') && !ev.shiftKey) drag = { ...base, type: 'slot', name, twice, over: '' }
+          else drag = { ...base, type: 'marquee', slot: name, twice, add: ev.shiftKey ? selected() : [] }
         }
         stage.setPointerCapture(ev.pointerId)
         return
       }
       if (!handle && !hit) {
-        if (!ev.shiftKey && sel.length) select([])
+        // the slide itself: a rectangle dragged out, or a click that selects nothing
+        ev.preventDefault()
+        stage.focus({ preventScroll: true })
+        lastPress = null
+        drag = { type: 'marquee', slot: '', twice: false, add: ev.shiftKey ? selected() : [], id: ev.pointerId, px: ev.clientX, py: ev.clientY, at: point(ev), ks: [], from: new Map(), moved: false, xs: [], ys: [] }
+        stage.setPointerCapture(ev.pointerId)
         return
       }
       ev.preventDefault()
@@ -718,7 +754,8 @@
       const snapX = edges => { const s = E.snap(edges, drag.xs, tol); if (s.at != null) guides.push({ x: s.at }); return s.d }
       const snapY = edges => { const s = E.snap(edges, drag.ys, tol); if (s.at != null) guides.push({ y: s.at }); return s.d }
       live = new Map()
-      if (drag.type === 'divide') {
+      if (drag.type === 'marquee') drag.to = p
+      else if (drag.type === 'divide') {
         // the columns follow the divide; their share is written when it is let go
         drag.share = E.share(p.x, drag.left, drag.width, drag.gap)
         slideEl().querySelector('.slide-cols').style.gridTemplateColumns = `${drag.share}fr ${100 - drag.share}fr`
@@ -789,6 +826,13 @@
       draw()
     })
 
+    /** A click on a slot: it is selected; a link under the click is still a link, and opens its note. */
+    function pressSlot(name, ev) {
+      selectSlot(name)
+      const a = document.elementsFromPoint(ev.clientX, ev.clientY).find(el => el.matches && el.matches('.slide a[data-go]'))
+      if (a) a.click()
+    }
+
     function drop(ev, done) {
       if (!drag || ev.pointerId !== drag.id) return
       const d = drag, now = live
@@ -803,17 +847,23 @@
         else redrawSlide()
         return
       }
+      if (d.type === 'marquee') {
+        if (done && d.moved && d.to) {
+          const r = { x: Math.min(d.at.x, d.to.x), y: Math.min(d.at.y, d.to.y), w: Math.abs(d.to.x - d.at.x), h: Math.abs(d.to.y - d.at.y) }
+          const hit = items().map((_, k) => k).filter(k => { const g = geom(k); return g && E.touches(g, r) })
+          select([...new Set([...d.add, ...hit])])
+        } else if (done && d.slot && d.twice) editSlot(d.slot)
+        else if (done && d.slot && !d.add.length) pressSlot(d.slot, ev)
+        else if (done && !d.add.length) { sel = []; slotSel = ''; draw() } else draw()
+        return
+      }
       if (d.type === 'slot') {
         if (done && d.moved && d.over) {
           const e = E.swapped(lines(), slide())
           if (e) { apply([e]); selectSlot(d.over) } else draw()
         } else if (done && !d.moved && d.twice) editSlot(d.name)
-        else if (done && !d.moved) {
-          // a link under the slot is still a link: a click on it opens its note
-          const a = document.elementsFromPoint(ev.clientX, ev.clientY).find(el => el.matches && el.matches('.slide a[data-go]'))
-          if (a) a.click()
-          draw()
-        } else draw()
+        else if (done && !d.moved) pressSlot(d.name, ev)
+        else draw()
         return
       }
       if (d.type === 'draw') {
@@ -861,6 +911,7 @@
       if (mod && key.toLowerCase() === 'z') { used(); if (ev.shiftKey) cm.redo(); else cm.undo(); return }
       if (mod && key.toLowerCase() === 'y') { used(); cm.redo(); return }
       if (key === 'Escape' && armed) { used(); arm(''); return }
+      if (mod && key.toLowerCase() === 'a') { used(); select(items().map((_, k) => k).filter(k => geom(k))); return }
       if (slotSel) {
         if (key === 'Enter') { used(); editSlot(slotSel) } else if (key === 'Escape') { used(); selectSlot('') }
         return
@@ -1108,6 +1159,13 @@
       button('fit', 'The box as high as its text: its height is no longer fixed', () => style({ h: null }, ['box']), type)
       // a tool used while a box's Markdown is open leaves it open
       bar.addEventListener('mousedown', ev => { if (editing && ev.target.closest('button')) ev.preventDefault() })
+      const lineUp = group('Align')
+      for (const [name, how, text] of [['alignLeft', 'left', 'their left sides'], ['alignCenter', 'center', 'their middles, one above the other'], ['alignRight', 'right', 'their right sides'],
+        ['alignTop', 'top', 'their tops'], ['alignMiddle', 'middle', 'their middles, side by side'], ['alignBottom', 'bottom', 'their bottoms']]) {
+        button(name, `Align ${text} (one alone: with the slide)`, () => align(how), lineUp)
+      }
+      button('spreadX', 'Distribute side by side: the gaps between three or more all one', () => distribute('x'), lineUp)
+      button('spreadY', 'Distribute one above the other: the gaps between three or more all one', () => distribute('y'), lineUp)
       const arrange = group('Arrange')
       button('forward', 'In front of the next one (Ctrl+]; with Shift, of all)', () => order(1), arrange)
       button('back', 'Behind the one before (Ctrl+[; with Shift, of all)', () => order(-1), arrange)
@@ -1122,6 +1180,8 @@
       const n = overlay ? selected().length : 0
       buttons.forward.disabled = buttons.back.disabled = n !== 1
       buttons.duplicate.disabled = buttons.remove.disabled = !n
+      for (const name of ['alignLeft', 'alignCenter', 'alignRight', 'alignTop', 'alignMiddle', 'alignBottom']) buttons[name].disabled = !n
+      buttons.spreadX.disabled = buttons.spreadY.disabled = n < 3
       for (const t of Object.keys(NEW)) buttons[t].setAttribute('aria-pressed', String(armed === t))
       // the style of the first box selected, and of the first line
       const box = n ? shownItem(['box']) : null, line = n ? shownItem(['line']) : null, any = box || line

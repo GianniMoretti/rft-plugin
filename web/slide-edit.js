@@ -190,6 +190,56 @@
     return { x: west ? r.x + r.w - w : r.x, y: north ? r.y + r.h - h : r.y, w, h }
   }
 
+  /**
+   * Rectangles brought in line: their `left`, `center` or `right`, their `top`, `middle` or
+   * `bottom`, on that of `frame` (the rectangle around them all, unless one is given: the slide,
+   * for one alone).
+   */
+  function aligned(rects, how, frame = null) {
+    if (!rects.length) return []
+    const x0 = Math.min(...rects.map(r => r.x)), y0 = Math.min(...rects.map(r => r.y))
+    const f = frame || { x: x0, y: y0, w: Math.max(...rects.map(r => r.x + r.w)) - x0, h: Math.max(...rects.map(r => r.y + r.h)) - y0 }
+    return rects.map(r => ({
+      ...r,
+      x: how === 'left' ? f.x : how === 'center' ? f.x + (f.w - r.w) / 2 : how === 'right' ? f.x + f.w - r.w : r.x,
+      y: how === 'top' ? f.y : how === 'middle' ? f.y + (f.h - r.h) / 2 : how === 'bottom' ? f.y + f.h - r.h : r.y,
+    }))
+  }
+
+  /**
+   * Rectangles spaced evenly along `axis` (`x`: side by side, `y`: one above the other): the
+   * first and the last stay, those between are put so that the gaps are all one. Fewer than
+   * three are as they were.
+   */
+  function distributed(rects, axis) {
+    if (rects.length < 3) return rects.map(r => ({ ...r }))
+    const at = axis === 'y' ? 'y' : 'x', size = axis === 'y' ? 'h' : 'w'
+    const order = rects.map((_, i) => i).sort((a, b) => rects[a][at] - rects[b][at] || a - b)
+    const first = rects[order[0]], last = rects[order[order.length - 1]]
+    const gap = (last[at] + last[size] - first[at] - rects.reduce((sum, r) => sum + r[size], 0)) / (rects.length - 1)
+    const out = rects.map(r => ({ ...r }))
+    let next = first[at]
+    for (const i of order) { out[i][at] = next; next += rects[i][size] + gap }
+    out[order[order.length - 1]][at] = last[at]
+    return out
+  }
+
+  /** Whether a box's rectangle, or a line (`{x1, y1, x2, y2}`), has a part in the rectangle `r`: what a dragged rectangle selects. */
+  function touches(g, r) {
+    if (!('x1' in g)) return g.x < r.x + r.w && g.x + g.w > r.x && g.y < r.y + r.h && g.y + g.h > r.y
+    // a line: cut to the rectangle (Liang and Barsky), something of it is left
+    let t0 = 0, t1 = 1
+    const dx = g.x2 - g.x1, dy = g.y2 - g.y1
+    for (const [p, q] of [[-dx, g.x1 - r.x], [dx, r.x + r.w - g.x1], [-dy, g.y1 - r.y], [dy, r.y + r.h - g.y1]]) {
+      if (p === 0) { if (q < 0) return false; continue }
+      const t = q / p
+      if (p < 0) t0 = Math.max(t0, t)
+      else t1 = Math.min(t1, t)
+      if (t0 > t1) return false
+    }
+    return true
+  }
+
   // ---------------------------------------------------------------- the slide itself: its options, its layout, its slots
 
   /** Lines put in the text at line `q`, a blank line kept between them and what is on each side. */
@@ -320,6 +370,6 @@
   root.RftSlideEdit = {
     BOX_ORDER, LINE_ORDER, SLIDE_ORDER, KEEP, SMALLEST,
     setOptions, applyEdits, set, at, inserted, removed, block, reordered, content, blocks, shifted, newBox, newLine, snap, keepOn, resized,
-    slideOptions, withLayout, newSlide, slotEdit, swapped, detached, share,
+    slideOptions, withLayout, newSlide, slotEdit, swapped, detached, share, aligned, distributed, touches,
   }
 })(typeof globalThis !== 'undefined' ? globalThis : window)

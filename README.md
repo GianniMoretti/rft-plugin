@@ -1122,6 +1122,11 @@ note: start with E05
   heading takes a colour and a size of its own per slide (`title-color`, `title-size`: the bar's
   text colour and size, with the heading selected), **Figure** puts its figure in the slot
   selected, and the layout gallery changes the slide's layout or adds a slide of one after it.
+  Several at once: Shift and a click add a box or a line to those selected (or take it away), a
+  rectangle dragged out over the slide takes all it touches, Ctrl+A all of them; they move, are
+  nudged, copied, duplicated and removed together. **Align** brings their left sides, middles,
+  right sides, tops or bottoms in line (one alone: with the slide), **Distribute** puts three or
+  more evenly apart, the outer two staying. Nothing is grouped: the selection is not kept.
   Every action is an edit of the text and of nothing else, in the editor's
   own history: Ctrl+Z undoes a drag in one step, whichever side the cursor is on.
 - **For**: `for:` lists where the deck is presented, one or more: a meeting's occurrence by the

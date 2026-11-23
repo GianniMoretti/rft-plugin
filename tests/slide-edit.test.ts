@@ -29,8 +29,9 @@ type Api = {
   snap: (edges: number[], targets: number[], tol: number) => { d: number; at: number | null }
   keepOn: (r: Rect, margin?: number) => Rect
   resized: (r: Rect, handle: string, dx: number, dy: number, keep?: boolean) => Rect
-  aligned: (rects: Rect[], how: string) => Rect[]
+  aligned: (rects: Rect[], how: string, frame?: Rect) => Rect[]
   distributed: (rects: Rect[], axis: string) => Rect[]
+  touches: (g: Rect | { x1: number; y1: number; x2: number; y2: number }, r: Rect) => boolean
   slideOptions: (lines: string[], slide: Slide, changes: Record<string, string | number | null>) => Edit | null
   withLayout: (lines: string[], slide: Slide, layout: string) => Edit | null
   newSlide: (lines: string[], slide: Slide, layout: string) => { edit: Edit; line: number }
@@ -357,5 +358,46 @@ describe('a slot\'s content: replaced, changed over with the other column\'s, ta
     expect(E.share(110 + 0.6 * 1620 + 40, 110, 1700, 80)).toBe(60)
     expect(E.share(0, 110, 1700, 80)).toBe(10)
     expect(E.share(1920, 110, 1700, 80)).toBe(90)
+  })
+})
+
+describe('several at once: brought in line, spaced evenly, taken by a dragged rectangle', () => {
+  const A = { x: 100, y: 100, w: 300, h: 100 }, B = { x: 600, y: 180, w: 200, h: 200 }, C = { x: 1500, y: 60, w: 100, h: 60 }
+  const xy = (rs: Rect[]) => rs.map(r => [r.x, r.y])
+
+  test('aligned on the rectangle around them: their sides, or their middles', () => {
+    expect(xy(E.aligned([A, B, C], 'left'))).toEqual([[100, 100], [100, 180], [100, 60]])
+    expect(xy(E.aligned([A, B, C], 'right'))).toEqual([[1300, 100], [1400, 180], [1500, 60]])
+    expect(xy(E.aligned([A, B, C], 'center'))).toEqual([[700, 100], [750, 180], [800, 60]])
+    expect(xy(E.aligned([A, B, C], 'top'))).toEqual([[100, 60], [600, 60], [1500, 60]])
+    expect(xy(E.aligned([A, B, C], 'bottom'))).toEqual([[100, 280], [600, 180], [1500, 320]])
+    expect(xy(E.aligned([A, B, C], 'middle'))).toEqual([[100, 170], [600, 120], [1500, 190]])
+    expect(E.aligned([A, B], 'left').map(r => [r.w, r.h])).toEqual([[300, 100], [200, 200]])
+    // one alone, on the slide
+    expect(xy(E.aligned([A], 'center', { x: 0, y: 0, w: 1920, h: 1080 }))).toEqual([[810, 100]])
+    expect(xy(E.aligned([A], 'middle', { x: 0, y: 0, w: 1920, h: 1080 }))).toEqual([[100, 490]])
+  })
+
+  test('distributed: the first and the last stay, the gaps between are all one', () => {
+    // 100..400, 600..800, 1500..1600: 1500 across, 600 of boxes, two gaps of 450
+    expect(xy(E.distributed([A, B, C], 'x'))).toEqual([[100, 100], [850, 180], [1500, 60]])
+    expect(xy(E.distributed([C, A, B], 'x'))).toEqual([[1500, 60], [100, 100], [850, 180]])
+    // top to bottom: C (60..120), A (100..200), B (180..380): 320 high, 360 of boxes, two gaps of -20
+    expect(xy(E.distributed([A, B, C], 'y'))).toEqual([[100, 100], [600, 180], [1500, 60]])
+    const D = { x: 0, y: 900, w: 10, h: 100 }
+    // C 60..120, A 100..200, B 180..380, D 900..1000: 940 high, 460 of boxes, three gaps of 160
+    expect(xy(E.distributed([A, B, C, D], 'y'))).toEqual([[100, 280], [600, 540], [1500, 60], [0, 900]])
+    expect(xy(E.distributed([A, B], 'x'))).toEqual([[100, 100], [600, 180]])
+  })
+
+  test('what a dragged rectangle takes: a box it overlaps, a line that passes through it', () => {
+    const r = { x: 500, y: 100, w: 400, h: 300 }
+    expect([A, B, C].map(g => E.touches(g, r))).toEqual([false, true, false])
+    expect(E.touches({ x: 890, y: 390, w: 50, h: 50 }, r)).toBe(true)
+    expect(E.touches({ x1: 0, y1: 0, x2: 1920, y2: 1080 }, r)).toBe(true) // through it, both ends outside
+    expect(E.touches({ x1: 600, y1: 200, x2: 650, y2: 250 }, r)).toBe(true) // inside
+    expect(E.touches({ x1: 0, y1: 500, x2: 1920, y2: 500 }, r)).toBe(false) // under it
+    expect(E.touches({ x1: 0, y1: 0, x2: 450, y2: 450 }, r)).toBe(false) // past its corner, though its own rectangle overlaps
+    expect(E.touches({ x1: 700, y1: 0, x2: 700, y2: 1080 }, r)).toBe(true) // straight down through it
   })
 })
