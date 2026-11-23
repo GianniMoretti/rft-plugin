@@ -1,0 +1,84 @@
+// A document's tracking file (docs/adr/0003-a-document-holds-no-trace.md): what ties the document
+// to the tree, kept outside the document's folder so that the folder can be shared as it is.
+// `documents/.rft/<name>/tracking.json`, written by the plugin only:
+//
+//   main     the document's main file
+//   copies   each copy of a snippet, in the order of the document: its snippet, its marker's words,
+//            its file, the fingerprint of the snippet's content it was taken from, its text as placed
+//   values   each number, figure and table of the tree written out in the document: where it came
+//            from, what was written, its file and the text before and after it
+//   bib      each entry of the document's .bib that came from a reference note
+//   allowed  occurrences the scan flagged and the user allowed
+
+import type { Io } from './vault'
+import { DOCUMENTS_DIR, join } from './vault'
+
+/** The plugin's own files of the documents, outside every document's folder. */
+export const TRACKING_DIR = `${DOCUMENTS_DIR}/.rft`
+export const trackingRel = (name: string) => `${TRACKING_DIR}/${name}/tracking.json`
+
+export type TrackedCopy = {
+  snippet: string
+  /** The marker's words when it was placed (`Definition: CutMix`): how the copy is found when its snippet is gone or retitled. */
+  marker: string
+  file: string
+  /** The fingerprint of the snippet's content the copy answers to. */
+  stamp: string
+  /** The copy's text as it was placed: the snippet written out then. */
+  placed: string
+}
+export type ValueKind = 'number' | 'figure' | 'table'
+export type TrackedValue = {
+  kind: ValueKind
+  /** The note it came from, and its name there (`acc.1k`, a figure's or a table's name). */
+  from: string
+  key: string
+  /** What was written in the document: the number's text, the figure's path, the table's tabular. */
+  written: string
+  file: string
+  /** The text just before and just after it, which finds it again. */
+  before: string
+  after: string
+}
+export type Allowed = { file: string; match: string; text: string }
+export type Tracking = {
+  version: 1
+  main: string
+  copies: TrackedCopy[]
+  values: TrackedValue[]
+  bib: Record<string, { from: string; file: string }>
+  allowed: Allowed[]
+}
+
+const str = (v: unknown) => (typeof v === 'string' ? v : '')
+const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is Record<string, unknown> => !!x && typeof x === 'object') : [])
+
+/** A tracking file as read: what is missing or malformed is left out, never guessed. */
+export function parseTracking(raw: unknown): Tracking {
+  const d = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+  const bib: Tracking['bib'] = {}
+  if (d.bib && typeof d.bib === 'object') {
+    for (const [key, v] of Object.entries(d.bib as Record<string, unknown>)) {
+      const e = v && typeof v === 'object' ? (v as Record<string, unknown>) : {}
+      if (str(e.from)) bib[key] = { from: str(e.from), file: str(e.file) }
+    }
+  }
+  return {
+    version: 1,
+    main: str(d.main) || 'main.tex',
+    copies: list(d.copies).filter(c => str(c.snippet) && str(c.file))
+      .map(c => ({ snippet: str(c.snippet), marker: str(c.marker), file: str(c.file), stamp: str(c.stamp), placed: str(c.placed) })),
+    values: list(d.values).filter(v => ['number', 'figure', 'table'].includes(str(v.kind)) && str(v.from) && str(v.file))
+      .map(v => ({ kind: str(v.kind) as ValueKind, from: str(v.from), key: str(v.key), written: str(v.written), file: str(v.file), before: str(v.before), after: str(v.after) })),
+    bib,
+    allowed: list(d.allowed).filter(a => str(a.file) && str(a.match)).map(a => ({ file: str(a.file), match: str(a.match), text: str(a.text) })),
+  }
+}
+
+/** A document's tracking file; one that is missing reads as a document tied to nothing yet. */
+export async function readTracking(io: Io, vault: string, name: string): Promise<Tracking> {
+  try { return parseTracking(JSON.parse(await io.read(join(vault, trackingRel(name))))) } catch { return parseTracking(null) }
+}
+
+export const writeTracking = (io: Io, vault: string, name: string, t: Tracking) =>
+  io.write(join(vault, trackingRel(name)), JSON.stringify(t, null, 2) + '\n')

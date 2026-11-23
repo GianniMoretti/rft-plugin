@@ -1,0 +1,81 @@
+{
+ "ids": ["D01", "T02", "E05", "E08", "R07", "S01", "S02", "S03", "S04", "S05", "S06"],
+ "treeKeys": ["yun2019cutmix", "R07"],
+ "cases": [
+  {
+   "why": "plain LaTeX with a marker of the new kind: nothing",
+   "files": {"main.tex": "%%% Definition: CutMix %%%\n\\begin{definition}[CutMix]\\label{def:cutmix}\nMixes two images.\n\\end{definition}\n%%% end %%%\n"},
+   "traces": []
+  },
+  {
+   "why": "a macro of the plugin and its package",
+   "files": {"main.tex": "\\usepackage{rft}\nIt reaches \\rftnum{X1}{acc}\\% and \\rftfig[width=1cm]{X1}{loss}.\n"},
+   "traces": [
+    {"file": "main.tex", "line": 1, "kind": "plugin", "match": "rft"},
+    {"file": "main.tex", "line": 2, "kind": "plugin", "match": "\\rftnum"},
+    {"file": "main.tex", "line": 2, "kind": "plugin", "match": "\\rftfig"}
+   ]
+  },
+  {
+   "why": "the markers of the first design, with the snippet's id in them",
+   "files": {"main.tex": "% rft-begin S04 3f2a1c9d\nText.\n% rft-end S04\n"},
+   "traces": [
+    {"file": "main.tex", "line": 1, "kind": "marker", "match": "rft-begin"},
+    {"file": "main.tex", "line": 1, "kind": "id", "match": "S04"},
+    {"file": "main.tex", "line": 3, "kind": "marker", "match": "rft-end"},
+    {"file": "main.tex", "line": 3, "kind": "id", "match": "S04"}
+   ]
+  },
+  {
+   "why": "the id of a note in the words, in a comment and in a label; an id that is no note's is the user's own",
+   "files": {"sections/method.tex": "As E05 shows (Table S1, Figure A12, model B2).\n% from E08\n\\label{fig:E08_loss}\nThe words craft, RFT and E055 are no trace, nor is xE05 or E05b.\n"},
+   "traces": [
+    {"file": "sections/method.tex", "line": 1, "kind": "id", "match": "E05"},
+    {"file": "sections/method.tex", "line": 2, "kind": "id", "match": "E08"},
+    {"file": "sections/method.tex", "line": 3, "kind": "id", "match": "E08"}
+   ]
+  },
+  {
+   "why": "a snippet's title that carries an id is flagged in its marker",
+   "files": {"main.tex": "%%% Result: What E05 found %%%\nText.\n%%% end %%%\n"},
+   "traces": [{"file": "main.tex", "line": 1, "kind": "id", "match": "E05"}]
+  },
+  {
+   "why": "ids and the plugin's names in the names of files and folders; a figure's content is not read",
+   "files": {"figures/E08_loss.pdf": null, "rft.sty": "\\ProvidesPackage{mine}\n", "S01/notes.txt": "nothing\n", "figures/loss.pdf": null},
+   "traces": [
+    {"file": "S01/notes.txt", "line": null, "kind": "id", "match": "S01"},
+    {"file": "figures/E08_loss.pdf", "line": null, "kind": "id", "match": "E08"},
+    {"file": "rft.sty", "line": null, "kind": "plugin", "match": "rft"}
+   ]
+  },
+  {
+   "why": "an entry of the tree that the document does not cite; the user's own entry is not the tree's; an entry keyed by a note's id",
+   "files": {
+    "main.tex": "Mixup~\\citep[see][p. 3]{zhang2018mixup} is older. % \\cite{yun2019cutmix}\n",
+    "refs.bib": "@inproceedings{yun2019cutmix,\n  title = {CutMix}\n}\n\n@inproceedings{zhang2018mixup,\n  title = {mixup}\n}\n\n@misc{unread2020,\n  title = {Never cited, not the tree's}\n}\n\n@misc{R07,\n  title = {CutMix}\n}\n"
+   },
+   "traces": [
+    {"file": "refs.bib", "line": 1, "kind": "reference", "match": "yun2019cutmix"},
+    {"file": "refs.bib", "line": 13, "kind": "id", "match": "R07"},
+    {"file": "refs.bib", "line": 13, "kind": "reference", "match": "R07"}
+   ]
+  },
+  {
+   "why": "cited from any file of the document, among other keys; \\nocite{*} cites everything",
+   "files": {
+    "main.tex": "\\input{sections/intro}\n\\nocite{*}\n",
+    "sections/intro.tex": "As shown~\\cite{other2020, yun2019cutmix}.\n",
+    "refs.bib": "@inproceedings{yun2019cutmix,\n  title = {CutMix}\n}\n"
+   },
+   "traces": []
+  },
+  {
+   "why": "an occurrence the user allowed is not flagged again; the same id on another line is",
+   "files": {"main.tex": "See Table S01 of the supplement.\nAnd S01 again.\n"},
+   "allowed": [{"file": "main.tex", "match": "S01", "text": "See Table S01 of the supplement."}],
+   "traces": [{"file": "main.tex", "line": 2, "kind": "id", "match": "S01"}],
+   "allowedCount": 1
+  }
+ ]
+}

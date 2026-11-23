@@ -20,7 +20,7 @@ export { DOCUMENTS_DIR, SNIPPETS_DIR }
 export const SNIPPETS_REGISTRY = MANUSCRIPT_REGISTRY
 export const DOCUMENTS_REGISTRY = `${DOCUMENTS_DIR}/documents.json`
 /** The files the plugin writes, relative to the vault: never by hand, Claude's or the user's. */
-export const GENERATED = [SNIPPETS_REGISTRY, DOCUMENTS_REGISTRY, ...['rft.sty', 'rft-numbers.tex', 'refs.bib', '.build'].map(f => `${DOCUMENTS_DIR}/${f}`)]
+export const GENERATED = [SNIPPETS_REGISTRY, DOCUMENTS_REGISTRY, ...['rft.sty', 'rft-numbers.tex', 'refs.bib', '.build', '.rft'].map(f => `${DOCUMENTS_DIR}/${f}`)]
 /** Each document's record of the snippets' text its copies were taken from. */
 export const BLOCKS_FILE = '.blocks.json'
 

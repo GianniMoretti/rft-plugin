@@ -17,6 +17,7 @@ import { REPRODUCED_LINE, changesReproduced, changesResultsBlock, reproducedEdit
 import { lockedText } from './ops'
 import { changesPriority, priorityText } from './priority'
 import { MEETING_FIELDS, changesDates, datesText } from './schedule'
+import { tracesInName, tracesInText, traceWords } from './scan'
 import { matches, shellWrites } from './shell'
 import { BLOCKS_FILE, DOCUMENTS_DIR, GENERATED, SNIPPETS_DIR, isDocumentLocked, isSnippetLocked, readDocsRegistry, readRegistry } from './snippets'
 import type { Io } from './vault'
@@ -51,7 +52,7 @@ type Call = {
   /** A shell command: the files it writes, the notes and whether any file in the vault among them, and whether it runs a script (whose writes it does not show). */
   shell: { cmd: string; files: string[]; script: boolean; notes: GuardNote[]; inVault: boolean } | null
   /** An edit: its file, the note that file is, and for a Markdown file in the vault its text before and once the call has run (null when the call would fail). */
-  edit: { path: string; note: GuardNote | null; change: () => Promise<{ before: string; after: string } | null> } | null
+  edit: { path: string; note: GuardNote | null; change: () => Promise<{ before: string; after: string } | null>; /** Any file's text before and once the call has run (null when the call would fail). */ any: () => Promise<{ before: string | null; after: string } | null> } | null
 }
 
 type Guard = (c: Call) => Promise<string | null> | string | null
@@ -109,6 +110,10 @@ function callOf(tool: string, e: Record<string, unknown>, at: Scene): Call | nul
         const after = afterCall(tool, e, before)
         return after === null ? null : { before, after }
       })),
+      any: () => text(path).then(t => {
+        const after = afterCall(tool, e, t ?? '')
+        return after === null ? null : { before: t, after }
+      }),
     },
   }
 }
@@ -237,6 +242,28 @@ const documentLockedText = (name: string) =>
   `The document ${name} is locked: its text is the user's. Place, move or remove a copy of a snippet with rft_set_document once the user agrees; comment or suggest on its text with rft_comment / rft_suggest {id: "${name}", quote, …}.`
 
 /**
+ * Why an edit of a file of an unlocked document is refused: it would write a trace of the tree
+ * that the file does not hold yet (scan.ts), in its text or, for a new file, in its name.
+ */
+async function traceWritten(c: Call, file: string): Promise<string | null> {
+  const ch = await c.edit!.any()
+  if (!ch) return null
+  const ids = new Set(c.nodes.map(n => n.id))
+  for (const f of await c.io.list(`${c.vault}/${SNIPPETS_DIR}`).catch(() => [])) if (/^S\d+\.tex$/.test(f.name)) ids.add(f.name.slice(0, -4))
+  const key = (t: { kind: string; match: string }) => `${t.kind} ${t.match}`
+  const had = new Map<string, number>()
+  for (const t of tracesInText(ch.before ?? '', ids)) had.set(key(t), (had.get(key(t)) ?? 0) + 1)
+  const added = [...(ch.before === null ? tracesInName(file, ids) : []), ...tracesInText(ch.after, ids)].filter(t => {
+    const left = had.get(key(t)) ?? 0
+    had.set(key(t), left - 1)
+    return left <= 0
+  })
+  if (!added.length) return null
+  return `A document's files are shared with co-authors as they are, so they hold no trace of the tree; this would write one (${[...new Set(added.map(t => traceWords({ file, ...t })))].slice(0, 4).join('; ')}). ` +
+    'Write a number, a figure or a citation as plain LaTeX (rft_set_document places a snippet written out, tracked outside the document), and name no note or snippet by its id.'
+}
+
+/**
  * Snippets or documents written by hand where they are not Claude's to (an Edit or Write in
  * vault/snippets/ or vault/documents/, a shell command that writes there): the registries, the
  * generated files and the copies' records always, a new snippet's file (rft_set_snippet numbers
@@ -268,6 +295,8 @@ const manuscript: Guard = async c => {
     const d = new RegExp(`^${DOCUMENTS_DIR}/([a-z0-9][a-z0-9-]*)/`).exec(rel)
     if (d) {
       if (isDocumentLocked(docs, d[1]!)) return documentLockedText(d[1]!)
+      const trace = c.edit ? await traceWritten(c, rel.slice(d[0].length)) : null
+      if (trace) return trace
       continue
     }
     if (rel.startsWith(`${SNIPPETS_DIR}/`) ? reg.locked : docs.locked) return rel.startsWith(`${SNIPPETS_DIR}/`) ? snippetLockedText() : MANUSCRIPT_GENERATED
