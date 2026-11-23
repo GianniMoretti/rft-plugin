@@ -110,6 +110,8 @@ PAGE_FILES = {
     "/phone.js": ("phone.js", "text/javascript; charset=utf-8"),
     "/manuscript.js": ("manuscript.js", "text/javascript; charset=utf-8"),
     "/slides.js": ("slides.js", "text/javascript; charset=utf-8"),
+    "/slide-edit.js": ("slide-edit.js", "text/javascript; charset=utf-8"),
+    "/slide-tools.js": ("slide-tools.js", "text/javascript; charset=utf-8"),
     "/decks.js": ("decks.js", "text/javascript; charset=utf-8"),
     # the Manuscript tab's editor
     "/vendor/codemirror.v5.65.16.min.js": ("vendor/codemirror.v5.65.16.min.js", "text/javascript; charset=utf-8"),

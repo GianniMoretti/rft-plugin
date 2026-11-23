@@ -1086,8 +1086,20 @@ note: start with E05
   the later in the text in front, in the same place in the tab, the presentation and the PDF. One
   written wrong (a box not closed, a position that is no whole number, an unknown option or
   colour) is listed under the text by slide and line, and by `rft_validate`; the slide is still
-  drawn. Tools to place them on the slide itself are designed, not built
-  (`docs/design/presentations.md`).
+  drawn.
+- **On the slide** (a desktop's mouse and keys; a phone keeps the slide as a view): the slide
+  beside the text is where you move them. A click selects a box or a line (a shape with nothing
+  in it, by its outline) and puts the editor's cursor in its text; the cursor in its text selects
+  it. A drag moves it; the handles resize it, a line by its two ends; a figure keeps its
+  proportions; a box as high as its text takes a height once its top or bottom is dragged. What
+  is dragged snaps to the slide's edges and middle and to the other boxes and lines, with a
+  guide (Alt: not); Shift keeps a box's proportions, or a line straight or at 45°. A box may hang
+  over the slide's edge, not leave it. The arrow keys move by 1, with Shift by 10; Delete
+  removes; Ctrl+D duplicates; Ctrl+C, X and V copy as text, to another slide, another deck or any
+  editor; Ctrl+] and Ctrl+[ put in front and behind (with Shift, of all); the bar above the slide
+  has the same, and hides the text to give the slide its room. Every action is an edit of the
+  text and of nothing else, in the editor's own history: Ctrl+Z undoes a drag in one step,
+  whichever side the cursor is on.
 - **For**: `for:` lists where the deck is presented, one or more: a meeting's occurrence by the
   day its rule gives it (`G01 2026-11-24`; moved to the 25th, the deck goes with it), a once-only
   meeting by its id, a deadline by its id. A practice talk and the real one are one deck for both.
@@ -1199,8 +1211,9 @@ claude --plugin-dir .
 The first two check and test the mod, the third tests the server (and, with Chromium and
 `websocket-client` installed, the page at a phone's size: `tests/test_phone.py`, which
 `RFT_PHONE_SHOTS=<dir>` makes save a screenshot of each screen; a slide's boxes and lines where
-their text puts them, in the tab, the presentation and the PDF's pages: `tests/test_slides.py`,
-which `RFT_SLIDES_SHOTS=<dir>` makes save the slides and the PDF; and, with uv, the notebook's
+their text puts them, in the tab, the presentation and the PDF's pages, and the slide tools by
+real drags and keys (the box where it was dropped, every other byte of the deck as it was):
+`tests/test_slides.py`, which `RFT_SLIDES_SHOTS=<dir>` makes save the slides and the PDF; and, with uv, the notebook's
 editor in the view's theme against the marimo uv installs: `tests/test_notebook_theme.py`), and
 the last starts a session with the plugin loaded from this folder.
 
@@ -1239,7 +1252,7 @@ the last starts a session with the plugin loaded from this folder.
   scratchpad's to-dos and lists, and its panel; `inbox.js` the inbox's panel; `queue.js` the experiment queue's monitor;
   `theme.js` the light and
   dark themes; `manuscript.js` the Manuscript tab; `slides.js` a deck's slides, layouts, boxes and lines and what it
-  is for, `decks.js` the Slides tab; vendored d3 and CodeMirror), one codebase for the live view and `/rft-view`, which shows the
+  is for, `decks.js` the Slides tab, `slide-tools.js` the tools on its slide and `slide-edit.js` their edits of the deck's text; vendored d3 and CodeMirror), one codebase for the live view and `/rft-view`, which shows the
   threads read-only.
 - `server/rft_server.py`: the local server (Python standard library); `server/rft_notebook.py` an
   experiment's notebook: the vault's link followed, the run in its repo's uv environment (its

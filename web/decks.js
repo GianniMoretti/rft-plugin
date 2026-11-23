@@ -149,6 +149,9 @@
       })
     }
 
+    // the tools on the slide (web/slide-tools.js): they edit the text in `cm`, and the slide is drawn again from it
+    const tools = cm && root.RftSlideTools ? root.RftSlideTools.mount({ cm, stage: previewEl, bar: $('sl-tools'), body, store, slide: () => parsed.slides[cur] || null }) : null
+
     // ---------------------------------------------------------------- the server
 
     async function api(path, opts = {}) {
@@ -383,13 +386,15 @@
     let fitPreview = () => {}
     function drawPreview() {
       const slide = parsed.slides[cur]
-      if (!slide) { previewEl.replaceChildren(); notesEl.textContent = ''; return }
+      if (!slide) { previewEl.replaceChildren(); notesEl.textContent = ''; if (tools) tools.redraw(); return }
       fitPreview = place(previewEl, slide)
       notesEl.textContent = slide.notes ? slide.notes : ''
       notesEl.hidden = !slide.notes
       markThumb()
+      if (tools) tools.redraw()
     }
-    if (root.ResizeObserver) new root.ResizeObserver(() => fitPreview()).observe(previewEl)
+    if (tools) tools.onRedraw(() => drawPreview())
+    if (root.ResizeObserver) new root.ResizeObserver(() => { fitPreview(); if (tools) tools.redraw() }).observe(previewEl)
 
     function drawThumbs() {
       thumbsEl.replaceChildren(...parsed.slides.map((s, k) => {
@@ -601,7 +606,7 @@
       async show() {
         renderAll()
         await refresh()
-        if (cm) setTimeout(() => { cm.refresh(); fitPreview() }, 0)
+        if (cm) setTimeout(() => { cm.refresh(); fitPreview(); if (tools) tools.redraw() }, 0)
       },
       /** A deck opened in the tab. */
       openDeck: id => openDeck(id),

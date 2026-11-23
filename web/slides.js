@@ -230,8 +230,8 @@
    * lines in the text (0-based, `to` excluded, its separator not in it), `layout` (as written, or
    * `title` for the first slide and `default` for the others), `cls`, `body` (its Markdown, the
    * options line, the boxes, the lines and the notes left out), `bodyLine` (the line its text
-   * starts at), `notes`, `items` (its boxes and lines, the later in the text in front) and
-   * `problems` (what is wrong with them, `{line, text}`).
+   * starts at), `notes`, `noteLine` (the line they start at, or -1), `items` (its boxes and lines,
+   * the later in the text in front) and `problems` (what is wrong with them, `{line, text}`).
    */
   function split(text) {
     const src = String(text || '').replace(/\r\n/g, '\n')
@@ -257,7 +257,7 @@
       while (first < end && !lines[first].trim()) first++
       return {
         n: k + 1, from: a, to: b, layout: o.layout || (k === 0 ? 'title' : 'default'), cls: o.cls, badLayout: o.badLayout,
-        body: kept.join('\n').replace(/^(\s*\n)+/, '').replace(/\s+$/, ''), bodyLine: first, notes, items, problems,
+        body: kept.join('\n').replace(/^(\s*\n)+/, '').replace(/\s+$/, ''), bodyLine: first, notes, noteLine: noteAt, items, problems,
       }
     })
     return { fields, body, slides }
@@ -392,21 +392,26 @@
   const cssColor = c => (COLORS.includes(c) ? `var(--slide-c-${c})` : c)
   const tenth = v => Math.round(v * 10) / 10
 
+  /** Whether a box holds a figure or an image alone, which then fills it. */
+  function isFigure(b) {
+    const lines = String(b.content || '').split('\n').filter(l => l.trim())
+    return b.kind === 'box' && lines.length === 1 && IMAGE_LINE_RE.test(lines[0])
+  }
+
   /**
    * A box's HTML: at its place on the slide, its fill and outline around its Markdown (none for a
    * plain shape). A figure or an image alone in it fills it (`figure`); a box with a height keeps
    * it whatever its text (`fixed`).
    */
   function boxHtml(b, k, md) {
-    const lines = b.content.split('\n').filter(l => l.trim())
-    const cls = ['slide-box', b.shape === 'ellipse' ? 'ellipse' : '', b.h ? 'fixed' : '', lines.length === 1 && IMAGE_LINE_RE.test(lines[0]) ? 'figure' : '',
+    const cls = ['slide-box', b.shape === 'ellipse' ? 'ellipse' : '', b.h ? 'fixed' : '', isFigure(b) ? 'figure' : '',
       b.valign && b.valign !== 'top' ? `valign-${b.valign}` : ''].filter(Boolean).join(' ')
     const style = [
       `left:${b.x}px`, `top:${b.y}px`, `width:${b.w}px`, b.h ? `height:${b.h}px` : '',
       b.fill ? `background:${cssColor(b.fill)}` : '', b.outline ? `border:${WEIGHTS[b.weight || 'medium']}px solid ${cssColor(b.outline)}` : '',
       b.color ? `color:${cssColor(b.color)}` : '', b.size ? `font-size:${b.size}px` : '', b.align ? `text-align:${b.align}` : '',
     ].filter(Boolean).join(';')
-    return `<div class="${cls}" data-item="${k}" style="${style}">${lines.length ? `<div class="slide-box-text">${md(b.content)}</div>` : ''}</div>`
+    return `<div class="${cls}" data-item="${k}" style="${style}">${b.content.trim() ? `<div class="slide-box-text">${md(b.content)}</div>` : ''}</div>`
   }
 
   /**
@@ -432,6 +437,9 @@
       `${atStart ? head(l.x1, l.y1, -ux, -uy) : ''}${atEnd ? head(l.x2, l.y2, ux, uy) : ''}</svg>`
   }
 
+  /** A box's or a line's HTML, `k` its place among its slide's (the tools find it by it). */
+  const itemHtml = (it, k, md) => (it.kind === 'box' ? boxHtml(it, k, md) : lineHtml(it, k))
+
   /**
    * A slide's HTML in its layout, `md(src)` giving a piece of Markdown's HTML: a box of the
    * slide's size (WIDTH × HEIGHT), which the page scales to fit. Its boxes and lines are drawn
@@ -454,12 +462,12 @@
       const caption = k < 0 ? rest : [...lines.slice(0, k), ...lines.slice(k + 1)].join('\n')
       inner = part('slide-head', head) + (figure ? part('slide-figure', figure) : '') + part('slide-caption', caption)
     } else inner = part('slide-content', slide.body)
-    const placed = (slide.items || []).map((it, k) => (it.kind === 'box' ? boxHtml(it, k, md) : lineHtml(it, k))).join('')
+    const placed = (slide.items || []).map((it, k) => itemHtml(it, k, md)).join('')
     return `<div class="${escAttr(cls)}" data-slide="${slide.n}">${inner}${placed}</div>`
   }
 
   root.RftSlides = {
     DECK_RE, DECKS, LAYOUTS, WIDTH, HEIGHT, COLORS, WEIGHTS,
-    frontOf, listItems, isLocked, optionsOf, split, slideAt, forItems, forItem, attach, problems, decksFor, groups, slideHtml,
+    frontOf, listItems, isLocked, optionsOf, split, slideAt, forItems, forItem, attach, problems, decksFor, groups, slideHtml, itemHtml, isFigure,
   }
 })(typeof globalThis !== 'undefined' ? globalThis : window)

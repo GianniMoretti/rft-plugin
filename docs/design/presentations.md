@@ -125,7 +125,8 @@ gap closes here
 
 ## The slide tools
 
-Designed 2026-11-23; not built yet. The editor's slide is an editing surface, with a toolbar
+Designed 2026-11-23; built so far: move and resize (`web/slide-tools.js` on the slide,
+`web/slide-edit.js` the edits of the text). The editor's slide is an editing surface, with a toolbar
 above it. Every action is an edit of the deck's text and of nothing else, and changes only the
 lines of what it acts on; the text pane stays beside the slide (a toggle hides it), its cursor
 and the slide's selection in step, and undo is one history for both.
@@ -222,7 +223,7 @@ A tab after Manuscript, its page icon a slide on an easel.
    deck as on a snippet.
 4. **The slide tools** (designed 2026-11-23, ahead of phases 2 and 3; "Boxes and lines" and "The
    slide tools" above), in six steps: the format (boxes and lines parsed and drawn, usable by
-   typing: built 2026-11-23); move and resize on the slide; the toolbar's Text, Rectangle, Ellipse, Line and Arrow,
+   typing: built 2026-11-23); move and resize on the slide (built 2026-11-23); the toolbar's Text, Rectangle, Ellipse, Line and Arrow,
    colours and text edited in place; figures picked from the tree and images dropped or pasted
    into `vault/decks/assets/`; slots (edit in place, Detach, the columns' divider, a layout
    gallery); several selected at once (Align, Distribute).

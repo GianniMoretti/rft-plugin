@@ -1162,6 +1162,30 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
 .slide .slide-box.figure.fixed img { height: 100%; object-fit: contain; }
 .slide .slide-line { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; overflow: visible; pointer-events: none; }
 
+/* the slide tools (web/slide-tools.js): a bar above the slide, and over the slide what the pointer
+   takes hold of, in the slide's own units (an SVG with the slide's transform): each box's and
+   line's shape, the frame and handles of those selected, the guides a drag is snapped to */
+.sl-tools { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.sl-tools[hidden] { display: none; }
+.sl-tool-group { display: inline-flex; gap: 2px; }
+.sl-body.no-text { grid-template-columns: minmax(170px, 240px) minmax(0, 1fr); }
+.sl-body.no-text > .ms-editor { display: none; }
+.sl-body.no-text .sl-stage { max-height: calc(100vh - 250px); }
+/* a handle on the slide's edge shows whole; nothing further out does, so the pane never scrolls for it */
+.sl-stage.sl-editing { overflow: clip; overflow-clip-margin: 8px; outline: none; }
+.sl-stage.sl-editing:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+.sl-edit { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0; overflow: visible; pointer-events: none; }
+.sl-edit .sl-hit { fill: transparent; stroke: transparent; pointer-events: all; cursor: move; }
+.sl-edit .sl-hit.hollow { fill: none; pointer-events: stroke; }
+.sl-edit .sl-frame { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none; }
+.sl-edit .sl-handle { fill: #fff; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: all; }
+.sl-edit .sl-guide { stroke: #f03e3e; stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+.sl-edit .sl-h-nw, .sl-edit .sl-h-se { cursor: nwse-resize; }
+.sl-edit .sl-h-ne, .sl-edit .sl-h-sw { cursor: nesw-resize; }
+.sl-edit .sl-h-n, .sl-edit .sl-h-s { cursor: ns-resize; }
+.sl-edit .sl-h-e, .sl-edit .sl-h-w { cursor: ew-resize; }
+.sl-edit circle.sl-handle { cursor: crosshair; }
+
 /* the deck presented: full screen, black around the slide */
 .sl-show { position: fixed; inset: 0; z-index: 1000; background: #000; cursor: pointer; }
 .sl-show[hidden] { display: none; }
