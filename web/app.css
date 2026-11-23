@@ -1189,6 +1189,12 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
 .sl-menu .sl-hex { grid-column: 1 / -1; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px;
   background: var(--bg); color: var(--fg); }
 .sl-menu .sl-hex.bad { border-color: #f03e3e; }
+/* the tree's figures to pick from, by the note that made each */
+.sl-menu.sl-figures { grid-template-columns: repeat(3, 120px); max-height: 60vh; overflow: auto; }
+.sl-figures-note, .sl-figures p { grid-column: 1 / -1; margin: 2px 0 0; font-size: 11px; color: var(--muted); }
+.sl-figure { display: flex; flex-direction: column; align-items: stretch; gap: 2px; padding: 4px; min-width: 0; }
+.sl-figure img { width: 100%; height: 64px; object-fit: contain; background: #fff; border-radius: 3px; }
+.sl-figure span { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* a tool that adds, waiting for where */
 .sl-stage.sl-armed, .sl-stage.sl-armed * { cursor: crosshair !important; }
 /* a box's Markdown open over it, at the slide's size: its source, in the box's own font */

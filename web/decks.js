@@ -150,7 +150,11 @@
     }
 
     // the tools on the slide (web/slide-tools.js): they edit the text in `cm`, and the slide is drawn again from it
-    const tools = cm && root.RftSlideTools ? root.RftSlideTools.mount({ cm, stage: previewEl, bar: $('sl-tools'), body, store, slide: () => parsed.slides[cur] || null }) : null
+    const tools = cm && root.RftSlideTools ? root.RftSlideTools.mount({
+      cm, stage: previewEl, bar: $('sl-tools'), body, store, notify, slide: () => parsed.slides[cur] || null,
+      api: (path, opts) => api(path, opts), deck: () => did, imageUrl: src => imageUrl(src),
+      noteName: id => { const n = nodes().get(id); return n ? n.name : id },
+    }) : null
 
     // ---------------------------------------------------------------- the server
 
@@ -355,8 +359,10 @@
       } catch { /* below */ }
       return `<code class="math">${escH(display ? `$$${src}$$` : `$${src}$`)}</code>`
     }
+    /** The address of an image the open deck shows. */
+    const imageUrl = src => `api/image?deck=${encodeURIComponent(did)}&src=${encodeURIComponent(src)}${key() ? `&token=${encodeURIComponent(key())}` : ''}`
     function image(src, alt, size) {
-      const url = `api/image?deck=${encodeURIComponent(did)}&src=${encodeURIComponent(src)}${key() ? `&token=${encodeURIComponent(key())}` : ''}`
+      const url = imageUrl(src)
       const dims = size ? ` width="${size[1]}"` + (size[2] ? ` height="${size[2]}"` : '') : ''
       return `<img src="${escH(url)}" alt="${escH(alt || '')}" data-label="${escH(alt || src.split('/').pop())}"${dims}>`
     }

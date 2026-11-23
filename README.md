@@ -1108,7 +1108,12 @@ note: start with E05
   `*` around what is selected; Esc or a click outside draws it again. A shape's first label goes
   to its middle; a box of text left empty is removed. A new box of text has a width only: drag
   its bottom to fix its height, and text longer than its box stays in view, marked in the editor
-  alone, never shrunk. Every action is an edit of the text and of nothing else, in the editor's
+  alone, never shrunk. **Figure** lists the figures the notebooks saved, by the note that made
+  each, and adds the one you pick as a box that shows it by reference (`![[E08_loss.svg]]`), so it
+  follows its notebook: run again with other proportions, the box keeps its width and its height
+  follows. **Image** takes a picture of your own, as does pasting one on the slide or dropping it
+  there: it is copied to `vault/decks/assets/` under its deck's name (`P03-1.png`) and shown in a
+  box. Neither is ever cropped or stretched. Every action is an edit of the text and of nothing else, in the editor's
   own history: Ctrl+Z undoes a drag in one step, whichever side the cursor is on.
 - **For**: `for:` lists where the deck is presented, one or more: a meeting's occurrence by the
   day its rule gives it (`G01 2026-11-24`; moved to the 25th, the deck goes with it), a once-only

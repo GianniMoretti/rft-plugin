@@ -145,6 +145,10 @@ RELAY_ALIVE_S = 2.0  # how long after it last asked a chat still counts as there
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
                ".webp": "image/webp", ".avif": "image/avif", ".bmp": "image/bmp", ".svg": "image/svg+xml"}
 MAX_IMAGE_BYTES = 50_000_000
+# an image pasted or dropped on a slide (decks/assets/): its types, and the most a request carrying one as base64 may be
+DECK_ASSETS = "assets"
+DECK_ASSET_TYPES = {"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp", "image/svg+xml": ".svg"}
+MAX_ASSET_BYTES = 28_000_000
 RESCAN_S = 5.0  # a name not found looks through the folders again at most this often
 MAX_SCAN_FILES = 2_000_000  # the most files a search by name looks through
 SKIP_DIRS = {"node_modules", "__pycache__"}  # with every dot folder: never searched by name
@@ -2094,6 +2098,35 @@ class Vault:
             self._write_note(path, text, "", rft_decks.with_lock(text, locked))
         return self.deck(did)
 
+    def figures(self) -> dict:
+        """The figures the notebooks saved (figures/<note id>_<name>.svg), by name, for a slide to pick one."""
+        d = self.root / FIGURES
+        names = [p.name for p in d.iterdir() if p.is_file() and p.suffix.lower() == ".svg"] if d.is_dir() else []
+        return {"figures": sorted(names, key=natural_key)}
+
+    def add_deck_asset(self, did: str, mime: str, data: str) -> tuple[int, dict]:
+        """An image the user pasted or dropped on a slide: kept in decks/assets/ under its deck's
+        name and the next number (`P03-1.png`), which the slide then shows by that name."""
+        path = self.deck_path(did)
+        if path is None:
+            return 404, {"error": "no such deck"}
+        ext = DECK_ASSET_TYPES.get(mime)
+        if ext is None:
+            return 400, {"error": f"not an image a slide shows ({', '.join(sorted(DECK_ASSET_TYPES))})"}
+        try:
+            raw = base64.b64decode(data, validate=True) if isinstance(data, str) else b""
+        except ValueError:
+            raw = b""
+        if not raw:
+            return 400, {"error": "expected the image as base64"}
+        assets = path.parent / DECK_ASSETS
+        with self._write_lock:
+            assets.mkdir(exist_ok=True)
+            taken = [int(m.group(1)) for p in assets.iterdir() if (m := re.fullmatch(re.escape(did) + r"-(\d+)\.\w+", p.name))]
+            name = f"{did}-{max(taken, default=0) + 1}{ext}"
+            (assets / name).write_bytes(raw)
+        return 201, {"file": name}
+
     def deck_image(self, did: str, src: str) -> Path | None:
         """An image a deck shows, found as a note's are, from the decks' folder (then the notebooks' figures)."""
         path = self.deck_path(did)
@@ -2552,6 +2585,8 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 return self._json(200, vault.style(), head_only)
             if route == "/api/decks":
                 return self._json(200, vault.decks(), head_only)
+            if route == "/api/figures":
+                return self._json(200, vault.figures(), head_only)
             if route == "/api/deck":
                 return self._json(*vault.deck((parse_qs(url.query).get("id") or [""])[0]), head_only)
             if route == "/api/manuscript":
@@ -2814,6 +2849,14 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                         or not isinstance(req.get("subtitle", ""), str):
                     return self._json(400, {"error": "expected {title, for?: [items], subtitle?}"})
                 return self._json(*vault.add_deck(req["title"], items, req.get("subtitle", "")))
+            if route == "/api/deck/asset":
+                got = self._write_request("/api/deck/asset", MAX_ASSET_BYTES)
+                if got is None:
+                    return
+                _, req = got
+                if not isinstance(req.get("id"), str) or not isinstance(req.get("type"), str) or not isinstance(req.get("data"), str):
+                    return self._json(400, {"error": "expected {id, type, data: the image as base64}"})
+                return self._json(*vault.add_deck_asset(req["id"], req["type"], req["data"]))
             if route == "/api/deck/lock":
                 got = self._write_request("/api/deck/lock", MAX_NODE_BYTES)
                 if got is None:

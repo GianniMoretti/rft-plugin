@@ -2190,6 +2190,40 @@ class DeckTest(unittest.TestCase):
         self.assertEqual((status, ctype), (200, "image/svg+xml"))
         self.assertEqual(self.get(f"/api/image?deck=P09&src={quote('E08_loss.svg')}")[0], 403)
 
+    def test_the_tree_s_figures_for_a_slide_to_pick_from(self):
+        figures = self.vault / "figures"
+        for name in ("E10_accuracy.svg", "E08_gap.svg", "E08_gap.pdf", "notes.txt"):
+            (figures / name).write_text("<svg xmlns='http://www.w3.org/2000/svg'/>")
+            self.addCleanup((figures / name).unlink)
+        got = json.loads(self.get("/api/figures")[2])
+        self.assertEqual(got, {"figures": ["E08_gap.svg", "E08_loss.svg", "E10_accuracy.svg"]})
+
+    def test_an_image_pasted_on_a_slide_is_kept_with_the_decks_under_its_deck_s_name(self):
+        png = bytes.fromhex("89504e470d0a1a0a") + b"not much of a picture"
+        assets = self.vault / "decks" / "assets"
+        self.addCleanup(lambda: shutil.rmtree(assets, ignore_errors=True))
+        status, out = self.write("POST", "/api/deck/asset", {"id": "P03", "type": "image/png", "data": base64.b64encode(png).decode()})
+        self.assertEqual((status, out), (201, {"file": "P03-1.png"}))
+        self.assertEqual((assets / "P03-1.png").read_bytes(), png)
+        # the next one of that deck, whatever its type; another deck counts on its own
+        status, out = self.write("POST", "/api/deck/asset", {"id": "P03", "type": "image/svg+xml", "data": base64.b64encode(b"<svg xmlns='http://www.w3.org/2000/svg'/>").decode()})
+        self.assertEqual((status, out), (201, {"file": "P03-2.svg"}))
+        (assets / "P03-1.png").unlink()
+        self.assertEqual(self.write("POST", "/api/deck/asset", {"id": "P03", "type": "image/jpeg", "data": base64.b64encode(b"jpeg").decode()})[1], {"file": "P03-3.jpg"})
+        self.assertEqual(self.write("POST", "/api/deck/asset", {"id": "P01", "type": "image/png", "data": base64.b64encode(png).decode()})[1], {"file": "P01-1.png"})
+        # the deck shows it by its name alone, as Obsidian finds it
+        status, ctype, body = self.get(f"/api/image?deck=P01&src={quote('P01-1.png')}")
+        self.assertEqual((status, ctype, body), (200, "image/png", png))
+        # refused: no such deck, what is no image, what is no base64, nothing
+        for req, code in (({"id": "P09", "type": "image/png", "data": "QUJD"}, 404), ({"id": "P03", "type": "text/html", "data": "QUJD"}, 400),
+                          ({"id": "P03", "type": "image/png", "data": "not base64!"}, 400), ({"id": "P03", "type": "image/png", "data": ""}, 400),
+                          ({"id": "../P03", "type": "image/png", "data": "QUJD"}, 404), ({"id": "P03", "type": "image/png"}, 400)):
+            self.assertEqual(self.write("POST", "/api/deck/asset", req)[0], code, req)
+        self.assertEqual(sorted(p.name for p in assets.iterdir()), ["P01-1.png", "P03-2.svg", "P03-3.jpg"])
+        # and not without the key
+        self.assertEqual(self.write("POST", "/api/deck/asset", {"id": "P03", "type": "image/png", "data": "QUJD"}, key=None)[0], 403)
+        self.assertEqual(sorted(p.name for p in assets.iterdir()), ["P01-1.png", "P03-2.svg", "P03-3.jpg"])
+
 
 
 class StyleRouteTest(unittest.TestCase):

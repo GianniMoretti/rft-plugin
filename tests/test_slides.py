@@ -840,5 +840,96 @@ class BuildTest(Tools):
         self.assertEqual(b.errors, [])
 
 
+# a picture made in the page (a canvas, `w` by `h`) and handed to the slide as the browser hands a pasted or a dropped one
+PICTURE = """(async (how, w, h, x, y) => {
+  const c = document.createElement('canvas'); c.width = w; c.height = h
+  const g = c.getContext('2d'); g.fillStyle = '#8B5CF6'; g.fillRect(0, 0, w, h)
+  const blob = await new Promise(done => c.toBlob(done, 'image/png'))
+  const dt = new DataTransfer(); dt.items.add(new File([blob], 'shot.png', { type: 'image/png' }))
+  const stage = document.getElementById('sl-preview')
+  if (how === 'paste') { stage.focus(); document.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })) }
+  else stage.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, clientX: x, clientY: y, bubbles: true, cancelable: true }))
+  return blob.size
+})"""
+
+
+@unittest.skipUnless(CHROME and websocket, "needs Chromium (Playwright's, or RFT_CHROME) and websocket-client")
+class PicturesTest(Tools):
+    """A figure of the tree picked for a slide, and an image of the user's pasted or dropped on it."""
+
+    ID, NAME = "P06", "P06 Pictures.md"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        (cls.vault / "figures").mkdir(exist_ok=True)
+        for name in ("E06_accuracy.svg", "E06_loss.svg", "E04_curve.svg"):
+            shutil.copy(FIXTURES / "E08_loss.svg", cls.vault / "figures" / name)
+
+    def test_1_a_figure_picked_from_the_tree(self):
+        b = self.b
+        self.start(2)
+        before = self.text()
+        self.tool("figure")
+        self.assertTrue(b.wait("document.querySelectorAll('#sl-tools .sl-figures .sl-figure').length === 3"), "the tree's figures are not listed")
+        heads = b.js("[...document.querySelectorAll('#sl-tools .sl-figures-note')].map(h => h.textContent)")
+        self.assertEqual([h.split(" ")[0] for h in heads], ["E04", "E06"])
+        self.assertIn("CutMix with cosine schedule", heads[1], "by the note that made them, named")
+        self.assertEqual(b.js("[...document.querySelectorAll('#sl-tools .sl-figure')].map(f => f.textContent)"), ["curve", "accuracy", "loss"])
+        self.press('#sl-tools .sl-figure[data-figure="E06_accuracy.svg"]')
+        made = '<!-- box x="560" y="240" w="800" -->\n![[E06_accuracy.svg]]\n<!-- /box -->'
+        self.assertEqual(self.text(), before.replace("\n\nnote:", f"\n\n{made}\n\nnote:"))
+        self.assertTrue(b.wait("(() => { const i = document.querySelector('#sl-preview .slide-box.figure img'); return !!i && i.complete && i.naturalWidth > 0 })()"), "the figure is not drawn")
+        fig = self.drawn()[3]
+        self.assertEqual([round(v) for v in fig["rect"][:3]], [560, 240, 800])
+        self.assertAlmostEqual(fig["img"][3], 800 * 500 / 800, delta=1)
+        self.assertEqual(self.selected(), 1)
+
+        # its notebook run again, the figure wider than it was: the box keeps its width, its height follows
+        (self.vault / "figures" / "E06_accuracy.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 200" width="800" height="200"><rect width="800" height="200" fill="#8B5CF6"/></svg>')
+        b.js("(() => { const i = document.querySelector('#sl-preview .slide-box.figure img'); i.src = i.src + '&again=1' })()")
+        self.assertTrue(b.wait("(() => { const i = document.querySelector('#sl-preview .slide-box.figure img'); return i.complete && i.naturalHeight === 200 })()"))
+        again = self.drawn()[3]
+        self.assertEqual([round(v) for v in again["rect"][:3]], [560, 240, 800])
+        self.assertAlmostEqual(again["rect"][3], 200, delta=1)
+        self.assertAlmostEqual(again["img"][2] / again["img"][3], 4, delta=0.02, msg="not cropped, not stretched")
+        self.assertEqual(b.errors, [])
+
+    def test_2_an_image_pasted_and_one_dropped(self):
+        b = self.b
+        self.start(2)
+        before = self.text()
+        assets = self.vault / "decks" / "assets"
+        size = b.js(f"{PICTURE}('paste', 400, 200, 0, 0)")
+        self.assertTrue(b.wait(f"{self.CM}.getValue().includes('![[P06-1.png]]')"), "the pasted image is not on the slide")
+        # 400 by 200, in the slide's middle; its file with the decks, under the deck's name
+        made = '<!-- box x="760" y="440" w="400" -->\n![[P06-1.png]]\n<!-- /box -->'
+        self.assertEqual(self.text(), before.replace("\n\nnote:", f"\n\n{made}\n\nnote:"))
+        self.assertEqual((assets / "P06-1.png").stat().st_size, size)
+        self.assertTrue(b.wait("(() => { const i = document.querySelector('#sl-preview .slide-box.figure img'); return !!i && i.complete && i.naturalWidth === 400 })()"), "the image is not drawn")
+        got = self.drawn()[3]
+        self.assertAlmostEqual(got["img"][2] / got["img"][3], 2, delta=0.02)
+        # dropped: around the point it is dropped at; wider than half the slide, it is brought to that
+        x, y = self.px(600, 500)
+        b.js(f"{PICTURE}('drop', 1600, 400, {x}, {y})")
+        self.assertTrue(b.wait(f"{self.CM}.getValue().includes('![[P06-2.png]]')"), "the dropped image is not on the slide")
+        dropped = dict(OPT.findall(item_line(self.text(), 2, 4)))
+        self.assertEqual(int(dropped["w"]), 960)
+        self.assertAlmostEqual(int(dropped["x"]), 600 - 480, delta=1)
+        self.assertAlmostEqual(int(dropped["y"]), 500 - 120, delta=1)
+        self.assertNotIn("h", dropped)
+        self.assertTrue((assets / "P06-2.png").is_file())
+        # resized by a corner, it keeps its proportions, and still has no height of its own
+        self.assertTrue(b.wait("[...document.querySelectorAll('#sl-preview img')].every(i => i.complete && i.naturalWidth > 0)"))
+        self.click(600, 500)
+        text = self.text()
+        self.drag(*self.handle("se"), -80, 0, ALT)
+        got = self.changed(text, 4, {"w": 960 - 80 / self.scale})
+        self.assertNotIn("h", got)
+        img = self.drawn()[4]["img"]
+        self.assertAlmostEqual(img[2] / img[3], 4, delta=0.02)
+        self.assertEqual(b.errors, [])
+
+
 if __name__ == "__main__":
     unittest.main()

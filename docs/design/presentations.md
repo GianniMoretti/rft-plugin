@@ -125,7 +125,7 @@ gap closes here
 
 ## The slide tools
 
-Designed 2026-11-23; built so far: move and resize, add and style, a box's Markdown edited over it
+Designed 2026-11-23; built so far: move and resize, add and style, a box's Markdown edited over it, figures and images
 (`web/slide-tools.js` on the slide, `web/slide-edit.js` the edits of the text). The editor's slide is an editing surface, with a toolbar
 above it. Every action is an edit of the deck's text and of nothing else, and changes only the
 lines of what it acts on; the text pane stays beside the slide (a toggle hides it), its cursor
@@ -225,7 +225,7 @@ A tab after Manuscript, its page icon a slide on an easel.
    slide tools" above), in six steps: the format (boxes and lines parsed and drawn, usable by
    typing: built 2026-11-23); move and resize on the slide (built 2026-11-23); the toolbar's Text, Rectangle, Ellipse, Line and Arrow,
    colours and text edited in place (built 2026-11-23); figures picked from the tree and images dropped or pasted
-   into `vault/decks/assets/`; slots (edit in place, Detach, the columns' divider, a layout
+   into `vault/decks/assets/` (built 2026-11-23); slots (edit in place, Detach, the columns' divider, a layout
    gallery); several selected at once (Align, Distribute).
    **Later**: thumbnails dragged to reorder; builds (one list item at a time); a presenter window
    (notes, the next slide, a timer) kept in step over a BroadcastChannel; themes

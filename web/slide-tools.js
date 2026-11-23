@@ -41,14 +41,20 @@
     fill: '<rect class="sl-ink" x="3" y="3" width="10" height="10" rx="1.5" stroke="none"/><rect x="3" y="3" width="10" height="10" rx="1.5" stroke-width="1"/>',
     outline: '<rect class="sl-ink-line" x="3.5" y="3.5" width="9" height="9" rx="1" stroke-width="2.5"/>',
     color: '<path d="M4.5 10.5L8 2.5l3.5 8M5.8 8h4.4" stroke-width="1.6"/><path class="sl-ink-line" d="M3 13.5h10" stroke-width="2.5"/>',
+    figure: '<path d="M2.5 2.5v11h11M5 10.5l2.5-3 2 1.5 3-4.5"/>',
+    image: '<rect x="2.5" y="3" width="11" height="10" rx="1"/><path d="M2.5 11.5l3-3 2.5 2.5 2-2 3.5 3.5"/><circle cx="10.5" cy="6" r="0.9"/>',
   }
   const icon = name => (ICONS[name] ? `<svg class="ico" viewBox="0 0 16 16" aria-hidden="true">${ICONS[name]}</svg>` : '')
   /** What each tool that adds puts on the slide when the slide is only clicked: its size, in the slide's units. */
   const NEW = { addText: { w: 480 }, rect: { w: 320, h: 200 }, ellipse: { w: 320, h: 200 }, line: { w: 300 }, arrow: { w: 300 } }
   const NEW_TEXT = 'Text'
+  const FIGURE_W = 800 // a figure picked from the tree is this wide at first
+  const IMAGE_W = 960 // an image pasted or dropped is at most this wide at first
+  const MAX_IMAGE = 20e6 // bytes: a larger image is not taken
+  const FIGURE_RE = /^([A-Za-z]+\d+)_(.+)\.svg$/
   const HEX_RE = /^#[0-9a-f]{6}$/i
 
-  function mount({ cm, stage, bar, body, store, slide }) {
+  function mount({ cm, stage, bar, body, store, slide, api = null, deck = () => '', imageUrl = src => src, noteName = id => id, notify = () => {} }) {
     if (!P || !E || !cm || !stage) return null
     const desktop = () => !(root.matchMedia && root.matchMedia(PHONE).matches)
     let sel = [] // what is selected: the handles of the lines of the text its boxes and lines start at
@@ -311,6 +317,101 @@
       return E.newBox({ shape: tool === 'ellipse' ? 'ellipse' : null, x, y, w, h, outline: 'text' })
     }
 
+    // ---------------------------------------------------------------- figures of the tree, images of the user's
+
+    /** A figure or an image `file` added as a box `w` wide, as high as it comes: by reference, so it follows what it shows. */
+    const addPicture = (file, x, y, w) => add([E.newBox({ x: Math.round(x), y: Math.round(y), w: Math.round(w) }, `![[${file}]]`)])
+
+    /** The tree's figures, by the note that made each, under the Figure button: one picked is added to the slide. */
+    async function figures() {
+      const open = menu && menu.dataset.for === 'figure'
+      closeMenu()
+      if (open || !api) return
+      let names = []
+      try { const r = await api('api/figures'); names = (r.ok && r.data.figures) || [] } catch { /* none */ }
+      closeMenu()
+      const b = buttons.figure
+      menu = document.createElement('div')
+      menu.className = 'sl-menu sl-figures'
+      menu.dataset.for = 'figure'
+      menu.setAttribute('role', 'menu')
+      const by = new Map()
+      for (const name of names) {
+        const m = FIGURE_RE.exec(name)
+        const id = m ? m[1] : ''
+        if (!by.has(id)) by.set(id, [])
+        by.get(id).push({ file: name, label: m ? m[2] : name })
+      }
+      if (!names.length) {
+        const none = document.createElement('p')
+        none.className = 'muted'
+        none.textContent = 'No figure yet: a notebook saves one with FIGURES, in the vault\'s figures/ folder.'
+        menu.append(none)
+      }
+      for (const [id, list] of by) {
+        const head = document.createElement('div')
+        head.className = 'sl-figures-note'
+        head.textContent = id ? noteName(id) : 'Others'
+        menu.append(head)
+        for (const f of list) {
+          const pick = document.createElement('button')
+          pick.type = 'button'
+          pick.className = 'sl-figure'
+          pick.dataset.figure = f.file
+          pick.title = f.file
+          const img = document.createElement('img')
+          img.src = imageUrl(f.file)
+          img.alt = ''
+          img.loading = 'lazy'
+          const label = document.createElement('span')
+          label.textContent = f.label
+          pick.append(img, label)
+          pick.addEventListener('click', () => {
+            closeMenu()
+            addPicture(f.file, (P.WIDTH - FIGURE_W) / 2, 240, FIGURE_W)
+            stage.focus({ preventScroll: true })
+          })
+          menu.append(pick)
+        }
+      }
+      menu.style.left = `${b.offsetLeft}px`
+      menu.style.top = `${b.offsetTop + b.offsetHeight + 4}px`
+      bar.append(menu)
+    }
+
+    /**
+     * Images the user pasted, dropped or chose: each saved with the decks (the server names it
+     * after the deck, `P03-1.png`) and added as a box, its proportions its own, around `at` (the
+     * slide's middle when there is none).
+     */
+    async function addImages(files, at = null) {
+      const images = [...files].filter(f => /^image\//.test(f.type))
+      if (!images.length || !api) return false
+      for (const [i, file] of images.entries()) {
+        if (file.size > MAX_IMAGE) { notify(`${file.name || 'The image'} is too large for a slide (${Math.round(file.size / 1e6)} MB; 20 at most).`); continue }
+        let w = 600, h = 375
+        try { const bmp = await createImageBitmap(file); w = bmp.width; h = bmp.height; if (bmp.close) bmp.close() } catch { /* an SVG: its size is not known here */ }
+        const data = await new Promise(done => { const r = new FileReader(); r.onload = () => done(String(r.result).replace(/^[^,]*,/, '')); r.onerror = () => done(''); r.readAsDataURL(file) })
+        let r
+        try { r = await api('api/deck/asset', { method: 'POST', body: { id: deck(), type: file.type, data } }) } catch { notify('Image not added: the server is not answering.'); return true }
+        if (!r.ok) { notify(r.status === 403 ? 'To add an image, open the address /rft printed (it ends in ?token=…) once: this browser then remembers its key.' : `Image not added: ${r.data.error || r.status}`); return true }
+        const wide = Math.min(w, IMAGE_W), high = wide * h / w
+        const c = at || { x: P.WIDTH / 2, y: P.HEIGHT / 2 }
+        const kept = E.keepOn({ x: c.x - wide / 2 + i * COPY_BY, y: c.y - high / 2 + i * COPY_BY, w: wide, h: high })
+        addPicture(r.data.file, kept.x, kept.y, wide)
+      }
+      return true
+    }
+
+    // an image dropped on the slide
+    stage.addEventListener('dragover', ev => { if (overlay && ev.dataTransfer && [...ev.dataTransfer.types].includes('Files')) ev.preventDefault() })
+    stage.addEventListener('drop', ev => {
+      if (!overlay || !ev.dataTransfer || !ev.dataTransfer.files.length) return
+      ev.preventDefault()
+      stage.focus({ preventScroll: true })
+      addImages(ev.dataTransfer.files, point(ev))
+    })
+
     // ---------------------------------------------------------------- the overlay: what the pointer takes hold of
 
     const svg = (tag, attrs) => {
@@ -400,6 +501,8 @@
       showLive()
       if (editing) layEditor()
       draw()
+      // a box as high as its figure is measured again once the figure is there
+      for (const img of el.querySelectorAll('.slide-box img')) if (!img.complete) img.addEventListener('load', () => { if (img.isConnected) draw() }, { once: true })
     }
 
     /** A box or a line drawn where it is being dragged to: the slide's own element, moved. */
@@ -623,7 +726,10 @@
       remove()
     })
     document.addEventListener('paste', ev => {
-      if (mine(ev) && paste(ev.clipboardData.getData('text/plain'))) ev.preventDefault()
+      if (!mine(ev)) return
+      // an image copied elsewhere: kept with the decks, and shown in a box
+      if ([...ev.clipboardData.files].some(f => /^image\//.test(f.type))) { ev.preventDefault(); addImages(ev.clipboardData.files); return }
+      if (paste(ev.clipboardData.getData('text/plain'))) ev.preventDefault()
     })
 
     // the cursor in a box's or a line's text selects it on the slide
@@ -735,6 +841,15 @@
       button('ellipse', `Ellipse: ${where} (Shift: a circle)`, () => arm('ellipse'), adds)
       button('line', `Line: ${where} (Shift: straight, or at 45°)`, () => arm('line'), adds)
       button('arrow', `Arrow: ${where}`, () => arm('arrow'), adds)
+      button('figure', 'Figure: one a notebook of the tree saved, shown by reference, so it follows its notebook', figures, adds)
+      const chooser = document.createElement('input')
+      chooser.type = 'file'
+      chooser.accept = 'image/png,image/jpeg,image/gif,image/webp,image/svg+xml'
+      chooser.multiple = true
+      chooser.hidden = true
+      chooser.addEventListener('change', () => { addImages(chooser.files); chooser.value = '' })
+      adds.append(chooser)
+      button('image', 'Image: a picture of your own, copied into the decks\' assets (or paste one on the slide, or drop it there)', () => chooser.click(), adds)
       const paint = group('Colours')
       button('fill', 'Fill', () => colours('fill', c => style({ fill: c || null }, ['box'])), paint)
       button('outline', 'Outline, or a line\'s colour', () => colours('outline', c => style({ outline: c || null })), paint)
