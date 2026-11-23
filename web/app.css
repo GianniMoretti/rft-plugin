@@ -1027,7 +1027,8 @@ main:has(#drawer:not([hidden])) #manuscript { right: min(var(--drawer-w), 92vw);
 .ms-heading { color: var(--muted); font-size: 11.5px; padding-top: 6px; }
 .ms-heading.ms-h-subsection, .ms-heading.ms-h-subsubsection { padding-left: 20px; }
 .ms-copy { padding-left: 18px; }
-.ms-state.ms-copy-sync { color: var(--muted); }
+.ms-state.ms-copy-placed { color: var(--muted); }
+.ms-state.ms-copy-lost { color: var(--p-high); border-color: var(--p-high); border-style: dashed; }
 .ms-state.ms-copy-adapted, .ms-chip.ms-copy-adapted { color: var(--theory); border-color: color-mix(in oklab, var(--theory) 50%, transparent); }
 .ms-state.ms-copy-review, .ms-chip.ms-copy-review { color: var(--p-high); border-color: var(--p-high); font-weight: 600; }
 .ms-state.ms-copy-gone { color: var(--dropped); border-color: var(--dropped); }
@@ -1040,6 +1041,13 @@ main:has(#drawer:not([hidden])) #manuscript { right: min(var(--drawer-w), 92vw);
 .ms-copy-panel { border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; padding: 6px 8px; display: flex; flex-direction: column; gap: 6px; }
 .ms-copy-panel.ms-copy-review { border-left-color: var(--p-high); }
 .ms-copy-panel.ms-copy-adapted { border-left-color: var(--theory); }
+.ms-item.ms-wrap { flex-wrap: wrap; row-gap: 3px; }
+.ms-item.ms-wrap .ms-title { flex: 1 1 100%; white-space: normal; overflow: visible; font-size: 12px; }
+.ms-item.ms-wrap .ms-id + .ms-title { flex: 1 1 60%; }
+.ms-item.ms-wrap button, .ms-fix { font: inherit; font-size: 11.5px; padding: 1px 7px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer; }
+.ms-item.ms-note { cursor: default; padding-left: 18px; font-size: 11.5px; }
+.ms-file { font-family: var(--mono, ui-monospace, monospace); font-size: 12px; color: var(--muted); }
+.ms-fix { align-self: flex-start; margin: 2px 0 4px; border-color: var(--accent); }
 .ms-copy-panel select, .ms-head select { font: inherit; font-size: 12px; padding: 2px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
 .ms-diff { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .ms-diff-text { margin: 2px 0 0; padding: 6px; max-height: 160px; overflow: auto; white-space: pre-wrap; border: 1px solid var(--line); border-radius: 6px;
@@ -1338,6 +1346,7 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
   .sl-body[data-pane="list"] > :not(.sl-list), .sl-body[data-pane="text"] > :not(.ms-editor), .sl-body[data-pane="pdf"] > :not(.sl-side) { display: none; }
   .ms-list, .ms-editor { border-right: 0; }
   .ms-item, .sl-item { min-height: 44px; align-items: center; padding: 6px 14px; }
+  .ms-item.ms-wrap button, .ms-fix { min-height: 44px; min-width: 44px; font-size: 14px; padding: 0 12px; }
   .ms-bar, .sl-bar { gap: 6px 8px; }
   .ms-ib .lbl { display: none; }
   .ms-ib, .ms-levels .ms-ib, .phone-panes .ms-ib { width: 44px; padding: 0; }

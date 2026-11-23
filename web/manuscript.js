@@ -1,10 +1,13 @@
 // The tree view's Manuscript tab (docs/design/manuscript.md): two levels, two views.
 // Snippets: the building blocks, each resting on notes of the tree, written once and reused; the
 // library by kind, one open in an editor (CodeMirror 5, vendored) with its notes and the documents
-// using it, compiled alone beside it. Documents: what is built with them; a document's outline (its
-// headings and its copies of snippets, each with its state), copies placed from the library, moved
-// or removed, a copy whose snippet changed shown then and now (take the new text, or keep yours),
-// the editor on the document and its PDF beside it. Both are discussed as a note is (comments and
+// using it, compiled alone beside it. Documents: what is built with them, each a folder of plain
+// LaTeX that names nothing of the tree (docs/adr/0003-a-document-holds-no-trace.md); a document's
+// files and outline (its headings and its copies of snippets, each between two marker lines and
+// with its state), copies placed from the library in any of its files, moved or removed, a copy
+// whose snippet changed shown then and now (take the new text, or keep yours), a copy the plugin
+// lost pointed to again, the tree's numbers and figures that changed since they were written, the
+// traces of the tree in its files, the editor on a file and the PDF beside it. Both are discussed as a note is (comments and
 // suggestions on a selection, Ask Claude). The locks are Claude's: the user writes whatever they
 // say. Loaded by the page before app.js, which mounts it (the standalone page leaves it out); its
 // pure parts are tested from tests/manuscript-view.test.ts.
@@ -23,8 +26,9 @@
   const KINDS = ['definition', 'theorem', 'lemma', 'proposition', 'corollary', 'proof', 'method', 'result', 'related-work', 'motivation', 'discussion', 'figure', 'table']
   const HEAD_RE = /^%\s*rft-snippet\s+(S\d+)\s*·\s*([\w-]+)\s*·\s*(.*?)\s*$/
   const BASIS_RE = /^%\s*basis:\s*(.*?)\s*$/
-  const BEGIN_RE = /^%\s*rft-begin\s+(S\d+)\s+([0-9a-f]{8})\s*$/
-  const END_RE = /^%\s*rft-end\s+(S\d+)\s*$/
+  const MARK_END_RE = /^\s*%%%\s*end\s*%%%\s*$/i
+  const MARK_RE = /^\s*%%%\s*(\S.*?)\s*%%%\s*$/
+  const THEOREM_NAMES = { theorem: 'Theorem', lemma: 'Lemma', proposition: 'Proposition', corollary: 'Corollary', definition: 'Definition' }
   const HEADING_RE = /^\s*\\(part|chapter|section|subsection|subsubsection)\*?\{(.*)\}\s*$/
 
   /** The quote of a selection and the text around it, as a thread is anchored. */
@@ -56,34 +60,90 @@
     return { word: s.stub ? 'stub' : 'written', why: '' }
   }
 
-  /** Where a snippet is used, in words: `paper, thesis (adapted)`. */
+  /** A copy's state in a word of its own: placed is said as nothing, review as what to do. */
+  const stateNote = st => (st === 'placed' ? '' : st === 'review' ? 'to review' : st)
+
+  /** One use of a snippet (a document's file, how many copies there, their states) in words: `main.tex ×2: adapted`. */
+  function useWords(u) {
+    const notes = [...new Set((u.states || []).map(stateNote).filter(Boolean))]
+    return `${u.file}${u.count > 1 ? ` ×${u.count}` : ''}${notes.length ? `: ${notes.join(', ')}` : ''}`
+  }
+
+  /** Where a snippet is used, in words: `paper (main.tex, sections/method.tex: adapted); thesis (main.tex)`. */
   function usedWords(s) {
     const u = (s && s.usedIn) || []
-    return u.length ? u.map(x => `${x.doc}${x.state === 'sync' ? '' : x.state === 'review' ? ' (to review)' : ` (${x.state})`}`).join(', ') : ''
+    return [...new Set(u.map(x => x.doc))].map(doc => `${doc} (${u.filter(x => x.doc === doc).map(useWords).join(', ')})`).join('; ')
+  }
+
+  /** How many copies a snippet has, over every document. */
+  const usedCount = s => ((s && s.usedIn) || []).reduce((n, u) => n + (u.count || 0), 0)
+
+  /** The marker pairs of a text, in order (parseMarkers in hooks/lib/copies.ts): a marker with no `%%% end %%%` before the next one is a comment of the user's own. */
+  function parseMarkers(text) {
+    const lines = (text || '').replace(/\r\n/g, '\n').split('\n')
+    const out = []
+    let open = null
+    lines.forEach((l, i) => {
+      if (MARK_END_RE.test(l)) {
+        if (open) out.push({ words: open.words, begin: open.begin, end: i })
+        open = null
+      } else {
+        const m = MARK_RE.exec(l)
+        if (m) open = { words: m[1], begin: i }
+      }
+    })
+    return out
   }
 
   /**
-   * A document's outline from its text: its headings and its copies (each with the state the
-   * server gave it), in order, with their lines (0-based).
+   * A file's outline from its text: its headings and the document's copies that are in it (each
+   * as the server gave it: its name, its state), in order, with their lines (0-based). A copy is
+   * where its marker lines are in the text as it is now, so it follows what is typed; one whose
+   * markers are gone is where the server found its text when the file was last read.
    */
-  function outlineOf(text, copies) {
-    const states = new Map((copies || []).map(c => [c.id, c]))
+  function outlineOf(text, copies, file) {
     const lines = (text || '').replace(/\r\n/g, '\n').split('\n')
+    const norm = s => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase()
+    const markers = parseMarkers(text).map(m => ({ ...m, taken: false }))
     const out = []
-    for (let i = 0; i < lines.length; i++) {
-      const b = BEGIN_RE.exec(lines[i])
-      if (b) {
-        const end = lines.findIndex((l, j) => j > i && (END_RE.exec(l) || [])[1] === b[1])
-        if (end < 0) continue
-        const c = states.get(b[1]) || {}
-        out.push({ type: 'copy', id: b[1], line: i, end, state: c.state || 'sync', snippetReview: !!c.snippetReview })
-        i = end
-        continue
-      }
-      const h = HEADING_RE.exec(lines[i])
-      if (h) out.push({ type: 'heading', level: h[1], title: h[2], line: i })
+    for (const c of copies || []) {
+      if (c.state === 'lost' || (file != null && c.file !== file)) continue
+      let line = null, end = null
+      if (c.markers !== false) {
+        const m = markers.find(x => !x.taken && norm(x.words) === norm(c.marker)) || markers.find(x => !x.taken && c.line != null && x.begin === c.line - 1)
+        if (m) { m.taken = true; line = m.begin; end = m.end }
+      } else if (c.line != null && c.end != null && c.end <= lines.length) { line = c.line - 1; end = c.end - 1 }
+      if (line == null) continue
+      out.push({ type: 'copy', id: c.id, name: c.name || c.id, marker: c.marker || '', line, end, state: c.state || 'placed', markers: c.markers !== false, snippetReview: !!c.snippetReview })
     }
-    return out
+    lines.forEach((l, i) => {
+      const h = HEADING_RE.exec(l)
+      if (h && !out.some(o => o.type === 'copy' && i >= o.line && i <= o.end)) out.push({ type: 'heading', level: h[1], title: h[2], line: i })
+    })
+    return out.sort((a, b) => a.line - b.line)
+  }
+
+  /** A tracked value the user is to look at, in a line: what stands in the document, and what the tree says now. */
+  function valueWords(v) {
+    const what = v.kind === 'number' ? v.written : `${v.kind} ${v.key}`
+    const where = `${v.file}${v.line ? `:${v.line}` : ''}`
+    if (v.state === 'review') return `${what} (${v.from} ${v.key}) · ${where} · ${v.now == null ? 'no longer saved' : v.kind === 'number' ? `the tree now says ${v.now}` : 'saved again'}`
+    if (v.state === 'changed') return `${what} (${v.from} ${v.key}) · ${where} · now ${v.inDocument} here: no longer the tree's`
+    return `${what} (${v.from} ${v.key}) · ${v.file} · not found any more`
+  }
+
+  /** A trace of the tree in a document's files, in a line. */
+  function traceWords(t) {
+    const what = t.kind === 'plugin' ? `the plugin's ${t.match}` : t.kind === 'marker' ? `a marker of the first design (${t.match})` : t.kind === 'id' ? `the id ${t.match}` : `the entry ${t.match}, not cited`
+    return `${t.file}${t.line == null ? ' (its name)' : `:${t.line}`}: ${what}`
+  }
+
+  /** A document's files in the order its outline lists them: its main file, the files holding copies as the document is read, then the rest. */
+  function fileOrder(d) {
+    const out = [d.main]
+    for (const c of d.copies || []) if (c.state !== 'lost' && !out.includes(c.file)) out.push(c.file)
+    for (const f of d.files || []) if (!out.includes(f)) out.push(f)
+    return out.filter(f => (d.files || [d.main]).includes(f))
   }
 
   /** The snippets resting on a note. */
@@ -105,9 +165,9 @@
     return ''
   }
 
-  /** An error of the compile in a line: where (a snippet's id or the file) and what. */
+  /** An error of the compile in a line: where (a snippet's id, or the file: a document's by its path inside it) and what. */
   function errorText(e) {
-    return `${e.snippet || e.file}${e.line ? `:${e.line}` : ''}: ${e.message}${e.context ? ` (${e.context})` : ''}`
+    return `${e.snippet || e.in || e.file}${e.line ? `:${e.line}` : ''}: ${e.message}${e.context ? ` (${e.context})` : ''}`
   }
 
   function mount({ key, store, open, nodes, notify, visible, changed = () => {}, every = 4000 }) {
@@ -120,8 +180,9 @@
     let ms = null // api/manuscript
     let level = store.get('msLevel', 'snippets') === 'documents' ? 'documents' : 'snippets'
     let doc = store.get('msDoc', '')
+    let docFile = '' // the document's file open in the editor, by its path inside the document ('': its main file)
     let sid = store.get('msSnippet', '') // the snippet open in the Snippets view
-    let file = null // { path, version, text (as read), taken (a document's: each copy's snippet text when taken) }
+    let file = null // { path, version, text (as read) }
     let note = null // the open snippet or document as api/note gives it: its threads
     let dirty = false
     let loading = false
@@ -171,7 +232,7 @@
         if (level === 'documents' && !dirty) {
           const line = cm.getCursor().line
           const c = outline().find(o => o.type === 'copy' && line >= o.line && line <= o.end)
-          if ((c && c.id) !== (focusCopy && focusCopy.id)) { focusCopy = c || null; renderList(); renderHead() }
+          if ((c && c.name) !== (focusCopy && focusCopy.name)) { focusCopy = c || null; renderList(); renderHead() }
         }
       })
     }
@@ -206,9 +267,12 @@
     const needKey = what => { notify(`To ${what}, open the address /rft printed (it ends in ?token=…) once: this browser then remembers its key.`) }
     const theDoc = () => (ms && ms.documents.find(d => d.name === doc)) || null
     const theSnippet = id => (ms && ms.snippets.find(s => s.id === (id || sid))) || null
-    const subject = () => (level === 'snippets' ? (file && sid) : doc) || null
-    const pathOf = () => (level === 'snippets' ? (sid ? `snippets/${sid}.tex` : '') : doc ? `documents/${doc}/main.tex` : '')
-    const outline = () => (level === 'documents' && file ? outlineOf(cm ? cm.getValue() : file.text, (theDoc() || {}).copies) : [])
+    // what is discussed: the open snippet, or the open document through its main file (its threads are anchored on that file's text)
+    const subject = () => (level === 'snippets' ? (file && sid) : (theDoc() && openRel() === theDoc().main ? doc : '')) || null
+    /** The open document's file in the editor: the one last chosen, while the document still has it; else its main file. */
+    const openRel = () => { const d = theDoc(); return d && (d.files || []).includes(docFile) ? docFile : (d && d.main) || 'main.tex' }
+    const pathOf = () => (level === 'snippets' ? (sid ? `snippets/${sid}.tex` : '') : doc ? `documents/${doc}/${openRel()}` : '')
+    const outline = () => (level === 'documents' && file ? outlineOf(cm ? cm.getValue() : file.text, (theDoc() || {}).copies, openRel()) : [])
 
     // ---------------------------------------------------------------- reading
 
@@ -265,10 +329,11 @@
     }
 
     function copyBadge(c) {
-      const word = c.state === 'sync' ? 'as snippet' : c.state === 'review' ? 'review' : c.state
+      const word = c.state === 'placed' ? 'as snippet' : c.state === 'review' ? 'review' : c.state
       const title = c.state === 'review' ? 'Its snippet changed since this copy was taken: take the new text, or keep yours'
         : c.state === 'adapted' ? 'Adapted to this document: it differs from its snippet, which has not changed since'
-          : c.state === 'gone' ? 'No such snippet any more' : 'As its snippet'
+          : c.state === 'gone' ? 'No such snippet any more'
+            : c.state === 'lost' ? 'Not found in the document any more: its marker lines and its text were changed elsewhere. Point to it again, or drop it' : 'As its snippet'
       return el('span', { class: `ms-state ms-copy-${c.state}`, text: word, title })
     }
 
@@ -279,7 +344,7 @@
           onclick: () => openSnippet(s.id),
         }, el('span', { class: 'ms-id', text: s.id }), el('span', { class: 'ms-title', text: s.title || '(no header)' }),
         stateBadge(s), s.unverified && s.unverified.length ? el('span', { class: 'ms-flag', text: '!', title: `Rests on notes not verified: ${s.unverified.join(', ')}` }) : null,
-        s.usedIn.length ? el('span', { class: 'ms-used', text: `×${s.usedIn.length}`, title: `Used in ${usedWords(s)}` }) : null,
+        s.usedIn.length ? el('span', { class: 'ms-used', text: `×${usedCount(s)}`, title: `Used in ${usedWords(s)}` }) : null,
         s.threads ? el('span', { class: 'ms-threads-n', text: String(s.threads), title: `${s.threads} open thread(s)` }) : null)
         const groups = byKind(ms.snippets)
         listEl.replaceChildren(...(groups.length ? groups.flatMap(g => [el('div', { class: 'ms-sub muted', text: g.kind }), el('ul', {}, g.snippets.map(item))])
@@ -288,18 +353,47 @@
       }
       const d = theDoc()
       if (!d) { listEl.replaceChildren(el('p', { class: 'muted ms-pad', text: 'No document yet: + Document.' })); return }
+      const here = openRel()
       const items = outline()
       const go = line => () => { if (cm) { cm.setCursor({ line, ch: 0 }); cm.scrollIntoView({ line, ch: 0 }, 80); cm.focus() } }
-      listEl.replaceChildren(el('ul', {},
-        el('li', { class: 'ms-item ms-doc-item', title: 'The document: its preamble, its text, its copies', onclick: go(0) },
-          el('span', { class: 'ms-id', text: 'main.tex' }), el('span', { class: 'ms-title', text: d.name }),
-          d.threads ? el('span', { class: 'ms-threads-n', text: String(d.threads), title: `${d.threads} open thread(s)` }) : null),
-        items.map(o => o.type === 'heading'
-          ? el('li', { class: `ms-item ms-heading ms-h-${o.level}`, onclick: go(o.line) }, el('span', { class: 'ms-title', text: `§ ${o.title}` }))
-          : el('li', { class: `ms-item ms-copy${focusCopy && focusCopy.id === o.id ? ' open' : ''}`, title: `A copy of ${o.id}`, onclick: () => { focusCopy = o; go(o.line + 1)(); renderList(); renderHead() } },
-            el('span', { class: 'ms-id', text: o.id }), el('span', { class: 'ms-title', text: (theSnippet(o.id) || {}).title || '' }), copyBadge(o),
-            o.snippetReview ? el('span', { class: 'ms-flag', text: '!', title: 'Its snippet is in review: its notes changed' }) : null))))
-      if (d.refsMissing && d.refsMissing.length) listEl.append(el('p', { class: 'ms-flag-text ms-pad', text: `Refers to ${d.refsMissing.join(', ')}, which it holds no copy of.` }))
+      const titleOf = id => (theSnippet(id) || {}).title || ''
+      const copyRow = (o, onclick) => el('li', { class: `ms-item ms-copy${focusCopy && focusCopy.name === o.name ? ' open' : ''}`, title: `A copy of ${o.id}${o.markers === false ? ' (its marker lines are gone)' : ''}`, onclick },
+        el('span', { class: 'ms-id', text: o.name }), el('span', { class: 'ms-title', text: titleOf(o.id) || o.marker || '' }), copyBadge(o),
+        o.markers === false && o.state !== 'lost' ? el('span', { class: 'ms-flag', text: '%', title: 'Its marker lines are gone: found by its text. Open it to put them back' }) : null,
+        o.snippetReview ? el('span', { class: 'ms-flag', text: '!', title: 'Its snippet is in review: its notes changed' }) : null)
+      const own = (d.bib || []).filter(b => !b.from)
+      // each file of the document; under the open one its outline, under the others the copies they hold
+      const rows = fileOrder(d).flatMap(f => [
+        el('li', {
+          class: `ms-item ms-doc-item${f === here ? ' open' : ''}`,
+          title: `${f === d.main ? 'The main file' : 'A file of the document'}${(d.notIncluded || []).includes(f) ? ': the main file does not take it in, so its copies are not in the document' : ''} (click: open it)`,
+          onclick: () => (f === here ? go(0)() : void openDocFile(f)),
+        }, el('span', { class: 'ms-id', text: f }), f === d.main ? el('span', { class: 'ms-title', text: d.name }) : el('span', { class: 'ms-title' }),
+        (d.notIncluded || []).includes(f) ? el('span', { class: 'ms-flag', text: '∅', title: 'The main file does not take this file in' }) : null,
+        f === d.main && d.threads ? el('span', { class: 'ms-threads-n', text: String(d.threads), title: `${d.threads} open thread(s)` }) : null),
+        ...(f === here
+          ? items.map(o => o.type === 'heading'
+            ? el('li', { class: `ms-item ms-heading ms-h-${o.level}`, onclick: go(o.line) }, el('span', { class: 'ms-title', text: `§ ${o.title}` }))
+            : copyRow(o, () => { focusCopy = o; go(o.line + 1)(); renderList(); renderHead() }))
+          : (d.copies || []).filter(c => c.file === f && c.state !== 'lost').map(c => copyRow(c, () => void showCopy(d.name, c.name, f)))),
+        ...(/\.bib$/i.test(f) && own.some(b => b.file === f) ? [el('li', { class: 'ms-item ms-note muted', title: 'Entries you added yourself: no reference note of the tree stands behind them' },
+          el('span', { class: 'ms-title', text: `Your own: ${own.filter(b => b.file === f).map(b => b.key).join(', ')}` }))] : []),
+      ])
+      const lost = (d.copies || []).filter(c => c.state === 'lost')
+      const values = (d.values || []).filter(v => v.state !== 'current')
+      const group = (word, title, lis) => (lis.length ? [el('div', { class: 'ms-sub ms-flag-text', text: word, title }), el('ul', {}, lis)] : [])
+      listEl.replaceChildren(el('ul', {}, rows),
+        ...group('Lost copies', 'Copies the plugin cannot find in the document any more: their marker lines and their text were changed elsewhere', lost.map(c => el('li', { class: 'ms-item ms-copy ms-wrap' },
+          el('span', { class: 'ms-id', text: c.name }), el('span', { class: 'ms-title', text: `${c.marker} (was in ${c.file})` }),
+          el('button', { type: 'button', text: 'It is the selection', title: 'Select the passage in the editor first: it becomes this copy again, between its marker lines', onclick: () => void pointAt(c.name) }),
+          el('button', { type: 'button', text: 'Drop', title: 'Stop tracking it (the snippet stays, and so does the document\'s text)', onclick: () => { if (confirm(`Stop tracking the lost copy of ${c.name} in ${d.name}?`)) void ask({ action: 'remove', name: d.name, id: c.name }, 'drop the copy') } })))),
+        ...group('Values to look at', 'Numbers, figures and tables of the tree written in this document that the tree no longer says, or that were changed here', values.map(v => el('li', { class: 'ms-item ms-wrap', title: 'Show it in the text', onclick: () => void goTo(v.file, v.line) },
+          el('span', { class: 'ms-title', text: valueWords(v) }),
+          v.state !== 'lost' && v.now != null ? el('button', { type: 'button', text: v.kind === 'figure' ? 'Copy it again' : `Take ${v.kind === 'number' ? v.now : 'it'}`, title: 'Write the tree\'s value in its place', onclick: ev => { ev.stopPropagation(); void ask({ action: 'take-value', name: d.name, index: v.index }, 'take the value') } }) : null,
+          el('button', { type: 'button', text: v.state === 'lost' || v.now == null ? 'Forget' : 'Keep mine', title: v.state === 'lost' || v.now == null ? 'Stop tracking it: what stands there is the document\'s own' : 'Keep what the document says: it is flagged again only when the tree changes', onclick: ev => { ev.stopPropagation(); void ask({ action: 'keep-value', name: d.name, index: v.index }, 'keep the value') } })))),
+        ...group(`Traces of the tree (${(d.traces || []).length})`, 'This document\'s files are shared with co-authors as they are: nothing in them should name the tree', (d.traces || []).slice(0, 40).map(x => el('li', { class: 'ms-item ms-wrap', title: x.text || x.file, onclick: () => void goTo(x.file, x.line) },
+          el('span', { class: 'ms-title', text: traceWords(x) }),
+          el('button', { type: 'button', text: 'Allow', title: 'A false alarm (a "Table S01" of a supplement): this occurrence is not flagged again', onclick: ev => { ev.stopPropagation(); void ask({ action: 'allow', name: d.name, file: x.file, match: x.match, text: x.text || '' }, 'allow it') } })))))
     }
 
     function chip(id) {
@@ -341,15 +435,15 @@
           el('div', { class: 'ms-head-row' },
             el('span', { class: 'muted', text: 'Used in' }),
             s.usedIn.length ? s.usedIn.map(u => el('button', {
-              type: 'button', class: `ms-chip ms-copy-${u.state}`, text: `${u.doc}${u.state === 'sync' ? '' : u.state === 'review' ? ' (to review)' : ` (${u.state})`}`,
-              title: `Go to its copy in ${u.doc}`, onclick: () => showCopy(u.doc, s.id),
+              type: 'button', class: `ms-chip ms-copy-${(u.states || []).includes('review') ? 'review' : (u.states || []).includes('adapted') ? 'adapted' : 'placed'}`, text: `${u.doc} · ${useWords(u)}`,
+              title: `Go to its ${u.count > 1 ? `${u.count} copies` : 'copy'} in ${u.doc}, ${u.file}`, onclick: () => showCopy(u.doc, s.id, u.file),
             })) : el('span', { class: 'muted', text: 'no document yet' }),
             ms.documents.length ? placeForm(s.id) : null),
         )
       } else {
         const d = theDoc()
         headEl.append(el('div', { class: 'ms-head-row' },
-          el('strong', { text: `${doc}` }), el('span', { class: 'muted', text: `${d ? d.copies.length : 0} cop${d && d.copies.length === 1 ? 'y' : 'ies'} of snippets` }),
+          el('strong', { text: `${doc}` }), el('span', { class: 'ms-file', text: openRel() }), el('span', { class: 'muted', text: `${d ? d.copies.length : 0} cop${d && d.copies.length === 1 ? 'y' : 'ies'} of snippets` }),
           d ? el('button', {
             type: 'button', class: 'icon-btn', 'aria-pressed': String(d.locked), 'aria-label': 'Lock this document',
             title: d.locked ? 'Its text is yours: Claude places copies you agree to and suggests (click: let Claude edit it)' : 'Claude may edit its text (click: yours again)',
@@ -362,58 +456,59 @@
       renderSelectionButtons()
     }
 
-    /** Place this snippet in a document: the document, Place (before its bibliography; move it after). */
+    /** Place this snippet in a document: the document, Place (before its bibliography; move it after). A snippet may be placed more than once. */
     function placeForm(id) {
-      const docs = ms.documents.filter(d => !d.copies.some(c => c.id === id))
+      const docs = ms.documents
       if (!docs.length) return null
       const sel = el('select', { 'aria-label': 'Document' }, docs.map(d => el('option', { value: d.name, text: d.name, selected: d.name === doc })))
       return el('span', { class: 'ms-place' }, el('span', { class: 'muted', text: '· Place in' }), sel,
-        el('button', { type: 'button', text: 'Place', title: 'Copy it into that document, before its bibliography (move it there afterwards)', onclick: () => place(sel.value, id) }))
+        el('button', { type: 'button', text: 'Place', title: 'Copy it into that document as plain LaTeX, before its bibliography (move it there afterwards)', onclick: () => place(sel.value, id) }))
     }
 
-    /** A document's row for placing a snippet from the library: which, after what. */
+    /** A document's row for placing a snippet from the library in the open file: which, after what; or making the selected passage a copy of it. */
     function placeRow() {
       const d = theDoc()
-      if (!d) return null
-      const free = ms.snippets.filter(s => !d.copies.some(c => c.id === s.id))
-      if (!free.length) return el('div', { class: 'ms-head-row muted', text: 'Every snippet has a copy here.' })
-      const which = el('select', { 'aria-label': 'Snippet' }, free.map(s => el('option', { value: s.id, text: `${s.id} ${s.title}` })))
+      if (!d || !/\.(tex|ltx)$/i.test(openRel())) return null
+      if (!ms.snippets.length) return el('div', { class: 'ms-head-row muted', text: 'No snippets yet to place here.' })
+      const which = el('select', { 'aria-label': 'Snippet' }, ms.snippets.map(s => el('option', { value: s.id, text: `${s.id} ${s.title}${d.copies.some(c => c.id === s.id) ? ' (already here)' : ''}` })))
       const after = afterSelect()
       return el('div', { class: 'ms-head-row' }, el('span', { class: 'muted', text: 'Place' }), which, el('span', { class: 'muted', text: 'after' }), after,
-        el('button', { type: 'button', text: 'Place', title: 'Copy the snippet\'s text here, referenced to it', onclick: () => place(doc, which.value, after.value) }))
+        el('button', { type: 'button', text: 'Place', title: 'Write the snippet out here as plain LaTeX, between two marker lines, referenced to it', onclick: () => place(doc, which.value, after.value, openRel()) }),
+        el('button', { type: 'button', class: 'ms-sel-copy', text: 'Selection is a copy', title: 'The selected passage becomes a copy of this snippet as it is: text a co-author wrote, tied to the tree without being replaced', onclick: () => void pointAt(which.value) }))
     }
 
-    /** Where in the document: the end, after a heading, or after a copy. */
+    /** Where in the open file: the end (before the bibliography), after a heading, or after a copy. */
     function afterSelect(skip) {
       return el('select', { 'aria-label': 'Where' }, el('option', { value: '', text: 'the end' }),
-        outline().filter(o => !(o.type === 'copy' && o.id === skip)).map(o => el('option', { value: o.type === 'copy' ? o.id : o.title, text: o.type === 'copy' ? o.id : `§ ${o.title}` })))
+        outline().filter(o => !(o.type === 'copy' && o.name === skip)).map(o => el('option', { value: o.type === 'copy' ? o.name : o.title, text: o.type === 'copy' ? o.name : `§ ${o.title}` })))
     }
 
-    /** The copy the cursor is in: its state, its snippet then and now when in review, take or keep, move, remove. */
+    /** The copy the cursor is in: its state, its text when placed and its snippet now when in review, take or keep, move, remove. */
     function copyPanel(c) {
       const s = theSnippet(c.id)
-      const after = afterSelect(c.id)
+      const after = afterSelect(c.name)
+      const tracked = ((theDoc() || {}).copies || []).find(x => x.name === c.name) || {}
       const box = el('div', { class: `ms-copy-panel ms-copy-${c.state}` },
         el('div', { class: 'ms-head-row' },
-          el('strong', { text: `Copy of ${c.id}` }), s ? el('span', { class: 'muted', text: s.title }) : null, copyBadge(c),
+          el('strong', { text: `Copy of ${c.name}` }), s ? el('span', { class: 'muted', text: s.title }) : null, copyBadge(c),
           c.snippetReview ? el('span', { class: 'ms-flag-text', text: 'its snippet is in review: its notes changed' }) : null,
+          c.markers === false ? el('button', { type: 'button', text: 'Put its marker lines back', title: 'Its two marker lines were deleted: it was found by its text. Put them back around it', onclick: () => ask({ action: 'markers', name: doc, id: c.name }, 'put the marker lines back') }) : null,
           s ? el('button', { type: 'button', text: 'Open the snippet', onclick: () => openSnippet(c.id) }) : null,
           el('span', { class: 'ms-spacer' }),
           el('span', { class: 'muted', text: 'Move after' }), after,
-          el('button', { type: 'button', text: 'Move', onclick: () => ask({ action: 'move', name: doc, id: c.id, ...(after.value ? { after: after.value } : {}) }, 'move the copy') }),
-          el('button', { type: 'button', text: 'Remove', title: 'Take the copy out of this document (the snippet stays)', onclick: () => { if (confirm(`Take the copy of ${c.id} out of ${doc}? The snippet stays.`)) void ask({ action: 'remove', name: doc, id: c.id }, 'remove the copy') } }),
+          el('button', { type: 'button', text: 'Move', onclick: () => ask({ action: 'move', name: doc, id: c.name, file: openRel(), ...(after.value ? { after: after.value } : {}) }, 'move the copy') }),
+          el('button', { type: 'button', text: 'Remove', title: 'Take the copy out of this document (the snippet stays)', onclick: () => { if (confirm(`Take the copy of ${c.name} out of ${doc}? The snippet stays.`)) void ask({ action: 'remove', name: doc, id: c.name }, 'remove the copy') } }),
           el('button', { type: 'button', class: 'icon-btn', text: '✕', title: 'Close', onclick: () => { focusCopy = null; renderList(); renderHead() } })))
       if (c.state === 'review' && s) {
-        const then = (file.taken || {})[c.id]
         const now = el('pre', { class: 'ms-diff-text', text: '…' })
         api(`api/manuscript/file?path=${encodeURIComponent(`snippets/${c.id}.tex`)}`).then(r => { now.textContent = r.ok ? contentOf(r.data.text) : '(not read)' }).catch(() => {})
         box.append(
           el('div', { class: 'ms-diff' },
-            el('div', {}, el('div', { class: 'muted', text: 'The snippet when taken' }), el('pre', { class: 'ms-diff-text', text: then != null ? then : '(not recorded)' })),
+            el('div', {}, el('div', { class: 'muted', text: 'The snippet as it was placed here' }), el('pre', { class: 'ms-diff-text', text: tracked.placed != null ? tracked.placed : '(not recorded)' })),
             el('div', {}, el('div', { class: 'muted', text: 'The snippet now' }), now)),
           el('div', { class: 'ms-head-row' },
-            el('button', { type: 'button', class: 'primary', text: 'Take the new text', title: 'Replace this copy with the snippet\'s text now (what you adapted here is lost)', onclick: () => { if (confirm(`Replace the copy of ${c.id} in ${doc} with the snippet's text now? What you adapted here is lost.`)) void ask({ action: 'take', name: doc, id: c.id }, 'take the new text') } }),
-            el('button', { type: 'button', text: 'Keep mine', title: 'Keep this copy as it is: it answers to the snippet as it is now', onclick: () => ask({ action: 'keep', name: doc, id: c.id }, 'keep the copy') })))
+            el('button', { type: 'button', class: 'primary', text: 'Take the new text', title: 'Replace this copy with the snippet\'s text now, written out as plain LaTeX (what you adapted here is lost)', onclick: () => { if (confirm(`Replace the copy of ${c.name} in ${doc} with the snippet's text now? What you adapted here is lost.`)) void ask({ action: 'take', name: doc, id: c.name }, 'take the new text') } }),
+            el('button', { type: 'button', text: 'Keep mine', title: 'Keep this copy as it is: it answers to the snippet as it is now', onclick: () => ask({ action: 'keep', name: doc, id: c.name }, 'keep the copy') })))
       }
       return box
     }
@@ -437,11 +532,14 @@
     }
 
     function renderSelectionButtons() {
-      const on = !!(cm && file && cm.somethingSelected() && !dirty)
+      const selected = !!(cm && file && cm.somethingSelected())
+      const on = selected && !dirty && !!subject()
       for (const b of headEl.querySelectorAll('.ms-sel-btn')) {
         b.disabled = !on
         if (dirty) b.title = 'Save first: a thread is anchored on the text as saved'
+        else if (level === 'documents' && !subject()) b.title = 'A document is discussed on its main file: open it to comment or suggest'
       }
+      for (const b of headEl.querySelectorAll('.ms-sel-copy')) b.disabled = !selected
     }
 
     function renderStatus(text) {
@@ -475,7 +573,7 @@
       cm.clearHistory()
       loading = false
       if (cursor) { cm.setCursor(cursor); cm.scrollTo(scroll.left, scroll.top) }
-      file = { path, version: r.data.version, text: r.data.text, taken: r.data.taken || {} }
+      file = { path, version: r.data.version, text: r.data.text }
       dirty = false
       composing = null
       renderStatus()
@@ -497,14 +595,43 @@
       await loadPdf()
     }
 
-    async function showCopy(name, id) {
+    /** Opens a document on the file holding a copy, the cursor in it: `id` a copy's name there (S04, S04#2) or a snippet (its first copy in `rel`). */
+    async function showCopy(name, id, rel) {
       if (dirty && !confirm('Leave the unsaved changes?')) return
       dirty = false
       doc = name
       store.set('msDoc', doc)
+      const d = theDoc()
+      const held = d && (d.copies || []).find(c => c.state !== 'lost' && (c.name === id || c.id === id) && (!rel || c.file === rel))
+      docFile = rel || (held && held.file) || ''
       await setLevel('documents', true)
-      const c = outline().find(o => o.type === 'copy' && o.id === id)
+      const c = outline().find(o => o.type === 'copy' && (o.name === id || o.id === id))
       if (c && cm) { focusCopy = c; cm.setCursor({ line: c.line + 1, ch: 0 }); cm.scrollIntoView({ line: c.line, ch: 0 }, 80); renderList(); renderHead() }
+    }
+
+    /** Opens another file of the open document in the editor. */
+    async function openDocFile(rel) {
+      if (dirty && !confirm('Leave the unsaved changes?')) return false
+      dirty = false
+      docFile = rel
+      focusCopy = null
+      return openFile(pathOf())
+    }
+
+    /** Shows a place of the open document: its file, at a line (from 1). */
+    async function goTo(rel, line) {
+      const d = theDoc()
+      if (!d || !(d.files || []).includes(rel)) return
+      if (rel !== openRel() && !(await openDocFile(rel))) return
+      if (cm && line) { cm.setCursor({ line: line - 1, ch: 0 }); cm.scrollIntoView({ line: line - 1, ch: 0 }, 80); cm.focus() }
+    }
+
+    /** The selected passage becomes a copy: `id` a lost copy (found again there) or a snippet (a new copy of it, its text kept). */
+    async function pointAt(id) {
+      if (!cm || !file || !cm.somethingSelected()) { notify('Select the passage in the editor first: its lines become the copy.'); return }
+      const from = cm.getCursor('from'), to = cm.getCursor('to')
+      const last = to.ch === 0 && to.line > from.line ? to.line - 1 : to.line
+      await ask({ action: 'point', name: doc, id, file: openRel(), from: from.line + 1, to: last + 1 }, 'make it a copy')
     }
 
     /** Switches the view; false when the user keeps unsaved changes. */
@@ -586,9 +713,18 @@
           type: 'button', class: 'ms-err', text: errorText(e), title: 'Go to it',
           onclick: async () => {
             if (e.snippet && level === 'snippets' && e.snippet !== sid) await openSnippet(e.snippet)
+            if (e.in && level === 'documents') { await goTo(e.in, e.line); return }
             if (e.line && cm) { cm.setCursor({ line: e.line - 1, ch: 0 }); cm.focus() }
           },
         }))
+        // a copy's environment the document does not declare: one action adds its line to the preamble
+        if (e.declare && THEOREM_NAMES[e.declare] && level === 'documents') {
+          errorsEl.append(el('button', {
+            type: 'button', class: 'ms-fix', text: `Add \\newtheorem{${e.declare}}{${THEOREM_NAMES[e.declare]}} to the preamble`,
+            title: `This document declares no ${e.declare} environment: add its declaration to the main file's preamble, and compile again`,
+            onclick: async () => { if (await ask({ action: 'declare', name: doc, environment: e.declare }, 'declare the environment')) await compile() },
+          }))
+        }
       }
       for (const w of warns) errorsEl.append(el('div', { class: 'ms-warn', text: w }))
       errorsEl.hidden = !errs.length && !warns.length && !c.error
@@ -833,7 +969,7 @@
 
     async function ask(body, whatFor) {
       if (!canWrite()) { needKey(whatFor); return null }
-      if (dirty && level === 'documents' && ['take', 'keep', 'place', 'move', 'remove'].includes(body.action)) {
+      if (dirty && level === 'documents' && ['take', 'keep', 'place', 'move', 'remove', 'take-value', 'keep-value', 'point', 'markers', 'allow', 'declare'].includes(body.action)) {
         if (confirm('The document has unsaved changes: save them first? (Cancel: drop them)')) await save(false)
         else dirty = false
       }
@@ -847,9 +983,14 @@
       return r.data
     }
 
-    async function place(name, id, after) {
-      const got = await ask({ action: 'place', name, id, ...(after ? { after } : {}) }, 'place the copy')
-      if (got) await showCopy(name, id)
+    async function place(name, id, after, rel) {
+      const before = ((ms.documents.find(d => d.name === name) || {}).copies || []).map(c => c.name)
+      const got = await ask({ action: 'place', name, id, ...(rel ? { file: rel } : {}), ...(after ? { after } : {}) }, 'place the copy')
+      if (!got) return
+      // the copy just made: the one of this snippet the document did not have (a copy placed before another takes its number)
+      const copies = ((got.documents.find(d => d.name === name) || {}).copies || []).filter(c => c.id === id && c.state !== 'lost')
+      const made = copies.find(c => (!rel || c.file === rel) && !before.includes(c.name)) || copies[copies.length - 1]
+      await showCopy(name, made ? made.name : id, made ? made.file : rel)
     }
 
     async function setLock(which, locked, one) {
@@ -944,6 +1085,7 @@
       if (!got) return
       closeDocForm()
       doc = name
+      docFile = ''
       store.set('msDoc', doc)
       await setLevel('documents', true)
     })
@@ -953,6 +1095,7 @@
       if (dirty && !confirm('Leave the unsaved changes?')) { docSel.value = doc; return }
       dirty = false
       doc = docSel.value
+      docFile = ''
       store.set('msDoc', doc)
       await setLevel('documents', true)
     })
@@ -981,5 +1124,5 @@
     return { show, writtenIn: id => writtenIn(ms, id), openSnippet: id => { void show().then(() => openSnippet(id)) }, get summary() { return ms }, stop: () => clearInterval(timer) }
   }
 
-  root.RftManuscript = { CONTEXT, KINDS, anchorOf, contentOf, byKind, stateOf, usedWords, outlineOf, writtenIn, slugOf, docNameProblem, errorText, mount }
+  root.RftManuscript = { CONTEXT, KINDS, anchorOf, contentOf, byKind, stateOf, usedWords, usedCount, parseMarkers, outlineOf, valueWords, traceWords, fileOrder, writtenIn, slugOf, docNameProblem, errorText, mount }
 })(typeof window !== 'undefined' ? window : globalThis)

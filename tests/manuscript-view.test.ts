@@ -1,12 +1,16 @@
 // The tree view's Manuscript tab (web/manuscript.js), two views: a selection's anchor, the library
-// by kind, a snippet's state and where it is used, the content a copy takes, a document's outline,
-// the snippets resting on a note, an error of the compile in a line.
+// by kind, a snippet's state and where it is used, the content a copy takes, a file's outline from
+// its marker lines and the copies the server found (the fixture's document among them), a value and
+// a trace in a line, the snippets resting on a note, an error of the compile in a line.
 
 import { describe, expect, test } from 'claude-code/testing'
 
 import '../web/manuscript.js'
+import { EXPECTED, FILES } from './fixtures/local-overleaf'
 
-type Snippet = { id: string; kind?: string; title?: string; basis?: string[]; review?: string[]; stub?: boolean; usedIn?: { doc: string; state: string }[] }
+type Use = { doc: string; file: string; count: number; states: string[] }
+type Copy = { id: string; name?: string; file?: string; state: string; marker?: string; markers?: boolean; line?: number | null; end?: number | null; snippetReview?: boolean }
+type Snippet = { id: string; kind?: string; title?: string; basis?: string[]; review?: string[]; stub?: boolean; usedIn?: Use[] }
 type Ms = { snippets: Snippet[] }
 type Api = {
   CONTEXT: number
@@ -15,19 +19,24 @@ type Api = {
   byKind: (snippets: Snippet[]) => { kind: string; snippets: Snippet[] }[]
   stateOf: (s: Snippet) => { word: string; why: string }
   usedWords: (s: Snippet) => string
-  outlineOf: (text: string, copies: { id: string; state: string; snippetReview?: boolean }[]) => Record<string, unknown>[]
+  usedCount: (s: Snippet) => number
+  parseMarkers: (text: string) => { words: string; begin: number; end: number }[]
+  outlineOf: (text: string, copies: Copy[], file?: string) => Record<string, unknown>[]
+  valueWords: (v: Record<string, unknown>) => string
+  traceWords: (t: Record<string, unknown>) => string
+  fileOrder: (d: { main: string; files: string[]; copies: Copy[] }) => string[]
   writtenIn: (ms: Ms | null, id: string) => string[]
   slugOf: (title: string) => string
   docNameProblem: (name: string, taken: string[]) => string
-  errorText: (e: { file: string; snippet?: string; line: number | null; message: string; context?: string }) => string
+  errorText: (e: { file: string; in?: string; snippet?: string; line: number | null; message: string; context?: string }) => string
 }
 const M = (globalThis as unknown as { RftManuscript: Api }).RftManuscript
 
 const ms: Ms = {
   snippets: [
-    { id: 'S01', kind: 'result', basis: ['E05', 'R01'], stub: false, review: [], usedIn: [{ doc: 'paper', state: 'sync' }, { doc: 'thesis', state: 'adapted' }] },
+    { id: 'S01', kind: 'result', basis: ['E05', 'R01'], stub: false, review: [], usedIn: [{ doc: 'paper', file: 'main.tex', count: 2, states: ['placed', 'placed'] }, { doc: 'paper', file: 'sections/method.tex', count: 1, states: ['adapted'] }, { doc: 'thesis', file: 'main.tex', count: 1, states: ['placed'] }] },
     { id: 'S02', kind: 'definition', basis: ['E06'], stub: true, review: [], usedIn: [] },
-    { id: 'S03', kind: 'result', basis: ['E05'], stub: false, review: ['E05 superseded by E09'], usedIn: [{ doc: 'paper', state: 'review' }] },
+    { id: 'S03', kind: 'result', basis: ['E05'], stub: false, review: ['E05 superseded by E09'], usedIn: [{ doc: 'paper', file: 'main.tex', count: 1, states: ['review'] }] },
     { id: 'S04', kind: 'essay', basis: [], stub: true, review: [] },
   ],
 }
@@ -47,9 +56,10 @@ describe('the manuscript tab', () => {
     expect(M.stateOf(ms.snippets[2]!)).toEqual({ word: 'review', why: 'E05 superseded by E09' })
     expect(M.stateOf(ms.snippets[1]!)).toEqual({ word: 'stub', why: '' })
     expect(M.stateOf(ms.snippets[0]!)).toEqual({ word: 'written', why: '' })
-    expect(M.usedWords(ms.snippets[0]!)).toBe('paper, thesis (adapted)')
-    expect(M.usedWords(ms.snippets[2]!)).toBe('paper (to review)')
+    expect(M.usedWords(ms.snippets[0]!)).toBe('paper (main.tex ×2, sections/method.tex: adapted); thesis (main.tex)')
+    expect(M.usedWords(ms.snippets[2]!)).toBe('paper (main.tex: to review)')
     expect(M.usedWords(ms.snippets[1]!)).toBe('')
+    expect([M.usedCount(ms.snippets[0]!), M.usedCount(ms.snippets[1]!), M.usedCount(ms.snippets[3]!)]).toEqual([4, 0, 0])
   })
 
   test('what a copy takes from a snippet: its text below the header, as the plugin takes it', () => {
@@ -57,17 +67,50 @@ describe('the manuscript tab', () => {
     expect(M.contentOf('No header.\n')).toBe('No header.')
   })
 
-  test('a document\'s outline: its headings and its copies with their state and lines', () => {
+  test('a file\'s outline: its headings and the copies between its marker lines, with the state the server gave each', () => {
     const doc = [
-      '\\begin{document}', '\\section{Results}', '% rft-begin S01 a1b2c3d4', 'Text.', '% rft-end S01',
-      '\\subsection{More}', '% rft-begin S03 00000000', 'Old.', '% rft-end S03', '% rft-begin S09 11111111', 'no end', '\\end{document}',
+      '\\begin{document}', '\\section{Results}', '%%% Result: One %%%', 'Text.', '%%% end %%%',
+      '\\subsection{More}', '%%%result:  one%%%', '\\section{Inside a copy}', 'Old.', '%%% end %%%', '%%% A comment of my own %%%', 'Found by its text.', '\\end{document}',
     ].join('\n')
-    expect(M.outlineOf(doc, [{ id: 'S01', state: 'adapted' }, { id: 'S03', state: 'review', snippetReview: true }])).toEqual([
+    expect(M.parseMarkers(doc)).toEqual([{ words: 'Result: One', begin: 2, end: 4 }, { words: 'result:  one', begin: 6, end: 9 }])
+    const copies: Copy[] = [
+      { id: 'S01', name: 'S01#1', file: 'main.tex', state: 'adapted', marker: 'Result: One', markers: true, line: 3, end: 5 },
+      { id: 'S01', name: 'S01#2', file: 'main.tex', state: 'review', marker: 'Result: One', markers: true, line: 7, end: 10, snippetReview: true },
+      { id: 'S05', name: 'S05', file: 'main.tex', state: 'placed', marker: 'Motivation: Why', markers: false, line: 12, end: 12 },
+      { id: 'S04', name: 'S04', file: 'sections/method.tex', state: 'placed', marker: 'Method: Setup', markers: true, line: 2, end: 4 },
+      { id: 'S06', name: 'S06', file: 'main.tex', state: 'lost', marker: 'Discussion: Limits', markers: false, line: null, end: null },
+    ]
+    expect(M.outlineOf(doc, copies, 'main.tex')).toEqual([
       { type: 'heading', level: 'section', title: 'Results', line: 1 },
-      { type: 'copy', id: 'S01', line: 2, end: 4, state: 'adapted', snippetReview: false },
+      { type: 'copy', id: 'S01', name: 'S01#1', marker: 'Result: One', line: 2, end: 4, state: 'adapted', markers: true, snippetReview: false },
       { type: 'heading', level: 'subsection', title: 'More', line: 5 },
-      { type: 'copy', id: 'S03', line: 6, end: 8, state: 'review', snippetReview: true },
+      { type: 'copy', id: 'S01', name: 'S01#2', marker: 'Result: One', line: 6, end: 9, state: 'review', markers: true, snippetReview: true },
+      { type: 'copy', id: 'S05', name: 'S05', marker: 'Motivation: Why', line: 11, end: 11, state: 'placed', markers: false, snippetReview: false },
     ])
+    // typing above a copy does not move its highlight off it: it is where its marker lines are now
+    expect(M.outlineOf(`A new line.\nAnother.\n${doc}`, copies.slice(0, 2), 'main.tex').filter(o => o.type === 'copy').map(o => [o.name, o.line, o.end])).toEqual([['S01#1', 4, 6], ['S01#2', 8, 11]])
+    expect(M.outlineOf('%%% Method: Setup %%%\nWe train.\n%%% end %%%\n', copies, 'sections/method.tex').map(o => o.name)).toEqual(['S04'])
+  })
+
+  test('the fixture\'s document: each file\'s outline holds its copies, in the order and the states expected', () => {
+    // the copies as the server gives them (tests/test_clean_source.py holds its reader to the same file)
+    const lines: Record<string, [number, number]> = { 'S05 main.tex': [28, 29], 'S01 main.tex': [31, 37], 'S01 sections/method.tex': [3, 6], 'S04 sections/method.tex': [8, 11], 'S03 sections/method.tex': [14, 20], 'S07 sections/method.tex': [22, 26], 'S02 main.tex': [43, 47] }
+    const copies: Copy[] = EXPECTED.copies.map(c => ({ id: c.snippet, name: c.snippet, file: c.file ?? 'main.tex', state: c.state, marker: c.marker, markers: c.markers, line: lines[`${c.snippet} ${c.file}`]?.[0] ?? null, end: lines[`${c.snippet} ${c.file}`]?.[1] ?? null }))
+    const got = ['main.tex', 'sections/method.tex'].flatMap(f => M.outlineOf(FILES[`vault/documents/paper/${f}`]!, copies, f).filter(o => o.type === 'copy').map(o => [o.id, f, o.state, (o.line as number) + 1, (o.end as number) + 1]))
+    expect(got).toEqual(EXPECTED.copies.filter(c => c.file).sort((a, b) => (a.file! < b.file! ? -1 : a.file! > b.file! ? 1 : a.order! - b.order!)).map(c => [c.snippet, c.file, c.state, ...lines[`${c.snippet} ${c.file}`]!]))
+    expect(M.fileOrder({ main: 'main.tex', files: ['main.tex', 'refs.bib', 'sections/method.tex'], copies })).toEqual(['main.tex', 'sections/method.tex', 'refs.bib'])
+  })
+
+  test('a value to look at and a trace, each in a line', () => {
+    const v = { kind: 'number', from: 'E05', key: 'acc.full', written: '81.4', file: 'main.tex', line: 45 }
+    expect(M.valueWords({ ...v, state: 'review', now: '81.6', inDocument: '81.4' })).toBe('81.4 (E05 acc.full) · main.tex:45 · the tree now says 81.6')
+    expect(M.valueWords({ ...v, state: 'review', now: null, inDocument: '81.4' })).toBe('81.4 (E05 acc.full) · main.tex:45 · no longer saved')
+    expect(M.valueWords({ ...v, state: 'changed', now: '81.4', inDocument: '82' })).toBe('81.4 (E05 acc.full) · main.tex:45 · now 82 here: no longer the tree\'s')
+    expect(M.valueWords({ kind: 'figure', from: 'E08', key: 'loss', written: 'figures/loss.pdf', file: 'sections/method.tex', line: 17, state: 'review', now: '12@3' })).toBe('figure loss (E08 loss) · sections/method.tex:17 · saved again')
+    expect(M.valueWords({ ...v, state: 'lost', line: null })).toBe('81.4 (E05 acc.full) · main.tex · not found any more')
+    expect(M.traceWords({ file: 'main.tex', line: 8, kind: 'plugin', match: '\\rftnum' })).toBe('main.tex:8: the plugin\'s \\rftnum')
+    expect(M.traceWords({ file: 'figures/E08_loss.pdf', line: null, kind: 'id', match: 'E08' })).toBe('figures/E08_loss.pdf (its name): the id E08')
+    expect(M.traceWords({ file: 'refs.bib', line: 8, kind: 'reference', match: 'yun2019cutmix' })).toBe('refs.bib:8: the entry yun2019cutmix, not cited')
   })
 
   test('the snippets resting on a note, for its drawer', () => {
@@ -92,5 +135,6 @@ describe('the manuscript tab', () => {
     expect(M.errorText({ file: 'snippets/S02.tex', snippet: 'S02', line: 4, message: 'Undefined control sequence.', context: 'l.4 \\rftnu' }))
       .toBe('S02:4: Undefined control sequence. (l.4 \\rftnu)')
     expect(M.errorText({ file: 'documents/paper/main.tex', line: null, message: 'Emergency stop.' })).toBe('documents/paper/main.tex: Emergency stop.')
+    expect(M.errorText({ file: 'documents/paper/sections/method.tex', in: 'sections/method.tex', line: 12, message: 'Undefined control sequence.' })).toBe('sections/method.tex:12: Undefined control sequence.')
   })
 })
