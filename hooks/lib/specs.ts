@@ -272,14 +272,15 @@ export const TOOLS = {
   },
   rft_set_document: {
     description:
-      'A document\'s structure, only as the user agreed: place a copy of a snippet (its text now, stamped; the copy is then the document\'s, and goes to review when the snippet changes), move a copy, or remove one. Propose placements as a table first.',
+      'A document\'s structure, only as the user agreed: place a copy of a snippet (written out as plain LaTeX; it is then the document\'s, and goes to review when the snippet changes), move a copy, or remove one. Propose placements as a table first.',
     inputSchema: {
       type: 'object',
       properties: {
         name: { type: 'string', description: 'The document.' },
         place: { type: 'string', description: 'A snippet to copy in (S04).' },
-        move: { type: 'string', description: 'A copy to move (S04).' },
-        remove: { type: 'string', description: 'A copy to take out (S04).' },
+        move: { type: 'string', description: 'A copy to move (S04, or S04#2: its second there).' },
+        remove: { type: 'string', description: 'A copy to take out.' },
+        file: { type: 'string', description: 'Its .tex file to place in; default: the main one.' },
         after: { type: 'string', description: 'Where: after a copy (S03) or a heading\'s title; default: before the bibliography.' },
       },
       required: ['name'],

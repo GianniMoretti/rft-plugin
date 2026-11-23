@@ -256,6 +256,8 @@ export type Io = {
   list: (path: string) => Promise<{ name: string; kind: string; mtimeMs: number; size: number }[]>
   exists: (path: string) => Promise<boolean>
   remove: (path: string) => Promise<void>
+  /** A file copied as it is, bytes and all (a figure into a document); without it a copy goes through `read` and `write`, as text. */
+  copy?: (from: string, to: string) => Promise<void>
 }
 
 export const CONFIG_PATH = '.rft/config.json'

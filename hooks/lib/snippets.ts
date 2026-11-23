@@ -24,6 +24,9 @@ export const GENERATED = [SNIPPETS_REGISTRY, DOCUMENTS_REGISTRY, ...['rft.sty', 
 /** Each document's record of the snippets' text its copies were taken from. */
 export const BLOCKS_FILE = '.blocks.json'
 
+/** What a tool of the snippets and documents refuses with: its message is the answer. */
+export class ManuscriptError extends Error {}
+
 export const SNIPPET_RE = /^S(\d+)$/
 export const isSnippetId = (id: string) => SNIPPET_RE.test(id.trim().toUpperCase())
 export const DOC_NAME = /^[a-z0-9][a-z0-9-]*$/

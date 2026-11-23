@@ -4,7 +4,7 @@
 //
 //   main     the document's main file
 //   copies   each copy of a snippet, in the order of the document: its snippet, its marker's words,
-//            its file, the fingerprint of the snippet's content it was taken from, its text as placed
+//            its file, the fingerprint of the snippet's content it answers to, that snippet written out
 //   values   each number, figure and table of the tree written out in the document: where it came
 //            from, what was written, its file and the text before and after it
 //   bib      each entry of the document's .bib that came from a reference note
@@ -24,8 +24,10 @@ export type TrackedCopy = {
   file: string
   /** The fingerprint of the snippet's content the copy answers to. */
   stamp: string
-  /** The copy's text as it was placed: the snippet written out then. */
+  /** The snippet written out, as the copy answers to it: what it is compared with to tell whether it was adapted. */
   placed: string
+  /** The copy's own text when the plugin last saw it, when that is not `placed`: what finds it again once its markers are gone. */
+  seen?: string
 }
 export type ValueKind = 'number' | 'figure' | 'table'
 export type TrackedValue = {
@@ -39,6 +41,8 @@ export type TrackedValue = {
   /** The text just before and just after it, which finds it again. */
   before: string
   after: string
+  /** What the tree said when the user chose to keep theirs: not flagged again until the tree says something else. */
+  kept?: string
 }
 export type Allowed = { file: string; match: string; text: string }
 export type Tracking = {
@@ -67,9 +71,9 @@ export function parseTracking(raw: unknown): Tracking {
     version: 1,
     main: str(d.main) || 'main.tex',
     copies: list(d.copies).filter(c => str(c.snippet) && str(c.file))
-      .map(c => ({ snippet: str(c.snippet), marker: str(c.marker), file: str(c.file), stamp: str(c.stamp), placed: str(c.placed) })),
+      .map(c => ({ snippet: str(c.snippet), marker: str(c.marker), file: str(c.file), stamp: str(c.stamp), placed: str(c.placed), ...(str(c.seen) ? { seen: str(c.seen) } : {}) })),
     values: list(d.values).filter(v => ['number', 'figure', 'table'].includes(str(v.kind)) && str(v.from) && str(v.file))
-      .map(v => ({ kind: str(v.kind) as ValueKind, from: str(v.from), key: str(v.key), written: str(v.written), file: str(v.file), before: str(v.before), after: str(v.after) })),
+      .map(v => ({ kind: str(v.kind) as ValueKind, from: str(v.from), key: str(v.key), written: str(v.written), file: str(v.file), before: str(v.before), after: str(v.after), ...(str(v.kept) ? { kept: str(v.kept) } : {}) })),
     bib,
     allowed: list(d.allowed).filter(a => str(a.file) && str(a.match)).map(a => ({ file: str(a.file), match: str(a.match), text: str(a.text) })),
   }

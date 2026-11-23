@@ -72,6 +72,14 @@ const ioOf = ($: EngineInterface): Io => ({
     const r = await $.process.run(argv)
     if (r.exitCode !== 0 || (await $.fs.exists(path))) throw new Error(r.stderr.trim() || `${argv[0]} left the file in place`)
   },
+  // a figure into a document: its bytes as they are, which $.fs.read and write would take through text
+  copy: async (from, to) => {
+    const win = /^[A-Za-z]:/.test(to)
+    const dir = to.slice(0, to.lastIndexOf('/'))
+    const made = await $.process.run(win ? ['cmd', '/c', 'mkdir', dir.replace(/\//g, '\\')] : ['mkdir', '-p', '--', dir])
+    const r = await $.process.run(win ? ['cmd', '/c', 'copy', '/y', from.replace(/\//g, '\\'), to.replace(/\//g, '\\')] : ['cp', '-f', '--', from, to])
+    if (r.exitCode !== 0) throw new Error(r.stderr.trim() || made.stderr.trim() || `${from} could not be copied to ${to}`)
+  },
 })
 
 /** The tree a session works on: its files and folder, the link that led there, the session's folder. */
@@ -511,7 +519,7 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       if (i.action === 'reviewed') return markReviewed(io, loaded, String(i.id ?? ''), today())
       if (i.action === 'document') return newDocument(io, loaded, String(i.name ?? ''), i.kind === 'report' ? 'report' : 'article', str(i.title))
       if (i.action === 'place' || i.action === 'move' || i.action === 'remove') {
-        return setDocument(io, loaded, { name: String(i.name ?? ''), [i.action]: String(i.id ?? ''), after: str(i.after) })
+        return setDocument(io, loaded, { name: String(i.name ?? ''), [i.action]: String(i.id ?? ''), file: str(i.file), after: str(i.after) })
       }
       if (i.action === 'take' || i.action === 'keep') return reviewCopy(io, loaded, String(i.name ?? ''), String(i.id ?? ''), i.action)
       return setSnippet(io, loaded, { kind: i.kind, title: i.title, basis: strings(i.basis) }, today(), { byUser: true })
@@ -630,7 +638,7 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
         text: i.text, edits: i.edits,
       }, today())
     case 'rft_set_document':
-      return setDocument(io, loaded, { name: str(i.name), place: str(i.place), move: str(i.move), remove: str(i.remove), after: str(i.after) })
+      return setDocument(io, loaded, { name: str(i.name), place: str(i.place), file: str(i.file), move: str(i.move), remove: str(i.remove), after: str(i.after) })
     case 'rft_tree':
       return treeReport(loaded, { root: str(i.root), depth: typeof i.depth === 'number' ? i.depth : undefined, vault: shownVault(h, loaded.config) })
     case 'rft_validate': {
@@ -763,7 +771,7 @@ const FROM_VIEW = [
   { line: 'RFT_SET_TYPE ', tool: 'rft_set_type', fields: ['id', 'type'], what: "change a note's type" },
   { line: 'RFT_MOVE_NODE ', tool: 'rft_move_node', fields: ['id', 'parent'], what: 'move a note' },
   { line: 'RFT_VERIFY ', tool: 'rft_verify', fields: ['id', 'action'], what: 'verify a note' },
-  { line: 'RFT_MANUSCRIPT ', tool: 'rft_manuscript_view', fields: ['action', 'id', 'kind', 'title', 'basis', 'name', 'after'], what: 'change the snippets or documents' },
+  { line: 'RFT_MANUSCRIPT ', tool: 'rft_manuscript_view', fields: ['action', 'id', 'kind', 'title', 'basis', 'name', 'after', 'file'], what: 'change the snippets or documents' },
 ] as const
 
 /**

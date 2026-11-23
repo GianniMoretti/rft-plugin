@@ -14,9 +14,9 @@
 // A macro that names nothing saved refuses the whole snippet, and so does a text that would carry
 // a trace (an id in its words or its title).
 
-import { ManuscriptError, citeIndex, macroProblems } from './manuscript'
+import { citeIndex, macroProblems } from './manuscript'
 import type { Snippet } from './snippets'
-import { contentOf } from './snippets'
+import { ManuscriptError, contentOf } from './snippets'
 import { tracesInText } from './scan'
 import type { ValueKind } from './tracking'
 import type { Io, Loaded } from './vault'

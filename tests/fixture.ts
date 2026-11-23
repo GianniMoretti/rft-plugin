@@ -130,6 +130,7 @@ export class MemoryFs {
       remove: async p => this.remove(p),
       list: async p => this.list(p),
       exists: async p => this.exists(p),
+      copy: async (from, to) => this.write(to, this.read(from)),
     }
   }
 }
@@ -151,6 +152,7 @@ export function world(on: On, files: Record<string, string>, opts: { refuse?: st
   // the plugin deletes a file with `rm` through $.process.run, and reads repos with `git -C <dir>`
   on('process.run', (_$, e) => {
     if (e.argv[0] === 'rm') w.fs.remove(e.argv[e.argv.length - 1]!)
+    if (e.argv[0] === 'cp') w.fs.write(e.argv[e.argv.length - 1]!, w.fs.read(e.argv[e.argv.length - 2]!))
     if (e.argv[0] === 'git' && e.argv[1] === '-C' && opts.git) {
       const r = opts.git(e.argv[2]!, e.argv.slice(3))
       return { value: { exitCode: r.ok ? 0 : 128, stdout: r.out, stderr: r.err } } as never

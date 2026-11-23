@@ -5,6 +5,7 @@ this file to write it again.
 
     python3 tests/fixtures/local-overleaf/to_ts.py
 """
+import hashlib
 import json
 from pathlib import Path
 
@@ -18,8 +19,8 @@ def module() -> str:
     files = {}
     for p in sorted(root.rglob("*")):
         if p.is_file():
-            # a binary file is only ever copied by the plugin's side: a stand-in that names it is enough
-            files[p.relative_to(root).as_posix()] = f"%PDF stand-in for {p.name}\n" if p.suffix in BINARY else p.read_text(encoding="utf-8")
+            # a binary file is only ever copied and compared by the plugin's side: a stand-in for its bytes is enough
+            files[p.relative_to(root).as_posix()] = f"%PDF stand-in {hashlib.sha1(p.read_bytes()).hexdigest()[:12]}\n" if p.suffix in BINARY else p.read_text(encoding="utf-8")
     want = json.loads((HERE / "expected.json").read_text(encoding="utf-8"))
     traces = json.loads((HERE / "traces.json").read_text(encoding="utf-8"))
     return ("// Copied from tests/fixtures/local-overleaf/ by tests/fixtures/local-overleaf/to_ts.py: edit those files, then run it.\n"
