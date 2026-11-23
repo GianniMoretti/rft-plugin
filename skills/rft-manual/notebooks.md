@@ -24,7 +24,11 @@ repo's own uv environment, from the repo's root.
     (`{"gap_1k": 4.1, "gap_1k_sd": 0.6}`);
   - `FIGURES`: `{name: matplotlib figure or SVG text}`, saved as `figures/<id>_<name>.svg`;
   - `TABLES`: `{name: DataFrame, list of row dicts, or dict of columns}`, saved as
-    `tables/<id>_<name>.html` (the name is its caption).
+    `tables/<id>_<name>.html` (the name is its caption);
+  - `LATEX` (optional): `{a table's name: the tabular the notebook typeset for it}`, for a table
+    the paper prints with more than columns and rows (cell colours, grouped headers, multirow).
+    The view's LaTeX button then copies that tabular in a table float, and `\rfttable` inputs it,
+    in place of the plain one; say in a `%` line above it which packages it needs.
 - **When its jobs end**, on a machine paired with the experiment queue, the queue's runner runs
   it (a job of its own, `notebook`, no GPU; with no queue, run it with `rft_run_notebook` once
   its runs end, which does the same) and, at no model turn: writes `RESULTS` in the note's Result as a table between two `rft-results`

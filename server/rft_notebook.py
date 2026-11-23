@@ -15,7 +15,8 @@ it: the repo's root (the folder of its pyproject.toml) as working folder and the
 folder first on sys.path; it answers the notebook's RESULTS, the repo's commit, and the end of the
 traceback when a cell fails; and FIGURES (each an SVG: a matplotlib figure, or SVG text) and
 TABLES (each a DataFrame, a list of rows as dicts, or a dict of columns), as SVG text and as
-columns and rows. The editors (`Editors`) are one `marimo edit` per repo, on 127.0.0.1
+columns and rows; and LATEX ({a table's name: the tabular the notebook typeset for it}), the LaTeX
+that table is copied and \\input as, in place of the plain one made from its columns and rows. The editors (`Editors`) are one `marimo edit` per repo, on 127.0.0.1
 with a key of their own, started when the tree view first opens a notebook of that repo and
 stopped with the server; each serves under notebook/<name>/ and the page reaches it through the
 server's own port (rft_server passes those requests on), the only one a browser on another
@@ -227,7 +228,7 @@ def run(path: Path, timeout: float, uv: str = "uv", style: dict | None = None) -
         except ValueError:
             return {**out, "ok": False, "error": "the run's answer was not JSON"}
         out["results"] = said.get("results")
-        for k in ("figures", "pdfs", "tables", "notes"):
+        for k in ("figures", "pdfs", "tables", "latex", "notes"):
             if said.get(k):
                 out[k] = said[k]
         return {**out, "ok": True}
@@ -262,7 +263,10 @@ def exec_notebook(path: str) -> int:
     # a matplotlib figure is also kept as PDF, for the manuscript's LaTeX (an SVG given as text has none)
     pdfs = {str(k): pdf for k, v in (get("FIGURES") or {}).items() if str(k) in figures and (pdf := pdf_of(v)) is not None} \
         if isinstance(get("FIGURES"), dict) else {}
-    answer = {"results": jsonable(get("RESULTS")), "figures": figures, "pdfs": pdfs, "tables": tables, "notes": notes}
+    # a table's own LaTeX, when the notebook typesets it itself (colours, grouped headers): text, for a table it made
+    latex = {str(k): v for k, v in (get("LATEX") or {}).items() if str(k) in tables and isinstance(v, str) and v.strip()} \
+        if isinstance(get("LATEX"), dict) else {}
+    answer = {"results": jsonable(get("RESULTS")), "figures": figures, "pdfs": pdfs, "tables": tables, "latex": latex, "notes": notes}
     sys.stdout.flush()
     print("\n" + MARK + json.dumps(answer, allow_nan=False), flush=True)
     return 0

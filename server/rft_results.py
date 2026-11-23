@@ -351,12 +351,15 @@ def table_tex(t: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def table_html(caption: str, t: dict) -> str:
-    """A table of the notebook (columns and rows) as the HTML an artifact takes in; numbers right-aligned by the page's style."""
+def table_html(caption: str, t: dict, latex: str | None = None) -> str:
+    """A table of the notebook (columns and rows) as the HTML an artifact takes in; numbers right-aligned by the page's style.
+    `latex`, the tabular the notebook typeset for it (its LATEX), rides on the table as data-latex: the view's
+    LaTeX button copies it, in place of the plain table it would make from the cells."""
     esc = lambda v: html.escape(number_text(v) if v is not None else "")  # noqa: E731
     head = "".join(f"<th>{html.escape(str(c))}</th>" for c in t.get("columns") or [])
     body = "\n".join("<tr>" + "".join(f"<td>{esc(v)}</td>" for v in row) + "</tr>" for row in t.get("rows") or [])
-    return f"<table>\n<caption>{html.escape(caption)}</caption>\n<thead><tr>{head}</tr></thead>\n<tbody>\n{body}\n</tbody>\n</table>"
+    own = f' data-latex="{html.escape(latex.strip(), quote=True).replace(chr(10), "&#10;")}"' if latex and latex.strip() else ""
+    return f"<table{own}>\n<caption>{html.escape(caption)}</caption>\n<thead><tr>{head}</tr></thead>\n<tbody>\n{body}\n</tbody>\n</table>"
 
 
 def fill_tables(page: str, tables: dict[str, str]) -> tuple[str, list[str]]:
@@ -421,11 +424,13 @@ def save(vault: Path, exp: str, outcome: dict, date: str, runs: list[dict]) -> t
             notes.append(f"table {name!r}: not a table")
             continue
         key = f"{exp}_{slug(name)}"
-        tables[key] = table_html(str(name), t)
+        own = (outcome.get("latex") or {}).get(name)
+        own = own if isinstance(own, str) and own.strip() else None
+        tables[key] = table_html(str(name), t, own)
         contents[key] = {"caption": str(name), "columns": t["columns"][:12], "rows": [r[:12] for r in (t.get("rows") or [])[:20]],
                          "more_rows": max(0, len(t.get("rows") or []) - 20)}
         write_atomic(vault / TABLES_DIR / f"{key}.html", tables[key] + "\n")
-        write_atomic(vault / TABLES_DIR / f"{key}.tex", table_tex(t))
+        write_atomic(vault / TABLES_DIR / f"{key}.tex", own.strip() + "\n" if own else table_tex(t))
     notes.extend(f"{n}" for n in outcome.get("notes") or [])
     record = {"exp": exp, "concepts": concept_chain(vault, exp), "date": date, "results": outcome.get("results"), "commit": outcome.get("commit"),
               "dirty": outcome.get("dirty"), "notebook": outcome.get("file"),

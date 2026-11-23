@@ -119,5 +119,12 @@
     ].join('\n')
   }
 
-  root.RftLatex = { escape, cellLatex, columnSpec, label, tableFloat, isNumber }
+  /** A table float around a tabular its notebook typeset itself (LATEX, on the table as data-latex): caption and label, its lines as they are. */
+  function floatAround(caption, tabular) {
+    const cap = String(caption || '').replace(/\s+/g, ' ').trim() || 'Table'
+    return ['\\begin{table}[t]', '\\centering', `\\caption{${escape(cap)}}`, `\\label{${label(cap)}}`,
+      String(tabular).replace(/\r\n?/g, '\n').replace(/^\n+|\s+$/g, ''), '\\end{table}'].join('\n')
+  }
+
+  root.RftLatex = { escape, cellLatex, columnSpec, label, tableFloat, floatAround, isNumber }
 })(typeof globalThis !== 'undefined' ? globalThis : window)
