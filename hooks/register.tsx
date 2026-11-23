@@ -45,6 +45,7 @@ import { runNotebook, setNotebook } from './lib/notebooks'
 import { MACHINE_FILE, machinePrompt, probeText, readMachine, statusText } from './lib/machine'
 import { manualDir } from './lib/manual'
 import { artifactPrompt, candidatesPrompt, literaturePrompt, manuscriptPrompt, notebooksPrompt, rebalancePrompt, suggestConceptsPrompt, summarizePrompt } from './lib/prompts'
+import { addItem, commandInput, inboxLine, inboxReport, loadInbox } from './lib/inbox'
 import { clearHandoff, handoffPrompt, handoffRules, hasHandoffs, leaveHandoff, showHandoff, sizeToast, toTell, uncommittedIn } from './lib/handoff'
 import type { MachineStatus, Probe } from './lib/machine'
 import { QUEUE_CLI, QUEUE_FILE, addedText, cancelledText, jobEvents, jobsNext, jobsReport, movedText, queueLine, readQueue, retriedText, toStart } from './lib/queue'
@@ -286,6 +287,7 @@ async function registerCommands($: EngineInterface): Promise<void> {
   await attempt('rft-artifact', () => $.command.register({ name: 'rft-artifact', description: "Ask Claude to write a concept's artifact, the page of its experiments' results (no concept: every one missing or out of date)", argumentHint: '[concept]' }))
   await attempt('rft-update', () => $.command.register({ name: 'rft-update', description: 'Bring a vault made by an older version up to this one: shows what it adds; apply writes it. notebooks: run every notebook again in the queue and list what is still to write (--write: ask Claude to write it)', argumentHint: '[apply] [--sections] | notebooks [--write] [concept]' }))
   await attempt('rft-view', () => $.command.register({ name: 'rft-view', description: 'Write a standalone HTML view of the tree to <vault>/tree.html' }))
+  await attempt('rft-inbox', () => $.command.register({ name: 'rft-inbox', description: 'Save a link to read later in the inbox (a URL, an arXiv id or a DOI), or with nothing after it print the inbox (no model turn)', argumentHint: '[<link> [urgent|high|medium|low] [why]]' }))
   await attempt('rft-handoff', () => $.command.register({ name: 'rft-handoff', description: 'Ask Claude to leave a handoff, so the work goes on in a new session (or after /clear) and not in a long one (show: print it; clear: remove it; no model turn)', argumentHint: '[show|clear|a note for the next session]' }))
   if (failed.length) reportFailures($, failed)
 }
@@ -481,6 +483,11 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       return conceptsReport(loaded)
     case 'rft_tags':
       return tagsReport(loaded)
+    case 'rft_inbox':
+      // no reading priority here: it is the user's (/rft-inbox, the page, the file)
+      return str(i.link)?.trim()
+        ? addItem(io, loaded, { link: str(i.link)!, why: str(i.why), title: str(i.title), today: today() })
+        : inboxReport(await loadInbox(io, loaded.config.vault))
     case 'rft_handoff': {
       const vault = loaded.config.vault
       if (i.clear === true) return clearHandoff(io, vault, h.cwd)
@@ -543,7 +550,7 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
     case 'rft_supersede':
       return unlocking($, unlock => supersede(io, loaded, String(i.id ?? ''), str(i.by) ?? null, str(i.why), today(), unlock))
     case 'rft_next':
-      return withJobs(await nextReport(io, loaded, today(), str(i.concept)), io, loaded, await nowS($))
+      return withInbox(await withJobs(await nextReport(io, loaded, today(), str(i.concept)), io, loaded, await nowS($)), io, loaded, str(i.concept))
     case 'rft_queue': {
       const exp = resolveId(loaded.tree, String(i.exp ?? ''))
       const n = exp ? loaded.tree.nodes[exp] : undefined
@@ -922,6 +929,17 @@ async function withJobs(report: string, io: Io, loaded: Loaded, now: number): Pr
     if (!(await readMachine(io, loaded.config.vault))) return report // no machine paired: no queue
     const part = jobsNext(await readQueue(io, loaded.config.vault), loaded, now)
     return part ? `${report}\n\n${part}` : report
+  } catch {
+    return report
+  }
+}
+
+/** rft_next with a line on the inbox after it, when something waits there and no one concept was asked for. */
+async function withInbox(report: string, io: Io, loaded: Loaded, concept?: string): Promise<string> {
+  if (concept?.trim()) return report
+  try {
+    const line = inboxLine(await loadInbox(io, loaded.config.vault))
+    return line ? `${report}\n\n${line}` : report
   } catch {
     return report
   }
@@ -1389,7 +1407,8 @@ export const register: Register = (on, options) => {
     try {
       const io = (await mustHere($)).io
       const loaded = await loadActive(io)
-      return { text: await withJobs(await nextReport(io, loaded, today(), e.args.trim() || undefined), io, loaded, await nowS($)) }
+      const concept = e.args.trim() || undefined
+      return { text: await withInbox(await withJobs(await nextReport(io, loaded, today(), concept), io, loaded, await nowS($)), io, loaded, concept) }
     } catch (err) {
       return { text: message(err) }
     }
@@ -1493,6 +1512,20 @@ export const register: Register = (on, options) => {
       if (doc && !ms.documents.some(d => d.name === doc)) return { text: `"${doc}" is no document (${ms.documents.map(d => d.name).join(', ') || 'none yet'}); /rft-manuscript new ${doc} makes it.` }
       pendingPrompts.push(manuscriptPrompt(doc))
       return { text: `Asked Claude to propose snippets to write and where to place them${doc ? ` in ${doc}` : ''}: tables to choose from; nothing is written until you pick.` }
+    } catch (err) {
+      return { text: message(err) }
+    }
+  })
+
+  // the inbox, with no model turn: printed, or one more link saved in it with the reading priority the user gave
+  on('command.run', { command: 'rft-inbox' }, async ($, e) => {
+    try {
+      const io = (await mustHere($)).io
+      const loaded = await loadActive(io)
+      if (!e.args.trim()) return { text: inboxReport(await loadInbox(io, loaded.config.vault)) }
+      const input = commandInput(e.args)
+      if (!input) return { text: `"${e.args.trim()}" does not start with a link. /rft-inbox <link> [urgent|high|medium|low] [why]: the link is a URL, an arXiv id or a DOI.` }
+      return { text: await addItem(io, loaded, { ...input, today: today() }) }
     } catch (err) {
       return { text: message(err) }
     }

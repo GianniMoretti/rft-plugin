@@ -24,7 +24,7 @@ describe('tool list', () => {
     const w = world(on, demoFiles())
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
     // no machine paired with the experiment queue: its tools are not there at all, rft_machine waits to pair one
-    expect(w.tools).toHaveLength(40)
+    expect(w.tools).toHaveLength(41)
     expect(inPrompt(w)).toEqual([...CORE_TOOLS].sort())
     // rft_sync is there (a session in two syncs by hand); rft_validate is not, since rft_sync and rft_add_node answer with the check
     expect(inPrompt(w)).toEqual(['rft_add_node', 'rft_graph', 'rft_map', 'rft_move_node', 'rft_next', 'rft_search', 'rft_set_status', 'rft_set_summary', 'rft_sync'])

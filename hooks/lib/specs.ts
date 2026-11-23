@@ -408,6 +408,18 @@ export const TOOLS = {
     description: 'List the topical tags in use in the vault, with how many notes carry each: check it before inventing a new tag.',
     inputSchema: { type: 'object', properties: {} },
   },
+  rft_inbox: {
+    description:
+      'The inbox: links the user saved to read later and has not decided about (Inbox.md in the vault, outside the tree; no note, no id). With no field it lists the items, the most pressing first. With a link it saves one ("save this for later"), or says where the link already is (the inbox, a processed item, a reference\'s Source) and adds nothing. A reading priority is the user\'s alone: this tool does not set one, and a why that reads as one is refused. An item is read and discussed only when the user asks to process it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        link: { type: 'string', description: 'What to save: a URL, an arXiv id or a DOI.' },
+        why: { type: 'string', description: 'One line on why it was saved, in the user\'s terms (a note id it may bear on).' },
+        title: { type: 'string', description: 'Its title, only when known for certain (from the page or the paper itself); never guessed.' },
+      },
+    },
+  },
   rft_handoff: {
     description:
       'Leave a handoff for the next session in this folder, which starts from it and the tree (a new session, or this one after /clear): done, next and unrecorded, 2,000 characters at most in all. Bring the notes up to date first: it points at notes by id and does not repeat them. Its answer lists the repositories with uncommitted changes. With no field it shows the handoff.',

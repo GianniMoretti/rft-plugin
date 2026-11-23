@@ -20,58 +20,86 @@ An item is a top-level list line that starts with a link: a markdown link, a URL
 DOI. After the link, parts set apart by `·`: why it was saved (after a dash), its reading priority
 as one word, `added <date>`. A brief is the indented list lines under it, the first starting
 `briefed <date>:`. Any other line (free text, a to-do, a heading of the user's own) is not an item.
-hooks/lib/inbox.ts reads the same file the same way; tests/fixtures/inbox holds both to one file.
-Standard library only.
+
+hooks/lib/inbox.ts reads and writes the same file the same way, pattern for pattern, and
+tests/fixtures/inbox holds both to one file and one list of cases. So that the two cannot differ on
+a line no case has, nothing here is left to what Python and JavaScript each take a word to mean:
+white space is the set spelled out in WS (not `\\s`, `strip()` or `isspace()`), digits are `[0-9]`,
+letters match without case in ASCII alone, a pattern ends at the end of the text (`\\Z`) and `.`
+takes any character. Standard library only.
 """
 from __future__ import annotations
 
 import re
-from urllib.parse import urlsplit
 
 INBOX = "Inbox.md"
 PRIORITIES = ("urgent", "high", "medium", "low")
 
-ARXIV_ID = r"(?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[A-Z]{2})?/\d{7})"
-ARXIV_URL = re.compile(rf"^https?://(?:www\.|export\.)?arxiv\.org/(?:abs|pdf)/({ARXIV_ID})(?:v\d+)?(?:\.pdf)?/?(?:[?#].*)?$", re.I)
-ARXIV_BARE = re.compile(rf"^(?:arxiv:\s*)?({ARXIV_ID})(?:v\d+)?$", re.I)
-DOI_ID = r"10\.\d{4,9}/\S+"
-DOI_URL = re.compile(rf"^https?://(?:dx\.)?doi\.org/({DOI_ID})$", re.I)
-DOI_BARE = re.compile(rf"^(?:doi:\s*)?({DOI_ID})$", re.I)
+
+class InboxError(ValueError):
+    """What cannot be added to the inbox, in words for the user."""
+
+
+def rx(pattern: str, nocase: bool = False) -> re.Pattern:
+    return re.compile(pattern, re.A | re.S | (re.I if nocase else 0))
+
+
+# white space, for inside a character class
+WS = r" \t\n\v\f\r   -     　"
+EDGES = rx(rf"^[{WS}]+|[{WS}]+\Z")
+SPACES = rx(rf"[{WS}]+")
+ARXIV_ID = r"(?:[0-9]{4}\.[0-9]{4,5}|[a-z-]+(?:\.[A-Z]{2})?/[0-9]{7})"
+ARXIV_URL = rx(rf"^https?://(?:www\.|export\.)?arxiv\.org/(?:abs|pdf|html)/({ARXIV_ID})(?:v[0-9]+)?(?:\.pdf)?/?(?:[?#].*)?\Z", True)
+ARXIV_BARE = rx(rf"^(?:arxiv:[{WS}]*)?({ARXIV_ID})(?:v[0-9]+)?\Z", True)
+DOI_ID = rf"10\.[0-9]{{4,9}}/[^{WS}]+"
+DOI_URL = rx(rf"^https?://(?:dx\.)?doi\.org/({DOI_ID})\Z", True)
+DOI_BARE = rx(rf"^(?:doi:[{WS}]*)?({DOI_ID})\Z", True)
+# a web address in its parts: scheme, host, path, query; the fragment is not part of what it is
+URL = rx(rf"^(https?)://([^/?#{WS}]+)([^?#]*)(?:\?([^#]*))?(?:#.*)?\Z", True)
 # a link at the start of an item: [title](target), <target>, or the target itself
-MD_LINK = re.compile(r"^\[([^\]]*)\]\(\s*<?([^)\s>]+)>?\s*\)")
-ANGLE = re.compile(r"^<([^>\s]+)>")
-BARE = re.compile(rf"^(?:https?://\S+|arxiv:\s*{ARXIV_ID}(?:v\d+)?|{ARXIV_ID}(?:v\d+)?|doi:\s*{DOI_ID}|{DOI_ID})", re.I)
-ITEM = re.compile(r"^[-*+][ \t]+(.*)$")
-SUB = re.compile(r"^[ \t]+[-*+][ \t]+(.*)$")
-PROCESSED = re.compile(r"^##[ \t]+processed[ \t]*$", re.I)
-HEADING = re.compile(r"^#{1,2}[ \t]")
-BRIEFED = re.compile(r"^briefed[ \t]+(\d{4}-\d{2}-\d{2})[ \t]*:?[ \t]*(.*)$", re.I)
-ADDED = re.compile(r"^added[ \t]+(\d{4}-\d{2}-\d{2})$", re.I)
-DATED = re.compile(r"^(\d{4}-\d{2}-\d{2})[ \t]+(.*)$")
-DASH = re.compile(r"^(?:—|–|->|-{1,2}|→)[ \t]*")  # `->` before `-`, or its `>` is left behind
+MD_LINK = rx(rf"^\[([^\]]*)\]\([{WS}]*<?([^){WS}>]+)>?[{WS}]*\)")
+ANGLE = rx(rf"^<([^>{WS}]+)>")
+BARE = rx(rf"^(?:https?://[^{WS}]+|arxiv:[{WS}]*{ARXIV_ID}(?:v[0-9]+)?|{ARXIV_ID}(?:v[0-9]+)?|doi:[{WS}]*{DOI_ID}|{DOI_ID})", True)
+WEB = rx(r"^https?://", True)
+# the links anywhere in a text (a reference's Source): a URL, an arXiv id said to be one, a DOI
+LINKS = rx(rf"(https?://[^{WS})>\]\"']+)|\barxiv(?:\.org/(?:abs|pdf|html)/|:?[{WS}]*)({ARXIV_ID})(?:v[0-9]+)?(?![0-9])"
+           rf"|\b(10\.[0-9]{{4,9}}/[^{WS})>\]\"']+)", True)
+ITEM = rx(r"^[-*+][ \t]+(.*)\Z")
+SUB = rx(r"^[ \t]+[-*+][ \t]+(.*)\Z")
+PROCESSED = rx(r"^##[ \t]+processed[ \t]*\Z", True)
+HEADING = rx(r"^#{1,2}[ \t]")
+SOURCE = rx(r"^##[ \t]+Source[ \t]*\Z")
+BRIEFED = rx(r"^briefed[ \t]+([0-9]{4}-[0-9]{2}-[0-9]{2})[ \t]*:?[ \t]*(.*)\Z", True)
+ADDED = rx(r"^added[ \t]+([0-9]{4}-[0-9]{2}-[0-9]{2})\Z", True)
+DATED = rx(r"^([0-9]{4}-[0-9]{2}-[0-9]{2})[ \t]+(.*)\Z")
+DASH = rx(r"^(?:—|–|->|-{1,2}|→)[ \t]*")  # `->` before `-`, or its `>` is left behind
+ENDS = rx(r"[.,;]+\Z")  # what ends a sentence, not an address
+
+
+def strip(text: str) -> str:
+    return EDGES.sub("", text)
+
+
+def one_line(text: str) -> str:
+    return strip(SPACES.sub(" ", text or ""))
 
 
 def target_of(target: str) -> tuple[str, str] | None:
     """A link's identity and the address that opens it: `arxiv:<id>` whatever the form the paper
-    was given in (abs, pdf, a version), `doi:<doi>`, or the URL without its fragment and trailing
-    slash. None when it is none of these."""
-    t = target.strip()
+    was given in (abs, pdf, html, a version), `doi:<doi>`, or the URL without its fragment and
+    trailing slash. None when it is none of these."""
+    t = strip(target)
     m = ARXIV_URL.match(t) or ARXIV_BARE.match(t)
     if m:
         return f"arxiv:{m.group(1)}", f"https://arxiv.org/abs/{m.group(1)}"
     m = DOI_URL.match(t) or DOI_BARE.match(t)
     if m:
         return f"doi:{m.group(1).lower()}", f"https://doi.org/{m.group(1)}"
-    if not re.match(r"^https?://", t, re.I):
+    m = URL.match(t)
+    if not m:
         return None
-    try:
-        u = urlsplit(t)
-    except ValueError:
-        return None
-    if not u.netloc:
-        return None
-    key = f"{u.scheme.lower()}://{u.netloc.lower()}{u.path.rstrip('/')}" + (f"?{u.query}" if u.query else "")
-    return key, t
+    scheme, host, path, query = m.groups()
+    return f"{scheme.lower()}://{host.lower()}{path.rstrip('/')}" + (f"?{query}" if query else ""), t
 
 
 def link_at(text: str) -> tuple[str, str, str, str] | None:
@@ -79,17 +107,17 @@ def link_at(text: str) -> tuple[str, str, str, str] | None:
     m = MD_LINK.match(text)
     if m:
         got = target_of(m.group(2))
-        return (*got, m.group(1).strip(), text[m.end():]) if got else None
+        return (*got, strip(m.group(1)), text[m.end():]) if got else None
     m = ANGLE.match(text)
     if m:
         got = target_of(m.group(1))
         return (*got, "", text[m.end():]) if got else None
     m = BARE.match(text)
-    if not m or (m.end() < len(text) and not text[m.end()].isspace()):
+    if not m or (m.end() < len(text) and not SPACES.match(text[m.end()])):
         return None
     raw = m.group(0)
-    if re.match(r"^https?://", raw, re.I):
-        raw = raw.rstrip(".,;")
+    if WEB.match(raw):
+        raw = ENDS.sub("", raw)
     got = target_of(raw)
     return (*got, "", text[m.end():]) if got else None
 
@@ -99,7 +127,7 @@ def tail_of(tail: str) -> tuple[str, str, str]:
     A priority word counts only as a part of its own (or as all there is): inside a why it is the
     why's."""
     why, priority, added = [], "", ""
-    for part in (p.strip() for p in DASH.sub("", tail.strip(), count=1).split("·")):
+    for part in (strip(p) for p in DASH.sub("", strip(tail), count=1).split("·")):
         a = ADDED.match(part)
         if a and not added:
             added = a.group(1)
@@ -110,13 +138,49 @@ def tail_of(tail: str) -> tuple[str, str, str]:
     return " · ".join(why), priority, added
 
 
+def links_in(text: str) -> list[str]:
+    """The identities of the links a text names, each once, in its order."""
+    out: list[str] = []
+    for m in LINKS.finditer(text):
+        url, arxiv, doi = m.groups()
+        got = target_of(ENDS.sub("", url)) if url else None
+        key = got[0] if got else f"arxiv:{arxiv}" if arxiv else f"doi:{ENDS.sub('', doi).lower()}" if doi else ""
+        if key and key not in out:
+            out.append(key)
+    return out
+
+
+def source_of(note: str) -> str:
+    """A note's `## Source` section (a reference says there what it is a note of), else nothing."""
+    out, inside = [], False
+    for line in note.replace("\r\n", "\n").split("\n"):
+        if HEADING.match(line):
+            inside = bool(SOURCE.match(line))
+        elif inside:
+            out.append(line)
+    return "\n".join(out)
+
+
+def item_line(url: str, title: str = "", why: str = "", priority: str = "", added: str = "") -> str:
+    """An item's line as the plugin writes it."""
+    link = f"[{title}]({url})" if title else url
+    return f"- {link}" + (f" — {why}" if why else "") + "".join(f" · {p}" for p in (priority, f"added {added}" if added else "") if p)
+
+
 class Inbox:
     """The file as read: its lines, as they are, and what they hold. `items` and `processed` are
     in the file's order; each item knows its lines (`at`: the first, and one past its last)."""
 
     def __init__(self, text: str):
-        self.crlf = "\r\n" in text
-        self.lines = text.replace("\r\n", "\n").split("\n")
+        raw = text.split("\n")
+        # each line apart from how it ended (`cr`: with a carriage return before its newline), so
+        # that a file goes back with the endings it had, mixed or not
+        self.cr = [n < len(raw) - 1 and line.endswith("\r") for n, line in enumerate(raw)]
+        self.lines = [line[:-1] if cr else line for line, cr in zip(raw, self.cr)]
+        self.crlf = any(self.cr)
+        self._read()
+
+    def _read(self) -> None:
         self.items: list[dict] = []
         self.processed: list[dict] = []
         seen: set[str] = set()
@@ -131,14 +195,14 @@ class Inbox:
             m = ITEM.match(line)
             if not m:
                 continue
-            rest = m.group(1).strip()
+            rest = strip(m.group(1))
             if done:
                 d = DATED.match(rest)
                 got = link_at(d.group(2) if d else rest)
                 if got:
                     key, _, title, tail = got
                     self.processed.append({"date": d.group(1) if d else "", "key": key, "title": title,
-                                           "outcome": DASH.sub("", tail.strip(), count=1).strip()})
+                                           "outcome": strip(DASH.sub("", strip(tail), count=1))})
                 continue
             got = link_at(rest)
             if not got:
@@ -147,19 +211,72 @@ class Inbox:
             why, priority, added = tail_of(tail)
             subs = []
             while i < len(self.lines) and SUB.match(self.lines[i]):
-                subs.append(SUB.match(self.lines[i]).group(1).strip())
+                subs.append(strip(SUB.match(self.lines[i]).group(1)))
                 i += 1
             b = BRIEFED.match(subs[0]) if subs else None
-            brief = {"date": b.group(1), "lines": [s for s in [b.group(2).strip(), *subs[1:]] if s]} if b else None
+            brief = {"date": b.group(1), "lines": [s for s in [strip(b.group(2)), *subs[1:]] if s]} if b else None
             self.items.append({"key": key, "url": url, "title": title, "why": why, "priority": priority, "added": added,
                                "duplicate": key in seen, "brief": brief, "at": (i - len(subs) - 1, i)})
             seen.add(key)
 
     def text(self) -> str:
         """The file again: as it was read, when nothing changed."""
-        out = "\n".join(self.lines)
-        return out.replace("\n", "\r\n") if self.crlf else out
+        return "\n".join(line + ("\r" if cr else "") for line, cr in zip(self.lines, self.cr))
 
     def shown(self) -> list[dict]:
         """The items as the page and the tool show them (without their place in the file)."""
         return [{k: v for k, v in item.items() if k != "at"} for item in self.items]
+
+    def find(self, key: str) -> tuple[str, dict] | None:
+        """What already holds this link: ("item", the first item with it), else ("processed", the
+        latest processed item with it), else None."""
+        for item in self.items:
+            if item["key"] == key:
+                return "item", item
+        for done in reversed(self.processed):
+            if done["key"] == key:
+                return "processed", done
+        return None
+
+    def add(self, link: str, why: str = "", priority: str = "", title: str = "", today: str = "") -> dict:
+        """Adds an item at the end of the open list (before the processed ones), as one new line,
+        and answers it. The caller looks for a duplicate first (`find`). InboxError when the link
+        is none, the reading priority is not one, or the line would not read back as meant."""
+        got = link_at(one_line(link))
+        if not got or strip(got[3]):
+            raise InboxError("not a link: give a URL, an arXiv id or a DOI")
+        key, url, own, _ = got
+        why, priority = one_line(why), one_line(priority).lower()
+        title = one_line(title or own).replace("[", "(").replace("]", ")")
+        if priority and priority not in PRIORITIES:
+            raise InboxError(f"a reading priority is {', '.join(PRIORITIES[:-1])} or {PRIORITIES[-1]}")
+        want = {"key": key, "why": why, "priority": priority, "added": today}
+        line = None
+        for t in ([title, ""] if title else [""]):  # a title the line cannot carry is left out
+            back = Inbox(item_line(url, t, why, priority, today)).shown()
+            if len(back) == 1 and all(back[0][k] == v for k, v in {**want, "title": t}.items()):
+                line = item_line(url, t, why, priority, today)
+                break
+        if line is None:
+            raise InboxError("the why would read as a reading priority or a date: say it in other words")
+        if not any(strip(l) for l in self.lines):
+            self.lines, self.cr, at = ["# Inbox", "", line, ""], [self.crlf] * 3 + [False], 2
+        else:
+            # the end of the open list: before the processed heading and the blank lines above it
+            stop = next((n for n, l in enumerate(self.lines) if PROCESSED.match(l)), len(self.lines))
+            end = stop
+            while end > 0 and not strip(self.lines[end - 1]):
+                end -= 1
+            # after free text or a heading, a blank line first; one after it when nothing follows
+            # or the processed heading is right there
+            before = [""] if end > 0 and not (ITEM.match(self.lines[end - 1]) or SUB.match(self.lines[end - 1])) else []
+            after = [""] if end == stop else []
+            put = before + [line] + after
+            if end == len(self.lines):
+                self.cr[end - 1] = self.crlf  # the last line had no ending: it has the file's now
+            self.lines[end:end] = put
+            self.cr[end:end] = [self.crlf] * len(put)
+            self.cr[-1] = False  # nothing ends the last line
+            at = end + len(before)
+        self._read()
+        return next({k: v for k, v in i.items() if k != "at"} for i in self.items if i["at"][0] == at)

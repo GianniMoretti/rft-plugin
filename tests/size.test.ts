@@ -62,5 +62,5 @@ test('the schemas of the tools in the prompt stay under their ceilings', async (
   // every feature at once: rft_suggest is brought by two of them and counted once
   const all = sum([...eagerTools(new Set(FEATURES))])
   expect(all).toBeLessThanOrEqual(EAGER_CORE + FEATURES.reduce((total, f) => total + EAGER[f], 0) - one('rft_suggest'))
-  expect(Object.keys(w.specs)).toHaveLength(43)
+  expect(Object.keys(w.specs)).toHaveLength(44)
 })

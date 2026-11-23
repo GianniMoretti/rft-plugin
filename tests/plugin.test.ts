@@ -20,7 +20,7 @@ describe('activation', () => {
     const w = world(on, {})
     on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.commands).toEqual(['rft', 'rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-next', 'rft-machine', 'rft-jobs', 'rft-summarize', 'rft-manuscript', 'rft-artifact', 'rft-update', 'rft-view', 'rft-handoff'])
+    expect(w.commands).toEqual(['rft', 'rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-next', 'rft-machine', 'rft-jobs', 'rft-summarize', 'rft-manuscript', 'rft-artifact', 'rft-update', 'rft-view', 'rft-inbox', 'rft-handoff'])
     expect(w.tools).toEqual([])
     expect(w.opened).toEqual([])
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
@@ -37,7 +37,7 @@ describe('activation', () => {
     const w = world(on, demoFiles())
     on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.tools).toEqual(['rft_add_node', 'rft_set_repos', 'rft_code', 'rft_set_code', 'rft_set_notebook', 'rft_run_notebook', 'rft_set_status', 'rft_suggest_priority', 'rft_suggest_dates', 'rft_add_deadline', 'rft_add_meeting', 'rft_suggest_deadline', 'rft_set_summary', 'rft_map', 'rft_supersede', 'rft_next', 'rft_set_digest', 'rft_artifact', 'rft_manuscript', 'rft_set_snippet', 'rft_set_document', 'rft_set_artifact', 'rft_move_node', 'rft_set_refs', 'rft_search', 'rft_graph', 'rft_collect_papers', 'rft_set_tags', 'rft_set_type', 'rft_set_concept', 'rft_concepts', 'rft_tags', 'rft_handoff', 'rft_tree', 'rft_validate', 'rft_sync', 'rft_comments', 'rft_comment', 'rft_suggest', 'rft_machine'])
+    expect(w.tools).toEqual(['rft_add_node', 'rft_set_repos', 'rft_code', 'rft_set_code', 'rft_set_notebook', 'rft_run_notebook', 'rft_set_status', 'rft_suggest_priority', 'rft_suggest_dates', 'rft_add_deadline', 'rft_add_meeting', 'rft_suggest_deadline', 'rft_set_summary', 'rft_map', 'rft_supersede', 'rft_next', 'rft_set_digest', 'rft_artifact', 'rft_manuscript', 'rft_set_snippet', 'rft_set_document', 'rft_set_artifact', 'rft_move_node', 'rft_set_refs', 'rft_search', 'rft_graph', 'rft_collect_papers', 'rft_set_tags', 'rft_set_type', 'rft_set_concept', 'rft_concepts', 'rft_tags', 'rft_inbox', 'rft_handoff', 'rft_tree', 'rft_validate', 'rft_sync', 'rft_comments', 'rft_comment', 'rft_suggest', 'rft_machine'])
     expect(w.opened).toEqual(['rft-tree'])
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
     const rules = res.sections.find(s => s.id === 'rft:rules')
@@ -51,8 +51,8 @@ describe('activation', () => {
     const w = world(on, demoFiles(), { refuse: ['rft'] })
     on('prompt.compose', () => ({ sections: [] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.commands).toEqual(['rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-next', 'rft-machine', 'rft-jobs', 'rft-summarize', 'rft-manuscript', 'rft-artifact', 'rft-update', 'rft-view', 'rft-handoff'])
-    expect(w.tools).toHaveLength(40)
+    expect(w.commands).toEqual(['rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-next', 'rft-machine', 'rft-jobs', 'rft-summarize', 'rft-manuscript', 'rft-artifact', 'rft-update', 'rft-view', 'rft-inbox', 'rft-handoff'])
+    expect(w.tools).toHaveLength(41)
     expect(w.opened).toEqual(['rft-tree'])
     expect(w.toasts.join()).toContain('/rft')
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
@@ -61,7 +61,7 @@ describe('activation', () => {
 
   test('no command takes the name of the plugin skill', async () => {
     // a plugin skill named <x> is the command /rft:<x>; the engine refuses a command of the same name
-    expect(['rft', 'rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-next', 'rft-machine', 'rft-jobs', 'rft-summarize', 'rft-manuscript', 'rft-artifact', 'rft-update', 'rft-view', 'rft-handoff']).not.toContain(SKILL)
+    expect(['rft', 'rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-next', 'rft-machine', 'rft-jobs', 'rft-summarize', 'rft-manuscript', 'rft-artifact', 'rft-update', 'rft-view', 'rft-inbox', 'rft-handoff']).not.toContain(SKILL)
   })
 
   test('autoOpen off keeps the pane closed', { options: { autoOpen: false } }, async ($, on) => {
@@ -679,7 +679,7 @@ describe('linked trees', () => {
     const srv = fakeServer(on)
     on('prompt.compose', () => ({ sections: [] }))
     await $.session.start({ cwd: REPO, source: 'startup' } as never)
-    expect(w.tools).toHaveLength(40)
+    expect(w.tools).toHaveLength(41)
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
     expect(res.sections.find(s => s.id === 'rft:rules')?.text).toContain(`notes in \`${TREE}/vault/\``)
     expect((await $.tool.call({ tool: 'mcp__rft__rft_tree' } as never)).text).toContain(`theory notes in ${TREE}/vault/.`)
@@ -714,7 +714,7 @@ describe('linked trees', () => {
     mock.clock(on)
     const w = world(on, linked(), { cwd: `${TREE}/analysis` })
     await $.session.start({ cwd: `${TREE}/analysis`, source: 'startup' } as never)
-    expect(w.tools).toHaveLength(40)
+    expect(w.tools).toHaveLength(41)
     const tree = await $.tool.call({ tool: 'mcp__rft__rft_tree' } as never)
     expect(tree.text).toMatch(/^demo: 2 directions, 2 experiments/)
   })

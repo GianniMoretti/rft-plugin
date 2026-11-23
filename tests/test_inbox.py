@@ -1,5 +1,6 @@
-"""Tests of the inbox's file as the server reads it (server/rft_inbox.py), against the fixture the
-plugin's reader is held to as well (tests/fixtures/inbox).
+"""Tests of the inbox's file as the server reads and writes it (server/rft_inbox.py), against the
+fixture and the cases the plugin's side is held to as well (tests/fixtures/inbox; tests/inbox.test.ts
+reads them through their copy, tests/fixtures/inbox.ts).
 
     python3 -m unittest discover -s tests -p "test_*.py"
 """
@@ -12,12 +13,69 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import rft_inbox  # noqa: E402
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "inbox"
+sys.path.insert(0, str(FIXTURE))
+import to_ts  # noqa: E402
 
 
 class InboxFileTest(unittest.TestCase):
     def setUp(self):
         self.text = (FIXTURE / "Inbox.md").read_text(encoding="utf-8")
         self.want = json.loads((FIXTURE / "expected.json").read_text(encoding="utf-8"))
+        self.cases = json.loads((FIXTURE / "cases.json").read_text(encoding="utf-8"))
+
+    def test_the_plugin_tests_read_the_same_fixture(self):
+        self.assertEqual(to_ts.OUT.read_text(encoding="utf-8"), to_ts.module(),
+                         "tests/fixtures/inbox.ts is behind the fixture: python3 tests/fixtures/inbox/to_ts.py")
+
+    def test_identity_case_by_case(self):
+        for text, key in self.cases["identity"]:
+            items = rft_inbox.Inbox(f"- {text}").items
+            self.assertEqual(items[0]["key"] if items else None, key, text)
+
+    def test_the_links_a_reference_names(self):
+        for text, keys in self.cases["sources"]:
+            self.assertEqual(rft_inbox.links_in(text), keys, text)
+        for note, keys in self.cases["notes"]:
+            self.assertEqual(rft_inbox.links_in(rft_inbox.source_of(note)), keys, note)
+
+    def test_white_space_is_the_set_spelled_out(self):
+        # the plugin's side has the same list: neither side's own idea of a space decides a line
+        spaces = [c for c in range(0x110000) if rft_inbox.SPACES.fullmatch(chr(c))]
+        self.assertEqual(spaces, [9, 10, 11, 12, 13, 32, 0xA0, 0x1680, *range(0x2000, 0x200B), 0x2028, 0x2029, 0x202F, 0x205F, 0x3000])
+        self.assertEqual(rft_inbox.strip("\u00a0\t x \u3000\n"), "x")
+        self.assertEqual(rft_inbox.strip("\ufeffx\x85"), "\ufeffx\x85")
+
+    def test_what_already_holds_a_link(self):
+        box = rft_inbox.Inbox(self.text)
+        for key, kind, fields in self.cases["finds"]:
+            got = box.find(key)
+            self.assertEqual(got[0] if got else None, kind, key)
+            for k, v in (fields or {}).items():
+                self.assertEqual(got[1][k], v, (key, k))
+
+    def test_add_case_by_case(self):
+        for case in self.cases["adds"]:
+            box = rft_inbox.Inbox(case["text"])
+            args = {k: case[k] for k in ("why", "priority", "title", "today") if k in case}
+            if case.get("error"):
+                with self.assertRaises(rft_inbox.InboxError, msg=case["name"]):
+                    box.add(case["link"], **args)
+                self.assertEqual(box.text(), case["text"], case["name"])
+                continue
+            item = box.add(case["link"], **args)
+            self.assertEqual(box.text(), case["want"], case["name"])
+            self.assertIn(item, box.shown(), case["name"])
+
+    def test_an_add_changes_one_line_of_the_fixture(self):
+        box = rft_inbox.Inbox(self.text)
+        item = box.add("arXiv:2511.00042v2", why="from the talk", priority="high", today="2026-11-23")
+        self.assertEqual(item, {"key": "arxiv:2511.00042", "url": "https://arxiv.org/abs/2511.00042", "title": "", "why": "from the talk",
+                                "priority": "high", "added": "2026-11-23", "duplicate": False, "brief": None})
+        before, after = self.text.split("\n"), box.text().split("\n")
+        at = before.index("- see also the list in Scratchpad") + 1
+        self.assertEqual(after, before[:at] + ["- https://arxiv.org/abs/2511.00042 — from the talk · high · added 2026-11-23"] + before[at:])
+        self.assertEqual(box.shown(), self.want["items"] + [item])
+        self.assertEqual(box.processed, self.want["processed"])
 
     def test_the_fixture_yields_its_items(self):
         box = rft_inbox.Inbox(self.text)
