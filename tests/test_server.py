@@ -66,7 +66,10 @@ class ServerTest(unittest.TestCase):
             if cls.answer:
                 cls.answer(request)
 
-        handler = rft_server.make_handler(rft_server.Vault(vault, "demo"), WEB, KEY, ask)
+        cls.v = rft_server.Vault(vault, "demo")
+        cls.v.arxiv_pause = 0
+        cls.v.arxiv_meta = None  # no test reaches arXiv: one that adds an arXiv item puts its own here
+        handler = rft_server.make_handler(cls.v, WEB, KEY, ask)
         cls.server = rft_server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
         cls.port = cls.server.server_address[1]
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
@@ -533,6 +536,153 @@ class ServerTest(unittest.TestCase):
         p.unlink()
         p.write_bytes(b"\xff\xfe not utf-8\n- https://e.org/x\n")
         self.assertEqual([i["key"] for i in json.loads(self.get("/api/inbox")[2])["items"]], ["https://e.org/x"])
+
+    def add_inbox(self, link, why=None, **kw):
+        return self.write("POST", "/api/inbox", {"link": link} if why is None else {"link": link, "why": why}, **kw)
+
+    def arxiv(self, answer):
+        """arXiv as a test has it: `answer(id)` gives the paper's title or raises. The ids asked for."""
+        asked = []
+
+        def meta(aid, *a):
+            asked.append(aid)
+            return {"title": answer(aid), "author": "", "year": ""}
+
+        self.v.arxiv_meta = meta
+        self.addCleanup(setattr, self.v, "arxiv_meta", None)
+        return asked
+
+    def until(self, done, what, seconds=3.0):
+        end = time.monotonic() + seconds
+        while not done():
+            self.assertLess(time.monotonic(), end, what)
+            time.sleep(0.01)
+
+    def test_inbox_add_writes_one_line_and_makes_the_file(self):
+        p = self.fresh_inbox()
+        asked = len(self.asked)
+        today = time.strftime("%Y-%m-%d")
+        status, got = self.add_inbox("  https://Example.org/blog/post/#top ", "for the related work")
+        self.assertEqual(status, 200, got)
+        item = {"key": "https://example.org/blog/post", "url": "https://Example.org/blog/post/#top", "title": "", "why": "for the related work",
+                "priority": "", "added": today, "duplicate": False, "brief": None}
+        self.assertEqual(got, {"name": "Inbox.md", "item": item, "items": [item]})
+        self.assertEqual(p.read_bytes(), f"# Inbox\n\n- https://Example.org/blog/post/#top \u2014 for the related work \u00b7 added {today}\n".encode())
+        self.assertEqual(json.loads(self.get("/api/inbox")[2])["items"], [item])
+        # into the fixture: one line more, after the open list's last line, the rest byte for byte
+        fixture = (Path(__file__).resolve().parent / "fixtures" / "inbox" / "Inbox.md").read_bytes()
+        p.write_bytes(fixture)
+        os.chmod(p, 0o640)
+        status, got = self.add_inbox("doi:10.1000/XYZ.1")
+        self.assertEqual((status, got["item"]["key"], len(got["items"])), (200, "doi:10.1000/xyz.1", 9))
+        before, after = fixture.decode().split("\n"), p.read_text(encoding="utf-8").split("\n")
+        at = before.index("- see also the list in Scratchpad") + 1
+        self.assertEqual(after, before[:at] + [f"- https://doi.org/10.1000/XYZ.1 \u00b7 added {today}"] + before[at:])
+        self.assertEqual(p.stat().st_mode & 0o777, 0o640)
+        self.assertEqual([f.name for f in self.vault.iterdir() if "rft-tmp" in f.name], [])
+        # with CRLF endings the new line has them too
+        p.write_bytes(b"# Inbox\r\n\r\n- https://a.org/x\r\n")
+        self.assertEqual(self.add_inbox("https://b.org/y")[0], 200)
+        self.assertEqual(p.read_bytes(), f"# Inbox\r\n\r\n- https://a.org/x\r\n- https://b.org/y \u00b7 added {today}\r\n".encode())
+        # the server did it alone: nothing was asked of a session (a view served from a terminal has none)
+        self.assertEqual(len(self.asked), asked)
+
+    def test_inbox_add_knows_a_link_in_any_of_its_forms(self):
+        p = self.fresh_inbox()
+        asked = self.arxiv(lambda aid: 1 / 0)  # arXiv does not answer: the items stay untitled
+        same = [["https://arxiv.org/abs/2406.01234", "https://arxiv.org/pdf/2406.01234v3.pdf", "2406.01234v2", "arXiv:2406.01234", "http://export.arxiv.org/abs/2406.01234v1",
+                 "[Mixup](https://arxiv.org/html/2406.01234)", "<arxiv:2406.01234>"],
+                ["https://doi.org/10.1109/CVPR.2022.01553", "doi:10.1109/cvpr.2022.01553", "10.1109/CVPR.2022.01553", "http://dx.doi.org/10.1109/CVPR.2022.01553"],
+                ["https://example.org/a/b/", "https://EXAMPLE.org/a/b", "https://example.org/a/b#part", "https://example.org/a/b/#part"]]
+        for forms in same:
+            status, got = self.add_inbox(forms[0])
+            self.assertEqual(status, 200, got)
+            now = p.read_bytes()
+            for form in forms[1:]:
+                status, got = self.add_inbox(form, "again")
+                self.assertEqual((status, got["duplicate"]["in"]), (409, "inbox"), form)
+                self.assertEqual(got["error"], f"already in the inbox, added {time.strftime('%Y-%m-%d')}")
+            self.assertEqual(p.read_bytes(), now)
+        # not the same: another query, another path, http and https
+        for other in ("https://example.org/a/b?page=2", "https://example.org/a", "http://example.org/a/b"):
+            self.assertEqual(self.add_inbox(other)[0], 200, other)
+        self.assertEqual(len(json.loads(self.get("/api/inbox")[2])["items"]), 6)
+        self.until(lambda: asked == ["2406.01234"], "arXiv is asked once, for the arXiv item alone")
+
+    def test_inbox_add_reports_what_a_link_duplicates(self):
+        fixture = (Path(__file__).resolve().parent / "fixtures" / "inbox" / "Inbox.md").read_bytes()
+        p = self.fresh_inbox(fixture)
+        refs = self.vault / "references"
+        refs.mkdir()
+        self.addCleanup(shutil.rmtree, refs)
+        (refs / "R01 Mixup paper.md").write_text(
+            note("R01", "reference", "done", "D00 Root question", "Mixup paper") + "\n## Source\n\nZhang et al., arXiv:1710.09412v2 (ICLR 2018)\n\n## Summary\n\nSee https://example.org/elsewhere\n")
+        for link, where, error in (
+            ("https://arxiv.org/abs/2311.09876v4", "inbox", "already in the inbox"),
+            ("10.1109/cvpr.2022.01553", "inbox", "already in the inbox, added 2026-11-02"),
+            ("arXiv:2111.06377", "processed", "already processed on 2026-11-10 (R03)"),
+            ("https://example.org/blog/old-post/", "processed", "already processed on 2026-11-12 (discarded: superseded by R07)"),
+            ("https://arxiv.org/pdf/1710.09412", "tree", "already in the tree: R01 is a reference of it"),
+        ):
+            status, got = self.add_inbox(link)
+            self.assertEqual((status, got["error"], got["duplicate"]["in"]), (409, error, where), link)
+        self.assertEqual(self.add_inbox("https://arxiv.org/pdf/1710.09412")[1]["duplicate"], {"in": "tree", "id": "R01"})
+        self.assertEqual(p.read_bytes(), fixture)
+        # a link the reference names outside its Source is not what it is a note of
+        self.arxiv(lambda aid: 1 / 0)
+        self.assertEqual(self.add_inbox("https://example.org/elsewhere")[0], 200)
+
+    def test_inbox_arxiv_title_comes_after_and_only_from_arxiv(self):
+        p = self.fresh_inbox(b"# Inbox\n\n- https://example.org/first\n")
+        asked = self.arxiv(lambda aid: {"2406.01234": "Mixup at  scale:\n a [second] look"}[aid])
+        status, got = self.add_inbox("arXiv:2406.01234v2", "from the talk")
+        self.assertEqual((status, got["item"]["title"]), (200, ""))  # the answer does not wait for arXiv
+        today = time.strftime("%Y-%m-%d")
+        want = f"# Inbox\n\n- https://example.org/first\n- [Mixup at scale: a (second) look](https://arxiv.org/abs/2406.01234) \u2014 from the talk \u00b7 added {today}\n"
+        self.until(lambda: p.read_text(encoding="utf-8") == want, "the title is written on the item's line")
+        self.assertEqual(asked, ["2406.01234"])
+        # arXiv has no such paper, or does not answer: the item stays as it was added
+        status, got = self.add_inbox("https://arxiv.org/abs/2501.99999")
+        self.assertEqual(status, 200)
+        self.until(lambda: asked == ["2406.01234", "2501.99999"], "arXiv is asked")
+        time.sleep(0.05)
+        self.assertEqual(p.read_text(encoding="utf-8"), want + f"- https://arxiv.org/abs/2501.99999 \u00b7 added {today}\n")
+        # nothing is asked for a link that is not arXiv's, for one pasted with its title, or for a duplicate
+        for link in ("https://openreview.net/forum?id=abc", "doi:10.1000/x", "[A title](https://arxiv.org/abs/2502.00001)", "2406.01234"):
+            self.add_inbox(link)
+        time.sleep(0.05)
+        self.assertEqual(asked, ["2406.01234", "2501.99999"])
+        # an item the user took out before the answer came is not put back
+        self.v.arxiv_meta = lambda aid, *a: (p.write_text("# Inbox\n"), {"title": "Late"})[1]
+        self.assertEqual(self.add_inbox("2503.00001")[0], 200)
+        self.until(lambda: p.read_text() == "# Inbox\n", "the item was removed")
+        time.sleep(0.05)
+        self.assertEqual(p.read_text(), "# Inbox\n")
+
+    def test_inbox_add_is_a_write_of_the_page_and_of_a_link(self):
+        p = self.fresh_inbox(b"# Inbox\n")
+        self.assertEqual(self.add_inbox("https://example.org/x", key=None)[0], 403)
+        self.assertEqual(self.add_inbox("https://example.org/x", key="wrong")[0], 403)
+        self.assertEqual(self.add_inbox("https://example.org/x", origin="http://evil.example")[0], 403)
+        for payload in ({}, {"link": 3}, {"link": "https://example.org/x", "why": ["a"]}, {"link": "https://example.org/" + "x" * 2000}, {"link": "https://example.org/x", "why": "y" * 501}):
+            self.assertEqual(self.write("POST", "/api/inbox", payload)[0], 400, str(payload)[:60])
+        for link in ("", "   ", "not a link", "ftp://example.org/x", "https://example.org/x and more", "see 2406.01234"):
+            status, got = self.add_inbox(link)
+            self.assertEqual((status, got["error"]), (400, "not a link: paste a URL, an arXiv id or a DOI"), link)
+        status, got = self.add_inbox("https://example.org/x", "urgent")  # the page's why is a why: a reading priority is set in its own place
+        self.assertEqual((status, "reading priority" in got["error"]), (400, True))
+        self.assertEqual(p.read_bytes(), b"# Inbox\n")
+        # a why in several lines is one line of the file
+        self.assertEqual(self.add_inbox("https://example.org/x", " for\nD04,  maybe ")[1]["item"]["why"], "for D04, maybe")
+        # neither through a link nor into a file that is not text
+        p.unlink()
+        os.symlink(self.root / "secret.md", p)
+        self.assertEqual(self.add_inbox("https://example.org/y")[0], 422)
+        self.assertNotIn("example.org", (self.root / "secret.md").read_text())
+        p.unlink()
+        p.write_bytes(b"\xff\xfe not utf-8\n")
+        self.assertEqual(self.add_inbox("https://example.org/y")[0], 422)
+        self.assertEqual(p.read_bytes(), b"\xff\xfe not utf-8\n")
 
     # ------------------------------------------------------------ comments, suggestions, lock
 

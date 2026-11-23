@@ -1,7 +1,7 @@
 """The inbox: links the user saved to read later, in one markdown file at the vault's top
 (Inbox.md, beside the scratchpad's), outside the tree. The file is the user's: they paste into it
-and edit it in Obsidian, so it is read as it is typed and nothing here rewrites it. A write, when
-there is one, changes single lines and leaves the rest as it was.
+and edit it in Obsidian, so it is read as it is typed and nothing here rewrites it. A write (an
+item added, a title found for one) changes single lines and leaves the rest as it was.
 
     # Inbox
 
@@ -280,3 +280,26 @@ class Inbox:
             at = end + len(before)
         self._read()
         return next({k: v for k, v in i.items() if k != "at"} for i in self.items if i["at"][0] == at)
+
+    def set_title(self, key: str, title: str) -> dict | None:
+        """Gives the first untitled item with this link its title: the link on its line becomes
+        `[title](address)` and the rest of the line stays as typed. None, and nothing changed, when
+        no untitled item has the link, or the line would not read back as the same item."""
+        title = one_line(title).replace("[", "(").replace("]", ")")
+        item = next((i for i in self.items if i["key"] == key and not i["title"]), None)
+        if not item or not title:
+            return None
+        n = item["at"][0]
+        line = self.lines[n]
+        m = ITEM.match(line)
+        rest = strip(m.group(1))
+        start = m.start(1) + m.group(1).index(rest)
+        end = start + len(rest) - len(link_at(rest)[3])
+        new = f"{line[:start]}[{title}]({item['url']}){line[end:]}"
+        back = Inbox(new).shown()
+        want = {**{k: item[k] for k in ("key", "why", "priority", "added")}, "title": title}
+        if len(back) != 1 or any(back[0][k] != v for k, v in want.items()):
+            return None
+        self.lines[n] = new
+        self._read()
+        return next({k: v for k, v in i.items() if k != "at"} for i in self.items if i["at"][0] == n)

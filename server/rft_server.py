@@ -10,7 +10,9 @@ alone (which also answers Claude's `suggested_priority:`); its dates, the user's
 dismissed); the meetings in vault/meetings/ (a new one, its times, how often it comes back, an
 occurrence skipped or moved, the notes it needs, or the meeting deleted); its discussion, the comments and suggestions on parts of its text, in
 vault/.comments/<id>.json (as hooks/lib/comments.ts reads it); and the user's scratchpad, quick
-notes and to-dos in vault/Scratchpad.md; and the slide decks in vault/decks/ (the user's edit of one, a
+notes and to-dos in vault/Scratchpad.md; the inbox, links saved to read later in vault/Inbox.md (a
+link added; for an arXiv paper its title, asked of arXiv's API in the background, the one host beyond
+this machine the server ever contacts, and only for a link the user saved); and the slide decks in vault/decks/ (the user's edit of one, a
 new one, its lock: rft_decks.py beside it). It serves each concept's artifact (vault/artifacts/<id> <name>.html,
 written by Claude with rft_set_artifact) read-only, as a page of its own in a sandbox (GET api/artifact?concept=<id>):
 no script of it reaches the network, the page that frames it, or a write; the tree lists the artifacts
@@ -27,7 +29,7 @@ top. It shows the experiment queue (GET api/queue: the GPUs, the jobs waiting an
 history; rft_queue.py beside it) and takes the user's changes to it (POST api/queue: a job moved,
 cancelled or retried, the queue paused, the GPUs it may use); a job's output (GET api/queue/output)
 goes only to a request carrying the key; all three answer 404 until this machine is paired with
-the queue (rft_queue.py machine add), so the page shows no monitor. A write (PUT api/note, PUT api/scratchpad, POST api/node, api/type, api/comment, api/lock, api/verify,
+the queue (rft_queue.py machine add), so the page shows no monitor. A write (PUT api/note, PUT api/scratchpad, POST api/inbox, POST api/node, api/type, api/comment, api/lock, api/verify,
 api/priority, api/dates, api/milestone, api/meeting, api/queue, PUT and POST api/deck, api/deck/lock) must also come from the page itself (its
 Origin) and carry the vault's key, which is in the address the server prints, so neither
 another web page nor another user of the machine can change a note. The key is kept in the
@@ -82,6 +84,7 @@ import rft_latex  # the manuscript's LaTeX: its generated files and the compile
 import rft_manuscript  # the manuscript as the page shows it
 import rft_notebook
 import rft_inbox  # the inbox, links saved to read later, as the page shows it
+import rft_papers  # for an arXiv item's title, asked as the downloader asks it
 import rft_queue  # the experiment queue, beside this file
 import rft_style  # the project's figure tokens, which the artifacts' and the slides' colours follow
 
@@ -131,6 +134,8 @@ LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 ID_RE = re.compile(r"^[EDRT]\d+$")
 MAX_NOTE_BYTES = 2_000_000
 MAX_NODE_BYTES = 10_000
+MAX_INBOX_LINK = 2_000  # characters: a link pasted into the inbox, and the line on why
+MAX_INBOX_WHY = 500
 NODE_WAIT_S = 10.0  # how long a new note may take the session to make
 SETTLE_S = 0.3  # how long the notes stay as they are before a new one counts as made
 RELAY_POLL_S = 0.25  # how often a chat asks the terminal's server for what the page asks of the session
@@ -671,6 +676,11 @@ class Vault:
         # the experiment queue (vault/.queue/): the monitor reads it, and the user reorders, pauses,
         # cancels and retries jobs; its runner, a process of its own, runs them
         self.queue = rft_queue.Queue(self.root)
+        # an arXiv item's title in the inbox: asked one at a time, with the pause arXiv asks for
+        self.arxiv_meta = rft_papers.arxiv_meta
+        self.arxiv_pause = 3.0
+        self._arxiv_lock = threading.Lock()
+        self._arxiv_last = 0.0
 
     def signature(self) -> str:
         parts = []
@@ -1516,6 +1526,98 @@ class Vault:
         except FileNotFoundError:
             return 200, {"name": rft_inbox.INBOX, "items": []}
         return 200, {"name": rft_inbox.INBOX, "items": rft_inbox.Inbox(data.decode("utf-8", errors="replace")).shown()}
+
+    def _inbox_edit(self, edit) -> tuple[int, dict]:
+        """One change to the inbox: `edit(box)` changes the file as read and answers (status,
+        what to say), or raises InboxError (a 400 in its words). On a 200 the file is written when
+        its text changed (made, when there was none), as a new file renamed over the old one, and
+        the answer has the items as they are now."""
+        path = self._inbox_file()
+        if path is None:
+            return 422, {"error": f"{rft_inbox.INBOX} in the vault is not a plain file"}
+        with self._write_lock:
+            try:
+                data = path.read_bytes()
+            except FileNotFoundError:
+                data = None
+            try:
+                old = "" if data is None else data.decode("utf-8")
+            except UnicodeDecodeError:
+                return 422, {"error": f"{rft_inbox.INBOX} is not UTF-8 text; edit it in an editor"}
+            box = rft_inbox.Inbox(old)
+            try:
+                status, answer = edit(box)
+            except rft_inbox.InboxError as e:
+                return 400, {"error": str(e)}
+            if status != 200:
+                return status, answer
+            new = box.text()
+            if new != old:
+                tmp = path.with_name(f".{path.name}.rft-tmp")
+                try:
+                    # (a lone surrogate, which JSON can carry and UTF-8 cannot, becomes "?")
+                    tmp.write_bytes(new.encode("utf-8", errors="replace"))
+                    if data is not None:
+                        os.chmod(tmp, stat.S_IMODE(path.stat().st_mode))
+                    os.replace(tmp, path)
+                finally:
+                    tmp.unlink(missing_ok=True)
+            return 200, {**answer, "name": rft_inbox.INBOX, "items": box.shown()}
+
+    def _reference_of(self, key: str) -> str | None:
+        """The reference note whose Source names this link, when one does."""
+        for node in self.tree()["nodes"]:
+            if node["type"] != "reference":
+                continue
+            path = self.note_path(node["id"])
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace") if path else ""
+            except OSError:
+                continue
+            if key in rft_inbox.links_in(rft_inbox.source_of(text)):
+                return node["id"]
+        return None
+
+    def add_inbox(self, link: str, why: str = "") -> tuple[int, dict]:
+        """Saves a link in the inbox with today's date: one new line in the file. A link that is
+        already in the inbox, among the processed items or the Source of a reference note is not
+        added (409, saying where it is). An arXiv paper's title is asked for afterwards."""
+        got = rft_inbox.link_at(rft_inbox.one_line(link))
+        if not got or rft_inbox.strip(got[3]):
+            return 400, {"error": "not a link: paste a URL, an arXiv id or a DOI"}
+        key = got[0]
+        ref = self._reference_of(key)
+
+        def edit(box):
+            found = box.find(key)
+            if found and found[0] == "item":
+                when = f", added {found[1]['added']}" if found[1]["added"] else ""
+                return 409, {"error": f"already in the inbox{when}", "duplicate": {"in": "inbox", "key": key}}
+            if found:
+                when = f" on {found[1]['date']}" if found[1]["date"] else ""
+                how = f" ({found[1]['outcome']})" if found[1]["outcome"] else ""
+                return 409, {"error": f"already processed{when}{how}", "duplicate": {"in": "processed", "key": key}}
+            if ref:
+                return 409, {"error": f"already in the tree: {ref} is a reference of it", "duplicate": {"in": "tree", "id": ref}}
+            return 200, {"item": box.add(link, why, today=time.strftime("%Y-%m-%d"))}
+
+        status, answer = self._inbox_edit(edit)
+        if status == 200 and key.startswith("arxiv:") and not answer["item"]["title"]:
+            threading.Thread(target=self._arxiv_title, args=(key,), daemon=True).start()
+        return status, answer
+
+    def _arxiv_title(self, key: str) -> None:
+        """Asks arXiv's API for the title of an item just saved and writes it on the item's line.
+        A lookup that fails leaves the item as it is; no other host is asked anything."""
+        with self._arxiv_lock:
+            time.sleep(max(0.0, self.arxiv_pause - (time.monotonic() - self._arxiv_last)))
+            try:
+                title = self.arxiv_meta(key[len("arxiv:"):])["title"]
+            except Exception:
+                return
+            finally:
+                self._arxiv_last = time.monotonic()
+        self._inbox_edit(lambda box: (200, {"item": box.set_title(key, title)}))
 
     # ------------------------------------------------------------ comments and suggestions
 
@@ -2544,7 +2646,9 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             "when"?, "duration"?, "every"?, "until"?, "skip"?: [days], "moved"?: ["<day> → <when>"], "needs"?} or
             {"id", "delete": true}.
             POST api/notebook {"id": "<id>"}: the address of the experiment's notebook in its repo's
-            marimo editor ({"url"}, under notebook/ on this server), the editor started first if need be."""
+            marimo editor ({"url"}, under notebook/ on this server), the editor started first if need be.
+            POST api/inbox {"link": a URL, an arXiv id or a DOI, "why"?: "one line"}: the link saved in
+            the inbox ({"item", "items"}), or 409 with where it already is."""
             if self.path.startswith(NOTEBOOK_PREFIX):
                 return self._proxy()
             route = urlsplit(self.path).path
@@ -2615,6 +2719,15 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 if not isinstance(req.get("id"), str) or not isinstance(req.get("action"), str):
                     return self._json(400, {"error": "expected {id, action, ...}"})
                 return self._json(*vault.comment(req["id"], req, ask))
+            if route == "/api/inbox":
+                got = self._write_request("/api/inbox", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                _, req = got
+                link, why = req.get("link"), req.get("why", "")
+                if not isinstance(link, str) or not isinstance(why, str) or len(link) > MAX_INBOX_LINK or len(why) > MAX_INBOX_WHY:
+                    return self._json(400, {"error": 'expected {"link": a URL, an arXiv id or a DOI, "why"?: one line}'})
+                return self._json(*vault.add_inbox(link, why))
             if route == "/api/lock":
                 got = self._write_request("/api/lock", MAX_NODE_BYTES)
                 if got is None:

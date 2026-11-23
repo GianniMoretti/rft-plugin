@@ -6,7 +6,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import '../web/inbox.js'
 
 type Item = { key: string; url: string; title: string; why: string; priority: string; added: string; duplicate: boolean; brief: null | { date: string; lines: string[] } }
-type Api = { count: (items: Item[] | null) => number; label: (item: Item) => string; sub: (item: Item) => string }
+type Api = { count: (items: Item[] | null) => number; label: (item: Item) => string; sub: (item: Item) => string; refusal: (status: number, got: { error?: unknown } | null) => string }
 
 const I = (globalThis as unknown as { RftInbox: Api }).RftInbox
 
@@ -35,5 +35,16 @@ describe('the inbox in the tree view', () => {
     expect(I.sub(item({ why: 'IJCV survey, low' }))).toBe('IJCV survey, low')
     expect(I.sub(item({ added: '2026-11-02' }))).toBe('added 2026-11-02')
     expect(I.sub(item({}))).toBe('')
+  })
+
+  test('of a link not added, the reason the server gave; of a server that gave none, what it answered', () => {
+    expect(I.refusal(409, { error: 'already in the inbox, added 2026-11-16' })).toBe('Not added: already in the inbox, added 2026-11-16.')
+    expect(I.refusal(409, { error: 'already in the tree: R03 is a reference of it' })).toBe('Not added: already in the tree: R03 is a reference of it.')
+    expect(I.refusal(400, { error: 'not a link: paste a URL, an arXiv id or a DOI' })).toBe('Not added: not a link: paste a URL, an arXiv id or a DOI.')
+    expect(I.refusal(500, {})).toBe('Not added: the server answered 500.')
+    expect(I.refusal(502, null)).toBe('Not added: the server answered 502.')
+    expect(I.refusal(400, { error: 3 })).toBe('Not added: the server answered 400.')
+    // a server started before the page could add: it knows no such route
+    expect(I.refusal(404, { error: 'not found' })).toBe('Not added: the server running is older than this page. /rft restart starts the new one.')
   })
 })

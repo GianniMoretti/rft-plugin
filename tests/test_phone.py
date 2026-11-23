@@ -422,6 +422,50 @@ class PhoneTest(unittest.TestCase):
         self.back_closes(w, h, [page("tree"), "document.getElementById('pad-toggle').click()"], "!document.getElementById('pad').hidden", "the scratchpad")
         self.back_closes(w, h, [page("tree"), "document.getElementById('inbox-toggle').click()"], "!document.getElementById('inbox').hidden", "the inbox")
 
+    def test_inbox_takes_a_link_at_its_top(self):
+        box = self.tmp / "vault" / "Inbox.md"
+        before = box.read_text(encoding="utf-8")
+        self.addCleanup(box.write_text, before, encoding="utf-8")
+        w, h = SIZES[0]
+        self.b.size(w, h)
+        self.screen([page("tree"), "document.getElementById('inbox-toggle').click()"])
+        # the field is at the top of the page-sized panel, over the list, and a finger's size
+        at = self.b.js("(() => { const r = id => document.getElementById(id).getBoundingClientRect(), f = r('inbox-link'), y = r('inbox-why'), s = r('inbox-save'), l = r('inbox-list');"
+                       " return [f.top - r('inbox').top < 80, s.bottom <= l.top, Math.min(f.height, y.height, s.height, s.width) >= 44, f.width > innerWidth - 40,"
+                       " document.getElementById('inbox-link').disabled, document.activeElement.id] })()")
+        self.assertEqual(at, [True, True, True, True, False, "inbox-close"])
+        n = self.b.js("document.querySelectorAll('#inbox-list .inbox-item').length")
+
+        def paste(link, why=""):
+            for field, text in (("inbox-link", link), ("inbox-why", why)):
+                self.b.js(f"(() => {{ const f = document.getElementById('{field}'); f.focus(); f.select() }})()")
+                if text:
+                    self.b.call("Input.insertText", text=text)
+            self.b.tap("#inbox-save")
+
+        paste("https://example.org/phone/post/", "from the phone")
+        last = "(() => { const li = [...document.querySelectorAll('#inbox-list .inbox-item')].pop(); return [li.querySelector('.inbox-link').textContent, li.querySelector('.inbox-sub').textContent] })()"
+        self.assertTrue(self.b.wait(f"document.querySelectorAll('#inbox-list .inbox-item').length === {n + 1}"), "the item is not in the list")
+        today = datetime.date.today().isoformat()
+        self.assertEqual(self.b.js(last), ["example.org/phone/post", f"from the phone · added {today}"])
+        self.assertEqual(self.b.js("[document.getElementById('inbox-link').value, document.getElementById('inbox-why').value, document.getElementById('inbox-add-msg').hidden,"
+                                   " document.getElementById('inbox-count').textContent, document.getElementById('inbox-badge').textContent]"), ["", "", True, f"{n + 1} items", str(n + 1)])
+        lines, now = before.split("\n"), box.read_text(encoding="utf-8").split("\n")
+        put = lines.index("- see also the list in Scratchpad") + 1
+        self.assertEqual(now, lines[:put] + [f"- https://example.org/phone/post/ — from the phone · added {today}"] + lines[put:])
+        # the same link again, and one that was processed: not added, and the page says where each is
+        for link, said in (("https://EXAMPLE.org/phone/post#top", f"Not added: already in the inbox, added {today}."),
+                           ("arXiv:2111.06377", "Not added: already processed on 2026-11-10 (R03)."),
+                           ("something to read", "Not added: not a link: paste a URL, an arXiv id or a DOI.")):
+            paste(link)
+            self.assertTrue(self.b.wait(f"document.getElementById('inbox-add-msg').textContent === {json.dumps(said)}"), f"{link}: {self.b.js('document.getElementById(`inbox-add-msg`).textContent')}")
+            self.assertEqual(self.b.js("document.getElementById('inbox-link').value"), link)  # what was typed stays, to be mended
+        time.sleep(2.5)  # a poll of the file leaves what was said
+        self.assertEqual(self.b.js("document.getElementById('inbox-add-msg').textContent"), said)
+        self.assertEqual(box.read_text(encoding="utf-8").split("\n"), now)
+        self.assertEqual(self.b.js("(() => { const m = document.getElementById('inbox-add-msg').getBoundingClientRect(); return m.right <= innerWidth && document.documentElement.scrollWidth <= innerWidth })()"), True)
+        self.assertEqual(self.b.errors, [])
+
     def test_back_returns_from_a_deck_to_the_decks(self):
         w, h = SIZES[0]
         self.back_closes(w, h, [page("slides"), "document.querySelector('.sl-item').click()"],

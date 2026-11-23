@@ -31,6 +31,7 @@ MAX_BYTES = 60 * 1024 * 1024
 TIMEOUT_S = 60
 ARXIV_API = "https://export.arxiv.org/api/query?id_list={}"
 ARXIV_PDF = "https://arxiv.org/pdf/{}"
+ARXIV_HOSTS = ("export.arxiv.org",)  # where the API is, and all it is asked of
 ATOM = {"a": "http://www.w3.org/2005/Atom"}
 # characters that break file names or Obsidian links
 FORBIDDEN = re.compile(r'[\^#|\[\]\\/:*"<>?]')
@@ -62,6 +63,12 @@ def parse_arxiv(xml: bytes) -> dict:
     authors = [a.findtext("a:name", "", ATOM) for a in entry.findall("a:author", ATOM)]
     year = (entry.findtext("a:published", "", ATOM) or "")[:4]
     return {"title": title, "author": surname(authors[0]) if authors else "", "year": year}
+
+
+def arxiv_meta(aid: str, hosts: tuple[str, ...] = ARXIV_HOSTS) -> dict:
+    """Title, first author's surname and year of the arXiv paper `aid`, asked of arXiv's API: what
+    a saved PDF is named by, and the title the tree view's inbox gives an arXiv item."""
+    return parse_arxiv(get(ARXIV_API.format(urllib.parse.quote(aid)), hosts, 2_000_000))
 
 
 def get(url: str, hosts: tuple[str, ...], limit: int = MAX_BYTES) -> bytes:
@@ -105,7 +112,7 @@ def fetch(job: dict, vault: Path, hosts: tuple[str, ...]) -> str:
     meta = {"title": job.get("title") or "", "author": "", "year": job.get("year") or ""}
     if job.get("arxiv"):
         aid = job["arxiv"]
-        meta = parse_arxiv(get(ARXIV_API.format(urllib.parse.quote(aid)), hosts))
+        meta = arxiv_meta(aid, hosts)
         url = ARXIV_PDF.format(aid)
     else:
         url = job["url"]

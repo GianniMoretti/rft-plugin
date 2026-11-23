@@ -77,6 +77,25 @@ class InboxFileTest(unittest.TestCase):
         self.assertEqual(box.shown(), self.want["items"] + [item])
         self.assertEqual(box.processed, self.want["processed"])
 
+    def test_a_title_changes_the_link_of_one_line(self):
+        box = rft_inbox.Inbox(self.text)
+        # the first untitled item with the link: the fixture's first one has its title already
+        item = box.set_title("arxiv:2406.01234", "Mixup, [again]")
+        self.assertEqual((item["title"], item["why"], item["duplicate"]), ("Mixup, (again)", "same one from Gianni?", True))
+        before, after = self.text.split("\n"), box.text().split("\n")
+        at = before.index("* arXiv:2406.01234v2 - same one from Gianni?")
+        self.assertEqual(after, before[:at] + ["* [Mixup, (again)](https://arxiv.org/abs/2406.01234) - same one from Gianni?"] + before[at + 1:])
+        # nothing to do: every item with the link has a title, the link is in no item, the title is empty
+        for key, title in (("arxiv:2406.01234", "Another"), ("arxiv:2111.06377", "Processed"), ("arxiv:2311.09876", " \n ")):
+            now = box.text()
+            self.assertIsNone(box.set_title(key, title), key)
+            self.assertEqual(box.text(), now)
+        # the line as typed stays: its bullet, its spaces, its ending
+        box = rft_inbox.Inbox("-   <https://arxiv.org/pdf/2501.00001v3>   \u2014 why  \u00b7 urgent\r\n  - briefed 2026-11-20: x\r\n- 2501.00001\n")
+        self.assertEqual(box.set_title("arxiv:2501.00001", "  A   title\nin two lines ")["title"], "A title in two lines")
+        self.assertEqual(box.text(), "-   [A title in two lines](https://arxiv.org/abs/2501.00001)   \u2014 why  \u00b7 urgent\r\n  - briefed 2026-11-20: x\r\n- 2501.00001\n")
+        self.assertEqual([(i["priority"], i["why"], bool(i["brief"])) for i in box.shown()], [("urgent", "why", True), ("", "", False)])
+
     def test_the_fixture_yields_its_items(self):
         box = rft_inbox.Inbox(self.text)
         self.assertEqual(box.shown(), self.want["items"])

@@ -156,6 +156,15 @@
       <span id="inbox-count" class="muted"></span>
       <button id="inbox-close" type="button" title="Close (Esc)" aria-label="Close the inbox">✕</button>
     </div>
+    <form id="inbox-add" autocomplete="off">
+      <input id="inbox-link" type="text" inputmode="url" enterkeyhint="done" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="2000" disabled
+        placeholder="Paste a link, an arXiv id or a DOI" aria-label="A link to save: a URL, an arXiv id or a DOI">
+      <div class="inbox-add-row">
+        <input id="inbox-why" type="text" enterkeyhint="done" maxlength="500" disabled placeholder="Why (optional)" aria-label="Why it is saved (optional)">
+        <button id="inbox-save" type="submit" class="primary" disabled title="Save the link to read later (Enter)">Add</button>
+      </div>
+      <p id="inbox-add-msg" role="status" hidden></p>
+    </form>
     <ul id="inbox-list" aria-label="The items in the inbox"></ul>
     <p id="inbox-empty" class="muted" hidden>Nothing saved to read later.</p>
     <div class="pad-foot">

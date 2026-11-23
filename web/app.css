@@ -709,6 +709,17 @@ a.cal-dl-name:hover { text-decoration: underline; }
   box-shadow: 0 6px 24px light-dark(#1f232822, #00000066); font-size: calc(13px * var(--font-scale)); }
 #inbox[hidden] { display: none; }
 #inbox .pad-head #inbox-count { flex: 1; font-size: 0.9em; }
+/* a link saved from the page: the field over the list, why it is saved and the button under it */
+#inbox-add { display: flex; flex-direction: column; flex: none; gap: 5px; margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.inbox-add-row { display: flex; gap: 6px; }
+#inbox-add input { flex: 1; min-width: 0; font: inherit; padding: 3px 7px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+#inbox-add input::placeholder { color: var(--muted); opacity: 0.8; }
+#inbox-add input:disabled { opacity: 0.6; }
+#inbox-add button { flex: none; font-size: 1em; }
+#inbox-add-msg { margin: 0; font-size: 0.9em; color: var(--muted); overflow-wrap: anywhere; }
+#inbox-add-msg.error { color: var(--dropped); }
+#inbox-add-msg[hidden] { display: none; }
 #inbox-list { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
 #inbox-empty { flex: 1; margin: 0; padding: 14px 12px; }
 #inbox-empty[hidden] { display: none; }
@@ -1219,6 +1230,9 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
   #corner:has(> :is(#pad, #inbox):not([hidden])) { inset: 0; max-height: none; align-items: stretch; z-index: 6; }
   #corner:has(> :is(#pad, #inbox):not([hidden])) > .corner-btns { display: none; }
   #pad, #inbox { flex: 1 1 auto; width: 100%; height: auto; border: 0; border-radius: 0; box-shadow: none; font-size: 15px; }
+  #inbox-add { gap: 8px; padding: 10px 16px; }
+  .inbox-add-row { gap: 8px; }
+  #inbox-add button { padding: 3px 16px; }
   /* an item's link is what a finger opens: a full row's height, the why under it */
   .inbox-item { padding: 2px 16px 10px; }
   .inbox-row { align-items: center; }

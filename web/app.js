@@ -4694,7 +4694,7 @@
     // before it existed serves neither its script nor api/scratchpad
     if (!EMBED && window.RftScratchpad) window.RftScratchpad.mount({ key: editKey, store, every: POLL_MS })
     // the inbox too (the standalone page leaves its script out)
-    if (!EMBED && window.RftInbox) window.RftInbox.mount({ store, every: POLL_MS })
+    if (!EMBED && window.RftInbox) window.RftInbox.mount({ key: editKey, store, every: POLL_MS })
     // the experiment queue's monitor: only on the server too (the standalone page leaves its script out)
     if (!EMBED && window.RftQueue) {
       window.RftQueue.mount({
