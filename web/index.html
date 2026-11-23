@@ -120,13 +120,17 @@
       <span class="muted jobs-file" title="The queue and its history live in the vault's .queue/ folder; each job's output in .queue/logs/">.queue/</span>
     </div>
   </section>
-  <!-- the bottom-left corner: the scratchpad's button with the legend's faint ? beside it, and under them
-       whichever is open; the open scratchpad takes the legend's place -->
+  <!-- the bottom-left corner: the scratchpad's and the inbox's buttons with the legend's faint ? beside
+       them, and under them whichever is open; the open scratchpad or inbox takes the legend's place -->
   <div id="corner">
   <div class="corner-btns">
   <button id="pad-toggle" class="icon-btn" hidden aria-expanded="false" aria-controls="pad" title="Scratchpad: quick notes and to-dos" aria-label="Scratchpad: quick notes and to-dos">
     <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h14a1 1 0 0 1 1 1v10l-6 6H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 20v-5a1 1 0 0 1 1-1h5"/><path d="M8 8h8M8 11.5h5"/></svg>
     <span id="pad-badge" class="pad-badge" hidden></span>
+  </button>
+  <button id="inbox-toggle" class="icon-btn" hidden aria-expanded="false" aria-controls="inbox" title="Inbox: links saved to read later" aria-label="Inbox: links saved to read later">
+    <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13l2.5-8h11L20 13v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"/><path d="M4 13h4.5a3.5 3.5 0 0 0 7 0H20"/></svg>
+    <span id="inbox-badge" class="pad-badge" hidden></span>
   </button>
   <button id="legend-toggle" class="legend-mark" aria-expanded="false" aria-controls="legend" title="Legend: what the colours, glows and shapes mean" aria-label="Legend">?</button>
   </div>
@@ -144,6 +148,19 @@
       <button id="pad-keep" type="button" class="primary" hidden title="Save your text over the newer one">Keep mine</button>
       <button id="pad-take" type="button" hidden title="Drop your text and take the newer one">Take theirs</button>
       <span class="pad-file muted" title="In the vault's top folder, beside 00 Index.md: plain markdown that Obsidian shows too, and not a note of the tree">Scratchpad.md</span>
+    </div>
+  </section>
+  <section id="inbox" hidden aria-label="Inbox">
+    <div class="pad-head">
+      <strong>Inbox</strong>
+      <span id="inbox-count" class="muted"></span>
+      <button id="inbox-close" type="button" title="Close (Esc)" aria-label="Close the inbox">✕</button>
+    </div>
+    <ul id="inbox-list" aria-label="The items in the inbox"></ul>
+    <p id="inbox-empty" class="muted" hidden>Nothing saved to read later.</p>
+    <div class="pad-foot">
+      <span id="inbox-msg" role="status"></span>
+      <span class="pad-file muted" title="In the vault's top folder, beside Scratchpad.md: plain markdown that Obsidian shows too, and not a note of the tree">Inbox.md</span>
     </div>
   </section>
   <aside id="legend" class="closed" aria-label="Legend and filter">
@@ -531,6 +548,7 @@
 <script src="concepts.js" data-rft-inline></script>
 <script src="markdown.js" data-rft-inline></script>
 <script src="scratchpad.js" data-rft-inline></script>
+<script src="inbox.js"></script>
 <script src="queue.js"></script>
 <script src="vendor/codemirror.v5.65.16.min.js"></script>
 <script src="manuscript.js"></script>

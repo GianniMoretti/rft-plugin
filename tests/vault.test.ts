@@ -434,6 +434,7 @@ describe('vault', () => {
     expect(html).toContain('<script>mdn()</script>')
     expect(html).toContain('<script>scr()</script>')
     expect(html).not.toContain('queue.js') // the queue's monitor reads the live server only
+    expect(html).not.toContain('inbox.js') // the inbox too
     expect(html).not.toContain('codemirror') // and so does the manuscript's tab
     expect(html).not.toContain('manuscript.js')
     expect(html).toContain('<style>.katex{}</style>')

@@ -1672,9 +1672,11 @@
   }
   document.getElementById('legend-toggle').addEventListener('click', () => {
     const pad = document.getElementById('pad')
-    // the open scratchpad stands in the legend's place: the ? closes it and shows the legend
-    const open = (pad && !pad.hidden) || legend.classList.contains('closed')
+    // the open scratchpad or inbox stands in the legend's place: the ? closes it and shows the legend
+    const inbox = document.getElementById('inbox')
+    const open = (pad && !pad.hidden) || (inbox && !inbox.hidden) || legend.classList.contains('closed')
     if (pad && !pad.hidden) document.getElementById('pad-close').click()
+    if (inbox && !inbox.hidden) document.getElementById('inbox-close').click()
     store.set('legendShown', open)
     setLegendOpen(open)
   })
@@ -4691,6 +4693,8 @@
     // the scratchpad lives on the server: the standalone page has none, and a server started
     // before it existed serves neither its script nor api/scratchpad
     if (!EMBED && window.RftScratchpad) window.RftScratchpad.mount({ key: editKey, store, every: POLL_MS })
+    // the inbox too (the standalone page leaves its script out)
+    if (!EMBED && window.RftInbox) window.RftInbox.mount({ store, every: POLL_MS })
     // the experiment queue's monitor: only on the server too (the standalone page leaves its script out)
     if (!EMBED && window.RftQueue) {
       window.RftQueue.mount({

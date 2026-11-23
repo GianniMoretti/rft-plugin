@@ -65,6 +65,8 @@ export function staticPage(a: PageAssets, tree: Tree, texts: Record<string, stri
     .replace(/<script src="concepts\.js" data-rft-inline><\/script>/, () => script(a.concepts))
     .replace(/<script src="markdown\.js" data-rft-inline><\/script>/, () => script(a.markdown))
     .replace(/<script src="scratchpad\.js" data-rft-inline><\/script>/, () => script(a.scratchpad))
+    // the inbox is read from the live server: a standalone page has none
+    .replace(/<script src="inbox\.js"><\/script>\n?/, '')
     // the experiment queue's monitor reads the live server: a standalone page has none
     .replace(/<script src="queue\.js"><\/script>\n?/, '')
     // the manuscript's tab lives on the server: its editor and its script stay out of the standalone page

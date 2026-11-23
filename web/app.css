@@ -124,7 +124,7 @@ main { position: relative; flex: 1; min-height: 0; }
   color: var(--muted); opacity: 0.45; transition: opacity 0.15s, color 0.15s; }
 .legend-mark:hover, .legend-mark:focus-visible { opacity: 0.9; }
 .legend-mark[aria-expanded="true"] { color: var(--accent); opacity: 0.8; }
-#corner:has(> #pad:not([hidden])) .legend-mark { color: var(--muted); opacity: 0.45; }
+#corner:has(> :is(#pad, #inbox):not([hidden])) .legend-mark { color: var(--muted); opacity: 0.45; }
 #legend { padding: 8px 10px; border-radius: 8px; min-height: 0;
   background: var(--panel); border: 1px solid var(--line); font-size: 12px; max-width: 240px; }
 .legend-title { font-weight: 600; margin: 4px 0 2px; }
@@ -683,7 +683,7 @@ a.cal-dl-name:hover { text-decoration: underline; }
   background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
   box-shadow: 0 6px 24px light-dark(#1f232822, #00000066); font-size: calc(13px * var(--font-scale)); }
 #pad[hidden] { display: none; }
-#corner:has(> #pad:not([hidden])) > #legend { display: none; }
+#corner:has(> :is(#pad, #inbox):not([hidden])) > #legend { display: none; }
 .pad-head { display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--line); }
 .pad-head #pad-count { flex: 1; font-size: 0.9em; }
 .pad-head button { padding: 1px 7px; }
@@ -697,6 +697,35 @@ a.cal-dl-name:hover { text-decoration: underline; }
 #pad-msg { flex: 1; min-width: 0; }
 #pad-msg.error { color: var(--dropped); flex: none; }
 .pad-file { margin-left: auto; }
+/* the inbox: links saved to read later (web/inbox.js); its button beside the scratchpad's, with the
+   number of items, and its panel in the same place, one of the two open at a time */
+#inbox-toggle { position: relative; padding: 6px; border-radius: 8px; background: var(--panel); color: var(--muted); }
+#inbox-toggle:hover, #inbox-toggle[aria-expanded="true"] { color: var(--accent); border-color: var(--accent); }
+#inbox-toggle .ico { width: 18px; height: 18px; }
+#inbox-toggle[hidden] { display: none; }
+#inbox { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0;
+  width: min(calc(380px * var(--font-scale)), calc(100vw - 20px)); height: calc(440px * var(--font-scale));
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 6px 24px light-dark(#1f232822, #00000066); font-size: calc(13px * var(--font-scale)); }
+#inbox[hidden] { display: none; }
+#inbox .pad-head #inbox-count { flex: 1; font-size: 0.9em; }
+#inbox-list { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
+#inbox-empty { flex: 1; margin: 0; padding: 14px 12px; }
+#inbox-empty[hidden] { display: none; }
+#inbox-list:empty { display: none; }
+.inbox-item { padding: 7px 12px; border-bottom: 1px solid var(--line); }
+.inbox-item:last-child { border-bottom: 0; }
+.inbox-row { display: flex; align-items: baseline; gap: 8px; }
+.inbox-link { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--fg); text-decoration: none; }
+.inbox-link:hover { color: var(--accent); text-decoration: underline; }
+.inbox-prio { flex: none; font-size: 0.85em; font-weight: 600; }
+.inbox-prio.p-urgent { color: var(--p-urgent); }
+.inbox-prio.p-high { color: var(--p-high); }
+.inbox-prio.p-medium { color: var(--p-medium); }
+.inbox-prio.p-low { color: var(--p-low); }
+.inbox-sub { margin-top: 1px; font-size: 0.9em; overflow-wrap: anywhere; }
+#inbox-msg { flex: 1; min-width: 0; }
+#inbox-msg.error { color: var(--dropped); flex: none; }
 
 /* a concept's artifact, in the drawer in a note's place: wider than a note by default (its own
    width once dragged), its header above a frame that scrolls on its own */
@@ -1185,11 +1214,16 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
   #filters .fhead { position: sticky; top: 0; z-index: 1; margin: 0 -16px 4px; padding: 4px 8px 4px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
   #jobs { inset: 0; width: auto; max-height: none; border: 0; border-radius: 0; box-shadow: none; }
   #corner { left: max(12px, env(safe-area-inset-left)); bottom: 12px; }
-  #pad-toggle { width: 52px; height: 52px; justify-content: center; border-radius: 16px; box-shadow: 0 4px 14px light-dark(#1f232826, #00000088); }
-  #pad-toggle .ico { width: 22px; height: 22px; }
-  #corner:has(> #pad:not([hidden])) { inset: 0; max-height: none; align-items: stretch; z-index: 6; }
-  #corner:has(> #pad:not([hidden])) > .corner-btns { display: none; }
-  #pad { flex: 1 1 auto; width: 100%; height: auto; border: 0; border-radius: 0; box-shadow: none; font-size: 15px; }
+  #pad-toggle, #inbox-toggle { width: 52px; height: 52px; justify-content: center; border-radius: 16px; box-shadow: 0 4px 14px light-dark(#1f232826, #00000088); }
+  #pad-toggle .ico, #inbox-toggle .ico { width: 22px; height: 22px; }
+  #corner:has(> :is(#pad, #inbox):not([hidden])) { inset: 0; max-height: none; align-items: stretch; z-index: 6; }
+  #corner:has(> :is(#pad, #inbox):not([hidden])) > .corner-btns { display: none; }
+  #pad, #inbox { flex: 1 1 auto; width: 100%; height: auto; border: 0; border-radius: 0; box-shadow: none; font-size: 15px; }
+  /* an item's link is what a finger opens: a full row's height, the why under it */
+  .inbox-item { padding: 2px 16px 10px; }
+  .inbox-row { align-items: center; }
+  .inbox-link { display: flex; align-items: center; min-height: 44px; }
+  .inbox-sub { margin-top: -6px; }
   .pad-head { padding: 4px 8px 4px 16px; }
   /* under one of them, a page keeps its whole width */
   main:has(#filters:not([hidden])) :is(#kanban, #calendar), main:has(#nbpane:not([hidden])) :is(#kanban, #calendar),

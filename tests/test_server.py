@@ -305,6 +305,7 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.get("/theme.js")[0], 200)
         self.assertEqual(self.get("/markdown.js")[0], 200)
         self.assertEqual(self.get("/scratchpad.js")[0], 200)
+        self.assertEqual(self.get("/inbox.js")[0], 200)
         self.assertEqual(self.get("/vendor/jspdf.v4.2.1.umd.min.js")[0], 200)
         self.assertEqual(self.get("/vendor/svg2pdf.v2.9.0.umd.min.js")[0], 200)
         self.assertEqual(self.get("/vendor/d3.v7.9.0.min.js")[0], 200)
@@ -496,6 +497,42 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.pad({"text": "pwned", "force": True})[0], 422)
         self.assertEqual((self.root / "secret.md").read_bytes(), secret)
         self.assertTrue(p.is_symlink())
+
+    # ------------------------------------------------------------ the inbox
+    def fresh_inbox(self, data: bytes | None = None):
+        """The vault's inbox as a test wants it (none by default), removed afterwards."""
+        p = self.vault / "Inbox.md"
+        p.unlink(missing_ok=True)
+        self.addCleanup(p.unlink, missing_ok=True)
+        if data is not None:
+            p.write_bytes(data)
+        return p
+
+    def test_inbox_read_as_the_fixture_says(self):
+        fixture = Path(__file__).resolve().parent / "fixtures" / "inbox"
+        want = json.loads((fixture / "expected.json").read_text(encoding="utf-8"))["items"]
+        before = (fixture / "Inbox.md").read_bytes()
+        self.fresh_inbox()
+        tree = json.loads(self.get("/api/tree")[2])
+        p = self.fresh_inbox(before)
+        status, ctype, body = self.get("/api/inbox")
+        self.assertEqual((status, ctype.split(";")[0]), (200, "application/json"))
+        self.assertEqual(json.loads(body), {"name": "Inbox.md", "items": want})
+        self.assertEqual(p.read_bytes(), before)  # read, never rewritten
+        # not a note: the tree, and its version, stay as they were
+        self.assertEqual(json.loads(self.get("/api/tree")[2]), tree)
+
+    def test_inbox_empty_without_a_file_and_never_through_a_link(self):
+        p = self.fresh_inbox()
+        self.assertEqual(json.loads(self.get("/api/inbox")[2]), {"name": "Inbox.md", "items": []})
+        self.assertFalse(p.exists())
+        os.symlink(self.root / "secret.md", p)
+        status, _, body = self.get("/api/inbox")
+        self.assertEqual(status, 422)
+        self.assertNotIn(b"secret", body.replace(b"Inbox.md", b""))
+        p.unlink()
+        p.write_bytes(b"\xff\xfe not utf-8\n- https://e.org/x\n")
+        self.assertEqual([i["key"] for i in json.loads(self.get("/api/inbox")[2])["items"]], ["https://e.org/x"])
 
     # ------------------------------------------------------------ comments, suggestions, lock
 

@@ -101,7 +101,7 @@ AUDIT_JS = r"""
     if (el.matches('input, select, textarea') && el.closest('label') && !el.closest('label').querySelector('input[type=checkbox], input[type=radio]')) { /* a field in a label: its own target */ }
     const r = el.getBoundingClientRect()
     const off = r.right > W + 1 || r.left < -1 || r.top < -1 || r.bottom > H + 1
-    if (off && !inScroller(el) && !el.closest('#canvas, #concept-canvas, #drawer, #filters, #pad, #jobs, .kb-cols, .cal-body, .ms-body, .sl-body, #kanban, #calendar, #manuscript, #slides, #legend, #bar-more')) {
+    if (off && !inScroller(el) && !el.closest('#canvas, #concept-canvas, #drawer, #filters, #pad, #inbox, #jobs, .kb-cols, .cal-body, .ms-body, .sl-body, #kanban, #calendar, #manuscript, #slides, #legend, #bar-more')) {
       out.push(`${name(el)} is off the screen (x ${Math.round(r.left)}–${Math.round(r.right)}, y ${Math.round(r.top)}–${Math.round(r.bottom)})`)
       continue
     }
@@ -184,6 +184,7 @@ SCREENS = [
     ("note-edit", [page("tree"), tap_node("E07"), "document.getElementById('drawer-edit').click()"]),
     ("filters", [page("tree"), "document.getElementById('filters-toggle').click()"]),
     ("pad", [page("tree"), "document.getElementById('pad-toggle').click()"]),
+    ("inbox", [page("tree"), "document.getElementById('inbox-toggle').click()"]),
     ("concepts", [page("concepts")]),
     ("kanban", [page("kanban")]),
     ("timeline", [page("calendar"), "document.querySelector('[data-cal-mode=timeline]').click()"]),
@@ -213,6 +214,7 @@ def demo_vault(dst: Path):
     (dst / "decks" / "P01 Weekly wrap-up.md").write_text(
         "---\nid: P01\ntype: deck\nlocked: true\n---\n\n# Weekly wrap-up\n\n---\n\n## E06 so far\n\n- CutMix holds at 1k\n- next: three seeds\n")
     (dst / "Scratchpad.md").write_text("- [ ] read the CutMix ablation\n- [x] mail the supervisor\n- a note\n")
+    shutil.copy(Path(__file__).resolve().parent / "fixtures" / "inbox" / "Inbox.md", dst / "Inbox.md")
     # a document of two pages, for the Manuscript's PDF
     (dst / "documents" / "two-pages").mkdir(parents=True)
     (dst / "documents" / "documents.json").write_text('{"locked": true, "unlocked": []}\n')
@@ -418,6 +420,7 @@ class PhoneTest(unittest.TestCase):
         self.back_closes(w, h, [page("tree"), tap_node("D00")], "!document.getElementById('drawer').hidden", "a note")
         self.back_closes(w, h, [page("tree"), "document.getElementById('filters-toggle').click()"], "!document.getElementById('filters').hidden", "the filters")
         self.back_closes(w, h, [page("tree"), "document.getElementById('pad-toggle').click()"], "!document.getElementById('pad').hidden", "the scratchpad")
+        self.back_closes(w, h, [page("tree"), "document.getElementById('inbox-toggle').click()"], "!document.getElementById('inbox').hidden", "the inbox")
 
     def test_back_returns_from_a_deck_to_the_decks(self):
         w, h = SIZES[0]

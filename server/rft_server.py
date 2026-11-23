@@ -81,6 +81,7 @@ import rft_decks  # the slide decks as the page reads them
 import rft_latex  # the manuscript's LaTeX: its generated files and the compile
 import rft_manuscript  # the manuscript as the page shows it
 import rft_notebook
+import rft_inbox  # the inbox, links saved to read later, as the page shows it
 import rft_queue  # the experiment queue, beside this file
 import rft_style  # the project's figure tokens, which the artifacts' and the slides' colours follow
 
@@ -100,6 +101,7 @@ PAGE_FILES = {
     "/theme.js": ("theme.js", "text/javascript; charset=utf-8"),
     "/markdown.js": ("markdown.js", "text/javascript; charset=utf-8"),
     "/scratchpad.js": ("scratchpad.js", "text/javascript; charset=utf-8"),
+    "/inbox.js": ("inbox.js", "text/javascript; charset=utf-8"),
     "/queue.js": ("queue.js", "text/javascript; charset=utf-8"),
     "/artifacts.js": ("artifacts.js", "text/javascript; charset=utf-8"),
     "/phone.js": ("phone.js", "text/javascript; charset=utf-8"),
@@ -1496,6 +1498,25 @@ class Vault:
                 tmp.unlink(missing_ok=True)
         return 200, {"name": SCRATCHPAD, "version": version_of(out)}
 
+    # ------------------------------------------------------------ the inbox
+
+    def _inbox_file(self) -> Path | None:
+        """The inbox's file at the vault's top; None when that name is held by something else than
+        a plain file, which is then neither read nor written."""
+        path = self.root / rft_inbox.INBOX
+        return None if path.is_symlink() or (path.exists() and not path.is_file()) else path
+
+    def inbox(self) -> tuple[int, dict]:
+        """The inbox as the page shows it: its items, in the file's order; none until the file is made."""
+        path = self._inbox_file()
+        if path is None:
+            return 422, {"error": f"{rft_inbox.INBOX} in the vault is not a plain file"}
+        try:
+            data = path.read_bytes()
+        except FileNotFoundError:
+            return 200, {"name": rft_inbox.INBOX, "items": []}
+        return 200, {"name": rft_inbox.INBOX, "items": rft_inbox.Inbox(data.decode("utf-8", errors="replace")).shown()}
+
     # ------------------------------------------------------------ comments and suggestions
 
     def _comments_file(self, nid: str) -> Path:
@@ -2387,6 +2408,8 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 return self._artifact(parse_qs(url.query), head_only)
             if route == "/api/scratchpad":
                 return self._json(*vault.scratchpad(), head_only)
+            if route == "/api/inbox":
+                return self._json(*vault.inbox(), head_only)
             if route == "/api/style":
                 return self._json(200, vault.style(), head_only)
             if route == "/api/decks":

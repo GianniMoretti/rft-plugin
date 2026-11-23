@@ -227,6 +227,8 @@
     }
 
     function setOpen(open, focus = true) {
+      // one panel in the corner: the inbox gives its place
+      if (open && $('inbox') && !$('inbox').hidden) $('inbox-close').click()
       panel.hidden = !open
       btn.setAttribute('aria-expanded', String(open))
       store.set('scratchpadOpen', open)
