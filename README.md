@@ -359,7 +359,9 @@ are in the prompt only once the vault holds one.
   processed before or in a reference note's **Source** is said to be there and not added twice,
   and an arXiv paper gets its title from arXiv a moment later. Each item has a **reading
   priority** (urgent, high, medium, low or none): yours alone, with no limits, not a note's
-  priority and never carried to one. The list is ordered by **Priority** or by **Date**; a tap
+  priority and never carried to one. It shows as an icon, three bars with as many filled as it
+  presses and a red **!** for urgent, and a tap on it steps to the next (none, low, medium, high,
+  urgent, none again), written a moment after the last tap. The list is ordered by **Priority** or by **Date**; a tap
   on an item's why edits it, and **✕** (asked twice) discards it.
   **Process** on an item asks Claude, in the chat that ran `/rft`, to read it: Claude saves a
   **brief** of at most three lines on the item (what it claims, which notes it touches, the

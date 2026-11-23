@@ -485,14 +485,16 @@ class PhoneTest(unittest.TestCase):
         self.assertEqual(self.b.js(keys).split("|"), by_priority)
         self.assertEqual(self.b.js(pressed), "priority true|date false")
         # the reading priority, the why and ✕ of every item are a finger's size, on the screen; so are the order's buttons
-        small = self.b.js("[...document.querySelectorAll('#inbox-list select.prio, #inbox-list .inbox-x, #inbox-list button.inbox-why, #inbox [data-inbox-order]')]"
+        small = self.b.js("[...document.querySelectorAll('#inbox-list .inbox-prio, #inbox-list .inbox-x, #inbox-list button.inbox-why, #inbox [data-inbox-order]')]"
                           ".filter(e => { const r = e.getBoundingClientRect(); return !(r.height >= 44 && r.width >= 44 && r.left >= 0 && r.right <= innerWidth) })"
                           ".map(e => e.className + ' ' + e.textContent.slice(0, 20) + ' ' + JSON.stringify(e.getBoundingClientRect()))")
         self.assertEqual(small, [])
-        self.assertEqual(self.b.js("[document.querySelectorAll('#inbox-list select.prio').length, document.querySelectorAll('#inbox-list .inbox-x').length,"
+        self.assertEqual(self.b.js("[document.querySelectorAll('#inbox-list .inbox-prio').length, document.querySelectorAll('#inbox-list .inbox-x').length,"
                                    " document.querySelectorAll('#inbox-list button.inbox-why').length, innerWidth, document.documentElement.scrollWidth <= innerWidth]"), [8, 8, 8, w, True])
-        self.assertEqual(self.b.js(f"[{row(mae)}.querySelector('select.prio').className, {row(mae)}.querySelector('select.prio').value, {row(blog)}.querySelector('select.prio').className]"),
-                         ["prio p-urgent", "urgent", "prio"])
+        self.assertEqual(self.b.js(f"[{row(mae)}.querySelector('.inbox-prio').className, {row(mae)}.querySelector('.inbox-prio').dataset.priority, {row(blog)}.querySelector('.inbox-prio').className]"),
+                         ["inbox-prio p-urgent", "urgent", "inbox-prio"])
+        # the reading priority is an icon and no word, in a chip no wider than a finger needs
+        self.assertEqual(self.b.js("[...document.querySelectorAll('#inbox-list .inbox-prio')].filter(b => b.tagName !== 'BUTTON' || b.textContent.trim() || !b.querySelector('svg') || b.getBoundingClientRect().width > 48 || !b.getAttribute('aria-label').includes('eading priority')).length"), 0)
         # by date, and still so after the page is loaded again; the file is as it was
         self.b.tap("[data-inbox-order=date]")
         self.assertTrue(self.b.wait(f"{keys} === {json.dumps('|'.join(by_date))}"), self.b.js(keys))
@@ -502,13 +504,24 @@ class PhoneTest(unittest.TestCase):
         self.assertEqual(box.read_text(encoding="utf-8"), before)
         self.b.tap("[data-inbox-order=priority]")
         self.assertTrue(self.b.wait(f"{keys} === {json.dumps('|'.join(by_priority))}"), self.b.js(keys))
-        # a reading priority from the menu: one plain word in the item's line, and the item moves up
-        self.b.js(f"(() => {{ const s = {row(blog)}.querySelector('select.prio'); s.focus(); s.value = 'urgent'; s.dispatchEvent(new Event('change', {{ bubbles: true }})) }})()")
+        # a reading priority by taps on its icon: each tap steps it (none, low, medium, high, urgent), and the taps of one go
+        # are written once, after the last; until then the item stays where the finger is
+        prio = f"{row(blog)}.querySelector('.inbox-prio')"
+        self.b.js(f"{prio}.scrollIntoView({{ block: 'center' }})")
+        self.b.tap(f'#inbox-list .inbox-item[data-key="{blog.rsplit(" ", 1)[0]}"] .inbox-prio')
+        self.assertTrue(self.b.wait(f"{prio}.dataset.priority === 'low'", 2), "a tap did not step the reading priority")
+        self.assertEqual(self.b.js(f"(() => {{ const b = {prio}; b.focus(); b.click(); b.click(); b.click(); return [b.dataset.priority, b.className, b.getAttribute('aria-label').startsWith('Reading priority: urgent, of '), {keys}] }})()"),
+                         ["urgent", "inbox-prio p-urgent pending", True, "|".join(by_priority)])
         self.assertTrue(self.b.wait(f"{keys}.startsWith({json.dumps(blog + '|' + mae)})"), self.b.js(keys))
         at = lines.index("- https://lilianweng.github.io/posts/2021-05-31-contrastive/")
         lines[at] += " · urgent"
         self.assertEqual(box.read_text(encoding="utf-8").split("\n"), lines)
-        self.assertEqual(self.b.js(f"[{row(blog)}.querySelector('select.prio').className, document.activeElement === {row(blog)}.querySelector('select.prio')]"), ["prio p-urgent", True])
+        self.assertEqual(self.b.js(f"[{prio}.className, document.activeElement === {prio}]"), ["inbox-prio p-urgent", True])
+        # one more tap after urgent is none again, and stepped all the way round nothing is written
+        self.b.js(f"(() => {{ const b = {prio}; for (let i = 0; i < 5; i++) b.click() }})()")
+        self.assertEqual(self.b.js(f"[{prio}.dataset.priority, {prio}.className]"), ["urgent", "inbox-prio p-urgent"])
+        time.sleep(1.2)
+        self.assertEqual(box.read_text(encoding="utf-8").split("\n"), lines)
         self.b.js("document.activeElement.blur()")
 
         def tap(selector):  # an item may be under the fold of the list

@@ -729,8 +729,20 @@ a.cal-dl-name:hover { text-decoration: underline; }
 .inbox-row { display: flex; align-items: baseline; gap: 6px; }
 .inbox-link { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--fg); text-decoration: none; }
 .inbox-link:hover { color: var(--accent); text-decoration: underline; }
-/* on an item: its reading priority (the kanban's menu and colours) and ✕, which asks once before it discards */
-.inbox-row select.prio { flex: none; font-size: 0.9em; }
+/* on an item: its reading priority, a button a tap steps, and ✕, which asks once before it discards. The priority is
+   its icon: three rising bars, as many filled as it presses, in the kanban's colours; urgent a filled square with a "!" */
+.inbox-prio { flex: none; display: inline-flex; align-items: center; padding: 0 4px; border-color: transparent; background: none; color: var(--muted); }
+.inbox-prio::before { content: '\200b'; } /* a line of text, so the button sits on the link's first line */
+.inbox-prio:hover { border-color: var(--line); }
+.inbox-prio:disabled { opacity: 1; }
+.inbox-prio:disabled:hover { border-color: transparent; }
+.inbox-prio.p-urgent { color: var(--p-urgent); }
+.inbox-prio.p-high { color: var(--p-high); }
+.inbox-prio.p-medium { color: var(--p-medium); }
+.inbox-prio.p-low { color: var(--fg); }
+.prio-ico { width: 14px; height: 14px; fill: currentColor; }
+.prio-ico .off { opacity: 0.3; }
+.prio-ico .cut { fill: none; stroke: var(--panel); stroke-width: 1.8; stroke-linecap: round; }
 .inbox-x { flex: none; padding: 0 5px; border-color: transparent; background: none; color: var(--muted); white-space: nowrap; }
 .inbox-x:hover { color: var(--dropped); border-color: var(--line); }
 .inbox-x.armed { padding: 0 7px; color: var(--dropped); border-color: var(--dropped); font-weight: 600; }
@@ -1256,7 +1268,9 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
   .inbox-row { align-items: center; gap: 8px; }
   .inbox-link { display: flex; align-items: center; min-height: 44px; }
   /* the reading priority and ✕ as chips a finger finds */
-  .inbox-row select.prio { padding: 0 12px; border-radius: 22px; }
+  .inbox-prio { justify-content: center; min-width: 44px; padding: 0; border-color: var(--line); border-radius: 22px; }
+  .inbox-prio:disabled:hover { border-color: var(--line); }
+  .prio-ico { width: 18px; height: 18px; }
   .inbox-x { border-color: var(--line); border-radius: 22px; font-size: 14px; }
   .inbox-x.armed { padding: 0 12px; }
   .inbox-under { align-items: center; margin-top: -4px; padding-right: 8px; }

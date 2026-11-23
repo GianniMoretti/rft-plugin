@@ -16,6 +16,8 @@ type Api = {
   refusal: (status: number, got: { error?: unknown } | null, what?: string) => string
   ORDERS: string[]
   PRIORITIES: string[]
+  nextPriority: (p: string) => string
+  priorityIcon: (p: string) => string
   ordered: (items: Item[] | null, by: string) => Row[]
 }
 
@@ -51,6 +53,27 @@ describe('the inbox in the tree view', () => {
   const some = (key: string, priority: string, added: string) => item({ key, url: key, priority, added })
   const hand = [some('a', '', '2026-11-20'), some('b', 'low', ''), some('c', 'urgent', '2026-11-01'), some('d', 'high', '2026-11-02'), some('e', 'high', '2026-11-09'), some('f', '', ''), some('g', '', '2026-11-21'), some('h', 'high', '2026-11-09')]
   const keys = (rows: Row[]) => rows.map(r => r.item.key).join('')
+
+  test('a tap steps a reading priority: none, low, medium, high, urgent, and none again', () => {
+    const steps = ['']
+    for (let i = 0; i < 5; i++) steps.push(I.nextPriority(steps[i]))
+    expect(steps).toEqual(['', 'low', 'medium', 'high', 'urgent', ''])
+    // every one the list orders by is stepped through, and a word that is none of them counts as none
+    expect([...steps.slice(1, 5)].sort()).toEqual([...I.PRIORITIES].sort())
+    expect(I.nextPriority('someday')).toBe('low')
+  })
+
+  test('a reading priority is drawn, not written: as many bars filled as it presses, urgent a shape of its own', () => {
+    const faint = (p: string) => (I.priorityIcon(p).match(/class="off"/g) || []).length
+    const bars = (p: string) => (I.priorityIcon(p).match(/<rect /g) || []).length
+    expect(['', 'low', 'medium', 'high'].map(p => [bars(p), faint(p)])).toEqual([[3, 3], [3, 2], [3, 1], [3, 0]])
+    expect(I.priorityIcon('urgent')).toContain('class="cut"')
+    expect(bars('urgent')).toBe(1)
+    // five different pictures, none with a word in it
+    const all = ['', 'low', 'medium', 'high', 'urgent'].map(I.priorityIcon)
+    expect(new Set(all).size).toBe(5)
+    for (const svg of all) expect(svg.replace(/<[^>]*>/g, '')).toBe('')
+  })
 
   test('by reading priority: the most pressing first, the newest first within one, those with no day after them', () => {
     expect(I.ORDERS).toEqual(['priority', 'date'])

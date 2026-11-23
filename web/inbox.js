@@ -24,9 +24,25 @@
   /** Beside an item's why: the day it was added, and that its link is in the inbox twice. */
   const when = item => [item.added ? `added ${item.added}` : '', item.duplicate ? 'in the inbox twice' : ''].filter(Boolean).join(' · ')
 
-  /** The reading priorities, the most pressing first, as the menu names them. */
+  /** The reading priorities, the most pressing first. */
   const PRIORITIES = ['urgent', 'high', 'medium', 'low']
-  const PRIORITY_LABEL = { urgent: 'Urgent', high: 'High', medium: 'Medium', low: 'Low' }
+  /** What a tap on an item's reading priority steps through: none, each more pressing one, and none again after urgent. */
+  const STEPS = ['', 'low', 'medium', 'high', 'urgent']
+  const nextPriority = p => STEPS[(Math.max(0, STEPS.indexOf(p || '')) + 1) % STEPS.length]
+  /** How long after the last tap on a reading priority it is written. */
+  const STEP_MS = 700
+
+  /**
+   * A reading priority drawn: three rising bars, as many filled as it presses (low one, medium
+   * two, high three, none all faint), and urgent a filled square with a "!".
+   */
+  function priorityIcon(p) {
+    const filled = { low: 1, medium: 2, high: 3 }[p] || 0
+    const bars = [[1.5, 10], [6.5, 6], [11.5, 2]]
+      .map(([x, y], i) => `<rect x="${x}" y="${y}" width="3" height="${14.5 - y}" rx="1"${i < filled ? '' : ' class="off"'}/>`).join('')
+    const urgent = '<rect x="1.5" y="1.5" width="13" height="13" rx="3"/><path class="cut" d="M8 4.6v4.2M8 11.4v.01"/>'
+    return `<svg class="prio-ico" viewBox="0 0 16 16" aria-hidden="true">${p === 'urgent' ? urgent : bars}</svg>`
+  }
   const rank = p => { const i = PRIORITIES.indexOf(p); return i < 0 ? PRIORITIES.length : i }
 
   const ORDERS = ['priority', 'date']
@@ -69,7 +85,7 @@
   /**
    * The panel in the live page. The button beside the scratchpad's opens it and shows how many
    * items wait; what changes in the file (Obsidian, Claude) comes in while it is open or shut. The
-   * field at its top saves a link; on each item, its reading priority as a menu, its why to edit,
+   * field at its top saves a link; on each item, its reading priority as an icon a tap steps, its why to edit,
    * ✕ to discard it (two taps: a discarded link is not added again from here), and Process, which
    * asks Claude in the chat that ran /rft to read it and discuss what becomes of it; an item Claude
    * has briefed says so, and shows its brief at a tap. `key()`: the
@@ -154,31 +170,44 @@
       }
     }
 
-    /** An item's reading priority as a menu: only the user sets it, and nothing limits how many hold one. */
-    function priorityMenu(r) {
+    /**
+     * An item's reading priority as a button: its icon says it and a tap steps it (none, low,
+     * medium, high, urgent, none again). Only the user sets it, and nothing limits how many hold
+     * one. The taps of one go are written once, a moment after the last: the list, ordered by
+     * reading priority, does not move the item from under the finger between two taps.
+     */
+    function priorityButton(r) {
       const { item } = r
-      const sel = el('select', `prio${item.priority ? ` p-${item.priority}` : ''}`)
-      sel.setAttribute('aria-label', `Reading priority of ${label(item)}`)
-      sel.title = `${item.priority ? `Reading priority: ${item.priority}` : 'No reading priority'}. How soon you mean to read it; only you set it.`
-      for (const v of ['', ...PRIORITIES]) {
-        const o = el('option', '', v ? PRIORITY_LABEL[v] : 'No priority')
-        o.value = v
-        o.selected = (item.priority || '') === v
-        sel.append(o)
+      const b = el('button')
+      b.type = 'button'
+      let saved = item.priority || '', now = saved, timer = 0, writing = false
+      const show = () => {
+        b.className = `inbox-prio${now ? ` p-${now}` : ''}${now !== saved ? ' pending' : ''}`
+        b.dataset.priority = now
+        b.innerHTML = priorityIcon(now)
+        const says = now ? `Reading priority: ${now}` : 'No reading priority'
+        b.title = key() ? `${says}. A tap steps it: none, low, medium, high, urgent. How soon you mean to read it; only you set it.` : `${says}.`
+        b.setAttribute('aria-label', `${says}, of ${label(item)}${key() ? `. Press for ${nextPriority(now) || 'none'}` : ''}`)
       }
-      sel.disabled = !key()
-      sel.addEventListener('change', async () => {
-        const focused = document.activeElement === sel
-        sel.className = `prio${sel.value ? ` p-${sel.value}` : ''}`
-        if (await change(r, 'priority', sel.value, sel)) {
-          const now = rowOf(item.key, r.nth)
-          if (focused && now && !list.contains(document.activeElement)) now.querySelector('select.prio').focus()
-        } else {
-          sel.value = item.priority || ''
-          sel.className = `prio${item.priority ? ` p-${item.priority}` : ''}`
-        }
+      show()
+      b.disabled = !key()
+      b.addEventListener('click', () => {
+        if (writing) return
+        now = nextPriority(now)
+        show()
+        clearTimeout(timer)
+        timer = setTimeout(async () => {
+          // stepped all the way round: nothing to write, and what came in meanwhile is drawn
+          if (now === saved) return draw(last)
+          writing = true
+          // written: this button says so, should the list not be drawn again yet (another item is being stepped)
+          if (await change(r, 'priority', now, b)) saved = now
+          else now = saved
+          writing = false
+          show()
+        }, STEP_MS)
       })
-      return sel
+      return b
     }
 
     /** The why of an item, which a tap turns into a field: Enter or leaving it saves, Esc gives up. */
@@ -348,7 +377,7 @@
       a.target = '_blank'
       a.rel = 'noopener noreferrer'
       a.title = item.url
-      head.append(a, priorityMenu(r))
+      head.append(a, priorityButton(r))
       if (key()) head.append(discardOf(r))
       li.append(head)
       const under = el('div', 'inbox-under')
@@ -367,13 +396,13 @@
 
     /**
      * Whether the user is at something of the list a redraw would take from under them: a reading
-     * priority's menu, a why being typed, a ✕ asked once. `from`: a control whose own write is
+     * priority being stepped, a why being typed, a ✕ asked once. `from`: a control whose own write is
      * being drawn.
      */
     function engaged(from) {
       const a = document.activeElement
-      if (a && a !== from && list.contains(a) && a.matches('select.prio, input.inbox-why-edit')) return true
-      return [...list.querySelectorAll('.inbox-x.armed')].some(x => x !== from)
+      if (a && a !== from && list.contains(a) && a.matches('input.inbox-why-edit')) return true
+      return [...list.querySelectorAll('.inbox-x.armed, .inbox-prio.pending')].some(x => x !== from)
     }
 
     function draw(items, from) {
@@ -390,9 +419,10 @@
       // drawn once they leave it (the list's focusout), or at the next read
       if (json === shown || engaged(from)) return
       shown = json
-      // a redraw under the brief's mark or Process leaves the focus on the one that replaces it
+      // a redraw under a reading priority, the brief's mark or Process leaves the focus on the one that replaces it
       const a = document.activeElement
-      const at = a && list.contains(a) && a.matches('.inbox-briefed, .inbox-process') ? { ...a.closest('li').dataset, cls: a.className } : null
+      const cls = a && list.contains(a) && ['inbox-prio', 'inbox-briefed', 'inbox-process'].find(c => a.classList.contains(c))
+      const at = cls ? { ...a.closest('li').dataset, cls } : null
       list.replaceChildren(...ordered(items, order).map(row))
       const now = at && rowOf(at.key, at.nth)
       if (now && now.querySelector(`.${at.cls}`)) now.querySelector(`.${at.cls}`).focus()
@@ -479,7 +509,7 @@
       draw(last, b)
       list.scrollTop = 0
     }))
-    // what came in while the user was at a menu, a why or a ✕ is drawn once they leave it
+    // what came in while the user was at a why or a ✕ is drawn once they leave it
     list.addEventListener('focusout', () => setTimeout(() => draw(last), 0))
     panel.addEventListener('keydown', ev => {
       if (ev.key !== 'Escape' || ev.isComposing) return
@@ -498,5 +528,5 @@
     })
   }
 
-  root.RftInbox = { count, label, when, refusal, ORDERS, PRIORITIES, ordered, mount }
+  root.RftInbox = { count, label, when, refusal, ORDERS, PRIORITIES, nextPriority, priorityIcon, ordered, mount }
 })(typeof globalThis !== 'undefined' ? globalThis : window)
