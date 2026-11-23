@@ -1097,9 +1097,19 @@ note: start with E05
   over the slide's edge, not leave it. The arrow keys move by 1, with Shift by 10; Delete
   removes; Ctrl+D duplicates; Ctrl+C, X and V copy as text, to another slide, another deck or any
   editor; Ctrl+] and Ctrl+[ put in front and behind (with Shift, of all); the bar above the slide
-  has the same, and hides the text to give the slide its room. Every action is an edit of the
-  text and of nothing else, in the editor's own history: Ctrl+Z undoes a drag in one step,
-  whichever side the cursor is on.
+  has the same, and hides the text to give the slide its room. The bar adds too: **Text**,
+  **Rectangle**, **Ellipse**, **Line**, **Arrow**, each dragged out on the slide (or clicked, for
+  its usual size), written after the slide's content and before its `note:`. It colours what is
+  selected (fill, outline, text: none, the project's tokens by name, or `#rrggbb`), sets the
+  outline's weight, a line's arrow, the text's size and its place in its box, and gives a box's
+  height back to its text. A style is a whole box's, never a few words'. A double click on a box
+  (or Enter) opens its Markdown over it, at the slide's size and in its font: its source, not the
+  drawn text, so math, links and macros stay exact; Bold and Italic (Ctrl+B, Ctrl+I) put `**` and
+  `*` around what is selected; Esc or a click outside draws it again. A shape's first label goes
+  to its middle; a box of text left empty is removed. A new box of text has a width only: drag
+  its bottom to fix its height, and text longer than its box stays in view, marked in the editor
+  alone, never shrunk. Every action is an edit of the text and of nothing else, in the editor's
+  own history: Ctrl+Z undoes a drag in one step, whichever side the cursor is on.
 - **For**: `for:` lists where the deck is presented, one or more: a meeting's occurrence by the
   day its rule gives it (`G01 2026-11-24`; moved to the 25th, the deck goes with it), a once-only
   meeting by its id, a deadline by its id. A practice talk and the real one are one deck for both.

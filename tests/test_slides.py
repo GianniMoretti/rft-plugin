@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -335,7 +336,15 @@ class Tools(unittest.TestCase):
         """A point of the slide, in its units, on the screen."""
         return self.left + x * self.scale, self.top + y * self.scale
 
+    pressed = (0.0, 0.0, 0.0)  # the last press: when and where
+
     def mouse(self, kind: str, x: float, y: float, modifiers=0, down=False):
+        if kind == "mousePressed":
+            # two presses at one point are two clicks, not a double click: half a second apart
+            t, px, py = Tools.pressed
+            if abs(px - x) < 6 and abs(py - y) < 6 and time.time() - t < 0.5:
+                time.sleep(0.5 - (time.time() - t))
+            Tools.pressed = (time.time(), x, y)
         self.b.call("Input.dispatchMouseEvent", type=kind, x=x, y=y, button="none" if kind == "mouseMoved" and not down else "left",
                     buttons=1 if down or kind == "mousePressed" else 0, clickCount=0 if kind == "mouseMoved" else 1, modifiers=modifiers)
 
@@ -369,6 +378,40 @@ class Tools(unittest.TestCase):
 
     def selected(self):
         return self.b.js("[...document.querySelectorAll('#sl-preview .sl-frame, #sl-preview circle.sl-handle[data-h=a]')].length")
+
+    def press(self, selector: str):
+        """A real click in the middle of an element of the page."""
+        at = self.b.js("(() => { const el = document.querySelector(%s); if (!el) return null; const r = el.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2] })()" % json.dumps(selector))
+        self.assertIsNotNone(at, f"nothing at {selector}")
+        self.mouse("mouseMoved", *at)
+        self.mouse("mousePressed", *at)
+        self.mouse("mouseReleased", *at)
+
+    def tool(self, name: str):
+        self.press(f"#sl-tools [data-tool={name}]")
+
+    def colour(self, tool: str, name: str):
+        """A colour taken from a tool's swatches."""
+        self.tool(tool)
+        self.press(f"#sl-tools .sl-menu [data-color=\"{name}\"]")
+
+    def choose(self, tool: str, value: str):
+        """A value chosen in one of the bar's lists (its own pop-up is the browser's, not the page's)."""
+        self.b.js("(() => { const s = document.querySelector('#sl-tools [data-tool=%s]'); s.value = %s; s.dispatchEvent(new Event('change', { bubbles: true })) })()" % (tool, json.dumps(value)))
+
+    def type(self, text: str):
+        self.b.call("Input.insertText", text=text)
+
+    def draw(self, tool: str, a, b, modifiers=ALT):
+        """A tool that adds, dragged on the slide from point `a` to point `b` (the slide's units)."""
+        self.tool(tool)
+        sx, sy = self.px(*a)
+        ex, ey = self.px(*b)
+        self.drag(sx, sy, ex - sx, ey - sy, modifiers)
+
+    def source(self):
+        """The Markdown open over a box, or None."""
+        return self.b.js("(() => { const t = document.querySelector('#sl-preview .sl-source'); return t ? t.value : null })()")
 
     # ---- what an action may change
 
@@ -625,6 +668,175 @@ class RoundTripTest(Tools):
         self.changed(before, 0, {"x": box["x"] + 50 / self.scale, "y": box["y"] + 20 / self.scale})
         b.js("document.querySelector('#sl-tools [data-tool=text]').click()")
         self.assertTrue(b.wait("getComputedStyle(document.querySelector('#slides .ms-editor')).display !== 'none'"))
+        self.assertEqual(b.errors, [])
+
+
+def without_items(text: str, n: int) -> str:
+    """A deck's text with slide `n`'s boxes and lines taken out, each with the blank line after it."""
+    slides = re.split(r"(^---[ \t]*$)", re.sub(r"\A---\n.*?\n---\n", "", text, flags=re.S), flags=re.M)
+    front = text[:len(text) - len("".join(slides))]
+    body = slides[2 * (n - 1)]
+    body = re.sub(r"^<!--[ \t]*box\b.*?^<!--[ \t]*/box[ \t]*-->[ \t]*\n\n?", "", body, flags=re.M | re.S)
+    body = re.sub(r"^<!--[ \t]*line\b.*-->[ \t]*\n\n?", "", body, flags=re.M)
+    slides[2 * (n - 1)] = body
+    return front + "".join(slides)
+
+
+@unittest.skipUnless(CHROME and websocket, "needs Chromium (Playwright's, or RFT_CHROME) and websocket-client")
+class BuildTest(Tools):
+    """Boxes and lines added and styled with the tools, and a box's Markdown edited over it."""
+
+    ID, NAME = "P05", "P05 Built.md"
+
+    def test_1_scenario_b_built_with_the_tools_is_the_text_written_by_hand(self):
+        b = self.b
+        bare = without_items(self.orig, 2)
+        self.assertNotIn("<!-- box", slides_of(bare)[1])
+        self.assertIn("<!-- box", slides_of(bare)[2])
+        self.start(2, bare)
+        want = placed(slides_of(self.orig)[1])
+        text, ellipse, arrow = want
+        # a box of text: dragged out to its width, typed, coloured, sized
+        self.draw("addText", (text["x"], text["y"]), (text["x"] + text["w"], text["y"] + 70))
+        self.assertEqual(self.source(), "Text", "its Markdown is open over it")
+        self.type("gap closes here")
+        self.key("Escape")
+        self.assertIsNone(self.source())
+        self.colour("color", "contrast")
+        self.press("#sl-tools [data-tool=size]")
+        self.type("40")
+        self.key("Enter")
+        # an ellipse around the point, its outline coloured and weighted
+        self.draw("ellipse", (ellipse["x"], ellipse["y"]), (ellipse["x"] + ellipse["w"], ellipse["y"] + ellipse["h"]))
+        self.colour("outline", "contrast")
+        self.choose("weight", "thick")
+        self.choose("weight", "medium")
+        # an arrow from the text to it
+        self.draw("arrow", arrow["from"], arrow["to"])
+        self.colour("outline", "contrast")
+        self.assertEqual(self.text(), self.orig)
+        if self.shots:
+            b.shot(Path(self.shots) / "scenario-b-built.png")
+        # each of those was one step: the arrow's colour, the arrow
+        self.key("z", CTRL)
+        self.key("z", CTRL)
+        self.assertEqual(self.text(), without_items(self.orig, 2).replace("\n\nnote:", "\n\n" + "\n\n".join(
+            "\n".join(blk) for blk in ([item_line(self.orig, 2, 0), "gap closes here", "<!-- /box -->"], [item_line(self.orig, 2, 1), "<!-- /box -->"])) + "\n\nnote:"))
+        self.assertEqual(b.errors, [])
+
+    def test_2_a_click_adds_at_the_usual_size_and_a_shape_takes_a_label(self):
+        b = self.b
+        bare = without_items(self.orig, 2)
+        self.start(2, bare)
+        self.tool("rect")
+        self.assertEqual(b.js("document.querySelector('#sl-tools [data-tool=rect]').getAttribute('aria-pressed')"), "true")
+        self.click(400, 300, ALT)
+        made = '<!-- box x="240" y="200" w="320" h="200" outline="text" -->'
+        self.assertEqual(self.text(), bare.replace("\n\nnote:", f"\n\n{made}\n<!-- /box -->\n\nnote:"))
+        self.assertEqual(b.js("document.querySelector('#sl-tools [data-tool=rect]').getAttribute('aria-pressed')"), "false", "the tool is put down once used")
+        self.assertEqual(self.selected(), 1)
+        # filled with a token's colour, then with one of your own
+        self.colour("fill", "fill")
+        self.assertIn('h="200" fill="fill" outline="text"', self.text())
+        self.tool("fill")
+        self.press("#sl-tools .sl-menu .sl-hex")
+        self.type("#E4E3F5")
+        self.key("Enter")
+        self.assertIn('h="200" fill="#E4E3F5" outline="text"', self.text())
+        self.assertEqual(self.drawn()[0]["background"], "rgb(228, 227, 245)")
+        # Enter opens its Markdown; its first label sits in its middle
+        self.key("Enter")
+        self.assertEqual(self.source(), "")
+        self.type("Encoder")
+        self.click(1500, 900)  # a click outside draws it again
+        self.assertIsNone(self.source())
+        labelled = '<!-- box x="240" y="200" w="320" h="200" fill="#E4E3F5" outline="text" align="center" valign="middle" -->'
+        self.assertEqual(self.text(), bare.replace("\n\nnote:", f"\n\n{labelled}\nEncoder\n<!-- /box -->\n\nnote:"))
+        # its alignment changed, and taken away again by the same button
+        self.click(400, 300)
+        self.tool("left")
+        self.assertIn('align="left" valign="middle"', self.text())
+        self.tool("left")
+        self.assertIn('outline="text" valign="middle" -->', self.text())
+        self.tool("top")
+        self.tool("top")
+        self.assertIn('outline="text" -->', self.text())
+        # a line made an arrow, thin
+        self.tool("line")
+        self.click(700, 700, ALT)
+        self.assertIn('\n\n<!-- line from="700 700" to="1000 700" -->\n\nnote:', self.text())
+        self.choose("ends", "both")
+        self.choose("weight", "thin")
+        self.assertIn('\n\n<!-- line from="700 700" to="1000 700" arrow="both" weight="thin" -->\n\nnote:', self.text())
+        self.choose("ends", "")
+        self.assertIn('\n\n<!-- line from="700 700" to="1000 700" weight="thin" -->\n\nnote:', self.text())
+        self.assertEqual(b.errors, [])
+
+    def test_3_a_box_s_markdown_edited_over_it(self):
+        b = self.b
+        self.start(2)
+        before = self.text()
+        box = self.items()[0]
+        at = self.px(box["x"] + box["w"] / 2, box["y"] + 30)
+        # a double click opens it, at the slide's size
+        self.mouse("mouseMoved", *at)
+        for n in (1, 2):
+            self.b.call("Input.dispatchMouseEvent", type="mousePressed", x=at[0], y=at[1], button="left", buttons=1, clickCount=n)
+            self.b.call("Input.dispatchMouseEvent", type="mouseReleased", x=at[0], y=at[1], button="left", buttons=0, clickCount=n)
+        self.assertEqual(self.source(), "gap closes here")
+        shown = b.js("(() => { const t = document.querySelector('#sl-preview .sl-source'), r = t.getBoundingClientRect(); return [r.left, r.top, r.width, parseFloat(getComputedStyle(t).fontSize)] })()")
+        sx, sy = self.px(box["x"], box["y"])
+        self.assertAlmostEqual(shown[0], sx, delta=1)
+        self.assertAlmostEqual(shown[1], sy, delta=1)
+        self.assertAlmostEqual(shown[2], box["w"] * self.scale, delta=1)
+        self.assertEqual(shown[3], 40)
+        # bold and italic go around what is selected of the source
+        self.key("a", CTRL, ["selectAll"])
+        self.tool("bold")
+        self.assertEqual(self.source(), "**gap closes here**")
+        self.key("i", CTRL)
+        self.assertEqual(self.source(), "***gap closes here***")
+        self.key("i", CTRL)
+        self.assertEqual(self.source(), "**gap closes here**")
+        self.assertEqual(self.text(), before, "nothing is written while it is open")
+        self.key("Escape")
+        self.assertIsNone(self.source())
+        self.assertEqual(self.text(), before.replace("gap closes here", "**gap closes here**"))
+        self.assertTrue(b.js("!!document.querySelector('#sl-preview .slide-box strong')"))
+        # the keys are the slide's again: the arrow moves the box
+        self.key("ArrowRight")
+        self.assertIn(f'x="{box["x"] + 1}"', item_line(self.text(), 2, 0))
+        # a box of text left empty is removed
+        self.key("Enter")
+        self.key("a", CTRL, ["selectAll"])
+        self.key("Delete", commands=["deleteBackward"])
+        self.assertEqual(self.source(), "")
+        self.key("Escape")
+        self.assertEqual(self.text(), without_items(self.orig, 2).replace("\n\nnote:", "\n\n" + "\n".join([item_line(self.orig, 2, 1), "<!-- /box -->", "", item_line(self.orig, 2, 2)]) + "\n\nnote:"))
+        self.assertEqual(b.errors, [])
+
+    def test_4_text_longer_than_its_box_is_marked_in_the_editor_only(self):
+        b = self.b
+        self.start(2)
+        box = self.items()[0]
+        self.click(box["x"] + box["w"] / 2, box["y"] + 30)
+        self.assertEqual(b.js("document.querySelector('#sl-tools [data-tool=fit]').disabled"), True)
+        # its bottom dragged up, under its text's height: the text stays whole, a mark says so
+        high = self.drawn()[0]["rect"][3]
+        self.drag(*self.handle("s"), 0, -(high - 30) * self.scale, ALT)
+        got = dict(OPT.findall(item_line(self.text(), 2, 0)))
+        self.assertAlmostEqual(int(got["h"]), 30, delta=1)
+        self.assertEqual(b.js("document.querySelectorAll('#sl-preview .sl-warn').length"), 1)
+        font = b.js("getComputedStyle(document.querySelector('#sl-preview .slide-box-text')).fontSize")
+        self.assertEqual(font, "40px", "the text is not shrunk to fit")
+        b.js("document.getElementById('sl-present').click()")
+        self.assertTrue(b.wait("!!document.querySelector('#sl-show .slide')"))
+        self.assertEqual(b.js("document.querySelectorAll('#sl-show .sl-warn, #sl-show .sl-edit').length"), 0)
+        b.js("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))")
+        # its height given back to its text
+        self.tool("fit")
+        self.assertEqual(self.text(), self.orig)
+        self.assertEqual(b.js("document.querySelectorAll('#sl-preview .sl-warn').length"), 0)
         self.assertEqual(b.errors, [])
 
 

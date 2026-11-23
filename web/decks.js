@@ -387,6 +387,7 @@
     function drawPreview() {
       const slide = parsed.slides[cur]
       if (!slide) { previewEl.replaceChildren(); notesEl.textContent = ''; if (tools) tools.redraw(); return }
+      if (tools) tools.beforeDraw()
       fitPreview = place(previewEl, slide)
       notesEl.textContent = slide.notes ? slide.notes : ''
       notesEl.hidden = !slide.notes

@@ -1165,16 +1165,45 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
 /* the slide tools (web/slide-tools.js): a bar above the slide, and over the slide what the pointer
    takes hold of, in the slide's own units (an SVG with the slide's transform): each box's and
    line's shape, the frame and handles of those selected, the guides a drag is snapped to */
-.sl-tools { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.sl-tools { flex: none; position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px;
+  --slide-c-text: var(--deck-fg, #1f2328); --slide-c-muted: var(--deck-muted, #656d76); --slide-c-accent: var(--deck-accent, #7048e8);
+  --slide-c-grid: var(--deck-line, #d8dde4); --slide-c-fill: var(--deck-fill, #f4f5f7); --slide-c-contrast: var(--deck-contrast, #EC003F);
+  --slide-c-baseline: var(--deck-baseline, #020617); --slide-c-neutral: var(--deck-neutral, #A3ADBD); --slide-c-axis: var(--deck-axis, #90A1B9);
+  --slide-c-c1: var(--deck-c1, #8E51FF); --slide-c-c2: var(--deck-c2, #2B7FFF); --slide-c-c3: var(--deck-c3, #F0B100);
+  --slide-c-c4: var(--deck-c4, #3F8F4E); --slide-c-c5: var(--deck-c5, #EC003F); --slide-c-c6: var(--deck-c6, #00B8DB); }
 .sl-tools[hidden] { display: none; }
-.sl-tool-group { display: inline-flex; gap: 2px; }
+.sl-tool-group { display: inline-flex; align-items: center; gap: 2px; }
+.sl-tools select, .sl-tools .sl-size { font: inherit; font-size: 12px; padding: 2px 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+.sl-tools .sl-size { width: 52px; }
+.sl-tools select:disabled, .sl-tools .sl-size:disabled { opacity: 0.45; }
+.sl-tools .sl-letter-bold { font-weight: 800; min-width: 28px; }
+.sl-tools .sl-letter-italic { font-style: italic; font-family: Georgia, serif; min-width: 28px; }
+/* a colour's button shows the colour in use; none: a dashed mark */
+.sl-tools .sl-ink { fill: var(--ink, transparent); }
+.sl-tools .sl-ink-line { stroke: var(--ink, currentColor); }
+.sl-tools .no-ink .sl-ink-line { stroke: var(--muted); stroke-dasharray: 2 2; }
+.sl-menu { position: absolute; z-index: 5; display: grid; grid-template-columns: repeat(8, 22px); gap: 4px; padding: 8px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--bg); box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18); }
+.sl-swatch { width: 22px; height: 22px; min-width: 0; padding: 0; border: 1px solid var(--line); border-radius: 4px; }
+.sl-swatch.none { background: linear-gradient(to top right, transparent 46%, #f03e3e 46%, #f03e3e 54%, transparent 54%); }
+.sl-menu .sl-hex { grid-column: 1 / -1; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--fg); }
+.sl-menu .sl-hex.bad { border-color: #f03e3e; }
+/* a tool that adds, waiting for where */
+.sl-stage.sl-armed, .sl-stage.sl-armed * { cursor: crosshair !important; }
+/* a box's Markdown open over it, at the slide's size: its source, in the box's own font */
+.sl-layer { position: absolute; z-index: 2; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0; pointer-events: none; }
+.sl-source { position: absolute; box-sizing: border-box; margin: 0; padding: 12px 20px; border: 0; outline: 4px solid var(--accent); border-radius: 2px; resize: none; overflow: hidden;
+  background: rgba(255, 255, 255, 0.94); color: #1f2328; pointer-events: auto; white-space: pre-wrap; }
+.sl-edit .sl-warn path { fill: #f59f00; stroke: none; pointer-events: all; }
+.sl-edit .sl-warn .sl-warn-mark { fill: none; stroke: #fff; stroke-linecap: round; pointer-events: none; }
 .sl-body.no-text { grid-template-columns: minmax(170px, 240px) minmax(0, 1fr); }
 .sl-body.no-text > .ms-editor { display: none; }
 .sl-body.no-text .sl-stage { max-height: calc(100vh - 250px); }
 /* a handle on the slide's edge shows whole; nothing further out does, so the pane never scrolls for it */
 .sl-stage.sl-editing { overflow: clip; overflow-clip-margin: 8px; outline: none; }
 .sl-stage.sl-editing:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
-.sl-edit { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0; overflow: visible; pointer-events: none; }
+.sl-edit { position: absolute; z-index: 1; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0; overflow: visible; pointer-events: none; }
 .sl-edit .sl-hit { fill: transparent; stroke: transparent; pointer-events: all; cursor: move; }
 .sl-edit .sl-hit.hollow { fill: none; pointer-events: stroke; }
 .sl-edit .sl-frame { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none; }
