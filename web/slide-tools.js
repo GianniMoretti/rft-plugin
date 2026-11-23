@@ -42,6 +42,8 @@
     outline: '<rect class="sl-ink-line" x="3.5" y="3.5" width="9" height="9" rx="1" stroke-width="2.5"/>',
     color: '<path d="M4.5 10.5L8 2.5l3.5 8M5.8 8h4.4" stroke-width="1.6"/><path class="sl-ink-line" d="M3 13.5h10" stroke-width="2.5"/>',
     figure: '<path d="M2.5 2.5v11h11M5 10.5l2.5-3 2 1.5 3-4.5"/>',
+    layout: '<rect x="2" y="3" width="12" height="10" rx="1"/><path d="M2 6.5h12M8 6.5V13"/>',
+    detach: '<rect x="2" y="2" width="8" height="6" rx="1" stroke-dasharray="2 1.5"/><rect x="6.5" y="8" width="7.5" height="6" rx="1"/><path d="M4 10.5l2 2M6 10.6v1.9H4.1"/>',
     image: '<rect x="2.5" y="3" width="11" height="10" rx="1"/><path d="M2.5 11.5l3-3 2.5 2.5 2-2 3.5 3.5"/><circle cx="10.5" cy="6" r="0.9"/>',
   }
   const icon = name => (ICONS[name] ? `<svg class="ico" viewBox="0 0 16 16" aria-hidden="true">${ICONS[name]}</svg>` : '')
@@ -52,6 +54,17 @@
   const IMAGE_W = 960 // an image pasted or dropped is at most this wide at first
   const MAX_IMAGE = 20e6 // bytes: a larger image is not taken
   const FIGURE_RE = /^([A-Za-z]+\d+)_(.+)\.svg$/
+  /** A layout as a small drawing, for the gallery: a slide 48 by 27. */
+  const LAYOUT_ICONS = {
+    default: '<rect x="5" y="4" width="20" height="3.5" rx="1"/><path d="M5 12h30M5 16h26M5 20h28"/>',
+    title: '<rect x="10" y="9" width="28" height="4.5" rx="1"/><path d="M16 18h16"/>',
+    section: '<rect x="0" y="0" width="48" height="27" class="sl-lay-fill"/><rect x="5" y="11" width="26" height="4.5" rx="1" class="sl-lay-inv"/>',
+    'two-cols': '<rect x="5" y="4" width="20" height="3.5" rx="1"/><rect x="5" y="11" width="17" height="12" rx="1" class="sl-lay-soft"/><rect x="26" y="11" width="17" height="12" rx="1" class="sl-lay-soft"/>',
+    figure: '<rect x="5" y="3" width="20" height="3.5" rx="1"/><rect x="9" y="9" width="30" height="11" rx="1" class="sl-lay-soft"/><path d="M17 23.5h14"/>',
+  }
+  const LAYOUT_NAMES = { default: 'A heading, then the content', title: 'Title', section: 'Section', 'two-cols': 'Two columns', figure: 'Figure' }
+  /** How far a box of text's edge is from its text (app.css's .slide-box-text): a slot's text taken out of its layout keeps its place by it. */
+  const TEXT_PAD = { x: 20, y: 12 }
   const HEX_RE = /^#[0-9a-f]{6}$/i
 
   function mount({ cm, stage, bar, body, store, slide, api = null, deck = () => '', imageUrl = src => src, noteName = id => id, notify = () => {} }) {
@@ -68,7 +81,8 @@
     let armed = '' // the tool that adds, waiting for where: the next press on the slide is its
     let editing = null // a box's Markdown open over it: { handle (its line in the text), ta, layer }
     let menu = null // the colours open under their button
-    let lastPress = null // the last press on a box or a line: { k, t, x, y }
+    let lastPress = null // the last press on a box, a line or a slot: { k, t, x, y }
+    let slotSel = '' // the slot selected, by its name (none while a box or a line is)
 
     // ---------------------------------------------------------------- what is on the slide
 
@@ -93,6 +107,7 @@
     function select(ks, cursor = true) {
       const its = items()
       sel = ks.filter(k => its[k]).map(k => cm.getLineHandle(its[k].from))
+      slotSel = ''
       if (cursor && ks.length && its[ks[0]] && cm.getCursor().line !== its[ks[0]].from) {
         syncing = true
         cm.setCursor({ line: its[ks[0]].from, ch: 0 })
@@ -100,6 +115,64 @@
         syncing = false
       }
       draw()
+    }
+
+    // ---- slots: the regions of the layout, which hold the content that is no box
+
+    const slotsNow = () => (slide() ? P.slots(slide()) : [])
+    const slotOf = name => slotsNow().find(s => s.name === name) || null
+    const slotEl = name => { const el = slideEl(); return el && name ? el.querySelector(`[data-slot="${name}"]`) : null }
+    /** Where an element of the slide is drawn, in the slide's units. */
+    const rectOf = el => {
+      const r = slideEl().getBoundingClientRect(), b = el.getBoundingClientRect()
+      return { x: (b.left - r.left) / scale, y: (b.top - r.top) / scale, w: b.width / scale, h: b.height / scale }
+    }
+
+    /** Selects a slot; the editor's cursor goes to its text. */
+    function selectSlot(name, cursor = true) {
+      sel = []
+      slotSel = slotEl(name) ? name : ''
+      const s = slotSel ? slotOf(name) : null
+      const first = s ? s.rows.find(r => r.line >= 0 && r.text.trim()) : null
+      if (cursor && first && cm.getCursor().line !== first.line) {
+        syncing = true
+        cm.setCursor({ line: first.line, ch: 0 })
+        cm.scrollIntoView({ line: first.line, ch: 0 }, 60)
+        syncing = false
+      }
+      draw()
+    }
+
+    /** The slide's own options changed (its layout, its columns' share, its heading's colour and size). */
+    function slideOpt(changes) {
+      const e = slide() ? E.slideOptions(lines(), slide(), changes) : null
+      if (e) apply([e])
+    }
+
+    /** The slot selected taken out of its layout: a box in the same place, selected. */
+    function detach() {
+      const s = slide(), el = slotEl(slotSel), slot = slotOf(slotSel)
+      if (!s || !el || !slot || !slot.text) return
+      // a figure alone keeps its own rectangle; text, its place inside the box's padding
+      const img = el.querySelectorAll('img').length === 1 && /^\s*!\[/.test(slot.text) && !slot.text.includes('\n') ? el.querySelector('img') : null
+      const r = rectOf(img || el)
+      const rect = img ? { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.w) } : { x: Math.round(r.x - TEXT_PAD.x), y: Math.round(r.y - TEXT_PAD.y), w: Math.round(r.w + 2 * TEXT_PAD.x) }
+      const d = E.detached(lines(), s, slotSel, rect)
+      if (!d) return
+      slotSel = ''
+      apply(d.edits)
+      selectLines([d.first])
+    }
+
+    /** The slide's layout changed, or (`fresh`) a new slide of that layout after it, its heading ready to be typed over. */
+    function layout(name, fresh) {
+      const s = slide()
+      if (!s) return
+      if (!fresh) { const e = E.withLayout(lines(), s, name); if (e) apply([e]); return }
+      const { edit, line } = E.newSlide(lines(), s, name)
+      apply([edit])
+      cm.setCursor({ line, ch: 0 })
+      cm.scrollIntoView({ line, ch: 0 }, 80)
     }
 
     /** Selects the boxes and lines that start at these lines of the text. */
@@ -217,34 +290,39 @@
 
     /** The editor laid over its box, at the slide's size; the box's own text hidden under it. */
     function layEditor() {
-      const el = slideEl(), line = cm.getLineNumber(editing.handle)
-      const k = items().findIndex(i => i.from === line)
-      const box = k < 0 ? null : elOf(k)
-      if (!el || !box) { const e = editing; editing = null; e.layer.remove(); return }
-      const g = geom(k), cs = getComputedStyle(box), ta = editing.ta
+      const el = slideEl(), ta = editing.ta
+      let over = null, g = null
+      if (editing.slot) {
+        over = slotEl(editing.slot)
+        g = over ? rectOf(over) : null
+      } else {
+        const line = cm.getLineNumber(editing.handle)
+        const k = items().findIndex(i => i.from === line)
+        over = k < 0 ? null : elOf(k)
+        g = over ? geom(k) : null
+      }
+      if (!el || !over) { const e = editing; editing = null; e.layer.remove(); return }
+      const cs = getComputedStyle(over)
       Object.assign(ta.style, { left: `${g.x}px`, top: `${g.y}px`, width: `${g.w}px`, minHeight: `${Math.max(g.h, 64)}px`, fontSize: cs.fontSize, fontFamily: cs.fontFamily, lineHeight: cs.lineHeight, textAlign: cs.textAlign })
+      ta.classList.toggle('sl-source-slot', !!editing.slot)
       editing.layer.style.transform = el.style.transform
       if (editing.layer.parentNode !== stage) stage.append(editing.layer)
-      const text = box.querySelector('.slide-box-text')
+      const text = editing.slot ? over : over.querySelector('.slide-box-text')
       if (text) text.style.visibility = 'hidden'
       if (editing.kept) { ta.focus({ preventScroll: true }); ta.setSelectionRange(...editing.kept); editing.kept = null }
     }
 
-    /** Opens the Markdown of box `k` over it (`all`: selected, to be typed over). Esc, or a click outside, draws it again. */
-    function edit(k, all = false) {
-      const it = items()[k]
-      if (!it || it.kind !== 'box' || !elOf(k)) return
-      commit()
-      select([k])
+    /** The editor over a box or a slot: its Markdown `text`, to be written by `commit`. */
+    function openEditor(state, text, all) {
       const layer = document.createElement('div')
       layer.className = 'sl-layer'
       const ta = document.createElement('textarea')
       ta.className = 'sl-source'
       ta.spellcheck = false
-      ta.value = it.content
-      ta.setAttribute('aria-label', 'The box\'s Markdown')
+      ta.value = text
+      ta.setAttribute('aria-label', state.slot ? 'The slot\'s Markdown' : 'The box\'s Markdown')
       layer.append(ta)
-      editing = { handle: cm.getLineHandle(it.from), ta, layer }
+      editing = { ...state, ta, layer }
       ta.addEventListener('input', grow)
       ta.addEventListener('blur', () => commit())
       ta.addEventListener('keydown', ev => {
@@ -262,12 +340,37 @@
       renderBar()
     }
 
+    /** Opens a slot's Markdown over it, as a box's. */
+    function editSlot(name, all = false) {
+      const slot = slotOf(name)
+      if (!slot || !slotEl(name)) return
+      commit()
+      selectSlot(name)
+      openEditor({ slot: name }, slot.text, all)
+    }
+
+    /** Opens the Markdown of box `k` over it (`all`: selected, to be typed over). Esc, or a click outside, draws it again. */
+    function edit(k, all = false) {
+      const it = items()[k]
+      if (!it || it.kind !== 'box' || !elOf(k)) return
+      commit()
+      select([k])
+      openEditor({ handle: cm.getLineHandle(it.from) }, it.content, all)
+    }
+
     /** The editor closed and its text written as the box's: a box of text left empty is removed; a shape's first label sits in its middle. */
     function commit() {
       if (!editing) return
       const e = editing
       editing = null
       e.layer.remove()
+      if (e.slot) {
+        const slot = slotOf(e.slot), now = e.ta.value.replace(/^(\s*\n)+/, '').replace(/\s+$/, '')
+        const change = slot && now !== slot.text ? E.slotEdit(lines(), slide(), e.slot, now) : null
+        if (change) apply([change])
+        else redrawSlide()
+        return
+      }
       const line = cm.getLineNumber(e.handle)
       const it = items().find(i => i.from === line), ls = lines()
       const value = e.ta.value.replace(/\s+$/, '')
@@ -368,7 +471,11 @@
           pick.append(img, label)
           pick.addEventListener('click', () => {
             closeMenu()
-            addPicture(f.file, (P.WIDTH - FIGURE_W) / 2, 240, FIGURE_W)
+            // into the slot selected, after what it holds; else a box of its own
+            const slot = slotOf(slotSel)
+            const e = slot ? E.slotEdit(lines(), slide(), slotSel, `${slot.text ? `${slot.text}\n\n` : ''}![[${f.file}]]`) : null
+            if (e) apply([e])
+            else addPicture(f.file, (P.WIDTH - FIGURE_W) / 2, 240, FIGURE_W)
             stage.focus({ preventScroll: true })
           })
           menu.append(pick)
@@ -425,6 +532,17 @@
       if (!overlay) return
       const its = items(), ks = selected(), u = 1 / scale
       const out = []
+      // the slots, under the boxes and lines; between two columns, their divide
+      const sl = slideEl()
+      const places = new Map([...sl.querySelectorAll('[data-slot]')].map(el => [el.dataset.slot, rectOf(el)]))
+      for (const [name, r] of places) out.push(svg('rect', { class: 'sl-slot', 'data-slot': name, x: r.x, y: r.y, width: r.w, height: Math.max(r.h, 1) }))
+      if (places.has('left') && places.has('right')) {
+        const l = places.get('left'), r = places.get('right'), w = HANDLE_PX * u * 1.4
+        const x = (l.x + l.w + r.x) / 2
+        out.push(svg('rect', { class: 'sl-divide', x: x - w / 2, y: l.y, width: w, height: Math.max(l.h, 1) }), svg('line', { class: 'sl-divide-mark', x1: x, y1: l.y, x2: x, y2: l.y + l.h }))
+      }
+      if (slotSel && places.has(slotSel)) { const r = places.get(slotSel); out.push(svg('rect', { class: 'sl-frame sl-slot-frame', x: r.x, y: r.y, width: r.w, height: r.h })) }
+      if (drag && drag.type === 'slot' && drag.over && places.has(drag.over)) { const r = places.get(drag.over); out.push(svg('rect', { class: 'sl-frame sl-drop', x: r.x, y: r.y, width: r.w, height: r.h })) }
       its.forEach((it, k) => {
         const g = geom(k)
         if (!g) return
@@ -497,6 +615,7 @@
       // what was selected and is gone from the text is no longer; another slide starts with nothing selected
       const n = slide() ? slide().n : 0
       sel = n === shown ? sel.filter(h => cm.getLineNumber(h) != null) : []
+      if (n !== shown || !slotEl(slotSel)) slotSel = ''
       shown = n
       showLive()
       if (editing) layEditor()
@@ -547,6 +666,24 @@
         return
       }
       const handle = ev.target.closest('.sl-handle'), hit = ev.target.closest('.sl-hit')
+      const divide = ev.target.closest('.sl-divide'), slotHit = ev.target.closest('.sl-slot')
+      if (divide || slotHit) {
+        ev.preventDefault()
+        stage.focus({ preventScroll: true })
+        const base = { id: ev.pointerId, px: ev.clientX, py: ev.clientY, at: point(ev), ks: [], from: new Map(), moved: false, xs: [], ys: [] }
+        if (divide) {
+          const cols = rectOf(slideEl().querySelector('.slide-cols')), l = rectOf(slotEl('left')), r = rectOf(slotEl('right'))
+          drag = { ...base, type: 'divide', left: cols.x, width: cols.w, gap: r.x - (l.x + l.w), share: slide().split || 50 }
+        } else {
+          const name = slotHit.dataset.slot
+          const twice = lastPress && lastPress.k === name && ev.timeStamp - lastPress.t < DOUBLE_MS && Math.hypot(ev.clientX - lastPress.x, ev.clientY - lastPress.y) < 5
+          lastPress = twice ? null : { k: name, t: ev.timeStamp, x: ev.clientX, y: ev.clientY }
+          selectSlot(name)
+          drag = { ...base, type: 'slot', name, twice, over: '' }
+        }
+        stage.setPointerCapture(ev.pointerId)
+        return
+      }
       if (!handle && !hit) {
         if (!ev.shiftKey && sel.length) select([])
         return
@@ -581,7 +718,16 @@
       const snapX = edges => { const s = E.snap(edges, drag.xs, tol); if (s.at != null) guides.push({ x: s.at }); return s.d }
       const snapY = edges => { const s = E.snap(edges, drag.ys, tol); if (s.at != null) guides.push({ y: s.at }); return s.d }
       live = new Map()
-      if (drag.type === 'draw') {
+      if (drag.type === 'divide') {
+        // the columns follow the divide; their share is written when it is let go
+        drag.share = E.share(p.x, drag.left, drag.width, drag.gap)
+        slideEl().querySelector('.slide-cols').style.gridTemplateColumns = `${drag.share}fr ${100 - drag.share}fr`
+      } else if (drag.type === 'slot') {
+        // a column's content goes to the other column, nowhere else
+        const other = drag.name === 'left' ? 'right' : drag.name === 'right' ? 'left' : ''
+        const el = slotEl(other), r = el ? rectOf(el) : null
+        drag.over = r && p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h ? other : ''
+      } else if (drag.type === 'draw') {
         let x = p.x, y = p.y
         const a = drag.at, straight = drag.tool === 'line' || drag.tool === 'arrow'
         if (ev.shiftKey && straight) {
@@ -650,6 +796,26 @@
       live = new Map()
       guides = []
       if (stage.hasPointerCapture(ev.pointerId)) stage.releasePointerCapture(ev.pointerId)
+      if (d.type === 'divide') {
+        const now = d.share === 50 ? null : d.share
+        const e = done && d.moved && now !== (slide().split || null) ? E.slideOptions(lines(), slide(), { split: now }) : null
+        if (e) apply([e])
+        else redrawSlide()
+        return
+      }
+      if (d.type === 'slot') {
+        if (done && d.moved && d.over) {
+          const e = E.swapped(lines(), slide())
+          if (e) { apply([e]); selectSlot(d.over) } else draw()
+        } else if (done && !d.moved && d.twice) editSlot(d.name)
+        else if (done && !d.moved) {
+          // a link under the slot is still a link: a click on it opens its note
+          const a = document.elementsFromPoint(ev.clientX, ev.clientY).find(el => el.matches && el.matches('.slide a[data-go]'))
+          if (a) a.click()
+          draw()
+        } else draw()
+        return
+      }
       if (d.type === 'draw') {
         if (!done) { draw(); return }
         const tool = d.tool
@@ -695,6 +861,10 @@
       if (mod && key.toLowerCase() === 'z') { used(); if (ev.shiftKey) cm.redo(); else cm.undo(); return }
       if (mod && key.toLowerCase() === 'y') { used(); cm.redo(); return }
       if (key === 'Escape' && armed) { used(); arm(''); return }
+      if (slotSel) {
+        if (key === 'Enter') { used(); editSlot(slotSel) } else if (key === 'Escape') { used(); selectSlot('') }
+        return
+      }
       if (!selected().length) return
       if (key === 'Enter' && selected().length === 1 && items()[selected()[0]].kind === 'box') { used(); edit(selected()[0]); return }
       const step = ev.shiftKey ? 10 : 1
@@ -738,7 +908,11 @@
       const line = cm.getCursor().line
       const k = items().findIndex(i => line >= i.from && line < i.to)
       const ks = selected()
-      if (k >= 0 ? ks.length !== 1 || ks[0] !== k : ks.length) select(k >= 0 ? [k] : [], false)
+      if (k >= 0) { if (ks.length !== 1 || ks[0] !== k) select([k], false); return }
+      // in a slot's text: the slot
+      const slot = slotsNow().find(sl => sl.rows.some(r => r.line === line && r.text.trim()))
+      const name = slot && slotEl(slot.name) ? slot.name : ''
+      if (ks.length || name !== slotSel) { sel = []; slotSel = name; draw() }
     })
 
     // ---------------------------------------------------------------- the bar above the slide
@@ -811,6 +985,42 @@
       if (menu) menu.remove()
       menu = null
     }
+
+    /** The layouts, under their button: this slide's changed to one, or a new slide of one after it. */
+    function gallery() {
+      const open = menu && menu.dataset.for === 'layout'
+      closeMenu()
+      if (open || !slide()) return
+      const b = buttons.layout
+      menu = document.createElement('div')
+      menu.className = 'sl-menu sl-layouts'
+      menu.dataset.for = 'layout'
+      menu.setAttribute('role', 'menu')
+      const row = (label, fresh) => {
+        const head = document.createElement('div')
+        head.className = 'sl-figures-note'
+        head.textContent = label
+        menu.append(head)
+        for (const name of P.LAYOUTS) {
+          const pick = document.createElement('button')
+          pick.type = 'button'
+          pick.className = 'sl-layout'
+          pick.dataset.layout = name
+          pick.dataset.fresh = String(fresh)
+          pick.title = LAYOUT_NAMES[name]
+          pick.setAttribute('aria-label', `${LAYOUT_NAMES[name]}${fresh ? ', a new slide' : ''}`)
+          if (!fresh) pick.setAttribute('aria-pressed', String(slide().layout === name))
+          pick.innerHTML = `<svg viewBox="0 0 48 27" aria-hidden="true">${LAYOUT_ICONS[name]}</svg>`
+          pick.addEventListener('click', () => { closeMenu(); layout(name, fresh); stage.focus({ preventScroll: true }) })
+          menu.append(pick)
+        }
+      }
+      row('This slide\'s layout', false)
+      row('A new slide after it', true)
+      menu.style.left = `${b.offsetLeft}px`
+      menu.style.top = `${b.offsetTop + b.offsetHeight + 4}px`
+      bar.append(menu)
+    }
     document.addEventListener('pointerdown', ev => {
       const tool = ev.target.closest && ev.target.closest('[data-tool]')
       if (menu && !menu.contains(ev.target) && !(tool && tool.dataset.tool === menu.dataset.for)) closeMenu()
@@ -834,6 +1044,9 @@
     if (bar) {
       const view = group('View')
       button('text', 'The deck\'s text beside the slide (click: hide it, or show it again)', () => showText(body.classList.contains('no-text')), view)
+      const page = group('Slide')
+      button('layout', 'The slide\'s layout, or a new slide of one', gallery, page)
+      button('detach', 'Detach: what the slot selected holds, out of its layout, as a box in the same place', detach, page)
       const adds = group('Add')
       const where = 'then drag on the slide, or click it'
       button('addText', `Text: ${where}`, () => arm('addText'), adds)
@@ -868,7 +1081,7 @@
       paint.append(weight, ends)
       Object.assign(buttons, { weight, ends })
       const type = group('Text')
-      button('color', 'The text\'s colour', () => colours('color', c => style({ color: c || null }, ['box'])), type)
+      button('color', 'The text\'s colour (a slot selected: its slide\'s heading\'s)', () => colours('color', c => (slotSel ? slideOpt({ 'title-color': c || null }) : style({ color: c || null }, ['box']))), type)
       const size = document.createElement('input')
       size.type = 'number'
       size.min = '8'
@@ -878,7 +1091,11 @@
       size.placeholder = 'size'
       size.title = 'The text\'s size, in the slide\'s units (the layout\'s body is 40); empty: the layout\'s'
       size.setAttribute('aria-label', 'The text\'s size')
-      const setSize = () => { const v = Math.round(Number(size.value)); style({ size: size.value.trim() && v >= 8 && v <= 400 ? v : null }, ['box']) }
+      const setSize = () => {
+        const v = Math.round(Number(size.value)), now = size.value.trim() && v >= 8 && v <= 400 ? v : null
+        if (slotSel) slideOpt({ 'title-size': now })
+        else style({ size: now }, ['box'])
+      }
       size.addEventListener('change', setSize)
       size.addEventListener('keydown', ev => { ev.stopPropagation(); if (ev.key === 'Enter') { ev.preventDefault(); size.blur(); stage.focus({ preventScroll: true }) } })
       type.append(size)
@@ -913,15 +1130,22 @@
         b.style.setProperty('--ink', !c ? 'transparent' : P.COLORS.includes(c) ? `var(--slide-c-${c})` : c)
         b.classList.toggle('no-ink', !c)
       }
+      // a slot selected: the colour and the size are its slide's heading's
+      const s = overlay && slotSel ? slide() : null
+      const titled = !!s && ['head', 'content'].includes(slotSel)
+      const slot = s ? slotOf(slotSel) : null
+      buttons.layout.disabled = !overlay || !slide()
+      buttons.detach.disabled = !slot || !slot.text
       ink('fill', box ? box.fill : '')
       ink('outline', any ? any.outline || (line && !box ? 'text' : '') : '')
-      ink('color', box ? box.color || 'text' : '')
-      buttons.fill.disabled = buttons.color.disabled = buttons.size.disabled = !box
+      ink('color', titled ? s.titleColor || 'text' : box ? box.color || 'text' : '')
+      buttons.fill.disabled = !box
+      buttons.color.disabled = buttons.size.disabled = !box && !titled
       buttons.outline.disabled = buttons.weight.disabled = !any
       buttons.weight.value = (any && any.weight) || 'medium'
       buttons.ends.disabled = !line
       buttons.ends.value = line ? line.arrow : ''
-      if (document.activeElement !== buttons.size) buttons.size.value = box && box.size ? String(box.size) : ''
+      if (document.activeElement !== buttons.size) buttons.size.value = titled ? (s.titleSize ? String(s.titleSize) : '') : box && box.size ? String(box.size) : ''
       for (const a of ['left', 'center', 'right']) { buttons[a].disabled = !box; buttons[a].setAttribute('aria-pressed', String(!!box && box.align === a)) }
       for (const a of ['top', 'middle', 'bottom']) { buttons[a].disabled = !box || !box.h; buttons[a].setAttribute('aria-pressed', String(!!box && box.valign === a)) }
       buttons.fit.disabled = !box || !box.h || !box.content.trim()

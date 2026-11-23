@@ -377,7 +377,27 @@ class Tools(unittest.TestCase):
         self.b.call("Input.dispatchKeyEvent", type="keyUp", key=key, code=code, windowsVirtualKeyCode=vk, modifiers=modifiers)
 
     def selected(self):
-        return self.b.js("[...document.querySelectorAll('#sl-preview .sl-frame, #sl-preview circle.sl-handle[data-h=a]')].length")
+        return self.b.js("[...document.querySelectorAll('#sl-preview .sl-frame:not(.sl-slot-frame):not(.sl-drop), #sl-preview circle.sl-handle[data-h=a]')].length")
+
+    def slot(self, name: str):
+        """Where a slot is drawn, in the slide's units: x, y, w, h."""
+        got = self.b.js("(() => { const s = document.querySelector('#sl-preview .slide'), el = s.querySelector('[data-slot=%s]'); if (!el) return null;"
+                        " const r = s.getBoundingClientRect(), b = el.getBoundingClientRect(), k = r.width / 1920; return [(b.left - r.left) / k, (b.top - r.top) / k, b.width / k, b.height / k] })()" % name)
+        self.assertIsNotNone(got, f"the slide has no slot {name}")
+        return got
+
+    def slot_selected(self):
+        """The slot selected on the slide, by its place (x, y), or None."""
+        return self.b.js("(() => { const f = document.querySelector('#sl-preview .sl-slot-frame'); return f ? [f.x.baseVal.value, f.y.baseVal.value] : null })()")
+
+    def twice(self, x: float, y: float):
+        """A double click at a point of the slide (its units)."""
+        at = self.px(x, y)
+        self.mouse("mouseMoved", *at)
+        for n in (1, 2):
+            self.b.call("Input.dispatchMouseEvent", type="mousePressed", x=at[0], y=at[1], button="left", buttons=1, clickCount=n)
+            self.b.call("Input.dispatchMouseEvent", type="mouseReleased", x=at[0], y=at[1], button="left", buttons=0, clickCount=n)
+        Tools.pressed = (0.0, 0.0, 0.0)
 
     def press(self, selector: str):
         """A real click in the middle of an element of the page."""
@@ -928,6 +948,203 @@ class PicturesTest(Tools):
         self.assertNotIn("h", got)
         img = self.drawn()[4]["img"]
         self.assertAlmostEqual(img[2] / img[3], 4, delta=0.02)
+        self.assertEqual(b.errors, [])
+
+
+COLUMNS = """---
+id: P07
+type: deck
+locked: false
+---
+
+# Slots
+
+---
+
+<!-- slide layout="two-cols" -->
+
+## Two columns
+
+- on the left
+- [[E06 CutMix with cosine schedule on three datasets]]
+
+::right::
+
+on the right
+
+note: swap them
+"""
+
+
+@unittest.skipUnless(CHROME and websocket, "needs Chromium (Playwright's, or RFT_CHROME) and websocket-client")
+class SlotsTest(Tools):
+    """A layout's slots on the slide: selected, edited in place, changed over, taken out; the columns' divide; the heading's own colour and size; the layouts."""
+
+    ID, NAME = "P07", "P07 Slots.md"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        (cls.vault / "figures").mkdir(exist_ok=True)
+        shutil.copy(FIXTURES / "E08_loss.svg", cls.vault / "figures" / "E06_loss.svg")
+
+    def test_1_scenario_a_a_wrap_up_slide_in_two_columns(self):
+        b = self.b
+        self.start(3)
+        # a new slide in two columns, from the gallery
+        self.tool("layout")
+        self.assertEqual(b.js("document.querySelectorAll('#sl-tools .sl-layouts .sl-layout').length"), 10)
+        self.press('#sl-tools .sl-layout[data-layout="two-cols"][data-fresh="true"]')
+        fresh = self.orig + "\n---\n\n<!-- slide layout=\"two-cols\" -->\n\n## Title\n\n::right::\n"
+        self.assertEqual(self.text(), fresh)
+        self.assertTrue(b.wait("!!document.querySelector('#sl-preview .slide.layout-two-cols[data-slide=\"4\"]')"), "the new slide is not the one in view")
+        self.assertTrue(b.wait("document.querySelectorAll('#sl-thumbs .sl-thumb').length === 4"))
+        self.to(4)
+        # E06's loss in the left column
+        left = self.slot("left")
+        self.click(left[0] + left[2] / 2, left[1] + 200)
+        self.assertEqual([round(v) for v in self.slot_selected()], [round(left[0]), round(left[1])])
+        self.tool("figure")
+        self.assertTrue(b.wait("document.querySelectorAll('#sl-tools .sl-figures .sl-figure').length === 1"))
+        self.press('#sl-tools .sl-figure[data-figure="E06_loss.svg"]')
+        self.assertEqual(self.text(), fresh.replace("## Title\n\n::right::", "## Title\n\n![[E06_loss.svg]]\n\n::right::"))
+        self.assertTrue(b.wait("(() => { const i = document.querySelector('#sl-preview [data-slot=left] img'); return !!i && i.complete && i.naturalWidth > 0 })()"), "the figure is not in the left column")
+        # three bullets typed in the right one
+        right = self.slot("right")
+        self.twice(right[0] + right[2] / 2, right[1] + 200)
+        self.assertEqual(self.source(), "")
+        self.type("- one seed so far\n- CutMix holds\n- next: three seeds")
+        self.key("Escape")
+        self.assertIsNone(self.source())
+        # the heading typed over
+        head = self.slot("head")
+        self.twice(head[0] + 200, head[1] + head[3] / 2)
+        self.assertEqual(self.source(), "## Title")
+        self.key("a", CTRL, ["selectAll"])
+        self.type("## E06 so far")
+        self.key("Escape")
+        # the divide dragged to 60 / 40
+        at = b.js("(() => { const r = document.querySelector('#sl-preview .sl-divide').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2] })()")
+        cols = b.js("(() => { const s = document.querySelector('#sl-preview .slide'), c = s.querySelector('.slide-cols'); const r = s.getBoundingClientRect(), b = c.getBoundingClientRect(), k = r.width / 1920; return [(b.left - r.left) / k, b.width / k] })()")
+        self.drag(at[0], at[1], (0.6 - 0.5) * (cols[1] - 80) * self.scale, 5)
+        want = self.orig + ("\n---\n\n<!-- slide layout=\"two-cols\" split=\"60\" -->\n\n## E06 so far\n\n![[E06_loss.svg]]\n\n::right::\n\n"
+                            "- one seed so far\n- CutMix holds\n- next: three seeds\n")
+        self.assertEqual(self.text(), want)
+        left, right = self.slot("left"), self.slot("right")
+        self.assertAlmostEqual(left[2] / (left[2] + right[2]), 0.6, delta=0.002)
+        self.assertEqual(b.js("document.querySelectorAll('#sl-preview [data-slot=right] li').length"), 3)
+        if self.shots:
+            b.shot(Path(self.shots) / "scenario-a-built.png")
+        # dragged back to the middle, the option is gone
+        at = b.js("(() => { const r = document.querySelector('#sl-preview .sl-divide').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2] })()")
+        self.drag(at[0], at[1], -(0.6 - 0.5) * (cols[1] - 80) * self.scale, 0)
+        self.assertEqual(self.text(), want.replace(' split="60"', ""))
+        self.assertEqual(b.errors, [])
+
+    def test_2_a_slot_selected_edited_and_taken_out_of_its_layout(self):
+        b = self.b
+        self.start(2)
+        before = self.text()
+        # the caption: a click selects it, and puts the editor's cursor in its text
+        cap = self.slot("caption")
+        self.click(cap[0] + cap[2] / 2, cap[1] + cap[3] / 2)
+        self.assertEqual([round(v) for v in self.slot_selected()], [round(cap[0]), round(cap[1])])
+        self.assertEqual(self.selected(), 0)
+        self.assertEqual(b.js(f"{self.CM}.getLine({self.CM}.getCursor().line)"), "Three seeds, mean and spread")
+        # it cannot be dragged freely: the text is as it was
+        self.drag(*self.px(cap[0] + cap[2] / 2, cap[1] + cap[3] / 2), 120, -160)
+        self.assertEqual(self.text(), before)
+        # Enter opens its Markdown over it
+        self.key("Enter")
+        self.assertEqual(self.source(), "Three seeds, mean and spread")
+        self.key("a", CTRL, ["selectAll"])
+        self.type("Three seeds, *mean* and spread")
+        self.key("Escape")
+        typed = before.replace("Three seeds, mean and spread", "Three seeds, *mean* and spread")
+        self.assertEqual(self.text(), typed)
+        self.assertTrue(b.js("!!document.querySelector('#sl-preview [data-slot=caption] em')"))
+        # Detach: a box in the same place
+        para = "(() => { const s = document.querySelector('#sl-preview .slide'), el = [...s.querySelectorAll('p')].find(p => p.textContent.startsWith('Three seeds')), r = s.getBoundingClientRect(), q = el.getBoundingClientRect(), k = r.width / 1920; return [(q.left - r.left) / k, (q.top - r.top) / k, q.width / k] })()"
+        was, cap = b.js(para), self.slot("caption")
+        self.assertIsNotNone(self.slot_selected())
+        self.tool("detach")
+        box = f'<!-- box x="{round(cap[0] - 20)}" y="{round(cap[1] - 12)}" w="{round(cap[2] + 40)}" -->'
+        self.assertEqual(self.text(), typed.replace("Three seeds, *mean* and spread\n\n", "").replace("\n\nnote:", f"\n\n{box}\nThree seeds, *mean* and spread\n<!-- /box -->\n\nnote:"))
+        self.assertEqual(self.selected(), 1, "the box it became is selected")
+        now = b.js(para)
+        for a, e in zip(now[:2], was[:2]):
+            self.assertAlmostEqual(a, e, delta=1.5)
+        # the figure taken out: its box is where the figure was
+        fig = b.js("(() => { const s = document.querySelector('#sl-preview .slide'), el = s.querySelector('[data-slot=figure] img'), r = s.getBoundingClientRect(), q = el.getBoundingClientRect(), k = r.width / 1920; return [(q.left - r.left) / k, (q.top - r.top) / k, q.width / k, q.height / k] })()")
+        self.click(fig[0] + 60, fig[1] + 60)
+        self.assertIsNotNone(self.slot_selected())
+        self.tool("detach")
+        self.assertIn(f'<!-- box x="{round(fig[0])}" y="{round(fig[1])}" w="{round(fig[2])}" -->\n![[E08_loss.svg]]\n<!-- /box -->\n\nnote:', self.text())
+        self.assertTrue(b.wait("(() => { const i = document.querySelector('#sl-preview .slide-box.figure img'); return !!i && i.complete && i.naturalWidth > 0 })()"))
+        got = self.drawn()[-1]["img"]
+        for a, e in zip(got, fig):
+            self.assertAlmostEqual(a, e, delta=1.5)
+        self.assertEqual(b.js("document.querySelectorAll('#sl-preview [data-slot=figure]').length"), 0)
+        self.assertEqual(b.errors, [])
+
+    def test_3_the_heading_s_own_colour_and_size_and_the_slide_s_layout(self):
+        b = self.b
+        self.start(2)
+        before = self.text()
+        head = self.slot("head")
+        self.click(head[0] + 200, head[1] + head[3] / 2)
+        self.colour("color", "contrast")
+        self.press("#sl-tools [data-tool=size]")
+        self.type("80")
+        self.key("Enter")
+        opts = '<!-- slide layout="figure" title-color="contrast" title-size="80" -->'
+        self.assertEqual(self.text(), before.replace('<!-- slide layout="figure" -->', opts))
+        look = b.js("(() => { const h = document.querySelector('#sl-preview [data-slot=head] h2'), c = getComputedStyle(h); return [c.color, c.fontSize] })()")
+        self.assertEqual(look, ["rgb(236, 0, 63)", "80px"])
+        self.assertEqual(b.js("getComputedStyle(document.querySelector('#sl-preview [data-slot=caption]')).color") == "rgb(236, 0, 63)", False, "the heading alone")
+        # the gallery: this slide in another layout; the default is not written
+        self.tool("layout")
+        self.assertEqual(b.js("document.querySelector('#sl-tools .sl-layout[data-layout=figure][data-fresh=false]').getAttribute('aria-pressed')"), "true")
+        self.press('#sl-tools .sl-layout[data-layout="two-cols"][data-fresh="false"]')
+        self.assertEqual(self.text(), before.replace('<!-- slide layout="figure" -->', opts.replace("figure", "two-cols")))
+        self.assertTrue(b.js("!!document.querySelector('#sl-preview .slide.layout-two-cols')"))
+        self.tool("layout")
+        self.press('#sl-tools .sl-layout[data-layout="default"][data-fresh="false"]')
+        self.assertEqual(self.text(), before.replace('<!-- slide layout="figure" -->', '<!-- slide title-color="contrast" title-size="80" -->'))
+        # the colour and the size given back: the line goes with its last option
+        head = self.slot("content")
+        self.click(head[0] + 200, head[1] + 30)
+        self.colour("color", "")
+        self.press("#sl-tools [data-tool=size]")
+        self.key("a", CTRL, ["selectAll"])
+        self.key("Delete", commands=["deleteBackward"])
+        self.key("Enter")
+        self.assertEqual(self.text(), before.replace('<!-- slide layout="figure" -->\n\n', ""))
+        self.assertEqual(b.errors, [])
+
+    def test_4_a_column_s_content_dragged_to_the_other_column(self):
+        b = self.b
+        self.start(2, COLUMNS)
+        left, right = self.slot("left"), self.slot("right")
+        sx, sy = self.px(left[0] + left[2] / 2, left[1] + 300)
+        ex, ey = self.px(right[0] + right[2] / 2, right[1] + 300)
+        self.drag(sx, sy, ex - sx, ey - sy, release=False)
+        self.assertEqual(b.js("document.querySelectorAll('#sl-preview .sl-drop').length"), 1, "the column it would go to is shown")
+        self.mouse("mouseReleased", ex, ey)
+        self.assertEqual(self.text(), COLUMNS.replace("- on the left\n- [[E06 CutMix with cosine schedule on three datasets]]\n\n::right::\n\non the right",
+                                                      "on the right\n\n::right::\n\n- on the left\n- [[E06 CutMix with cosine schedule on three datasets]]"))
+        self.assertEqual([round(v) for v in self.slot_selected()], [round(right[0]), round(right[1])], "it is the one selected, where it went")
+        # dropped anywhere else, nothing changes
+        after = self.text()
+        self.drag(ex, ey, 0, -260)
+        self.assertEqual(self.text(), after)
+        # a link in a slot is still a link: a click on it opens its note
+        link = b.js("(() => { const a = document.querySelector('#sl-preview [data-slot=right] a[data-go]'); if (!a) return null; const r = a.getClientRects()[0]; return [r.left + r.width / 2, r.top + r.height / 2] })()")
+        self.assertIsNotNone(link, "the note is not linked")
+        self.mouse("mouseMoved", *link)
+        self.mouse("mousePressed", *link)
+        self.mouse("mouseReleased", *link)
+        self.assertTrue(b.wait("!document.getElementById('drawer').hidden"), "the note did not open")
         self.assertEqual(b.errors, [])
 
 

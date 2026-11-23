@@ -44,6 +44,9 @@
   }
   /** A box with no width that can be read is this wide. */
   const BOX_W = 480
+  /** The least and the most of two columns the left one may take, in percent. */
+  const SPLIT_MIN = 10
+  const SPLIT_MAX = 90
   const MEETING_ID = /^G\d+$/
   const DEADLINE_ID = /^M\d+$/
   const DAY_RE = /^\d{4}-\d{2}-\d{2}$/
@@ -88,13 +91,25 @@
   /** Whether a deck is locked: unless its frontmatter says `locked: false`, it is the user's to write. */
   const isLocked = fields => String(unquote((fields || {}).locked) ?? '').toLowerCase() !== 'false'
 
-  /** A slide's options from its `<!-- slide … -->` line: `{layout, cls}`, a layout none of LAYOUTS left out. */
-  function optionsOf(attrs) {
+  /**
+   * A slide's options from its `<!-- slide … -->` line: `{layout, cls, badLayout, split, titleColor,
+   * titleSize}`, a layout none of LAYOUTS left out. `split` is the left column's share of two
+   * columns, in percent (null: half); `titleColor` and `titleSize` are its heading's own (''
+   * and null: the layout's). One that cannot be read is said to `say` and left out.
+   */
+  function optionsOf(attrs, say = () => {}) {
     const out = {}
-    for (const m of String(attrs || '').matchAll(ATTR_RE)) out[m[1].toLowerCase()] = m[2]
+    for (const m of String(attrs || '').matchAll(ATTR_RE)) out[m[1].toLowerCase()] = m[2].trim()
     const layout = LAYOUTS.includes(out.layout) ? out.layout : ''
     const cls = (out.class || '').split(/\s+/).filter(c => /^[a-z][a-z0-9-]*$/i.test(c)).join(' ')
-    return { layout, cls, badLayout: out.layout && !layout ? out.layout : '' }
+    let split = null
+    if ('split' in out) {
+      if (WHOLE_RE.test(out.split) && Number(out.split) >= SPLIT_MIN && Number(out.split) <= SPLIT_MAX) split = Number(out.split)
+      else say(`split="${out.split}" is no whole number from ${SPLIT_MIN} to ${SPLIT_MAX}`)
+    }
+    const color = 'title-color' in out ? colorOf({ color: out['title-color'] }, 'color', say) : ''
+    const size = 'title-size' in out ? wholeOf({ 'title-size': out['title-size'] }, 'title-size', say, true) : null
+    return { layout, cls, badLayout: out.layout && !layout ? out.layout : '', split, titleColor: color === 'currentColor' ? '' : color, titleSize: size }
   }
 
   /**
@@ -197,32 +212,34 @@
   }
 
   /**
-   * A slide's lines `from` to `to` of the text, its options line left out, read: `kept` (the lines
-   * of the layout's content, a blank one where a box or a line was, as its comment breaks a
-   * paragraph), `items` (its boxes and lines in the order written), `problems` (`{line, text}`)
+   * A slide's lines `from` to `to` of the text, its options line left out, read: `rows` (the lines
+   * of the layout's content, each `{line, text}`; a blank one of line -1 where a box or a line
+   * was, as its comment breaks a paragraph), `items` (its boxes and lines in the order written), `problems` (`{line, text}`)
    * and `noteAt` (the line its speaker's notes start at, or -1).
    */
   function readSlide(lines, from, to) {
-    const kept = [], items = [], problems = []
+    const rows = [], items = [], problems = []
     const sayAt = line => text => problems.push({ line, text })
+    const keep = i => rows.push({ line: i, text: lines[i] })
+    const gap = () => rows.push({ line: -1, text: '' })
     let fenced = false, noteAt = -1
     for (let i = from; i < to; i++) {
       const line = lines[i]
       let m
-      if (FENCE_RE.test(line)) { fenced = !fenced; kept.push(line) }
-      else if (fenced) kept.push(line)
+      if (FENCE_RE.test(line)) { fenced = !fenced; keep(i) }
+      else if (fenced) keep(i)
       else if (NOTE_RE.test(line)) { noteAt = i; break }
       else if ((m = BOX_RE.exec(line))) {
         const end = boxEnd(lines, i + 1, to)
         const content = lines.slice(i + 1, end.at).join('\n').replace(/^(\s*\n)+/, '').replace(/\s+$/, '')
         items.push(boxOf(m[1], i, end.closed ? end.at + 1 : end.at, end.closed, content, sayAt(i)))
-        kept.push('')
+        gap()
         i = end.closed ? end.at : end.at - 1
-      } else if (BOX_END_RE.test(line)) { sayAt(i)('this <!-- /box --> closes no box'); kept.push('') }
-      else if ((m = LINE_RE.exec(line))) { items.push(lineOf(m[1], i, sayAt(i))); kept.push('') }
-      else kept.push(line)
+      } else if (BOX_END_RE.test(line)) { sayAt(i)('this <!-- /box --> closes no box'); gap() }
+      else if ((m = LINE_RE.exec(line))) { items.push(lineOf(m[1], i, sayAt(i))); gap() }
+      else keep(i)
     }
-    return { kept, items, problems, noteAt }
+    return { rows, items, problems, noteAt }
   }
 
   /**
@@ -231,7 +248,9 @@
    * `title` for the first slide and `default` for the others), `cls`, `body` (its Markdown, the
    * options line, the boxes, the lines and the notes left out), `bodyLine` (the line its text
    * starts at), `notes`, `noteLine` (the line they start at, or -1), `items` (its boxes and lines,
-   * the later in the text in front) and `problems` (what is wrong with them, `{line, text}`).
+   * the later in the text in front) and `problems` (what is wrong with them and with its options, `{line, text}`). And for the tools:
+   * `optLine` (the line of its options, or -1), `split`, `titleColor`, `titleSize` (optionsOf)
+   * and `rows` (readSlide).
    */
   function split(text) {
     const src = String(text || '').replace(/\r\n/g, '\n')
@@ -248,16 +267,19 @@
       let i = a
       while (i < b && !lines[i].trim()) i++
       const opt = i < b ? OPTIONS_RE.exec(lines[i]) : null
-      const o = optionsOf(opt ? opt[1] : '')
+      const wrong = []
+      const o = optionsOf(opt ? opt[1] : '', text => wrong.push({ line: i, text }))
       const start = opt ? i + 1 : a
-      const { kept, items, problems, noteAt } = readSlide(lines, start, b)
+      const { rows, items, problems, noteAt } = readSlide(lines, start, b)
+      problems.unshift(...wrong)
       const end = noteAt < 0 ? b : noteAt
       const notes = noteAt < 0 ? '' : [NOTE_RE.exec(lines[noteAt])[1], ...lines.slice(noteAt + 1, b)].join('\n').trim()
       let first = start
       while (first < end && !lines[first].trim()) first++
       return {
         n: k + 1, from: a, to: b, layout: o.layout || (k === 0 ? 'title' : 'default'), cls: o.cls, badLayout: o.badLayout,
-        body: kept.join('\n').replace(/^(\s*\n)+/, '').replace(/\s+$/, ''), bodyLine: first, notes, noteLine: noteAt, items, problems,
+        optLine: opt ? i : -1, split: o.split, titleColor: o.titleColor, titleSize: o.titleSize, rows,
+        body: rows.map(r => r.text).join('\n').replace(/^(\s*\n)+/, '').replace(/\s+$/, ''), bodyLine: first, notes, noteLine: noteAt, items, problems,
       }
     })
     return { fields, body, slides }
@@ -369,23 +391,30 @@
 
   const escAttr = t => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
-  /** The lines of `body` before and after a line `::right::` outside code, or null when there is none. */
-  function columns(body) {
-    const lines = body.split('\n')
-    let fenced = false
-    for (let i = 0; i < lines.length; i++) {
-      if (FENCE_RE.test(lines[i])) fenced = !fenced
-      else if (!fenced && RIGHT_RE.test(lines[i])) return [lines.slice(0, i).join('\n'), lines.slice(i + 1).join('\n')]
+  /**
+   * A slide's slots, the regions of its layout its content is placed in, in the order drawn:
+   * `head`, `left` and `right` of two columns (split at a line `::right::` outside code); `head`,
+   * `figure` (the first line that is an image alone) and `caption` of a figure; `content` of the
+   * others. Each `{name, rows, text}`: the rows of the slide it holds (their lines in the deck's
+   * text) and its Markdown. The right column also has `at`, the line of its `::right::`, or -1.
+   */
+  function slots(slide) {
+    const rows = slide.rows || []
+    const slot = (name, rs, more = {}) => ({ name, rows: rs, text: rs.map(r => r.text).join('\n').replace(/^(\s*\n)+/, '').replace(/\s+$/, ''), ...more })
+    // the leading heading, and the rest: a layout that spans its heading over its parts
+    const headed = rs => { const i = rs.findIndex(r => r.text.trim()); return i >= 0 && HEADING_RE.test(rs[i].text) ? [[rs[i]], rs.slice(i + 1)] : [[], rs] }
+    if (slide.layout === 'two-cols') {
+      let at = -1, fenced = false
+      rows.forEach((r, i) => { if (FENCE_RE.test(r.text)) fenced = !fenced; else if (!fenced && at < 0 && RIGHT_RE.test(r.text)) at = i })
+      const [head, left] = headed(at < 0 ? rows : rows.slice(0, at))
+      return [slot('head', head), slot('left', left), slot('right', at < 0 ? [] : rows.slice(at + 1), { at: at < 0 ? -1 : rows[at].line })]
     }
-    return null
-  }
-
-  /** The body's leading heading line, and the rest: a layout that spans its heading over its parts. */
-  function headOf(body) {
-    const lines = body.split('\n')
-    let i = 0
-    while (i < lines.length && !lines[i].trim()) i++
-    return i < lines.length && HEADING_RE.test(lines[i]) ? [lines[i], lines.slice(i + 1).join('\n')] : ['', body]
+    if (slide.layout === 'figure') {
+      const [head, rest] = headed(rows)
+      const k = rest.findIndex(r => IMAGE_LINE_RE.test(r.text))
+      return [slot('head', head), slot('figure', k < 0 ? [] : [rest[k]]), slot('caption', k < 0 ? rest : [...rest.slice(0, k), ...rest.slice(k + 1)])]
+    }
+    return [slot('content', rows)]
   }
 
   /** A colour as CSS: `#rrggbb` as it is, a token by the slide's own name for it (app.css, `--slide-c-…`). */
@@ -442,32 +471,27 @@
 
   /**
    * A slide's HTML in its layout, `md(src)` giving a piece of Markdown's HTML: a box of the
-   * slide's size (WIDTH × HEIGHT), which the page scales to fit. Its boxes and lines are drawn
-   * over the layout, the later in the text in front.
+   * slide's size (WIDTH × HEIGHT), which the page scales to fit. Each slot is named (`data-slot`),
+   * for the tools; its boxes and lines are drawn over the layout, the later in the text in front.
    */
   function slideHtml(slide, md) {
-    const cls = `slide layout-${slide.layout}${slide.cls ? ` ${slide.cls}` : ''}`
-    const part = (name, src) => (src.trim() ? `<div class="${name}">${md(src)}</div>` : '')
+    const cls = `slide layout-${slide.layout}${slide.cls ? ` ${slide.cls}` : ''}${slide.titleSize ? ' title-sized' : ''}`
+    const by = Object.fromEntries(slots(slide).map(s => [s.name, s.text]))
+    const part = (cssClass, name, always = false) => (by[name] ? `<div class="${cssClass}" data-slot="${name}">${md(by[name])}</div>` : always ? `<div class="${cssClass}" data-slot="${name}"></div>` : '')
     let inner
     if (slide.layout === 'two-cols') {
-      const cols = columns(slide.body)
-      const [head, rest] = headOf(cols ? cols[0] : slide.body)
-      const [left, right] = cols ? [rest, cols[1]] : [rest, '']
-      inner = part('slide-head', head) + `<div class="slide-cols">${part('slide-col', left) || '<div class="slide-col"></div>'}${part('slide-col', right) || '<div class="slide-col"></div>'}</div>`
-    } else if (slide.layout === 'figure') {
-      const [head, rest] = headOf(slide.body)
-      const lines = rest.split('\n')
-      const k = lines.findIndex(l => IMAGE_LINE_RE.test(l))
-      const figure = k < 0 ? '' : lines[k]
-      const caption = k < 0 ? rest : [...lines.slice(0, k), ...lines.slice(k + 1)].join('\n')
-      inner = part('slide-head', head) + (figure ? part('slide-figure', figure) : '') + part('slide-caption', caption)
-    } else inner = part('slide-content', slide.body)
+      const share = slide.split ? ` style="grid-template-columns:${slide.split}fr ${100 - slide.split}fr"` : ''
+      inner = part('slide-head', 'head') + `<div class="slide-cols"${share}>${part('slide-col', 'left', true)}${part('slide-col', 'right', true)}</div>`
+    } else if (slide.layout === 'figure') inner = part('slide-head', 'head') + part('slide-figure', 'figure') + part('slide-caption', 'caption')
+    else inner = part('slide-content', 'content')
     const placed = (slide.items || []).map((it, k) => itemHtml(it, k, md)).join('')
-    return `<div class="${escAttr(cls)}" data-slide="${slide.n}">${inner}${placed}</div>`
+    // its heading's own colour and size, should the slide give them
+    const title = [slide.titleColor ? `--slide-title-color:${cssColor(slide.titleColor)}` : '', slide.titleSize ? `--slide-title-size:${slide.titleSize}px` : ''].filter(Boolean).join(';')
+    return `<div class="${escAttr(cls)}" data-slide="${slide.n}"${title ? ` style="${title}"` : ''}>${inner}${placed}</div>`
   }
 
   root.RftSlides = {
     DECK_RE, DECKS, LAYOUTS, WIDTH, HEIGHT, COLORS, WEIGHTS,
-    frontOf, listItems, isLocked, optionsOf, split, slideAt, forItems, forItem, attach, problems, decksFor, groups, slideHtml, itemHtml, isFigure,
+    frontOf, listItems, isLocked, optionsOf, split, slideAt, forItems, forItem, attach, problems, decksFor, groups, slots, slideHtml, itemHtml, isFigure, SPLIT_MIN, SPLIT_MAX,
   }
 })(typeof globalThis !== 'undefined' ? globalThis : window)

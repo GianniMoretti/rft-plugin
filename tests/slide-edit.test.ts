@@ -31,6 +31,13 @@ type Api = {
   resized: (r: Rect, handle: string, dx: number, dy: number, keep?: boolean) => Rect
   aligned: (rects: Rect[], how: string) => Rect[]
   distributed: (rects: Rect[], axis: string) => Rect[]
+  slideOptions: (lines: string[], slide: Slide, changes: Record<string, string | number | null>) => Edit | null
+  withLayout: (lines: string[], slide: Slide, layout: string) => Edit | null
+  newSlide: (lines: string[], slide: Slide, layout: string) => { edit: Edit; line: number }
+  slotEdit: (lines: string[], slide: Slide, name: string, text: string) => Edit | null
+  swapped: (lines: string[], slide: Slide) => Edit | null
+  detached: (lines: string[], slide: Slide, name: string, rect: { x: number; y: number; w: number }) => { edits: Edit[]; first: number } | null
+  share: (x: number, left: number, width: number, gap: number) => number
 }
 
 const P = (globalThis as unknown as { RftSlides: { split: (t: string) => { slides: Slide[] } } }).RftSlides
@@ -213,5 +220,142 @@ describe('where a drag ends', () => {
     expect(E.resized(r, 'nw', -100, 0, true)).toEqual({ x: 0, y: 150, w: 500, h: 250 })
     expect(E.resized(r, 'ne', 0, -50, true)).toEqual({ x: 100, y: 150, w: 500, h: 250 })
     expect(E.resized(r, 'w', 100, 0, true)).toEqual({ x: 200, y: 200, w: 300, h: 150 })
+  })
+})
+
+describe('a slide\'s own options: on its options line, written when it had none, taken out when none is left', () => {
+  const opt = (text: string, k: number, changes: Record<string, string | number | null>) => {
+    const { lines, slides } = deck(text)
+    const e = E.slideOptions(lines, slides[k]!, changes)
+    return e ? after(text, [e]) : null
+  }
+
+  test('changed and added on the line there is', () => {
+    const text = '# T\n---\n\n<!-- slide layout="two-cols" -->\n\n## H\n'
+    const wide = '# T\n---\n\n<!-- slide layout="two-cols" split="60" -->\n\n## H\n'
+    expect(opt(text, 1, { split: 60 })).toBe(wide)
+    expect(opt(wide, 1, { split: null })).toBe(text)
+    expect(opt(wide, 1, { 'title-color': 'contrast', 'title-size': 72 })).toBe('# T\n---\n\n<!-- slide layout="two-cols" split="60" title-color="contrast" title-size="72" -->\n\n## H\n')
+    expect(opt(text, 1, { split: null })).toBe(null)
+  })
+
+  test('the line written above the slide\'s first line, as close to it as the separator is; on a slide with nothing on it', () => {
+    expect(opt('# T\n---\n\n## H\n', 1, { layout: 'section' })).toBe('# T\n---\n\n<!-- slide layout="section" -->\n\n## H\n')
+    expect(opt('# T\n---\n## H', 1, { layout: 'section' })).toBe('# T\n---\n<!-- slide layout="section" -->\n## H')
+    expect(opt('---\nid: P01\n---\n\n# T\n', 0, { 'title-color': 'accent' })).toBe('---\nid: P01\n---\n\n<!-- slide title-color="accent" -->\n\n# T\n')
+    expect(opt('# T\n---\n', 1, { layout: 'section' })).toBe('# T\n---\n\n<!-- slide layout="section" -->\n')
+    expect(opt('# T\n---\n\nnote: only notes\n', 1, { layout: 'section' })).toBe('# T\n---\n\n<!-- slide layout="section" -->\n\nnote: only notes\n')
+    expect(opt('# T\n---\n\n## H\n', 1, { split: null })).toBe(null)
+  })
+
+  test('the line taken out with its last option, and the blank line it leaves', () => {
+    expect(opt('# T\n---\n\n<!-- slide layout="section" -->\n\n## H\n', 1, { layout: null })).toBe('# T\n---\n\n## H\n')
+    expect(opt('# T\n---\n<!-- slide layout="section" -->\n## H', 1, { layout: null })).toBe('# T\n---\n## H')
+    expect(opt('# T\n---\n<!-- slide layout="section" -->\n\n## H', 1, { layout: null })).toBe('# T\n---\n\n## H')
+  })
+
+  test('a layout: written, unless it is the one the slide has unasked', () => {
+    const lay = (text: string, k: number, layout: string) => { const { lines, slides } = deck(text); const e = E.withLayout(lines, slides[k]!, layout); return e ? after(text, [e]) : null }
+    expect(lay('# T\n---\n\n## H\n', 1, 'two-cols')).toBe('# T\n---\n\n<!-- slide layout="two-cols" -->\n\n## H\n')
+    expect(lay('# T\n---\n\n<!-- slide layout="two-cols" split="60" -->\n\n## H\n', 1, 'default')).toBe('# T\n---\n\n<!-- slide split="60" -->\n\n## H\n')
+    expect(lay('# T\n---\n\n<!-- slide layout="two-cols" -->\n\n## H\n', 1, 'default')).toBe('# T\n---\n\n## H\n')
+    expect(lay('<!-- slide layout="section" -->\n# T', 0, 'title')).toBe('# T')
+    expect(lay('# T', 0, 'default')).toBe('<!-- slide layout="default" -->\n\n# T')
+    expect(lay('# T\n---\n\n## H\n', 1, 'default')).toBe(null)
+  })
+})
+
+describe('a new slide after this one', () => {
+  const add = (text: string, k: number, layout: string) => {
+    const { lines, slides } = deck(text)
+    const { edit, line } = E.newSlide(lines, slides[k]!, layout)
+    const out = after(text, [edit])
+    expect(out.split('\n')[line]).toMatch(/^#{1,2} Title$/)
+    return out
+  }
+
+  test('between two slides, with its layout and a heading to type over', () => {
+    const text = '# T\n\n---\n\n## A\n\nnote: n\n\n---\n\n## B\n'
+    expect(add(text, 1, 'two-cols')).toBe('# T\n\n---\n\n## A\n\nnote: n\n\n---\n\n<!-- slide layout="two-cols" -->\n\n## Title\n\n::right::\n\n---\n\n## B\n')
+    expect(add(text, 0, 'default')).toBe('# T\n\n---\n\n## Title\n\n---\n\n## A\n\nnote: n\n\n---\n\n## B\n')
+    expect(add('# T\n---\n## B', 0, 'figure')).toBe('# T\n\n---\n\n<!-- slide layout="figure" -->\n\n## Title\n\n---\n## B')
+  })
+
+  test('at the end of the deck', () => {
+    expect(add('# T\n\n---\n\n## A\n', 1, 'default')).toBe('# T\n\n---\n\n## A\n\n---\n\n## Title\n')
+    expect(add('# T', 0, 'section')).toBe('# T\n\n---\n\n<!-- slide layout="section" -->\n\n# Title\n')
+    expect(add('# T\n\n\n', 0, 'title')).toBe('# T\n\n---\n\n<!-- slide layout="title" -->\n\n# Title\n')
+  })
+})
+
+describe('a slot\'s content: replaced, changed over with the other column\'s, taken out of the layout', () => {
+  const COLS = ['# T', '---', '<!-- slide layout="two-cols" -->', '', '## Head', '', 'left one', '<!-- line from="0 0" to="1 1" -->', 'left two', '', '::right::', '', '- right', '', 'note: n'].join('\n')
+  const slot = (text: string, k: number, name: string, now: string) => {
+    const { lines, slides } = deck(text)
+    const e = E.slotEdit(lines, slides[k]!, name, now)
+    return e ? after(text, [e]) : null
+  }
+
+  test('replaced where it is; a line written among its lines is kept, after it', () => {
+    expect(slot(COLS, 1, 'head', '## New head')).toBe(COLS.replace('## Head', '## New head'))
+    expect(slot(COLS, 1, 'right', '- a\n- b\n')).toBe(COLS.replace('- right', '- a\n- b'))
+    expect(slot(COLS, 1, 'left', 'new left\n\nsecond')).toBe(COLS.replace('left one\n<!-- line from="0 0" to="1 1" -->\nleft two', 'new left\n\nsecond\n\n<!-- line from="0 0" to="1 1" -->'))
+    expect(slot(COLS, 1, 'nope', 'x')).toBe(null)
+  })
+
+  test('emptied, with the blank line it leaves', () => {
+    expect(slot(COLS, 1, 'right', '')).toBe(COLS.replace('::right::\n\n- right\n\nnote', '::right::\n\nnote'))
+    expect(slot(COLS, 1, 'left', '  \n')).toBe(COLS.replace('left one\n<!-- line from="0 0" to="1 1" -->\nleft two', '<!-- line from="0 0" to="1 1" -->'))
+    expect(slot('# T\n---\n<!-- slide layout="two-cols" -->\nleft', 1, 'right', '')).toBe(null)
+  })
+
+  test('a slot with nothing in it is written where it starts', () => {
+    const fresh = '# T\n\n---\n\n<!-- slide layout="two-cols" -->\n\n## Title\n\n::right::\n'
+    const withLeft = '# T\n\n---\n\n<!-- slide layout="two-cols" -->\n\n## Title\n\n![[E06_loss.svg]]\n\n::right::\n'
+    expect(slot(fresh, 1, 'left', '![[E06_loss.svg]]')).toBe(withLeft)
+    expect(slot(withLeft, 1, 'right', '- one\n- two\n- three')).toBe('# T\n\n---\n\n<!-- slide layout="two-cols" -->\n\n## Title\n\n![[E06_loss.svg]]\n\n::right::\n\n- one\n- two\n- three\n')
+    expect(slot('# T\n---\n<!-- slide layout="two-cols" -->\n## Head\nleft\n', 1, 'right', '- x')).toBe('# T\n---\n<!-- slide layout="two-cols" -->\n## Head\nleft\n\n::right::\n\n- x\n')
+    expect(slot('# T\n---\n<!-- slide layout="two-cols" -->\n\n::right::\n\nr\n', 1, 'left', 'l')).toBe('# T\n---\n<!-- slide layout="two-cols" -->\n\nl\n\n::right::\n\nr\n')
+    expect(slot('# T\n---\n<!-- slide layout="two-cols" -->\n\nleft\n', 1, 'head', '## Head')).toBe('# T\n---\n<!-- slide layout="two-cols" -->\n\n## Head\n\nleft\n')
+    expect(slot('# T\n---\n', 1, 'content', 'text')).toBe('# T\n---\n\ntext\n')
+    expect(slot('# T\n---\n<!-- slide layout="figure" -->\n## L\n![[f.svg]]', 1, 'caption', 'three seeds')).toBe('# T\n---\n<!-- slide layout="figure" -->\n## L\n![[f.svg]]\n\nthree seeds')
+    expect(slot('# T\n---\n<!-- slide layout="figure" -->\n## L\n\ncaption\n\nnote: n', 1, 'figure', '![[f.svg]]')).toBe('# T\n---\n<!-- slide layout="figure" -->\n## L\n\n![[f.svg]]\n\ncaption\n\nnote: n')
+  })
+
+  test('two columns changed over', () => {
+    const swap = (text: string, k: number) => { const { lines, slides } = deck(text); const e = E.swapped(lines, slides[k]!); return e ? after(text, [e]) : null }
+    const over = COLS.replace('left one\n<!-- line from="0 0" to="1 1" -->\nleft two\n\n::right::\n\n- right', '- right\n\n::right::\n\nleft one\n\nleft two\n\n<!-- line from="0 0" to="1 1" -->')
+    expect(swap(COLS, 1)).toBe(over)
+    const twice = swap(over, 1)!
+    expect(P.split(twice).slides[1]!.body.replace(/\n+/g, '\n')).toBe('## Head\nleft one\nleft two\n::right::\n- right')
+    // one of them with nothing in it: its content goes over
+    expect(swap('# T\n---\n<!-- slide layout="two-cols" -->\n## Head\n\nleft\n', 1)).toBe('# T\n---\n<!-- slide layout="two-cols" -->\n## Head\n\n::right::\n\nleft\n')
+    expect(swap('# T\n---\n<!-- slide layout="two-cols" -->\n## Head\n\n::right::\n\nright\n', 1)).toBe('# T\n---\n<!-- slide layout="two-cols" -->\n## Head\n\nright\n\n::right::\n')
+    expect(swap('# T\n---\n<!-- slide layout="two-cols" -->\n## Head\n', 1)).toBe(null)
+    expect(swap('# T\n---\n## Head\ntext', 1)).toBe(null)
+  })
+
+  test('taken out of the layout: a box where it was drawn, in front, its lines gone from the slot', () => {
+    const { lines, slides } = deck(COLS)
+    const d = E.detached(lines, slides[1]!, 'left', { x: 90, y: 248, w: 850 })!
+    const out = after(COLS, d.edits)
+    expect(out).toBe(['# T', '---', '<!-- slide layout="two-cols" -->', '', '## Head', '', '<!-- line from="0 0" to="1 1" -->', '', '::right::', '', '- right', '',
+      '<!-- box x="90" y="248" w="850" -->', 'left one', '', 'left two', '<!-- /box -->', '', 'note: n'].join('\n'))
+    expect(out.split('\n')[d.first]).toBe('<!-- box x="90" y="248" w="850" -->')
+    const fig = '# T\n---\n<!-- slide layout="figure" -->\n\n## Loss\n\n![[E08_loss.svg]]\n\nThree seeds\n'
+    const f = deck(fig)
+    const df = E.detached(f.lines, f.slides[1]!, 'figure', { x: 400, y: 190, w: 1120 })!
+    const outf = after(fig, df.edits)
+    expect(outf).toBe('# T\n---\n<!-- slide layout="figure" -->\n\n## Loss\n\nThree seeds\n\n<!-- box x="400" y="190" w="1120" -->\n![[E08_loss.svg]]\n<!-- /box -->\n')
+    expect(outf.split('\n')[df.first]).toBe('<!-- box x="400" y="190" w="1120" -->')
+    expect(E.detached(f.lines, f.slides[0]!, 'nope', { x: 0, y: 0, w: 1 })).toBe(null)
+  })
+
+  test('the left column\'s share where the divide is dragged to', () => {
+    // two columns 1700 wide from 110, 80 apart: the divide in the middle is half
+    expect(E.share(110 + 850, 110, 1700, 80)).toBe(50)
+    expect(E.share(110 + 0.6 * 1620 + 40, 110, 1700, 80)).toBe(60)
+    expect(E.share(0, 110, 1700, 80)).toBe(10)
+    expect(E.share(1920, 110, 1700, 80)).toBe(90)
   })
 })

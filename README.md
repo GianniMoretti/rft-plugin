@@ -1054,8 +1054,9 @@ note: start with E05
 ```
 
 - **Slides**: a slide may open with `<!-- slide layout="…" -->`: `title` (the first slide's
-  default), `default`, `section`, `two-cols` (split at a line `::right::`), `figure` (one image
-  filling the slide). Everything after a line `note:` is the speaker's, never on the slide or in
+  default), `default`, `section`, `two-cols` (split at a line `::right::`; `split="60"` gives the
+  left column 60 % of the two), `figure` (one image filling the slide). The same line takes
+  `title-color` and `title-size`, the heading's own on that slide. Everything after a line `note:` is the speaker's, never on the slide or in
   the PDF. The rest is the notes' Markdown: links to notes, KaTeX math, tables, code, `###`
   headings and numbered lists, and images found as Obsidian finds them, so `![[E08_loss.svg]]` is
   the figure a notebook saved in `vault/figures/`.
@@ -1113,7 +1114,15 @@ note: start with E05
   follows its notebook: run again with other proportions, the box keeps its width and its height
   follows. **Image** takes a picture of your own, as does pasting one on the slide or dropping it
   there: it is copied to `vault/decks/assets/` under its deck's name (`P03-1.png`) and shown in a
-  box. Neither is ever cropped or stretched. Every action is an edit of the text and of nothing else, in the editor's
+  box. Neither is ever cropped or stretched. What a layout places is in its **slots** (the
+  heading, a column, the figure, the caption): a click selects one, a double click (or Enter)
+  opens its Markdown over it, and a column's content is dragged to the other column, but nowhere
+  else: **Detach** takes it out of its layout, as a box in the same place. The divide between two
+  columns is dragged (`split="60"` on the slide's options line: the left one's share), the
+  heading takes a colour and a size of its own per slide (`title-color`, `title-size`: the bar's
+  text colour and size, with the heading selected), **Figure** puts its figure in the slot
+  selected, and the layout gallery changes the slide's layout or adds a slide of one after it.
+  Every action is an edit of the text and of nothing else, in the editor's
   own history: Ctrl+Z undoes a drag in one step, whichever side the cursor is on.
 - **For**: `for:` lists where the deck is presented, one or more: a meeting's occurrence by the
   day its rule gives it (`G01 2026-11-24`; moved to the 25th, the deck goes with it), a once-only

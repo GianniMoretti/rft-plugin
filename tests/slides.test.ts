@@ -165,16 +165,16 @@ describe('a slide drawn in its layout', () => {
   const slide = (text: string, k = 0) => P.split(text).slides[k]!
 
   test('the layouts, the head spanning two columns and a figure\'s caption', () => {
-    expect(P.slideHtml(slide('# Title\nsub'), md)).toBe('<div class="slide layout-title" data-slide="1"><div class="slide-content"><md># Title\nsub</md></div></div>')
+    expect(P.slideHtml(slide('# Title\nsub'), md)).toBe('<div class="slide layout-title" data-slide="1"><div class="slide-content" data-slot="content"><md># Title\nsub</md></div></div>')
     expect(P.slideHtml(slide('x\n---\n<!-- slide layout="two-cols" class="dense" -->\n## Head\nleft\n::right::\nright', 1), md)).toBe(
-      '<div class="slide layout-two-cols dense" data-slide="2"><div class="slide-head"><md>## Head</md></div>' +
-      '<div class="slide-cols"><div class="slide-col"><md>left</md></div><div class="slide-col"><md>right</md></div></div></div>')
+      '<div class="slide layout-two-cols dense" data-slide="2"><div class="slide-head" data-slot="head"><md>## Head</md></div>' +
+      '<div class="slide-cols"><div class="slide-col" data-slot="left"><md>left</md></div><div class="slide-col" data-slot="right"><md>right</md></div></div></div>')
     expect(P.slideHtml(slide('x\n---\n<!-- slide layout="figure" -->\n## Loss\n![[E08_loss.svg]]\nThree seeds', 1), md)).toBe(
-      '<div class="slide layout-figure" data-slide="2"><div class="slide-head"><md>## Loss</md></div>' +
-      '<div class="slide-figure"><md>![[E08_loss.svg]]</md></div><div class="slide-caption"><md>Three seeds</md></div></div>')
+      '<div class="slide layout-figure" data-slide="2"><div class="slide-head" data-slot="head"><md>## Loss</md></div>' +
+      '<div class="slide-figure" data-slot="figure"><md>![[E08_loss.svg]]</md></div><div class="slide-caption" data-slot="caption"><md>Three seeds</md></div></div>')
     // two columns with no ::right:: yet: all on the left
     expect(P.slideHtml(slide('x\n---\n<!-- slide layout="two-cols" -->\nleft', 1), md)).toBe(
-      '<div class="slide layout-two-cols" data-slide="2"><div class="slide-cols"><div class="slide-col"><md>left</md></div><div class="slide-col"></div></div></div>')
+      '<div class="slide layout-two-cols" data-slide="2"><div class="slide-cols"><div class="slide-col" data-slot="left"><md>left</md></div><div class="slide-col" data-slot="right"></div></div></div>')
   })
 
   test('a class that is no class name is left out', () => {
@@ -385,8 +385,8 @@ describe('boxes and lines drawn on the slide, over its layout, the later in the 
 
   test('the format\'s example', () => {
     const html = draw(EXAMPLE, 1)
-    expect(html.startsWith('<div class="slide layout-two-cols" data-slide="2"><div class="slide-head"><md>## Accuracy holds at 1k images</md></div>' +
-      '<div class="slide-cols"><div class="slide-col"><md>\n![[E08_loss.svg]]\n</md></div><div class="slide-col"><md>\n- 3 seeds so far</md></div></div>')).toBe(true)
+    expect(html.startsWith('<div class="slide layout-two-cols" data-slide="2"><div class="slide-head" data-slot="head"><md>## Accuracy holds at 1k images</md></div>' +
+      '<div class="slide-cols"><div class="slide-col" data-slot="left"><md>![[E08_loss.svg]]</md></div><div class="slide-col" data-slot="right"><md>- 3 seeds so far</md></div></div>')).toBe(true)
     expect(html).toContain('<div class="slide-box" data-item="0" style="left:1180px;top:620px;width:520px;color:var(--slide-c-accent);font-size:40px"><div class="slide-box-text"><md>gap closes here</md></div></div>' +
       '<div class="slide-box ellipse fixed" data-item="1" style="left:980px;top:410px;width:160px;height:120px;border:4px solid var(--slide-c-contrast)"></div>' +
       '<svg class="slide-line" data-item="2" viewBox="0 0 1920 1080" style="color:var(--slide-c-contrast)">')
@@ -442,7 +442,7 @@ describe('boxes and lines drawn on the slide, over its layout, the later in the 
   test('a line with no place is not drawn, the rest of the slide is; the order in the text is the order drawn', () => {
     const html = draw('one\n<!-- line from="x" to="1 2" -->\n<!-- box x="1" y="2" w="3" -->\n<!-- /box -->\n<!-- line from="0 0" to="5 5" -->\n<!-- box x="4" y="5" w="6" -->\n<!-- /box -->')
     expect([...html.matchAll(/data-item="(\d)"/g)].map(m => m[1])).toEqual(['1', '2', '3'])
-    expect(html).toContain('<div class="slide-content"><md>one</md></div><div class="slide-box" data-item="1"')
+    expect(html).toContain('<div class="slide-content" data-slot="content"><md>one</md></div><div class="slide-box" data-item="1"')
   })
 })
 
@@ -456,5 +456,48 @@ describe('boxes and lines in the vault', () => {
     expect(lines).toHaveLength(2)
     expect(lines[1]).toBe('slide 1, line 9: this box is not closed: add <!-- /box --> after its text')
     expect(await deckWarnings(io, l)).toEqual(lines.map(p => `vault/decks/P01 Weekly wrap-up.md: ${p}`))
+  })
+})
+
+describe('a slide\'s slots, and its own options', () => {
+  const md = (src: string) => `<md>${src}</md>`
+  type Slot = { name: string; rows: { line: number; text: string }[]; text: string; at?: number }
+  type More = Placed & { optLine: number; split: number | null; titleColor: string; titleSize: number | null }
+  const slotsOf = (text: string, k = 0) => (P as unknown as { slots: (s: Slide) => Slot[] }).slots(P.split(text).slides[k]!)
+  const lined = (ss: Slot[]) => ss.map(s => [s.name, s.rows.filter(r => r.line >= 0 && r.text.trim()).map(r => r.line), s.text])
+
+  test('two columns: the heading, the left and the right, each with its lines in the text, a box between left out', () => {
+    const text = '# T\n---\n<!-- slide layout="two-cols" -->\n\n## Head\n\nleft one\n<!-- line from="0 0" to="1 1" -->\nleft two\n\n::right::\n\n- right\n\nnote: n'
+    expect(lined(slotsOf(text, 1))).toEqual([['head', [4], '## Head'], ['left', [6, 8], 'left one\n\nleft two'], ['right', [12], '- right']])
+    expect(slotsOf(text, 1)[2]!.at).toBe(10)
+    const none = slotsOf('# T\n---\n<!-- slide layout="two-cols" -->\nno heading, no right', 1)
+    expect(lined(none)).toEqual([['head', [], ''], ['left', [3], 'no heading, no right'], ['right', [], '']])
+    expect(none[2]!.at).toBe(-1)
+  })
+
+  test('a figure: the heading, the first image alone on its line, the rest its caption; the other layouts: one slot', () => {
+    expect(lined(slotsOf('<!-- slide layout="figure" -->\n## Loss\nbefore\n![[E08_loss.svg]]\nafter'))).toEqual([['head', [1], '## Loss'], ['figure', [3], '![[E08_loss.svg]]'], ['caption', [2, 4], 'before\nafter']])
+    expect(lined(slotsOf('# Title\n\nsub'))).toEqual([['content', [0, 2], '# Title\n\nsub']])
+  })
+
+  test('the columns\' share, and the heading\'s own colour and size', () => {
+    const text = '# T\n---\n\n<!-- slide layout="two-cols" split="60" title-color="contrast" title-size="72" -->\n## Head\nleft\n::right::\nright'
+    const s = P.split(text).slides[1] as More
+    expect(s).toMatchObject({ optLine: 3, split: 60, titleColor: 'contrast', titleSize: 72 })
+    expect(P.slideHtml(s, md)).toBe('<div class="slide layout-two-cols title-sized" data-slide="2" style="--slide-title-color:var(--slide-c-contrast);--slide-title-size:72px">' +
+      '<div class="slide-head" data-slot="head"><md>## Head</md></div><div class="slide-cols" style="grid-template-columns:60fr 40fr"><div class="slide-col" data-slot="left"><md>left</md></div>' +
+      '<div class="slide-col" data-slot="right"><md>right</md></div></div></div>')
+    expect(P.split('# T') .slides[0]).toMatchObject({ optLine: -1, split: null, titleColor: '', titleSize: null })
+    expect(P.slideHtml(P.split('<!-- slide title-color="#211A52" -->\n# T').slides[0]!, md)).toBe('<div class="slide layout-title" data-slide="1" style="--slide-title-color:#211A52"><div class="slide-content" data-slot="content"><md># T</md></div></div>')
+  })
+
+  test('one that cannot be read is said, by its line, and left out', () => {
+    const text = '# T\n---\n<!-- slide layout="two-cols" split="95" title-color="coral" title-size="big" -->\nleft'
+    expect(said(text)).toEqual([
+      'slide 2, line 3: split="95" is no whole number from 10 to 90',
+      'slide 2, line 3: no colour "coral": a token\'s name (text, muted, accent, contrast, baseline, neutral, axis, grid, fill, c1 to c6) or #rrggbb',
+      'slide 2, line 3: title-size="big" is no whole number above 0',
+    ])
+    expect(P.split(text).slides[1]).toMatchObject({ split: null, titleColor: '', titleSize: null })
   })
 })

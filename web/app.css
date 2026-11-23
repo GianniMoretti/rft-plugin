@@ -1161,6 +1161,9 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
 .slide .slide-box.figure.fixed .slide-box-text, .slide .slide-box.figure.fixed p { height: 100%; }
 .slide .slide-box.figure.fixed img { height: 100%; object-fit: contain; }
 .slide .slide-line { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; overflow: visible; pointer-events: none; }
+/* a slide's heading in a colour and a size of its own (title-color, title-size on its options line) */
+.slide .slide-head > :is(h1, h2, h3), .slide .slide-content > :is(h1, h2, h3):first-child { color: var(--slide-title-color, inherit); }
+.slide.title-sized .slide-head > :is(h1, h2, h3), .slide.title-sized .slide-content > :is(h1, h2, h3):first-child { font-size: var(--slide-title-size); }
 
 /* the slide tools (web/slide-tools.js): a bar above the slide, and over the slide what the pointer
    takes hold of, in the slide's own units (an SVG with the slide's transform): each box's and
@@ -1189,6 +1192,14 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
 .sl-menu .sl-hex { grid-column: 1 / -1; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px;
   background: var(--bg); color: var(--fg); }
 .sl-menu .sl-hex.bad { border-color: #f03e3e; }
+/* the layouts to pick from: each a small drawing of its slide */
+.sl-menu.sl-layouts { grid-template-columns: repeat(5, 56px); }
+.sl-layout { padding: 3px; min-width: 0; line-height: 0; }
+.sl-layout svg { width: 48px; height: 27px; background: #fff; border-radius: 2px; fill: #495057; stroke: #868e96; stroke-width: 1.4; stroke-linecap: round; }
+.sl-layout svg .sl-lay-soft { fill: #dee2e6; stroke: none; }
+.sl-layout svg .sl-lay-fill { fill: var(--slide-c-accent); stroke: none; }
+.sl-layout svg .sl-lay-inv { fill: #fff; stroke: none; }
+.sl-source.sl-source-slot { padding: 0; }
 /* the tree's figures to pick from, by the note that made each */
 .sl-menu.sl-figures { grid-template-columns: repeat(3, 120px); max-height: 60vh; overflow: auto; }
 .sl-figures-note, .sl-figures p { grid-column: 1 / -1; margin: 2px 0 0; font-size: 11px; color: var(--muted); }
@@ -1215,6 +1226,12 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
 .sl-edit .sl-frame { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none; }
 .sl-edit .sl-handle { fill: #fff; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: all; }
 .sl-edit .sl-guide { stroke: #f03e3e; stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+/* a slot: taken by a click anywhere in it; selected, framed in dashes; the divide between two columns */
+.sl-edit .sl-slot { fill: transparent; stroke: none; pointer-events: all; cursor: default; }
+.sl-edit .sl-slot-frame { stroke-dasharray: 5 4; }
+.sl-edit .sl-drop { stroke-width: 3; fill: color-mix(in oklab, var(--accent) 12%, transparent); }
+.sl-edit .sl-divide { fill: transparent; pointer-events: all; cursor: col-resize; }
+.sl-edit .sl-divide-mark { stroke: var(--accent); stroke-width: 1; stroke-dasharray: 2 4; vector-effect: non-scaling-stroke; pointer-events: none; opacity: 0.55; }
 .sl-edit .sl-h-nw, .sl-edit .sl-h-se { cursor: nwse-resize; }
 .sl-edit .sl-h-ne, .sl-edit .sl-h-sw { cursor: nesw-resize; }
 .sl-edit .sl-h-n, .sl-edit .sl-h-s { cursor: ns-resize; }

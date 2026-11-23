@@ -100,7 +100,9 @@ gives it), `G04` (a once-only meeting), `M04` (a deadline); one deck may be for 
   (its text's), `align` (`left`, `center`, `right`), `valign` (`top`, `middle`, `bottom`). A line
   takes `from`, `to` and `arrow` (`start`, `end`, `both`), `outline`, `weight`. A colour is a
   figure token's name (`text`, `muted`, `accent`, `contrast`, `baseline`, `neutral`, `axis`,
-  `grid`, `fill`, `c1` to `c6`) or `#rrggbb`.
+  `grid`, `fill`, `c1` to `c6`) or `#rrggbb`. A slide's options line also takes `split="60"`
+  (two columns: the left one's share, 10 to 90) and `title-color`, `title-size` (its heading's
+  own).
 - `rft_validate` names a `for:` that is no meeting or deadline, a day the meeting does not fall
-  on, a skipped occurrence, a recurring meeting named with no day, and each box or line it cannot
-  read in full, by slide and line: run it after writing them.
+  on, a skipped occurrence, a recurring meeting named with no day, and each box, line or slide
+  option it cannot read in full, by slide and line: run it after writing them.
