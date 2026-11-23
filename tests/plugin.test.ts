@@ -190,6 +190,9 @@ describe('concepts', () => {
     expect(prompts[0]).toContain('ONE literature note, not a note per paper')
     expect(prompts[0]).toContain('tags ["literature"]')
     expect(prompts[0]).toContain('never invent a citation')
+    // what it found and did not read goes to the inbox, with a why naming the search
+    expect(prompts[0]).toContain('that you did not read are neither written about nor dropped: save each in the inbox with rft_inbox')
+    expect(prompts[0]).toContain('a why that names this search')
     await run('label smoothing')
     await clock.advance(5000)
     expect(prompts[1]).toContain('"label smoothing"')

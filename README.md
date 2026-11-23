@@ -174,6 +174,7 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_machine` | pairs this machine with the experiment queue, which turns the queue on: `probe` reads the machine with no model (its NVIDIA GPUs, the disks for the runs' outputs, conda and uv), `add` pairs it with the outputs' root and the GPUs you keep out, `status` says how it stands (see The experiment queue) |
   | `rft_queue` | queues a run of an experiment on this machine's GPUs (command, folder, GPUs, a label); it starts once its GPUs are free, in your order (see The experiment queue). Only on a paired machine |
   | `rft_jobs` | the queue in a few lines: the GPUs, the jobs running and waiting (with why each waits), the last ones that ended, the results still to record; one job with its run record (the code it ran, its outputs, the end of its traceback) and the end of its output |
+  | `rft_inbox` | the inbox, links saved to read later: lists the items, saves one (a link already in the inbox, processed or a reference's Source is reported, not added), saves the brief of an item you asked to process, and closes it with the outcome you picked (the note it became, or why it was discarded); it never sets a reading priority |
   | `rft_job` | changes the queue when you ask: moves one waiting job to the top, the end, or before another (answering the new order in one line), cancels one, retries one that ended, pauses or resumes the queue |
 
 - **The outline pane** opens as a sidebar at session start in the terminal and VS Code where the
@@ -349,6 +350,26 @@ are in the prompt only once the vault holds one.
   adds one, and the icon shows how many are open. A change made meanwhile in Obsidian or by Claude
   comes in; one that crosses your typing asks you to **Keep mine** or **Take theirs**. **Esc**
   closes it. It is on every page; `/rft-view` leaves it out.
+- **The inbox** (the tray icon beside the scratchpad's, with the number of items) holds what you
+  saved to read later and have not decided about: papers, articles, blog posts. An item is a
+  link (a URL, an arXiv id or a DOI) with, if you give one, a line on why. It is not a note of
+  the tree: the items are list lines in `Inbox.md` at the vault's top, plain markdown you can
+  edit in Obsidian. Paste a link in the field at the panel's top, type `/rft-inbox <link>
+  [reading priority] [why]` in the chat, or ask Claude to save it; a link already in the inbox,
+  processed before or in a reference note's **Source** is said to be there and not added twice,
+  and an arXiv paper gets its title from arXiv a moment later. Each item has a **reading
+  priority** (urgent, high, medium, low or none): yours alone, with no limits, not a note's
+  priority and never carried to one. The list is ordered by **Priority** or by **Date**; a tap
+  on an item's why edits it, and **✕** (asked twice) discards it.
+  **Process** on an item asks Claude, in the chat that ran `/rft`, to read it: Claude saves a
+  **brief** of at most three lines on the item (what it claims, which notes it touches, the
+  outcome it recommends) and waits. You pick the **outcome**: a reference note, an entry in a
+  literature note, a direction citing its reference, discard, or later. Claude writes what that
+  needs and closes the item, which moves under `## Processed` with its date and what it became
+  (`→ R15`, or `— discarded: why`); *later* leaves it in the inbox with its brief, which the
+  panel shows at a tap on **briefed**. With no chat on the tree, Process is refused at once,
+  saying so. Claude never processes an item unasked; a literature search saves the papers it
+  found and did not read here. `/rft-inbox` alone prints the inbox, and `/rft-view` leaves it out.
 - It follows the vault live, and keeps the zoom, layout, folds, filters and text size between
   visits.
 
@@ -776,9 +797,9 @@ python3 /path/to/rft-plugin/server/rft_serve.py        # [folder] [--port N]; Ct
 
 It prints the address `/rft` prints, key included, on the config's `webPort` (set one so the
 address, and a bookmark of it, stay the same; with none it takes a free port). Reading, editing,
-comments, the kanban, the calendar, the scratchpad and the queue work as from a chat. What the
+comments, the kanban, the calendar, the scratchpad, the inbox and the queue work as from a chat. What the
 page asks of the session (**Add child**, **Change type**, **Move**, **Verify**, the Manuscript's
-changes, **Ask Claude**) a chat makes: `/rft` in a chat on the same tree shows the terminal's
+changes, **Ask Claude**, the inbox's **Process**) a chat makes: `/rft` in a chat on the same tree shows the terminal's
 address and makes them from there, and the terminal says when a chat connects or leaves. With no
 chat, they are refused at once, saying so. A chat already serving the tree on that port keeps it,
 and the terminal serves it once the chat ends; a terminal that stops while a chat is open leaves
@@ -786,7 +807,7 @@ the address to that chat. A second terminal on the same tree says where the firs
 
 On a **phone** (a screen up to 700 px wide; `web/phone.js`), the pages are tabs along the bottom,
 the bar is the search and **⋯** (layout, fit, fold, text size, the concept overlay, Came from,
-Filters, the theme), and a note, the filters, the scratchpad, the queue and a notebook each take
+Filters, the theme), and a note, the filters, the scratchpad, the inbox, the queue and a notebook each take
 the whole page, the note's actions a row of named chips above it. The phone's **Back** closes
 what was opened last, and in a note reached by a link shows the note it was in. The kanban
 shows a column at a time, swiped; the Manuscript and the Slides a pane at a time (the list, the
@@ -1078,6 +1099,7 @@ note: start with E05
 | `/rft-update [apply] [--sections]` | bring a vault made by an older version up to this one: list what it lacks (the folders and templates of newer note types, the config's format); `apply` writes it and refreshes the derived files. Notes are never changed, except that `--sections` adds the sections their type has gained, as empty headings, to unlocked notes. A session on an older vault starts with a toast pointing here (no model turn) |
 | `/rft-update notebooks [--write <concept or experiment ids>]` | bring the existing notebooks up to what the plugin does now: every notebook runs again in the queue (one job, no GPU, in check mode, no model turn; with no machine paired it says so and runs nothing), so each saves its numbers, figures and tables; and, for information, a list by concept with code of the experiments with a result and no notebook (not those with `notebook: no`), a missing concept notebook, an artifact's hand-drawn charts. `--write <concept>` asks Claude to write that concept's, `--write E05 E07` those experiments' only; a notebook is never written for what you did not name |
 | `/rft-handoff [show\|clear\|a note for the next session]` | ask Claude to leave a handoff, so the work goes on in a new session (or after `/clear`) and not in a long one; `show` prints it and `clear` removes it (no model turn) |
+| `/rft-inbox [link] [reading priority] [why]` | print the inbox, the most pressing first; with a link, save it to read later, with the reading priority and the why you give (no model turn) |
 | `/rft-view` | write `vault/tree.html`: the same tree view as one standalone file, every note inside (images as placeholders), to open anywhere or share |
 
 The plugin registers these commands when a session starts, so the desktop app's slash-command
@@ -1170,6 +1192,9 @@ the last starts a session with the plugin loaded from this folder.
   `rft_validate`'s warnings.
 - `hooks/lib/handoff.ts`: the handoff a session leaves for the next one in its folder: its file,
   who gets it in full, the repositories checked for uncommitted work.
+- `hooks/lib/inbox.ts`: the inbox as the session reads and writes it (`rft_inbox`, `/rft-inbox`,
+  the Process prompt); `server/rft_inbox.py` the same file as the page reads and writes it. Both
+  are held to one fixture, `tests/fixtures/inbox/`.
 - `hooks/lib/tools.ts`: which tools sit in the prompt from the start, and which only report;
   `hooks/lib/shell.ts` the files a shell command writes (the guards' input); `hooks/lib/answers.ts` the subagents that
   answer threads; `hooks/lib/update.ts` `/rft-update` and the vault's format.
@@ -1178,7 +1203,7 @@ the last starts a session with the plugin loaded from this folder.
   concept artifact's state, links and frame, `frame.js` and `frame.css` the runtime and base style
   inside the artifact's frame, `latex.js` its tables as LaTeX; `markdown.js` the note
   renderer, footnotes and the map from the page back to the note's text; `scratchpad.js` the
-  scratchpad's to-dos and lists, and its panel; `queue.js` the experiment queue's monitor;
+  scratchpad's to-dos and lists, and its panel; `inbox.js` the inbox's panel; `queue.js` the experiment queue's monitor;
   `theme.js` the light and
   dark themes; `manuscript.js` the Manuscript tab; `slides.js` a deck's slides, layouts and what it
   is for, `decks.js` the Slides tab; vendored d3 and CodeMirror), one codebase for the live view and `/rft-view`, which shows the

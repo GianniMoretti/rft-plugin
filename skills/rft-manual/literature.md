@@ -22,6 +22,10 @@ The tree should start from what is already known, not from scratch.
   (known, open, setups to start from) and list the directions it suggests and the papers worth
   a note of their own: add them only once the user chooses. The tree shows literature notes in
   a colour of their own (cyan; `▤` in the pane).
+- **Found but not read: the inbox.** A search turns up more papers than it reads. Those that
+  look worth reading and were not read are neither written about nor dropped: save each with
+  `rft_inbox {link, title, why}`, the why naming the search ("from the literature search on
+  <topic>"), and say how many were saved. The user processes them when they choose (`inbox.md`).
 - **Papers in the vault.** `rft_collect_papers(ids?)` downloads, in the background, the PDFs of
   reference notes whose **Source** has an arXiv id or link, or a PDF link on an open-access
   host (OpenReview, PMLR, ACL Anthology, NeurIPS and CVF proceedings, JMLR, bioRxiv...), into
