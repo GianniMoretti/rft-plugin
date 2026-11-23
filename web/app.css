@@ -734,8 +734,9 @@ a.cal-dl-name:hover { text-decoration: underline; }
 .inbox-x { flex: none; padding: 0 5px; border-color: transparent; background: none; color: var(--muted); white-space: nowrap; }
 .inbox-x:hover { color: var(--dropped); border-color: var(--line); }
 .inbox-x.armed { padding: 0 7px; color: var(--dropped); border-color: var(--dropped); font-weight: 600; }
-/* under it: why it is saved (a tap edits it), then the day it was added */
-.inbox-under { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; margin-top: 1px; font-size: 0.9em; }
+/* under it: why it is saved (a tap edits it), then the day it was added; Process at their right */
+.inbox-under { display: flex; align-items: flex-start; gap: 8px; margin-top: 1px; font-size: 0.9em; }
+.inbox-about { display: flex; flex: 1; min-width: 0; flex-wrap: wrap; align-items: baseline; gap: 0 8px; }
 .inbox-why { min-width: 0; margin: 0; padding: 0; border: 0; border-radius: 3px; background: none; font: inherit; color: var(--muted);
   text-align: left; overflow-wrap: anywhere; }
 button.inbox-why { cursor: text; }
@@ -743,6 +744,13 @@ button.inbox-why:hover { color: var(--fg); }
 button.inbox-why.empty { opacity: 0.75; }
 .inbox-why-edit { flex: 1 1 100%; min-width: 0; font: inherit; padding: 1px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
 .inbox-when { white-space: nowrap; }
+/* then that Claude briefed it (a tap shows the brief under the item), and Process, which asks Claude in the chat */
+.inbox-briefed { flex: none; margin: 0; padding: 0; border: 0; border-radius: 3px; background: none; font: inherit; color: var(--accent); white-space: nowrap; }
+.inbox-briefed::after { content: " \25B8"; }
+.inbox-briefed[aria-expanded="true"]::after { content: " \25BE"; }
+.inbox-process { flex: none; padding: 0 8px; font-size: 1em; }
+.inbox-brief { margin: 4px 0 2px; padding: 1px 0 1px 9px; border-left: 2px solid var(--line); list-style: none; font-size: 0.9em; overflow-wrap: anywhere; }
+.inbox-brief[hidden] { display: none; }
 #inbox .pad-head .seg { gap: 3px; }
 /* what the server said of a change it did not make can be a sentence: it wraps, within the panel */
 #inbox-msg { flex: 1; min-width: 0; overflow-wrap: anywhere; }
@@ -1252,8 +1260,13 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
   .inbox-x { border-color: var(--line); border-radius: 22px; font-size: 14px; }
   .inbox-x.armed { padding: 0 12px; }
   .inbox-under { align-items: center; margin-top: -4px; padding-right: 8px; }
-  button.inbox-why { min-width: 44px; }
-  .inbox-under:has(.inbox-why-edit) { margin-top: 2px; padding-bottom: 6px; gap: 2px 8px; }
+  .inbox-under:has(.inbox-process) { margin-top: 4px; }
+  .inbox-about { align-items: center; }
+  button.inbox-why, .inbox-briefed { min-width: 44px; }
+  .inbox-process { padding: 0 16px; border-radius: 22px; font-size: 14px; }
+  .inbox-brief { margin: 4px 8px 8px 0; }
+  .inbox-under:has(.inbox-why-edit) { margin-top: 2px; padding-bottom: 6px; }
+  .inbox-under:has(.inbox-why-edit) .inbox-about { gap: 2px 8px; }
   #inbox .pad-head .seg { gap: 6px; }
   #inbox .pad-head .seg button { padding: 1px 12px; }
   .pad-head { padding: 4px 8px 4px 16px; }

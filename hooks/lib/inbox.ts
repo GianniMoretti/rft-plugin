@@ -25,8 +25,9 @@
 // pattern has the `u` flag (letters match without case in ASCII alone), and `.` takes any character
 // (the `s` flag). A change to a pattern here is a change to the same pattern there.
 
+import { cite } from './manual'
 import type { Io, Loaded } from './vault'
-import { join } from './vault'
+import { isLiterature, join, resolveId } from './vault'
 
 export const INBOX = 'Inbox.md'
 /** The reading priorities, the most pressing first; an item may have none. */
@@ -79,6 +80,7 @@ const ADDED = rx(String.raw`^added[ \t]+([0-9]{4}-[0-9]{2}-[0-9]{2})$`, true)
 const DATED = rx(String.raw`^([0-9]{4}-[0-9]{2}-[0-9]{2})[ \t]+(.*)$`)
 const DASH = rx(String.raw`^(?:—|–|->|-{1,2}|→)[ \t]*`) // `->` before `-`, or its `>` is left behind
 const ENDS = rx(String.raw`[.,;]+$`) // what ends a sentence, not an address
+const MARKER = rx(String.raw`^[-*+][ \t]+`)
 
 export const strip = (text: string) => text.replace(EDGES, '')
 const oneLine = (text: string | undefined) => strip((text ?? '').replace(SPACES, ' '))
@@ -266,6 +268,105 @@ export function addTo(box: Inbox, input: AddInput): { box: Inbox; item: InboxIte
   return { box: next, item: shown(next)[next.items.findIndex(i => i.at[0] === at)]! }
 }
 
+/** The item with this link: the first, or the `nth` after it when the link was typed more than once. */
+export const nthItem = (box: Inbox, key: string, nth = 0): Inbox['items'][number] | null => (nth >= 0 ? box.items.filter(i => i.key === key)[nth] ?? null : null)
+
+/** New lines before line `end` (after the last one, when there is none), with the file's endings. */
+function put(lines: string[], cr: boolean[], crlf: boolean, end: number, add: string[]): void {
+  if (end === lines.length && end > 0) cr[end - 1] = crlf // the last line had no ending: it has the file's now
+  lines.splice(end, 0, ...add)
+  cr.splice(end, 0, ...add.map(() => crlf))
+  cr[cr.length - 1] = false // nothing ends the last line
+}
+
+/** A brief is short: read in a minute, shown whole in the panel. */
+export const BRIEF_LINES = 3
+export const BRIEF_LINE_CHARS = 400
+
+/**
+ * The file with a brief under an item: at most three indented lines, the first saying the day. A
+ * brief the item had is replaced whole; indented lines of the user's that are no brief stay, after
+ * it. Null when the inbox has no such item; InboxError when the brief is empty or too long.
+ */
+export function briefOn(box: Inbox, key: string, nth: number, brief: string, today: string): { box: Inbox; item: InboxItem } | null {
+  const item = nthItem(box, key, nth)
+  if (!item) return null
+  // as it may be given: a list, its first line saying "briefed <day>:" already
+  const said = brief.split('\n').map(l => oneLine(l).replace(MARKER, '')).map((l, n) => (n === 0 ? strip(BRIEFED.exec(l)?.[2] ?? l) : l)).filter(l => l && !MARKER.test(`${l} `))
+  if (!said.length) throw new InboxError('a brief says what the item claims, which notes of the tree it touches and the outcome you recommend')
+  if (said.length > BRIEF_LINES) throw new InboxError(`a brief is at most ${BRIEF_LINES} lines and this has ${said.length}: what the item claims, which notes of the tree it touches, the outcome you recommend`)
+  if (said.some(l => l.length > BRIEF_LINE_CHARS)) throw new InboxError(`a line of a brief is at most ${BRIEF_LINE_CHARS} characters: the user decides from it in a minute`)
+  const lines = [...box.lines], cr = [...box.cr]
+  const [a, b] = item.at
+  if (item.brief) {
+    lines.splice(a + 1, b - a - 1)
+    cr.splice(a + 1, b - a - 1)
+  }
+  put(lines, cr, box.crlf, a + 1, said.map((l, n) => `  - ${n === 0 ? `briefed ${today}: ` : ''}${l}`))
+  const next = readLines(lines, cr, box.crlf)
+  const now = next.items.find(i => i.at[0] === a)
+  if (!now?.brief || now.brief.date !== today || said.some((l, n) => now.brief!.lines[n] !== l)) throw new InboxError('the brief would not read back as written: say it in other words')
+  return { box: next, item: shown(next)[next.items.indexOf(now)]! }
+}
+
+/**
+ * The file with an item taken out of the inbox and what was decided for it: its line and its brief
+ * go (and a blank line with them, where that would leave two together or one at the file's top),
+ * and one line with the day, the link and the outcome is added at the end of the processed ones
+ * (under a `## Processed` heading, made when there is none). An outcome that starts with an arrow
+ * is the note the item became (`→ R15`) and is written as it is; any other follows a dash
+ * (`— discarded: why`). Null when the inbox has no such item. As server/rft_inbox.py's `close`.
+ */
+export function closeIn(box: Inbox, key: string, nth = 0, outcome = 'discarded', today = ''): { box: Inbox; processed: ProcessedItem } | null {
+  const item = nthItem(box, key, nth)
+  if (!item) return null
+  const said = oneLine(outcome)
+  const arrow = said.startsWith('→')
+  let line: string | null = null
+  let want: ProcessedItem | null = null
+  for (const t of item.title ? [item.title, ''] : ['']) { // a title the line cannot carry is left out
+    const made = `- ${today ? `${today} ` : ''}${t ? `[${t}](${item.url})` : item.url}${arrow ? ` ${said}` : said ? ` — ${said}` : ''}`
+    want = { date: today, key, title: t, outcome: arrow ? strip(said.slice(1)) : said }
+    const back = readInbox(`## Processed\n${made}`).processed
+    if (back.length === 1 && back[0]!.date === want.date && back[0]!.key === want.key && back[0]!.title === want.title && back[0]!.outcome === want.outcome) {
+      line = made
+      break
+    }
+  }
+  if (line === null || !want) throw new InboxError('the outcome would not read back as it is: say it in other words')
+  const lines = [...box.lines], cr = [...box.cr]
+  const [a, b] = item.at
+  lines.splice(a, b - a)
+  cr.splice(a, b - a)
+  if (!lines.length) {
+    lines.push('')
+    cr.push(false)
+  }
+  // where the item was: a blank line that is now the file's first, or the second of two, goes
+  if (lines.length > 1 && a < lines.length && !strip(lines[a]!) && (a === 0 || !strip(lines[a - 1]!))) {
+    lines.splice(a, 1)
+    cr.splice(a, 1)
+  }
+  cr[cr.length - 1] = false
+  const head = lines.findIndex(l => PROCESSED.test(l))
+  let end: number, stop: number, add: string[]
+  if (head < 0) {
+    // at the file's end, a blank line before the heading unless one is there
+    stop = lines.length
+    end = lines[lines.length - 1] === '' ? stop - 1 : stop
+    add = [...(end > 0 && strip(lines[end - 1]!) ? [''] : []), '## Processed', '', line]
+  } else {
+    // the end of the processed ones: before the next heading and the blank lines above it
+    const after = lines.findIndex((l, n) => n > head && HEADING.test(l))
+    stop = after < 0 ? lines.length : after
+    end = stop
+    while (end > head + 1 && !strip(lines[end - 1]!)) end--
+    add = [...(ITEM.test(lines[end - 1]!) || SUB.test(lines[end - 1]!) ? [] : ['']), line]
+  }
+  put(lines, cr, box.crlf, end, [...add, ...(end === stop ? [''] : [])])
+  return { box: readLines(lines, cr, box.crlf), processed: want }
+}
+
 // ---------------------------------------------------------------- in a session
 
 const itemName = (item: { key: string; url: string; title: string }) => (item.title ? `${item.title} (${item.url})` : item.url)
@@ -332,7 +433,7 @@ export async function addItem(io: Io, loaded: Loaded, input: AddInput): Promise<
   const held = findIn(box, got.key)
   if (held && 'item' in held) {
     const about = [held.item.added ? `added ${held.item.added}` : '', held.item.priority ? `reading priority ${held.item.priority}` : ''].filter(Boolean).join(', ')
-    return `Already in the inbox${about ? ` (${about})` : ''}: ${itemName(held.item)}. Nothing added.`
+    return `Already in the inbox${about ? ` (${about})` : ''}: ${itemName(held.item)}. Nothing added.${briefText(held.item)}`
   }
   if (held) {
     const p = held.processed
@@ -351,6 +452,134 @@ export async function addItem(io: Io, loaded: Loaded, input: AddInput): Promise<
   const { item } = added
   const about = [item.priority ? `reading priority ${item.priority}` : '', item.why ? `why: ${item.why}` : ''].filter(Boolean).join('; ')
   return `Saved to the inbox: ${itemName(item)}${about ? ` (${about})` : ''}. ${countsOf(shown(added.box))}.`
+}
+
+const briefText = (item: InboxItem) => (item.brief ? `\nIts brief, saved ${item.brief.date}:\n${item.brief.lines.map(l => `- ${l}`).join('\n')}` : '')
+
+/** The item a tool call names by its link, and the inbox; InboxError when the link is none or no item has it. */
+async function itemAt(io: Io, vault: string, link: string): Promise<{ box: Inbox; item: Inbox['items'][number] }> {
+  const got = linkAt(oneLine(link))
+  if (!got || strip(got.tail)) throw new InboxError(`"${oneLine(link)}" is not a link: name the item by its link (a URL, an arXiv id or a DOI), as rft_inbox lists it.`)
+  const box = await loadInbox(io, vault)
+  const item = nthItem(box, got.key)
+  if (item) return { box, item }
+  const p = box.processed.filter(x => x.key === got.key).pop()
+  throw new InboxError(p
+    ? `Not in the inbox any more: ${itemName({ ...got, title: p.title })} was processed${p.date ? ` on ${p.date}` : ''}${p.outcome ? ` (${p.outcome})` : ''}.`
+    : `No item of the inbox has this link (${got.url}). rft_inbox with no field lists them.`)
+}
+
+/** Saves the brief of an item (rft_inbox {link, brief}) and says so. */
+export async function saveBrief(io: Io, loaded: Loaded, link: string, brief: string, today: string): Promise<string> {
+  const vault = loaded.config.vault
+  const { box, item } = await itemAt(io, vault, link)
+  let done: ReturnType<typeof briefOn>
+  try {
+    done = briefOn(box, item.key, 0, brief, today)
+  } catch (err) {
+    if (err instanceof InboxError) throw new InboxError(`Brief not saved: ${err.message}.`)
+    throw err
+  }
+  await io.write(join(vault, INBOX), inboxText(done!.box))
+  return `Brief saved on ${itemName(item)} (${done!.item.brief!.lines.length} ${done!.item.brief!.lines.length === 1 ? 'line' : 'lines'}): it stays in the inbox until the user picks an outcome.`
+}
+
+/** What the user may decide for a processed item; Claude recommends one and only the user picks. */
+export const OUTCOMES = ['reference', 'literature entry', 'direction', 'discard', 'later'] as const
+export type Outcome = (typeof OUTCOMES)[number]
+export type CloseInput = { link: string; outcome: string; note?: string; cites?: string; reason?: string; today: string }
+
+const A = (type: string) => `${/^[aeiou]/.test(type) ? 'an' : 'a'} ${type}`
+
+/**
+ * Closes an item with the outcome the user picked (rft_inbox {link, outcome, ...}): it leaves the
+ * inbox for the processed ones, pointing at the note it became or saying why it was discarded.
+ * The note is there already: an outcome that needs one is refused while it is missing or of
+ * another kind. `later` closes nothing.
+ */
+export async function closeItem(io: Io, loaded: Loaded, input: CloseInput): Promise<string> {
+  const vault = loaded.config.vault
+  const said = oneLine(input.outcome).toLowerCase().replace(/[-_]/g, ' ')
+  const outcome = (said === 'discarded' ? 'discard' : said === 'literature' ? 'literature entry' : said) as Outcome
+  if (!(OUTCOMES as readonly string[]).includes(outcome)) throw new InboxError(`Not closed: an outcome is ${OUTCOMES.slice(0, -1).join(', ')} or ${OUTCOMES[OUTCOMES.length - 1]}, and "${oneLine(input.outcome)}" is none of them.`)
+  const { box, item } = await itemAt(io, vault, input.link)
+  const name = itemName(item)
+  if (outcome === 'later') return `Left in the inbox for later: ${name}${item.brief ? `, with its brief (${item.brief.date})` : ', with no brief'}. Nothing closed.`
+  const { nodes } = loaded.tree
+  const noteOf = (given: string | undefined, field: string, what: string) => {
+    const id = resolveId(loaded.tree, given?.trim())
+    if (!id) {
+      throw new InboxError(given?.trim()
+        ? `Not closed: there is no note ${given.trim()}. Make ${what} first (rft_add_node), then close the item with its id.`
+        : `Not closed: the outcome ${outcome} names ${what} (${field}). Make it first (rft_add_node), then close the item with its id.`)
+    }
+    return id
+  }
+  let line: string
+  let advice = ''
+  if (outcome === 'discard') {
+    const reason = oneLine(input.reason)
+    if (!reason) throw new InboxError('Not closed: a discard gives its reason in one line (reason): the user reads it later to know why they passed on the item.')
+    line = `discarded: ${reason}`
+  } else if (outcome === 'reference') {
+    const id = noteOf(input.note, 'note', 'the reference note of the item')
+    const n = nodes[id]!
+    if (n.type !== 'reference') throw new InboxError(`Not closed: ${id} is ${A(n.type)}, not a reference.`)
+    if (isLiterature(n)) throw new InboxError(`Not closed: ${id} is a literature note. An item added to it as one of its papers has the outcome "literature entry"; the outcome reference names a reference note of the item alone.`)
+    if (!linksIn(sourceOf(loaded.texts[id] ?? '')).includes(item.key)) advice = ` ${id}'s Source does not name this link (${item.url}): add it there, so that the link is known as ${id}'s when it is saved again.`
+    line = `→ ${id}`
+  } else if (outcome === 'literature entry') {
+    const id = noteOf(input.note, 'note', 'the literature note the item was added to')
+    const n = nodes[id]!
+    if (!isLiterature(n)) throw new InboxError(`Not closed: ${id} is ${n.type === 'reference' ? 'a reference of one source' : A(n.type)}, not a literature note (a reference tagged literature, with its papers in a Papers section).`)
+    if (!linksIn(loaded.texts[id] ?? '').includes(item.key)) advice = ` ${id} does not name this link (${item.url}): check that its entry is in the Papers section, with the link.`
+    line = `→ ${id} (literature entry)`
+  } else {
+    const id = noteOf(input.note, 'note', 'the direction the item sparked')
+    const n = nodes[id]!
+    if (n.type !== 'direction') throw new InboxError(`Not closed: ${id} is ${A(n.type)}, not a direction.`)
+    const ref = noteOf(input.cites, 'cites', 'the reference note of the item, which the direction cites')
+    if (nodes[ref]!.type !== 'reference') throw new InboxError(`Not closed: ${ref} is ${A(nodes[ref]!.type)}, not a reference. A direction from an item cites the reference note of the item (cites).`)
+    if (!(n.refs ?? []).includes(ref) && !(loaded.texts[id] ?? '').includes(`[[${nodes[ref]!.name}`)) advice = ` ${id} does not link ${ref}: add it to its refs, so that the direction cites what it came from.`
+    line = `→ ${id}, citing ${ref}`
+  }
+  // a link the user typed twice is two items: both are closed, each with its own line
+  let now = box
+  let closed = 0
+  let done: ProcessedItem | null = null
+  try {
+    for (let next = closeIn(now, item.key, 0, line, input.today); next; next = closeIn(now, item.key, 0, line, input.today)) {
+      now = next.box
+      done = next.processed
+      closed++
+    }
+  } catch (err) {
+    if (err instanceof InboxError) throw new InboxError(`Not closed: ${err.message}.`)
+    throw err
+  }
+  await io.write(join(vault, INBOX), inboxText(now))
+  const left = shown(now)
+  return `Closed: ${name} ${line.startsWith('→') ? line : `— ${line}`}. It is under Processed in ${INBOX}${done?.date ? `, dated ${done.date}` : ''}${closed > 1 ? ` (it was in the inbox ${closed} times: all are closed)` : ''}. `
+    + `${left.length ? countsOf(left) : 'The inbox is empty'}.${advice}`
+}
+
+/**
+ * What Process asks of Claude, as a turn of the chat (ADR 0001): read the item, save its brief,
+ * recommend one outcome and wait. The detail is in the manual's part on the inbox.
+ */
+export function processPrompt(m: string, item: InboxItem): string {
+  const about = [item.why ? `saved because: ${item.why}` : '', item.added ? `added ${item.added}` : ''].filter(Boolean).join('; ')
+  const head = `Process this inbox item with me (read ${cite(m, 'inbox', 'Processing an item')} first): ${itemName(item)}${about ? ` (${about})` : ''}.`
+  const tool = `rft_inbox {link: ${JSON.stringify(item.url)}, `
+  const wait = `Then wait: write nothing to the tree until I pick an outcome (reference, literature entry, direction, discard or later). When I pick, write what that outcome needs and close the item with ${tool}outcome, ...}.`
+  if (item.brief) {
+    return `${head}\n\nIt has a brief, saved ${item.brief.date}:\n${item.brief.lines.map(l => `- ${l}`).join('\n')}\n\n`
+      + `Start from this brief: do not read the item again unless I ask, or the brief leaves open what I need to decide. Give me the brief and the outcome it recommends; if you read the item again and the brief changes, save the new one with ${tool}brief} first. ${wait}`
+  }
+  return `${head}\n\n`
+    + 'Read the item itself before you say anything about it: the page or the paper at its link, with the tools you have (for an arXiv paper, the abstract page and as much of the paper as the brief needs). '
+    + `Then, before anything else, save its brief with ${tool}brief}: at most three lines, what it claims, which notes of the tree it touches (by id: rft_search and rft_map find them), and the one outcome you recommend, with where it would go. Give me the brief in the chat too. ${wait}\n\n`
+    + 'If you cannot read it (a paywall, a dead link, a page that needs a login), say so and save no brief: never brief from the title or from what you remember of the paper. Offer me to discard it, to leave it for later, or to give you the path of its PDF in the vault.'
 }
 
 /** What `/rft-inbox <link> [reading priority] [why]` was given: a first word that is a reading priority is one, the rest is the why. */

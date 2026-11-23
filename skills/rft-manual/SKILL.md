@@ -31,7 +31,7 @@ the parts the work at hand needs:
 | `queue.md` | this machine is paired with the experiment queue, or the user asks to pair it; a run is queued, ended or failed; a script is written for the queue | `rft_machine`, `rft_queue`, `rft_jobs`, `rft_job` |
 | `writing.md` | a result is final (suggest verifying it), or a verified note's claim may no longer hold; snippets, documents or slides come up | `rft_manuscript`, `rft_set_snippet`, `rft_set_document` |
 | `comments.md` | a note is locked; a comment or suggestion of the tree view is to be answered; a note has footnotes or highlights | `rft_comments`, `rft_comment`, `rft_suggest` |
-| `inbox.md` | the user saves something to read later, or asks what waits in the inbox | `rft_inbox` |
+| `inbox.md` | the user saves something to read later, asks what waits in the inbox or asks to process an item | `rft_inbox` |
 
 This file's own tools: `rft_add_node`, `rft_set_status`, `rft_set_tags`, `rft_tags`, `rft_set_refs`,
 `rft_set_type`, `rft_tree`, `rft_sync`, `rft_validate`, `rft_handoff`. A tool that is not in the

@@ -325,17 +325,19 @@ class Inbox:
     def close(self, key: str, nth: int = 0, outcome: str = "discarded", today: str = "") -> dict | None:
         """Takes an item out of the inbox with what was decided for it: its line and its brief go
         (and a blank line with them, where that would leave two or one at the file's top), and one line with the day, the link and the outcome is added at the end of the processed
-        ones (under a `## Processed` heading, made when there is none). Answers the processed item,
-        or None when the inbox has no such item."""
+        ones (under a `## Processed` heading, made when there is none). An outcome that starts with
+        an arrow is the note the item became (`→ R15`) and is written as it is; any other follows a
+        dash (`— discarded: why`). Answers the processed item, or None when the inbox has no such item."""
         item = self.nth(key, nth)
         if not item:
             return None
         outcome = one_line(outcome)
+        arrow = outcome.startswith("\u2192")
         line = want = None
         for t in ([item["title"], ""] if item["title"] else [""]):  # a title the line cannot carry is left out
             link = f"[{t}]({item['url']})" if t else item["url"]
-            new = "- " + (f"{today} " if today else "") + link + (f" \u2014 {outcome}" if outcome else "")
-            want = {"date": today, "key": key, "title": t, "outcome": outcome}
+            new = "- " + (f"{today} " if today else "") + link + (f" {outcome}" if arrow else f" \u2014 {outcome}" if outcome else "")
+            want = {"date": today, "key": key, "title": t, "outcome": strip(outcome[1:]) if arrow else outcome}
             if Inbox(f"## Processed\n{new}").processed == [want]:
                 line = new
                 break

@@ -1623,6 +1623,23 @@ class Vault:
 
         return self._inbox_edit(edit)
 
+    def process_inbox(self, key: str, nth: int, ask) -> tuple[int, dict]:
+        """The user asks to process an item: asked of the session, where Claude reads it and
+        discusses it with the user as a turn of the chat (docs/adr/0001). Nothing is written and
+        nothing waits: with no chat to ask, it is refused at once (503), and so is an item that
+        is no longer in the inbox (409)."""
+        status, got = self.inbox()
+        if status != 200:
+            return status, got
+        same = [i for i in got["items"] if i["key"] == key]
+        if nth >= len(same):
+            return 409, {"error": "that item is no longer in the inbox"}
+        try:
+            ask("RFT_PROCESS", {"key": key, "nth": nth})
+        except (OSError, ValueError) as err:
+            return 503, {"error": gone(err)}
+        return 200, {"asked": True, "item": same[nth]}
+
     def _arxiv_title(self, key: str) -> None:
         """Asks arXiv's API for the title of an item just saved and writes it on the item's line.
         A lookup that fails leaves the item as it is; no other host is asked anything."""
@@ -2669,7 +2686,8 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             "why" | "discard", "key": the item's key, "nth"?: which of the items with that key,
             "priority" | "why"?: the new value, "" for none}: the item's reading priority or why
             changed ({"item", "items"}), or the item moved under Processed as discarded
-            ({"processed", "items"})."""
+            ({"processed", "items"}); {"action": "process", "key", "nth"?}: the session asked to
+            process the item in its chat ({"asked", "item"}), 503 at once when there is no chat."""
             if self.path.startswith(NOTEBOOK_PREFIX):
                 return self._proxy()
             route = urlsplit(self.path).path
@@ -2752,8 +2770,13 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                             or not isinstance(value, str) or len(value) > MAX_INBOX_WHY or (action != "discard" and action not in req)):
                         return self._json(400, {"error": 'expected {"action": "priority" | "why" | "discard", "key": the item\'s key, "nth"?: which of them, "priority" | "why": the new value}'})
                     return self._json(*vault.change_inbox(action, key, nth, value))
+                if action == "process":
+                    key, nth = req.get("key"), req.get("nth", 0)
+                    if not isinstance(key, str) or not key or len(key) > MAX_INBOX_LINK or type(nth) is not int or nth < 0:
+                        return self._json(400, {"error": 'expected {"action": "process", "key": the item\'s key, "nth"?: which of them}'})
+                    return self._json(*vault.process_inbox(key, nth, ask))
                 if action != "add":
-                    return self._json(400, {"error": 'expected "action": "add", "priority", "why" or "discard"'})
+                    return self._json(400, {"error": 'expected "action": "add", "priority", "why", "discard" or "process"'})
                 link, why = req.get("link"), req.get("why", "")
                 if not isinstance(link, str) or not isinstance(why, str) or len(link) > MAX_INBOX_LINK or len(why) > MAX_INBOX_WHY:
                     return self._json(400, {"error": 'expected {"link": a URL, an arXiv id or a DOI, "why"?: one line}'})

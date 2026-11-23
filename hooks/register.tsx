@@ -45,7 +45,7 @@ import { runNotebook, setNotebook } from './lib/notebooks'
 import { MACHINE_FILE, machinePrompt, probeText, readMachine, statusText } from './lib/machine'
 import { manualDir } from './lib/manual'
 import { artifactPrompt, candidatesPrompt, literaturePrompt, manuscriptPrompt, notebooksPrompt, rebalancePrompt, suggestConceptsPrompt, summarizePrompt } from './lib/prompts'
-import { addItem, commandInput, inboxLine, inboxReport, loadInbox } from './lib/inbox'
+import { InboxError, addItem, closeItem, commandInput, inboxLine, inboxReport, loadInbox, nthItem, processPrompt, saveBrief, shown } from './lib/inbox'
 import { clearHandoff, handoffPrompt, handoffRules, hasHandoffs, leaveHandoff, showHandoff, sizeToast, toTell, uncommittedIn } from './lib/handoff'
 import type { MachineStatus, Probe } from './lib/machine'
 import { QUEUE_CLI, QUEUE_FILE, addedText, cancelledText, jobEvents, jobsNext, jobsReport, movedText, queueLine, readQueue, retriedText, toStart } from './lib/queue'
@@ -483,11 +483,17 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       return conceptsReport(loaded)
     case 'rft_tags':
       return tagsReport(loaded)
-    case 'rft_inbox':
+    case 'rft_inbox': {
       // no reading priority here: it is the user's (/rft-inbox, the page, the file)
-      return str(i.link)?.trim()
-        ? addItem(io, loaded, { link: str(i.link)!, why: str(i.why), title: str(i.title), today: today() })
-        : inboxReport(await loadInbox(io, loaded.config.vault))
+      const link = str(i.link)?.trim(), brief = str(i.brief)?.trim(), outcome = str(i.outcome)?.trim()
+      if (!link && (brief || outcome)) throw new InboxError('Name the item by its link (link), as rft_inbox with no field lists it.')
+      if (!link) return inboxReport(await loadInbox(io, loaded.config.vault))
+      if (!brief && !outcome) return addItem(io, loaded, { link, why: str(i.why), title: str(i.title), today: today() })
+      // a brief and an outcome in one call: the brief first, as when processing
+      const said = brief ? [await saveBrief(io, loaded, link, brief, today())] : []
+      if (outcome) said.push(await closeItem(io, loaded, { link, outcome, note: str(i.note), cites: str(i.cites), reason: str(i.reason), today: today() }))
+      return said.join('\n')
+    }
     case 'rft_handoff': {
       const vault = loaded.config.vault
       if (i.clear === true) return clearHandoff(io, vault, h.cwd)
@@ -721,6 +727,7 @@ async function spawnServer($: EngineInterface, argv: string[]): Promise<string> 
             const m = /RFT_SERVER_URL (\S+)/.exec(l)
             if (m) found(m[1]!)
             else if (l.startsWith(ASK)) void askFromView($, l.slice(ASK.length))
+            else if (l.startsWith(PROCESS)) void processFromView($, l.slice(PROCESS.length))
             else {
               const asked = FROM_VIEW.find(a => l.startsWith(a.line))
               if (asked) void fromView($, asked, l.slice(asked.line.length))
@@ -770,6 +777,27 @@ async function fromView($: EngineInterface, asked: (typeof FROM_VIEW)[number], r
     await refresh($, true)
   } catch (err) {
     $.ui.toast(`rft: the tree view could not ${asked.what} (${message(err)})`)
+  }
+}
+
+const PROCESS = 'RFT_PROCESS '
+
+/**
+ * An inbox item the user asks to process from the tree view (its Process button, relayed by the
+ * server): a prompt naming the item, submitted by the poller as a turn of this chat, where Claude
+ * reads it, discusses it and writes to the tree what the user decides (docs/adr/0001).
+ */
+async function processFromView($: EngineInterface, request: string): Promise<void> {
+  try {
+    const r = JSON.parse(request) as Record<string, unknown>
+    const h = await mustHere($)
+    const loaded = await loadActive(h.io)
+    const box = await loadInbox(h.io, loaded.config.vault)
+    const item = nthItem(box, String(r.key ?? ''), typeof r.nth === 'number' ? r.nth : 0)
+    if (!item) throw new Error('that item is no longer in the inbox')
+    pendingPrompts.push(processPrompt(manualDir($.plugin.root), shown(box)[box.items.indexOf(item)]!))
+  } catch (err) {
+    $.ui.toast(`rft: the tree view could not process the inbox item (${message(err)})`)
   }
 }
 

@@ -448,7 +448,7 @@ class PhoneTest(unittest.TestCase):
                 " return [li.querySelector('.inbox-link').textContent, li.querySelector('.inbox-under').textContent] })()")
         self.assertTrue(self.b.wait(f"document.querySelectorAll('#inbox-list .inbox-item').length === {n + 1}"), "the item is not in the list")
         today = datetime.date.today().isoformat()
-        self.assertEqual(self.b.js(last), ["example.org/phone/post", f"from the phoneadded {today}"])
+        self.assertEqual(self.b.js(last), ["example.org/phone/post", f"from the phoneadded {today}Process"])
         self.assertEqual(self.b.js("[document.getElementById('inbox-link').value, document.getElementById('inbox-why').value, document.getElementById('inbox-add-msg').hidden,"
                                    " document.getElementById('inbox-count').textContent, document.getElementById('inbox-badge').textContent]"), ["", "", True, f"{n + 1} items", str(n + 1)])
         lines, now = before.split("\n"), box.read_text(encoding="utf-8").split("\n")
@@ -576,6 +576,64 @@ class PhoneTest(unittest.TestCase):
         self.assertTrue(self.b.wait(f"document.getElementById('inbox-add-msg').textContent === {json.dumps(note)}"), self.b.js("document.getElementById('inbox-add-msg').textContent"))
         self.assertEqual(self.b.js("[innerWidth, visualViewport.offsetTop, document.documentElement.scrollWidth <= innerWidth]"), [w, 0, True])
         self.assertEqual(self.b.errors, [])
+
+    def test_inbox_process_is_a_chip_and_a_brief_shows_at_a_tap(self):
+        box = self.tmp / "vault" / "Inbox.md"
+        before = box.read_text(encoding="utf-8")
+        w, h = SIZES[0]
+        self.b.size(w, h)
+        self.screen([page("tree"), "document.getElementById('inbox-toggle').click()"])
+
+        def tap(selector):  # an item may be under the fold of the list
+            self.b.js(f"document.querySelector({json.dumps(selector)}).scrollIntoView({{ block: 'center' }})")
+            self.b.tap(selector)
+
+        # Process on every item and the mark of the briefed one: a finger's size, on the screen
+        small = self.b.js("[...document.querySelectorAll('#inbox-list .inbox-process, #inbox-list .inbox-briefed')]"
+                          ".filter(e => { const r = e.getBoundingClientRect(); return !(r.height >= 44 && r.width >= 44 && r.left >= 0 && r.right <= innerWidth) })"
+                          ".map(e => e.className + ' ' + e.textContent.slice(0, 20) + ' ' + JSON.stringify(e.getBoundingClientRect()))")
+        self.assertEqual(small, [])
+        self.assertEqual(self.b.js("[document.querySelectorAll('#inbox-list .inbox-process').length, [...document.querySelectorAll('#inbox-list .inbox-briefed')].map(b => b.textContent + ' ' + b.closest('li').dataset.key),"
+                                   " [...document.querySelectorAll('#inbox-list .inbox-process')].every(b => b.textContent === 'Process' && !b.disabled), innerWidth, document.documentElement.scrollWidth <= innerWidth]"),
+                         [8, ["briefed 2026-11-20 arxiv:2406.01234"], True, w, True])
+        # the brief is shut until its mark is tapped; then its lines, under the item and within the screen
+        mark, brief = "#inbox-list .inbox-briefed", "document.querySelector('#inbox-list .inbox-brief')"
+        state = (f"(() => {{ const b = {brief}, r = b.getBoundingClientRect(); return [b.hidden, document.querySelector({json.dumps(mark)}).getAttribute('aria-expanded'),"
+                 " [...b.children].map(l => l.textContent), b.hidden || (r.left >= 0 && r.right <= innerWidth && r.height > 0)] })()")
+        lines = ["claims strong augmentation still helps at ViT-H scale", "touches R07, E12", "recommends: reference under D04"]
+        self.assertEqual(self.b.js(state), [True, "false", lines, True])
+        tap(mark)
+        self.assertTrue(self.b.wait(f"!{brief}.hidden"), "the brief is not shown")
+        self.assertEqual(self.b.js(state), [False, "true", lines, True])
+        self.assertEqual(self.b.js(f"{brief}.closest('li').dataset.key"), "arxiv:2406.01234")
+        # it stays open when the list is drawn again
+        self.b.tap("[data-inbox-order=date]")
+        self.assertTrue(self.b.wait("document.querySelector('[data-inbox-order=date]').getAttribute('aria-pressed') === 'true'"))
+        self.assertEqual(self.b.js(state), [False, "true", lines, True])
+        self.b.tap("[data-inbox-order=priority]")
+        tap(mark)
+        self.assertTrue(self.b.wait(f"{brief}.hidden"), "the brief is not shut")
+        # Process asks the chat: the foot says so, the button waits against a second tap, nothing is written
+        foot = "document.getElementById('inbox-msg').textContent"
+        first = "#inbox-list .inbox-item[data-key='arxiv:2406.01234'][data-nth='0'] .inbox-process"
+        tap(first)
+        self.assertTrue(self.b.wait(f"{foot} === 'Asked in the chat: Claude starts from its brief there.'", 4), self.b.js(foot))
+        self.assertEqual(self.b.js(f"[document.querySelector({json.dumps(first)}).disabled, document.getElementById('inbox-msg').classList.contains('error')]"), [True, False])
+        other = "#inbox-list .inbox-item[data-key='arxiv:2311.09876'] .inbox-process"
+        tap(other)
+        self.assertTrue(self.b.wait(f"{foot} === 'Asked in the chat: Claude reads it and gives its brief there.'", 4), self.b.js(foot))
+        self.assertEqual(self.b.js("[...document.querySelectorAll('#inbox-list .inbox-process')].filter(b => b.disabled).length"), 2)
+        self.assertEqual(self.b.js("(() => { const m = document.getElementById('inbox-msg').getBoundingClientRect(); return [innerWidth, m.left >= 0 && m.right <= innerWidth, document.documentElement.scrollWidth <= innerWidth] })()"), [w, True, True])
+        self.assertEqual(box.read_text(encoding="utf-8"), before)
+        self.assertEqual(self.b.errors, [])
+        # a page that may not write has no Process; the brief is still read
+        self.b.js("try { localStorage.clear() } catch (e) {}")
+        self.b.open(re.sub(r"\?token=[^&#]+", "", self.url))
+        self.b.js("document.getElementById('inbox-toggle').click()")
+        self.assertTrue(self.b.wait("document.querySelectorAll('#inbox-list .inbox-item').length === 8"), "the read-only page lists no items")
+        self.assertEqual(self.b.js("[document.querySelectorAll('#inbox-list .inbox-process').length, document.querySelectorAll('#inbox-list .inbox-briefed').length]"), [0, 1])
+        tap(mark)
+        self.assertTrue(self.b.wait(f"!{brief}.hidden"), "the brief is not shown on a read-only page")
 
     def test_back_returns_from_a_deck_to_the_decks(self):
         w, h = SIZES[0]

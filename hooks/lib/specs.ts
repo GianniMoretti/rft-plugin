@@ -410,13 +410,18 @@ export const TOOLS = {
   },
   rft_inbox: {
     description:
-      'The inbox: links the user saved to read later and has not decided about (Inbox.md in the vault, outside the tree; no note, no id). With no field it lists the items, the most pressing first. With a link it saves one ("save this for later"), or says where the link already is (the inbox, a processed item, a reference\'s Source) and adds nothing. A reading priority is the user\'s alone: this tool does not set one, and a why that reads as one is refused. An item is read and discussed only when the user asks to process it.',
+      'The inbox: links the user saved to read later and has not decided about (Inbox.md in the vault, outside the tree; no note, no id). With no field it lists the items, the most pressing first. With a link alone it saves one ("save this for later"), or says where the link already is (the inbox, with its brief; a processed item; a reference\'s Source) and adds nothing. With a link and a brief it saves the brief on that item; with a link and an outcome it closes the item as the user decided. A reading priority is the user\'s alone: this tool does not set one, and a why that reads as one is refused. An item is read and discussed only when the user asks to process it (the manual\'s inbox.md).',
     inputSchema: {
       type: 'object',
       properties: {
         link: { type: 'string', description: 'What to save: a URL, an arXiv id or a DOI.' },
         why: { type: 'string', description: 'One line on why it was saved, in the user\'s terms (a note id it may bear on).' },
         title: { type: 'string', description: 'Its title, only when known for certain (from the page or the paper itself); never guessed.' },
+        brief: { type: 'string', description: 'Processing the item named by link: its brief, at most three lines (what it claims; which notes of the tree it touches, by id; the outcome you recommend and where). Saved under the item, in place of a brief it had. Only after reading the item itself.' },
+        outcome: { type: 'string', enum: ['reference', 'literature entry', 'direction', 'discard', 'later'], description: 'Closes the item named by link with what the user picked, never your own choice. reference: note is its reference note. literature entry: note is the literature note it was added to. direction: note is the direction, cites its reference note. discard: reason says why. later: it stays in the inbox, with its brief. The notes are made first; a missing one is refused.' },
+        note: { type: 'string', description: 'With outcome reference, literature entry or direction: the id of the note the item became or was added to.' },
+        cites: { type: 'string', description: 'With outcome direction: the id of the reference note of the item, which the direction cites.' },
+        reason: { type: 'string', description: 'With outcome discard: one line on why, in the user\'s terms.' },
       },
     },
   },

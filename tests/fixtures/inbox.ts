@@ -849,6 +849,195 @@ export const CASES = {
    "key": "https://a.org/x",
    "today": "2026-11-23",
    "none": true
+  },
+  {
+   "name": "the note it became: an arrow, no dash",
+   "text": "- [A title](https://a.org/x) \u2014 why \u00b7 urgent\n  - briefed 2026-11-20: claims x\n\n## Processed\n\n- 2026-11-10 https://c.org/z \u2014 discarded\n",
+   "key": "https://a.org/x",
+   "today": "2026-11-23",
+   "outcome": "\u2192 R15",
+   "want": "## Processed\n\n- 2026-11-10 https://c.org/z \u2014 discarded\n- 2026-11-23 [A title](https://a.org/x) \u2192 R15\n",
+   "processed": {
+    "date": "2026-11-23",
+    "key": "https://a.org/x",
+    "title": "A title",
+    "outcome": "R15"
+   }
+  },
+  {
+   "name": "a direction and the reference it cites",
+   "text": "- 2406.01234\n",
+   "key": "arxiv:2406.01234",
+   "today": "2026-11-23",
+   "outcome": "\u2192  D12, citing R15 ",
+   "want": "## Processed\n\n- 2026-11-23 https://arxiv.org/abs/2406.01234 \u2192 D12, citing R15\n",
+   "processed": {
+    "date": "2026-11-23",
+    "key": "arxiv:2406.01234",
+    "title": "",
+    "outcome": "D12, citing R15"
+   }
+  },
+  {
+   "name": "an arrow inside an outcome is the outcome's",
+   "text": "- https://a.org/x\n",
+   "key": "https://a.org/x",
+   "today": "2026-11-23",
+   "outcome": "discarded: A \u2192 B is known",
+   "want": "## Processed\n\n- 2026-11-23 https://a.org/x \u2014 discarded: A \u2192 B is known\n",
+   "processed": {
+    "date": "2026-11-23",
+    "key": "https://a.org/x",
+    "title": "",
+    "outcome": "discarded: A \u2192 B is known"
+   }
+  },
+  {
+   "name": "the first of two with one link: the other stays",
+   "text": "- https://a.org/x \u2014 one\n  - briefed 2026-11-20: claims x\n- https://a.org/x#top \u2014 two\n",
+   "key": "https://a.org/x",
+   "today": "2026-11-23",
+   "outcome": "\u2192 R15",
+   "want": "- https://a.org/x#top \u2014 two\n\n## Processed\n\n- 2026-11-23 https://a.org/x \u2192 R15\n"
+  }
+ ],
+ "briefs": [
+  {
+   "name": "three lines under the item",
+   "text": "# Inbox\n\n- https://a.org/x \u2014 why \u00b7 high\n- https://b.org/y\n",
+   "key": "https://a.org/x",
+   "today": "2026-11-23",
+   "brief": "claims x\ntouches R07, E12\nrecommends: reference under D04",
+   "want": "# Inbox\n\n- https://a.org/x \u2014 why \u00b7 high\n  - briefed 2026-11-23: claims x\n  - touches R07, E12\n  - recommends: reference under D04\n- https://b.org/y\n",
+   "is": {
+    "date": "2026-11-23",
+    "lines": [
+     "claims x",
+     "touches R07, E12",
+     "recommends: reference under D04"
+    ]
+   }
+  },
+  {
+   "name": "a brief there already is replaced, whole",
+   "text": "- https://a.org/x\n  - briefed 2026-11-20: old\n  - old two\n  - old three\n- https://b.org/y\n",
+   "key": "https://a.org/x",
+   "today": "2026-11-23",
+   "brief": "new",
+   "want": "- https://a.org/x\n  - briefed 2026-11-23: new\n- https://b.org/y\n",
+   "is": {
+    "date": "2026-11-23",
+    "lines": [
+     "new"
+    ]
+   }
+  },
+  {
+   "name": "the user's lines under an item are kept, after it",
+   "text": "- https://a.org/x\n    * from Bea\n",
+   "key": "https://a.org/x",
+   "today": "2026-11-23",
+   "brief": "claims x",
+   "want": "- https://a.org/x\n  - briefed 2026-11-23: claims x\n    * from Bea\n",
+   "is": {
+    "date": "2026-11-23",
+    "lines": [
+     "claims x",
+     "from Bea"
+    ]
+   }
+  },
+  {
+   "name": "the last line of a file with no newline at its end",
+   "text": "- https://a.org/x",
+   "key": "https://a.org/x",
+   "today": "2026-11-23",
+   "brief": "claims x\nrecommends: later",
+   "want": "- https://a.org/x\n  - briefed 2026-11-23: claims x\n  - recommends: later",
+   "is": {
+    "date": "2026-11-23",
+    "lines": [
+     "claims x",
+     "recommends: later"
+    ]
+   }
+  },
+  {
+   "name": "CRLF",
+   "text": "- https://a.org/x\r\n  - briefed 2026-11-20: old\r\n\r\n## Processed\r\n",
+   "key": "https://a.org/x",
+   "today": "2026-11-23",
+   "brief": "claims x\r\ntouches nothing",
+   "want": "- https://a.org/x\r\n  - briefed 2026-11-23: claims x\r\n  - touches nothing\r\n\r\n## Processed\r\n",
+   "is": {
+    "date": "2026-11-23",
+    "lines": [
+     "claims x",
+     "touches nothing"
+    ]
+   }
+  },
+  {
+   "name": "typed as a list, with its own date, blank lines between",
+   "text": "- https://a.org/x\n",
+   "key": "https://a.org/x",
+   "today": "2026-11-23",
+   "brief": "- briefed 2026-11-01: claims  x\n\n * touches R07\n",
+   "want": "- https://a.org/x\n  - briefed 2026-11-23: claims x\n  - touches R07\n",
+   "is": {
+    "date": "2026-11-23",
+    "lines": [
+     "claims x",
+     "touches R07"
+    ]
+   }
+  },
+  {
+   "name": "the second of two with one link",
+   "text": "- https://a.org/x\n- https://a.org/x/\n",
+   "key": "https://a.org/x",
+   "nth": 1,
+   "today": "2026-11-23",
+   "brief": "claims x",
+   "want": "- https://a.org/x\n- https://a.org/x/\n  - briefed 2026-11-23: claims x\n",
+   "is": {
+    "date": "2026-11-23",
+    "lines": [
+     "claims x"
+    ]
+   }
+  },
+  {
+   "name": "four lines are one too many",
+   "text": "- https://a.org/x\n",
+   "key": "https://a.org/x",
+   "today": "2026-11-23",
+   "brief": "a\nb\nc\nd",
+   "error": true
+  },
+  {
+   "name": "nothing said",
+   "text": "- https://a.org/x\n",
+   "key": "https://a.org/x",
+   "today": "2026-11-23",
+   "brief": " \n - \n",
+   "error": true
+  },
+  {
+   "name": "a line too long to read in a minute",
+   "text": "- https://a.org/x\n",
+   "key": "https://a.org/x",
+   "today": "2026-11-23",
+   "brief": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "error": true
+  },
+  {
+   "name": "no item has the link",
+   "text": "- https://a.org/x\n",
+   "key": "https://b.org/y",
+   "today": "2026-11-23",
+   "brief": "claims x",
+   "none": true
   }
  ]
 }

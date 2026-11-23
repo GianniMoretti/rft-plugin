@@ -763,7 +763,9 @@ class ServerTest(unittest.TestCase):
                         {"action": "priority", "key": k, "priority": None}, {"action": "why", "key": k, "why": "y" * 501},
                         {"action": "discard"}, {"action": "discard", "key": ""}, {"action": "discard", "key": 3}, {"action": "discard", "key": "x" * 2001},
                         {"action": "discard", "key": k, "nth": -1}, {"action": "discard", "key": k, "nth": True}, {"action": "discard", "key": k, "nth": "0"},
-                        {"action": "discard", "key": k, "nth": 0.0}, {"action": "process", "key": k}, {"action": 3, "key": k}, {"action": ["discard"], "key": k}):
+                        {"action": "discard", "key": k, "nth": 0.0}, {"action": "brief", "key": k}, {"action": 3, "key": k}, {"action": ["discard"], "key": k},
+                        {"action": "process"}, {"action": "process", "key": ""}, {"action": "process", "key": 3}, {"action": "process", "key": k, "nth": -1},
+                        {"action": "process", "key": k, "nth": "0"}, {"action": "process", "key": k, "nth": True}, {"action": "process", "key": "x" * 2001}):
             self.assertEqual(self.write("POST", "/api/inbox", payload)[0], 400, str(payload)[:70])
         self.assertEqual(p.read_bytes(), b"- https://a.org/x\n")
         # not through a link out of the vault
@@ -774,6 +776,48 @@ class ServerTest(unittest.TestCase):
         os.symlink(out, p)
         self.assertEqual(self.change_inbox("discard", k)[0], 422)
         self.assertEqual(out.read_text(), "- https://a.org/x\n")
+
+    def test_inbox_process_is_asked_of_the_session_and_writes_nothing(self):
+        text = b"- [A title](https://arxiv.org/abs/2406.01234) \xe2\x80\x94 why \xc2\xb7 high\n  - briefed 2026-11-20: claims x\n- https://b.org/y\n- 2406.01234 \xe2\x80\x94 again\n"
+        p = self.fresh_inbox(text)
+        asked = len(self.asked)
+        status, got = self.change_inbox("process", "arxiv:2406.01234", nth=1)
+        self.assertEqual((status, got["asked"], got["item"]["why"]), (200, True, "again"))
+        status, got = self.change_inbox("process", "https://b.org/y")
+        self.assertEqual((status, got["item"]["key"]), (200, "https://b.org/y"))
+        self.assertEqual(self.asked[asked:], [("RFT_PROCESS", {"key": "arxiv:2406.01234", "nth": 1}), ("RFT_PROCESS", {"key": "https://b.org/y", "nth": 0})])
+        # an item that is no longer there: said, and the session is not asked
+        for key, nth in (("https://b.org/gone", None), ("arxiv:2406.01234", 2), ("https://b.org/y", 1)):
+            status, got = self.change_inbox("process", key, nth=nth)
+            self.assertEqual((status, got), (409, {"error": "that item is no longer in the inbox"}))
+        self.assertEqual(len(self.asked), asked + 2)
+        self.assertEqual(p.read_bytes(), text)
+        # a write of the page, as the others
+        for kw in ({"key": None}, {"key": "wrong"}, {"origin": "http://evil.example"}):
+            self.assertEqual(self.write("POST", "/api/inbox", {"action": "process", "key": "https://b.org/y"}, **kw)[0], 403)
+        self.assertEqual(len(self.asked), asked + 2)
+
+    def test_inbox_process_with_no_chat_is_refused_at_once_and_nothing_waits(self):
+        # scenario B: the view served from a terminal (rft_serve.py), with no chat on the tree
+        text = b"- https://a.org/x \xe2\x80\x94 why\n"
+        p = self.fresh_inbox(text)
+        relay = rft_server.Relay()
+        type(self).answer = staticmethod(lambda request: relay.ask("RFT_PROCESS", request))
+        self.addCleanup(setattr, type(self), "answer", None)
+        start = time.monotonic()
+        status, got = self.change_inbox("process", "https://a.org/x")
+        self.assertEqual((status, got), (503, {"error": rft_server.NO_SESSION}))
+        self.assertLess(time.monotonic() - start, 1)
+        self.assertEqual(relay._pending, [])  # no chat that comes later finds it
+        self.assertEqual(p.read_bytes(), text)
+        self.assertEqual([i["brief"] for i in json.loads(self.get("/api/inbox")[2])["items"]], [None])
+        # a session that went away while it was asked
+        def broken(request):
+            raise BrokenPipeError()
+        type(self).answer = staticmethod(broken)
+        status, got = self.change_inbox("process", "https://a.org/x")
+        self.assertEqual((status, got), (503, {"error": "the Claude Code session that ran /rft is gone"}))
+        self.assertEqual(p.read_bytes(), text)
 
     # ------------------------------------------------------------ comments, suggestions, lock
 

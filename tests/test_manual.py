@@ -79,6 +79,21 @@ class Manual(unittest.TestCase):
         for tool in own:
             self.assertIn(f'`{tool}', below_index, f'{tool} is not in the core')
 
+    def test_the_inbox_part_says_what_each_outcome_writes(self):
+        """The outcomes as the plugin has them (hooks/lib/inbox.ts) and as rft_inbox offers them: each a row of the part's table."""
+        outcomes = re.findall(r"'([a-z ]+)'", re.search(r'export const OUTCOMES = \[([^\]]+)\]', text(ROOT / 'hooks/lib/inbox.ts')).group(1))
+        self.assertEqual(outcomes, ['reference', 'literature entry', 'direction', 'discard', 'later'])
+        spec = text(ROOT / 'hooks/lib/specs.ts')
+        self.assertIn("outcome: { type: 'string', enum: [" + ', '.join(f"'{o}'" for o in outcomes) + ']', spec)
+        body = text(MANUAL / 'inbox.md')
+        self.assertIn('Processing an item', headings('inbox'))
+        rows = {m.group(1): m.group(2) for m in re.finditer(r'(?m)^\| `([a-z ]+)` \| ([^|]+) \|', body)}
+        self.assertEqual(list(rows), outcomes)
+        for outcome in ('discard', 'later'):
+            self.assertTrue(rows[outcome].startswith('nothing'), outcome)
+        for said in ('Save the brief before anything else', 'at most three lines', 'never brief from', 'Write nothing to the tree until the user picks', 'only the user picks', 'gets **no priority**'):
+            self.assertIn(said, ' '.join(body.split()), said)
+
     def test_a_part_opens_by_saying_what_it_is_part_of(self):
         for part in parts_in_code():
             lines = text(MANUAL / f'{part}.md').splitlines()

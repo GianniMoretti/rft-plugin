@@ -70,7 +70,9 @@
    * The panel in the live page. The button beside the scratchpad's opens it and shows how many
    * items wait; what changes in the file (Obsidian, Claude) comes in while it is open or shut. The
    * field at its top saves a link; on each item, its reading priority as a menu, its why to edit,
-   * and ✕ to discard it (two taps: a discarded link is not added again from here). `key()`: the
+   * ✕ to discard it (two taps: a discarded link is not added again from here), and Process, which
+   * asks Claude in the chat that ran /rft to read it and discuss what becomes of it; an item Claude
+   * has briefed says so, and shows its brief at a tap. `key()`: the
    * key for writes ('' : read-only); `store`: the page's storage for this project (whether the
    * panel is open, the order of the list).
    */
@@ -86,6 +88,9 @@
     let reads = 0 // counts what was asked of the server: an answer older than the last one drawn is dropped
     let sending = false
     let locked = false // the line under the field says the page is read-only
+    const open = new Set() // the items whose brief is shown, by link and which of them
+    const asked = new Map() // the items asked of the chat a moment ago, and until when: their Process waits, against a second tap
+    const ASKED_MS = 10000
 
     const el = (tag, cls, text) => {
       const e = document.createElement(tag)
@@ -94,10 +99,10 @@
       return e
     }
 
-    function setMsg(text, isError = false) {
+    function setMsg(text, isError = false, hold = isError ? 8000 : 0) {
       msg.textContent = text
       msg.classList.toggle('error', isError)
-      keep = isError ? Date.now() + 8000 : 0
+      keep = hold ? Date.now() + hold : 0
     }
 
     function setNote(text, isError = false) {
@@ -266,6 +271,72 @@
       return x
     }
 
+    /** That an item has a brief, and the brief itself, which a tap on the mark shows under the item. */
+    function briefOf(r) {
+      const { item } = r
+      if (!item.brief || !item.brief.lines.length) return null
+      const id = `${r.nth} ${item.key}`
+      const mark = el('button', 'inbox-briefed', `briefed${item.brief.date ? ` ${item.brief.date}` : ''}`)
+      mark.type = 'button'
+      const body = el('ul', 'inbox-brief')
+      for (const l of item.brief.lines) body.append(el('li', '', l))
+      const set = on => {
+        body.hidden = !on
+        mark.setAttribute('aria-expanded', String(on))
+        mark.title = on ? 'Hide the brief' : 'Show the brief Claude saved when it read it'
+        if (on) open.add(id)
+        else open.delete(id)
+      }
+      set(open.has(id))
+      mark.addEventListener('click', () => set(body.hidden))
+      return { mark, body }
+    }
+
+    /**
+     * Process: the item asked of Claude in the chat that ran /rft, where it reads it, gives its
+     * brief and waits for the user to pick what becomes of it. Nothing changes here until Claude
+     * saves the brief; with no chat, the line at the foot says so and nothing waits.
+     */
+    function processOf(r) {
+      const { item } = r
+      const id = `${r.nth} ${item.key}`
+      const b = el('button', 'inbox-process', 'Process')
+      b.type = 'button'
+      b.title = item.brief ? 'Process: Claude starts from its brief in the chat, and you pick what becomes of it' : 'Process: Claude reads it in the chat, gives its brief, and you pick what becomes of it'
+      b.setAttribute('aria-label', `Process ${label(item)} in the chat`)
+      b.disabled = (asked.get(id) || 0) > Date.now()
+      // the button as the list has it now: a redraw may have replaced this one
+      const free = () => {
+        asked.delete(id)
+        const li = rowOf(item.key, r.nth), now = li && li.querySelector('.inbox-process')
+        if (now) now.disabled = false
+      }
+      b.addEventListener('click', async () => {
+        if ((asked.get(id) || 0) > Date.now()) return
+        asked.set(id, Date.now() + ASKED_MS)
+        b.disabled = true
+        try {
+          const res = await fetch('api/inbox', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-RFT-Token': key() },
+            body: JSON.stringify({ action: 'process', key: item.key, nth: r.nth }),
+          })
+          const got = await res.json().catch(() => ({}))
+          if (!res.ok || !got.asked) {
+            // a server from before Process knows no such action
+            setMsg(refusal(res.status === 400 ? 404 : res.status, got, 'Not processed'), true)
+            return free()
+          }
+          setMsg(`Asked in the chat: Claude ${item.brief ? 'starts from its brief' : 'reads it and gives its brief'} there.`, false, ASKED_MS)
+          setTimeout(free, ASKED_MS)
+        } catch (e) {
+          setMsg('Not processed: the server did not answer.', true)
+          free()
+        }
+      })
+      return b
+    }
+
     function row(r) {
       const { item } = r
       const li = el('li', 'inbox-item')
@@ -281,10 +352,16 @@
       if (key()) head.append(discardOf(r))
       li.append(head)
       const under = el('div', 'inbox-under')
-      const why = whyOf(r), day = when(item)
-      if (why) under.append(why)
-      if (day) under.append(el('span', 'inbox-when muted', day))
+      // what is said of it, which wraps, and Process at its right
+      const about = el('div', 'inbox-about')
+      const why = whyOf(r), day = when(item), brief = briefOf(r)
+      if (why) about.append(why)
+      if (day) about.append(el('span', 'inbox-when muted', day))
+      if (brief) about.append(brief.mark)
+      if (about.firstChild || key()) under.append(about)
+      if (key()) under.append(processOf(r))
       if (under.firstChild) li.append(under)
+      if (brief) li.append(brief.body)
       return li
     }
 
@@ -313,7 +390,12 @@
       // drawn once they leave it (the list's focusout), or at the next read
       if (json === shown || engaged(from)) return
       shown = json
+      // a redraw under the brief's mark or Process leaves the focus on the one that replaces it
+      const a = document.activeElement
+      const at = a && list.contains(a) && a.matches('.inbox-briefed, .inbox-process') ? { ...a.closest('li').dataset, cls: a.className } : null
       list.replaceChildren(...ordered(items, order).map(row))
+      const now = at && rowOf(at.key, at.nth)
+      if (now && now.querySelector(`.${at.cls}`)) now.querySelector(`.${at.cls}`).focus()
       $('inbox-empty').hidden = n > 0
     }
 
