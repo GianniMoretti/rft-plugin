@@ -8,7 +8,7 @@
 // to (rft_set_document).
 
 import type { Io, Loaded, RftNode } from './vault'
-import { compareNames, conceptOrder, fnv1a, join, resolveId } from './vault'
+import { compareNames, conceptOrder, join, resolveId } from './vault'
 import type { Located, LocatedValue } from './copies'
 import { bibKeys, copyAt, locateCopies, locateValues, readingOrder } from './copies'
 import type { Trace } from './scan'
@@ -253,16 +253,20 @@ export type ValueState = 'current' | 'review' | 'changed' | 'lost'
  */
 export type Value = LocatedValue & { state: ValueState; now: string | null; inCopyOf: string | null }
 
-/** What the tree gives now for a value: a number's text, a table's tabular, a figure's fingerprint; null when it is no longer saved. */
-async function valueNow(io: Io, vault: string, v: Pick<TrackedValue, 'kind' | 'from' | 'key'>, numbers: Record<string, Record<string, string> | null>): Promise<string | null> {
+/** A saved figure's version, as both sides can tell it: its size and the second it was written; null when there is none. */
+async function figureToken(io: Io, vault: string, from: string, key: string): Promise<string | null> {
+  const f = (await io.list(join(vault, 'figures')).catch(() => [])).find(x => x.kind === 'file' && x.name === `${from}_${key}.pdf`)
+  return f ? `${f.size}@${Math.floor(f.mtimeMs / 1000)}` : null
+}
+
+/** What the tree gives now for a value: a number's text, a table's tabular, a figure's version; null when it is no longer saved. */
+export async function valueNow(io: Io, vault: string, v: Pick<TrackedValue, 'kind' | 'from' | 'key'>, numbers: Record<string, Record<string, string> | null> = {}): Promise<string | null> {
   if (v.kind === 'number') {
     const saved = v.from in numbers ? numbers[v.from]! : (numbers[v.from] = await savedNumbers(io, vault, v.from))
     return saved?.[v.key] ?? null
   }
-  try {
-    const text = await io.read(join(vault, v.kind === 'table' ? tableRel(v.from, v.key) : figureRel(v.from, v.key)))
-    return v.kind === 'table' ? text.replace(/\r\n/g, '\n').trim() : fnv1a(text)
-  } catch { return null }
+  if (v.kind === 'figure') return figureToken(io, vault, v.from, v.key)
+  try { return (await io.read(join(vault, tableRel(v.from, v.key)))).replace(/\r\n/g, '\n').trim() } catch { return null }
 }
 
 /** A document's tracked values, each found in its file and held against the tree as it is now. */
@@ -272,12 +276,12 @@ export async function valuesOf(io: Io, loaded: Loaded, d: Doc): Promise<Value[]>
   const out: Value[] = []
   for (const v of locateValues(d.files, d.tracking)) {
     const now = await valueNow(io, vault, v, numbers)
-    // a figure is held against the file the document has of it
-    let written = v.written
-    if (v.kind === 'figure' && v.found === 'written') {
-      try { written = fnv1a(await io.read(join(vault, DOCUMENTS_DIR, d.name, v.written))) } catch { written = '' }
+    let same = now === v.written
+    // a figure is the tree's while the file the document has of it is the vault's
+    if (v.kind === 'figure' && now !== null && v.found === 'written') {
+      try { same = (await io.read(join(vault, DOCUMENTS_DIR, d.name, v.written))) === (await io.read(join(vault, figureRel(v.from, v.key)))) } catch { same = false }
     }
-    const state: ValueState = !v.found ? 'lost' : v.found === 'changed' ? 'changed' : now === null || (now !== written && now !== v.kept) ? 'review' : 'current'
+    const state: ValueState = !v.found ? 'lost' : v.found === 'changed' ? 'changed' : now !== null && (same || now === v.kept) ? 'current' : 'review'
     out.push({ ...v, state, now, inCopyOf: v.line === null ? null : copyAt(d.copies, v.file, v.line)?.snippet ?? null })
   }
   return out
@@ -949,6 +953,156 @@ export async function reviewCopy(io: Io, loaded: Loaded, name: string, ref: stri
   dropUnused(w, d)
   await save(io, vault, d, w)
   return `The copy of ${words} in ${name} now holds the snippet's text, written out as plain LaTeX.`
+}
+
+/**
+ * The user answers a tracked value (the tree view): `take` the tree's (the number or the tabular
+ * written in its place, the figure's file copied again), or `keep` theirs (what stands in the
+ * document is theirs: it is not flagged again until the tree says something else). A value whose
+ * place is lost, or that the tree no longer saves, is no longer tracked once kept.
+ */
+export async function reviewValue(io: Io, loaded: Loaded, name: string, index: number, action: 'take' | 'keep'): Promise<string> {
+  const ms = await readManuscript(io, loaded)
+  const d = ms?.documents.find(x => x.name === name)
+  if (!ms || !d) throw new ManuscriptError(`"${name}" is no document`)
+  const v = (await valuesOf(io, loaded, d)).find(x => x.index === index)
+  if (!v) throw new ManuscriptError(`${name} tracks no such value`)
+  const vault = loaded.config.vault
+  const w = workOn(d)
+  const what = `${v.kind === 'number' ? `the number ${v.from} ${v.key}` : `the ${v.kind} ${v.key} of ${v.from}`} in ${name} (${v.file})`
+  if (action === 'keep') {
+    if (!v.found || v.now === null) {
+      w.tracking.values.splice(index, 1)
+      await save(io, vault, d, w)
+      return `${what} is no longer tracked: what stands there is the document's own.`
+    }
+    w.tracking.values[index] = { ...w.tracking.values[index]!, ...(v.kind === 'figure' ? {} : { written: v.inDocument! }), kept: v.now }
+    await save(io, vault, d, w)
+    return `${what} is kept as it is; it is flagged again when the tree says something else.`
+  }
+  if (!v.found) throw new ManuscriptError(`${what} is not found in the document any more: keep it (it is then no longer tracked), or write it again`)
+  if (v.now === null) throw new ManuscriptError(`${v.from} no longer saves ${v.key}: keep what the document has (it is then no longer tracked)`)
+  const entry = { ...w.tracking.values[index]! }
+  delete entry.kept
+  if (v.kind === 'figure') {
+    await copyIn(io, join(vault, figureRel(v.from, v.key)), join(vault, DOCUMENTS_DIR, d.name, v.written))
+  } else {
+    const text = w.files[v.file]!
+    w.files[v.file] = text.slice(0, v.offset!) + v.now + text.slice(v.offset! + v.inDocument!.length)
+    w.touched.add(v.file)
+    // the copy it stands in answers to the snippet written out with the tree's value: taking it does not make the copy adapted
+    const c = v.line === null ? null : copyAt(d.copies, v.file, v.line)
+    if (c) {
+      const tracked = w.tracking.copies[c.index]!
+      for (const field of ['placed', 'seen'] as const) {
+        const own = tracked[field]
+        const at = own === undefined ? null : locateValues({ x: own }, { values: [{ ...entry, file: 'x' }] })[0]!
+        if (own !== undefined && at?.found === 'written') tracked[field] = own.slice(0, at.offset!) + v.now + own.slice(at.offset! + entry.written.length)
+      }
+    }
+    entry.written = v.now
+  }
+  w.tracking.values[index] = entry
+  await save(io, vault, d, w)
+  return v.kind === 'figure' ? `${what} is the tree's again: its file was copied in anew.` : `${what} now reads ${v.kind === 'number' ? v.now : 'as the tree has it'}.`
+}
+
+/** The user allows one occurrence the scan flagged (a false alarm: "Table S01" of a supplement): remembered in the tracking file, not flagged again. */
+export async function allowTrace(io: Io, loaded: Loaded, name: string, t: { file: string; match: string; text: string }): Promise<string> {
+  const ms = await readManuscript(io, loaded)
+  const d = ms?.documents.find(x => x.name === name)
+  if (!ms || !d) throw new ManuscriptError(`"${name}" is no document`)
+  const { traces } = await tracesOf(io, loaded, ms, d)
+  if (!traces.some(x => x.file === t.file && x.match === t.match && x.text === t.text)) throw new ManuscriptError(`${name} has no such trace to allow (it may have changed since: look again)`)
+  const w = workOn(d)
+  w.tracking.allowed.push({ file: t.file, match: t.match, text: t.text })
+  await save(io, loaded.config.vault, d, w)
+  return `Allowed ${t.match} in ${name} (${t.file}): that occurrence is not flagged again.`
+}
+
+/** The heading each theorem-like environment prints. */
+const THEOREM_NAMES: Record<string, string> = { theorem: 'Theorem', lemma: 'Lemma', proposition: 'Proposition', corollary: 'Corollary', definition: 'Definition' }
+
+/** The user adds the declaration of an environment a copy needs and the document lacks: one \newtheorem line at the end of the main file's preamble. */
+export async function declareEnvironment(io: Io, loaded: Loaded, name: string, environment: string): Promise<string> {
+  const ms = await readManuscript(io, loaded)
+  const d = ms?.documents.find(x => x.name === name)
+  if (!ms || !d) throw new ManuscriptError(`"${name}" is no document`)
+  const heading = THEOREM_NAMES[environment]
+  if (!heading || !THEOREMS.includes(environment)) throw new ManuscriptError(`"${environment}" is not an environment of a snippet's kind (${THEOREMS.join(', ')})`)
+  const lines = d.text.split('\n')
+  const at = lines.findIndex(l => /\\begin\{document\}/.test(uncommented(l)))
+  if (at < 0) throw new ManuscriptError(`${d.main} has no \\begin{document} to declare it before`)
+  if (Object.entries(d.files).some(([f, text]) => TEX_FILE.test(f) && new RegExp(`\\\\newtheorem\\*?\\{${environment}\\}`).test(uncommented(text)))) return `${name} already declares the ${environment} environment.`
+  const line = `\\newtheorem{${environment}}{${heading}}`
+  const before = lines.slice(0, at)
+  while (before.length && !before[before.length - 1]!.trim()) before.pop()
+  const w = workOn(d)
+  w.files[d.main] = [...before, line, '', ...lines.slice(at)].join('\n')
+  w.touched.add(d.main)
+  await save(io, loaded.config.vault, d, w)
+  return `Added ${line} to the preamble of ${name} (${d.main}).`
+}
+
+/**
+ * The user points to a passage of a document as a copy of a snippet (the tree view, a selection):
+ * the lines from `from` to `to` of `file` (from 1) get marker lines around them. `ref` names a
+ * lost copy (it is found again, there) or a snippet (a new copy: text a co-author wrote is tied to
+ * the snippet without being replaced). Its text is the passage's, so it reads as adapted.
+ */
+export async function pointCopy(io: Io, loaded: Loaded, name: string, ref: string, at: { file: string; from: number; to: number }): Promise<string> {
+  const ms = await readManuscript(io, loaded)
+  const d = ms?.documents.find(x => x.name === name)
+  if (!ms || !d) throw new ManuscriptError(`"${name}" is no document`)
+  const vault = loaded.config.vault
+  const m = COPY_REF.exec(ref.trim().toUpperCase())
+  if (!m) throw new ManuscriptError(`"${ref}" names no snippet or copy`)
+  const lost = d.copies.filter(c => c.snippet === m[1] && !c.found)
+  const again = m[2] ? lost.find(c => c.nth === Number(m[2])) : lost[0]
+  if (m[2] && !again) throw new ManuscriptError(`${name} has no lost copy ${ref}`)
+  const s = ms.snippets.find(x => x.id === m[1])
+  if (!again && !s) throw new ManuscriptError(`${m[1]} is no snippet`)
+  const text = d.files[at.file]
+  if (text === undefined || !TEX_FILE.test(at.file)) throw new ManuscriptError(`${name} has no .tex file ${at.file}`)
+  const lines = text.split('\n')
+  const from = Math.floor(at.from) - 1, to = Math.floor(at.to) - 1
+  if (!(from >= 0 && to >= from && to < lines.length)) throw new ManuscriptError(`lines ${at.from} to ${at.to} are not in ${at.file}`)
+  const over = d.copies.find(c => c.found && c.file === at.file && c.begin! <= to && c.end! >= from)
+  if (over) throw new ManuscriptError(`those lines are already in the copy of ${copyName(d, over)}`)
+  const passage = lines.slice(from, to + 1).join('\n')
+  if (!passage.trim()) throw new ManuscriptError('select the passage first: those lines are empty')
+  const w = workOn(d)
+  let entry: TrackedCopy
+  if (again) {
+    entry = { ...w.tracking.copies.splice(again.index, 1)[0]!, file: at.file, seen: passage }
+  } else {
+    const out = await writeOut(io, loaded, s!, ms.snippets, vaultIds(loaded, ms), heldOf(d))
+    entry = { snippet: s!.id, marker: out.marker, file: at.file, stamp: contentFingerprint(contentOf(s!.text)), placed: out.text, seen: passage }
+  }
+  if (contentFingerprint(entry.placed) === contentFingerprint(passage)) delete entry.seen
+  const order = readingOrder(w.files, d.main)
+  const next = locateCopies(w.files, w.tracking).find(c => c.found && order.at(c.file, c.begin!) >= order.at(at.file, from))
+  w.files[at.file] = [...lines.slice(0, from), ...markedText(entry.marker, passage).split('\n'), ...lines.slice(to + 1)].join('\n')
+  w.touched.add(at.file)
+  w.tracking.copies.splice(next ? next.index : w.tracking.copies.length, 0, entry)
+  await save(io, vault, d, w)
+  return again ? `The copy of ${m[1]} in ${name} is found again: lines ${at.from} to ${at.to} of ${at.file}, between its marker lines.`
+    : `Lines ${at.from} to ${at.to} of ${at.file} in ${name} are now a copy of ${m[1]}, between two marker lines: its text is kept as it is, and it goes to review when ${m[1]} changes.`
+}
+
+/** A copy found by its text gets its two marker lines back, around its text as it is. */
+export async function restoreMarkers(io: Io, loaded: Loaded, name: string, ref: string): Promise<string> {
+  const ms = await readManuscript(io, loaded)
+  const d = ms?.documents.find(x => x.name === name)
+  if (!ms || !d) throw new ManuscriptError(`"${name}" is no document`)
+  const c = found(d, findCopy(d, ref))
+  if (c.found === 'markers') return `The copy of ${copyName(d, c)} in ${name} has its marker lines.`
+  const w = workOn(d)
+  const lines = w.files[c.file]!.split('\n')
+  w.files[c.file] = [...lines.slice(0, c.begin), ...markedText(c.marker, c.content).split('\n'), ...lines.slice(c.end + 1)].join('\n')
+  w.touched.add(c.file)
+  await save(io, loaded.config.vault, d, w)
+  return `The copy of ${copyName(d, c)} in ${name} (${c.file}) has its two marker lines again.`
 }
 
 // ---------------------------------------------------------------- the first layout

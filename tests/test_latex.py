@@ -1,6 +1,7 @@
 """The LaTeX of snippets and documents: the generated rft.sty, rft-numbers.tex and refs.bib, a
-document (holding copies of snippets) compiled by latexmk whose PDF, read back with pdftotext, holds
-the numbers results/*.json holds, and a snippet compiled alone.
+snippet compiled alone by latexmk whose PDF, read back with pdftotext, holds the numbers
+results/*.json holds, and a document compiled from its folder alone (the fixture's document, with
+its copies written out: tests/test_clean_source.py).
 
 The compile is skipped without latexmk or pdftotext.
 
@@ -86,15 +87,15 @@ DOC = r"""\documentclass[11pt]{article}
 \usepackage{amsmath,amssymb,amsthm}
 \usepackage{graphicx,booktabs}
 \usepackage[numbers]{natbib}
-\usepackage{rft}
 \usepackage{hyperref}
 \title{Small data}
 \begin{document}
 \maketitle
-%(S01)s
-%(S02)s
-\bibliographystyle{plainnat}
-\bibliography{refs}
+%%%% Result: Training length at 1k images %%%%
+\paragraph{Training length at 1k images}
+Long training reaches 71.3 percent at 1k images.
+%%%% end %%%%
+%(more)s
 \end{document}
 """
 
@@ -122,10 +123,6 @@ The gap is \rftnum{E05}{nope}.
 """
 
 
-def copy_of(sid: str, snippet: str) -> str:
-    """A copy of a snippet as a document holds it (blockText in hooks/lib/snippets.ts)."""
-    content = rft_manuscript.content_of(snippet)
-    return f"% rft-begin {sid} {rft_manuscript.content_fingerprint(content)}\n{content}\n% rft-end {sid}"
 
 
 class GeneratedTest(unittest.TestCase):
@@ -178,19 +175,17 @@ class GeneratedTest(unittest.TestCase):
         ])
         self.assertEqual(warnings, ["No number nope of E05 (results/E05.json)", "Citation nobody undefined"])
 
-    def documents(self, doc: str = DOC):
-        """The snippets in snippets/, and the paper holding a copy of each."""
+    def documents(self, more: str = ""):
+        """The snippets in snippets/, and the paper: plain LaTeX holding a copy written out."""
         ms = self.vault / "documents"
         (ms / "paper").mkdir(parents=True)
-        (ms / "paper" / "main.tex").write_text(doc % {"S01": copy_of("S01", S01), "S02": copy_of("S02", S02)})
+        (ms / "paper" / "main.tex").write_text(DOC % {"more": more})
         (self.vault / "snippets").mkdir()
         (self.vault / "snippets" / "S01.tex").write_text(S01)
         (self.vault / "snippets" / "S02.tex").write_text(S02)
         return ms
 
-    @unittest.skipUnless(HAS_TEX, "latexmk, pdflatex or pdftotext is not on PATH")
-    def test_a_document_compiles_and_its_pdf_holds_the_saved_numbers(self):
-        ms = self.documents()
+    def figure_and_table(self):
         (self.vault / "tables").mkdir()
         (self.vault / "tables" / "E05_accuracy_by_seed.tex").write_text(
             rft_results.table_tex({"columns": ["seed", "accuracy"], "rows": [[0, 71.25], [1, 71.35]]}))
@@ -202,10 +197,14 @@ class GeneratedTest(unittest.TestCase):
         (self.vault / "figures").mkdir()
         shutil.copy(fig / "f.pdf", self.vault / "figures" / "E05_loss.pdf")
 
-        r = rft_latex.compile_doc(self.vault, "paper")
+    @unittest.skipUnless(HAS_TEX, "latexmk, pdflatex or pdftotext is not on PATH")
+    def test_a_snippet_compiles_alone_and_its_pdf_holds_the_saved_numbers(self):
+        ms = self.documents()
+        self.figure_and_table()
+        r = rft_latex.compile_snippet(self.vault, "S01")
         self.assertTrue(r["ok"], r)
-        self.assertEqual(r["errors"], [])
-        self.assertEqual(r["warnings"], ["No number nope of E05 (results/E05.json)"])
+        self.assertEqual((r["errors"], r["warnings"]), ([], []))
+        self.assertTrue(r["pdf"].endswith("documents/.build/_snippets/S01.pdf"))
         text = subprocess.run(["pdftotext", "-layout", r["pdf"], "-"], capture_output=True, text=True, check=True).stdout
         saved = json.loads((self.vault / "results" / "E05.json").read_text())["results"]
         # the numbers in the PDF are the saved ones: no one typed them
@@ -213,35 +212,54 @@ class GeneratedTest(unittest.TestCase):
         self.assertIn(f"over {saved['seeds']} seeds", text)
         self.assertIn("71.25", text)  # the table
         self.assertIn("LOSSCURVE", text)  # the figure
-        self.assertIn("Definition 1 (Augmentation gap). The gap is ??", text)
-        self.assertIn("mixup: beyond empirical risk minimization", text.lower())  # the bibliography
-        self.assertIn("[2] Sangdoo Yun. Cutmix. In ICCV, 2019.", text)
+        self.assertIn("mixup: beyond empirical risk minimization", text.lower())  # it cites: its bibliography too
+        self.assertIn("Sangdoo Yun. Cutmix. In ICCV, 2019.", text)
         for f in ("rft.sty", "rft-numbers.tex", "refs.bib"):
             self.assertTrue((ms / f).is_file(), f)
+        # a name that no run saved prints ?? and is a warning; no citation, no bibliography
+        r = rft_latex.compile_snippet(self.vault, "S02")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["warnings"], ["No number nope of E05 (results/E05.json)"])
+        text = subprocess.run(["pdftotext", "-layout", r["pdf"], "-"], capture_output=True, text=True, check=True).stdout
+        self.assertIn("Definition 1 (Augmentation gap). The gap is ??", text)
 
     @unittest.skipUnless(HAS_TEX, "latexmk, pdflatex or pdftotext is not on PATH")
-    def test_an_error_names_its_file_and_line(self):
-        ms = self.documents(DOC.replace("\\maketitle", "\\maketitle\n\\notacommand here"))
+    def test_a_document_compiles_from_its_folder_alone_with_nothing_generated_for_it(self):
+        ms = self.documents("\\include{sections/more}")
+        (ms / "paper" / "sections").mkdir()
+        (ms / "paper" / "sections" / "more.tex").write_text("\\section{More}\nA chapter of its own.\n")
+        r = rft_latex.compile_doc(self.vault, "paper")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual((r["errors"], r["warnings"]), ([], []))
+        text = " ".join(subprocess.run(["pdftotext", r["pdf"], "-"], capture_output=True, text=True, check=True).stdout.split())
+        self.assertIn("Long training reaches 71.3 percent at 1k images.", text)
+        self.assertIn("A chapter of its own.", text)
+        # nothing of the plugin beside it, and nothing written in its folder
+        self.assertEqual(sorted(p.name for p in ms.iterdir()), [".build", "paper"])
+        self.assertEqual(sorted(p.relative_to(ms / "paper").as_posix() for p in (ms / "paper").rglob("*")), ["main.tex", "sections", "sections/more.tex"])
+        self.assertTrue((ms / ".build" / "paper" / "sections" / "more.aux").is_file())
+        # a macro of the plugin left in a document is an error there: nothing resolves it
+        (ms / "paper" / "main.tex").write_text(DOC % {"more": "It reaches \\rftnum{E05}{acc.1k}."})
+        r = rft_latex.compile_doc(self.vault, "paper")
+        self.assertEqual([(e["file"], e["in"], e["line"], e["message"]) for e in r["errors"]], [("documents/paper/main.tex", "main.tex", 15, "Undefined control sequence.")])
+
+    @unittest.skipUnless(HAS_TEX, "latexmk, pdflatex or pdftotext is not on PATH")
+    def test_an_error_names_its_file_and_line_and_an_environment_to_declare(self):
+        ms = self.documents("\\input{sections/more}")
+        (ms / "paper" / "sections").mkdir()
+        (ms / "paper" / "sections" / "more.tex").write_text("Fine.\n\\notacommand here\n")
         r = rft_latex.compile_doc(self.vault, "paper")
         self.assertFalse(r["ok"])
-        self.assertEqual([(e["file"], e["line"], e["message"]) for e in r["errors"]], [("documents/paper/main.tex", 12, "Undefined control sequence.")])
+        self.assertEqual([(e["file"], e["in"], e["line"], e["message"]) for e in r["errors"]], [("documents/paper/sections/more.tex", "sections/more.tex", 2, "Undefined control sequence.")])
+        # a definition placed where no definition environment is declared: named, so the page can offer its line
+        (ms / "paper" / "main.tex").write_text(DOC % {"more": "\\begin{definition}[Gap]\nThe gap.\n\\end{definition}"})
+        r = rft_latex.compile_doc(self.vault, "paper")
+        self.assertEqual([(e["line"], e["message"], e.get("declare")) for e in r["errors"]], [(15, "LaTeX Error: Environment definition undefined.", "definition")])
         # a snippet compiled alone: its errors at its own lines
         (self.vault / "snippets" / "S03.tex").write_text("% rft-snippet S03 · result · X\n% basis: E05\nFine.\n\\notacommand here\n")
         r = rft_latex.compile_snippet(self.vault, "S03")
         self.assertEqual([(e.get("snippet"), e["line"], e["message"]) for e in r["errors"]], [("S03", 4, "Undefined control sequence.")])
         self.assertTrue((ms / "rft.sty").is_file())
-
-    @unittest.skipUnless(HAS_TEX, "latexmk, pdflatex or pdftotext is not on PATH")
-    def test_a_snippet_compiles_alone(self):
-        self.documents()
-        r = rft_latex.compile_snippet(self.vault, "S01")
-        self.assertTrue(r["ok"], r)
-        self.assertTrue(r["pdf"].endswith("documents/.build/_snippets/S01.pdf"))
-        text = " ".join(subprocess.run(["pdftotext", r["pdf"], "-"], capture_output=True, text=True, check=True).stdout.split())
-        self.assertIn("Long training reaches 71.3 percent at 1k images over 3 seeds", text)
-        self.assertIn("mixup: beyond empirical risk minimization", text.lower())  # it cites: its bibliography too
-        r = rft_latex.compile_snippet(self.vault, "S02")  # no citation, no bibliography
-        self.assertTrue(r["ok"], r)
 
     def test_no_such_document_or_snippet(self):
         self.assertEqual(rft_latex.compile_doc(self.vault, "../x"), {"ok": False, "error": "no document ../x"})

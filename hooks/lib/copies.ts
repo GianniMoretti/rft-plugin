@@ -163,6 +163,9 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 /** A text as a pattern that takes any spacing where the text has some. */
 const flexible = (s: string) => s.split(/\s+/).map(escapeRe).join('\\s+')
 
+/** How much of the text on each side of a value is asked to match: all that was kept, then less. */
+const NEAR = [1000, 12, 6]
+
 /** A tracked value as it is found in its file. */
 export type LocatedValue = TrackedValue & {
   index: number
@@ -191,12 +194,22 @@ export function locateValues(files: Record<string, string>, tracking: Pick<Track
       }
       return null
     }
-    const before = flexible(v.before), after = flexible(v.after)
-    const exact = take('written', new RegExp(`(${before})(${flexible(v.written)})(?=${after})`, 'g'))
-    if (exact) return exact
+    // by all the text kept on each side; then by less of it, so that a word changed nearby does not lose the value
+    const around = (n: number) => [flexible(v.before.slice(-n)), flexible(v.after.slice(0, n))] as const
+    for (const n of NEAR) {
+      const [before, after] = around(n)
+      const exact = take('written', new RegExp(`(${before})(${flexible(v.written)})(?=${after})`, 'g'))
+      if (exact) return exact
+    }
     // what stands between the same before and after now: the user's or a co-author's own value
-    if (squeeze(v.before).length + squeeze(v.after).length < 6 || v.kind === 'table') return lost
-    return take('changed', new RegExp(`(${before})([^\\n]{0,80}?)(?=${after})`, 'g')) ?? lost
+    if (v.kind === 'table') return lost
+    for (const n of NEAR.slice(0, 2)) {
+      if (squeeze(v.before.slice(-n)).length + squeeze(v.after.slice(0, n)).length < 6) continue
+      const [before, after] = around(n)
+      const changed = take('changed', new RegExp(`(${before})([^\\n]{0,80}?)(?=${after})`, 'g'))
+      if (changed) return changed
+    }
+    return lost
   })
 }
 

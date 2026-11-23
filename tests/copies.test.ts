@@ -7,7 +7,10 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { nextReport } from '../hooks/lib/knowledge'
-import { bibOf, copyState, manuscriptReport, manuscriptWarnings, readManuscript, reviewCopy, setDocument, usedIn, valuesOf } from '../hooks/lib/manuscript'
+import {
+  allowTrace, bibOf, copyState, declareEnvironment, manuscriptReport, manuscriptWarnings, pointCopy, readManuscript, restoreMarkers, reviewCopy, reviewValue,
+  setDocument, tracesOf, usedIn, valuesOf,
+} from '../hooks/lib/manuscript'
 import { locateCopies, locateValues, parseMarkers, readingOrder } from '../hooks/lib/copies'
 import { load, readConfig } from '../hooks/lib/vault'
 import { MemoryFs } from './fixture'
@@ -120,6 +123,99 @@ describe('the fixture\'s document', () => {
   })
 })
 
+describe('what the user answers in the page', () => {
+  const states = async (s: Awaited<ReturnType<typeof setup>>) => (await valuesOf(s.io, s.l, (await s.ms()).documents[0]!)).map(v => v.state)
+
+  test('a number the tree changed: take the tree\'s (the copy it stands in stays as placed), or keep theirs until the tree changes again', async () => {
+    const s = await setup()
+    const { fs, io, l } = s
+    expect(await states(s)).toEqual(['current', 'current', 'review', 'changed', 'current'])
+    expect(await reviewValue(io, l, 'paper', 2, 'take')).toBe('the number E05 acc.full in paper (main.tex) now reads 81.6.')
+    expect(fs.read(`${DOC}/main.tex`)).toContain('CutMix reaches 73.2\\% top-1 accuracy, against 81.6\\% when trained on the')
+    expect(await states(s)).toEqual(['current', 'current', 'current', 'changed', 'current'])
+    const m = await s.ms()
+    expect(copyState(m.documents[0]!.copies.find(c => c.snippet === 'S02')!, m.snippets.find(x => x.id === 'S02')).state).toBe('placed')
+    // the tree changes again; this time the user keeps what the document says
+    fs.write('vault/results/E05.json', FILES['vault/results/E05.json']!.replace('81.6', '82.0'))
+    expect(await states(s)).toEqual(['current', 'current', 'review', 'changed', 'current'])
+    expect(await reviewValue(io, l, 'paper', 2, 'keep')).toBe('the number E05 acc.full in paper (main.tex) is kept as it is; it is flagged again when the tree says something else.')
+    expect(fs.read(`${DOC}/main.tex`)).toContain('against 81.6\\%')
+    expect(await states(s)).toEqual(['current', 'current', 'current', 'changed', 'current'])
+    fs.write('vault/results/E05.json', FILES['vault/results/E05.json']!.replace('81.6', '82.5'))
+    expect((await states(s))[2]).toBe('review')
+  })
+
+  test('a number changed in the document: keep it (it is the document\'s until the tree changes), or take the tree\'s back', async () => {
+    const s = await setup()
+    const { fs, io, l } = s
+    await reviewValue(io, l, 'paper', 3, 'keep')
+    expect(JSON.parse(fs.read(TRACKING)).values[3]).toMatchObject({ written: '5', kept: '3' })
+    expect((await states(s))[3]).toBe('current')
+    fs.write('vault/results/E05.json', FILES['vault/results/E05.json']!.replace('"seeds": 3', '"seeds": 4'))
+    expect((await states(s))[3]).toBe('review')
+    expect(await reviewValue(io, l, 'paper', 3, 'take')).toBe('the number E05 seeds in paper (sections/method.tex) now reads 4.')
+    expect(fs.read(`${DOC}/sections/method.tex`)).toContain('All numbers are averaged over 4 seeds.')
+    expect(JSON.parse(fs.read(TRACKING)).values[3]).toEqual({ kind: 'number', from: 'E05', key: 'seeds', written: '4', file: 'sections/method.tex', before: 'numbers are averaged over ', after: ' seeds.' })
+    await expect(reviewValue(io, l, 'paper', 9, 'take')).rejects.toThrow('paper tracks no such value')
+  })
+
+  test('a figure saved again: its file is copied in anew, or the document keeps the one it has; a number no longer saved is kept as the document\'s own', async () => {
+    const s = await setup()
+    const { fs, io, l } = s
+    fs.write('vault/figures/E08_loss.pdf', '%PDF a new run\n')
+    expect((await states(s))[4]).toBe('review')
+    expect(await reviewValue(io, l, 'paper', 4, 'keep')).toBe('the figure loss of E08 in paper (sections/method.tex) is kept as it is; it is flagged again when the tree says something else.')
+    expect([(await states(s))[4], fs.read(`${DOC}/figures/loss.pdf`)]).toEqual(['current', FILES[`${DOC}/figures/loss.pdf`]])
+    fs.write('vault/figures/E08_loss.pdf', '%PDF yet another run\n')
+    expect((await states(s))[4]).toBe('review')
+    expect(await reviewValue(io, l, 'paper', 4, 'take')).toBe('the figure loss of E08 in paper (sections/method.tex) is the tree\'s again: its file was copied in anew.')
+    expect([(await states(s))[4], fs.read(`${DOC}/figures/loss.pdf`)]).toEqual(['current', '%PDF yet another run\n'])
+    fs.write('vault/results/E05.json', '{"exp": "E05", "results": {"acc": {"1k": 73.2}}}')
+    expect(await states(s)).toEqual(['current', 'current', 'review', 'changed', 'current'])
+    await expect(reviewValue(io, l, 'paper', 2, 'take')).rejects.toThrow('E05 no longer saves acc.full: keep what the document has')
+    expect(await reviewValue(io, l, 'paper', 2, 'keep')).toBe('the number E05 acc.full in paper (main.tex) is no longer tracked: what stands there is the document\'s own.')
+    expect(JSON.parse(fs.read(TRACKING)).values.map((v: { key: string }) => v.key)).toEqual(['acc.1k', 'acc.1k', 'seeds', 'loss'])
+  })
+
+  test('a lost copy is pointed to again; a passage a co-author wrote becomes a copy; a copy found by its text gets its markers back', async () => {
+    const s = await setup()
+    const { fs, io, l } = s
+    const main = () => fs.read(`${DOC}/main.tex`).split('\n')
+    const at = main().findIndex(x => x.startsWith('We only looked at ResNet-50')) + 1
+    expect(await pointCopy(io, l, 'paper', 'S06', { file: 'main.tex', from: at, to: at + 1 })).toBe(`The copy of S06 in paper is found again: lines ${at} to ${at + 1} of main.tex, between its marker lines.`)
+    expect(main().slice(at - 1, at + 3)).toEqual(['%%% Discussion: Limitations %%%', 'We only looked at ResNet-50 on ImageNet subsets, so these findings may not transfer to other', 'backbones; a co-author rewrote this paragraph in Overleaf.', '%%% end %%%'])
+    let m = await s.ms()
+    expect(m.documents[0]!.copies.map(c => [c.snippet, c.found, copyState(c, m.snippets.find(x => x.id === c.snippet)).state]).slice(-2)).toEqual([['S02', 'markers', 'placed'], ['S06', 'markers', 'adapted']])
+    // the sentence on mixing augmentations, written by hand, is tied to the motivation snippet
+    const intro = main().findIndex(x => x.startsWith('Mixing augmentations such as')) + 1
+    await expect(pointCopy(io, l, 'paper', 'S05', { file: 'main.tex', from: intro, to: intro + 3 })).rejects.toThrow('those lines are already in the copy of S05')
+    expect(await pointCopy(io, l, 'paper', 'S04', { file: 'main.tex', from: intro, to: intro + 1 })).toContain('are now a copy of S04, between two marker lines')
+    m = await s.ms()
+    expect(m.documents[0]!.copies.map(c => `${c.snippet}#${c.nth} ${c.file} ${copyState(c, m.snippets.find(x => x.id === c.snippet)).state}`).slice(0, 3)).toEqual(['S04#1 main.tex adapted', 'S05#1 main.tex placed', 'S01#1 main.tex placed'])
+    expect(await restoreMarkers(io, l, 'paper', 'S05')).toBe('The copy of S05 in paper (main.tex) has its two marker lines again.')
+    expect(fs.read(`${DOC}/main.tex`)).toContain('%%% end %%%\n%%% Motivation: Why low data %%%\nLabelled images are scarce in most applied settings, and augmentations tuned on the full ImageNet\nare rarely tested with a thousand images or fewer.\n%%% end %%%\n')
+    expect((await s.ms()).documents[0]!.copies.every(c => c.found === 'markers')).toBe(true)
+    await expect(pointCopy(io, l, 'paper', 'S09', { file: 'main.tex', from: 1, to: 1 })).rejects.toThrow('S09 is no snippet')
+    await expect(pointCopy(io, l, 'paper', 'S02', { file: 'main.tex', from: 900, to: 901 })).rejects.toThrow('lines 900 to 901 are not in main.tex')
+    expect((await tracesOf(io, l, await s.ms(), (await s.ms()).documents[0]!)).traces).toEqual([])
+  })
+
+  test('a trace that is a false alarm is allowed once and remembered; an environment the document lacks is declared in one line', async () => {
+    const s = await setup({ [`${DOC}/sections/method.tex`]: FILES[`${DOC}/sections/method.tex`]! + 'See Table S01 of the supplement.\n' })
+    const { fs, io, l } = s
+    const scan = async () => tracesOf(io, l, await s.ms(), (await s.ms()).documents[0]!)
+    const [t] = (await scan()).traces
+    expect(t).toMatchObject({ file: 'sections/method.tex', kind: 'id', match: 'S01', text: 'See Table S01 of the supplement.' })
+    expect(await allowTrace(io, l, 'paper', t!)).toBe('Allowed S01 in paper (sections/method.tex): that occurrence is not flagged again.')
+    expect(await scan()).toEqual({ traces: [], allowed: 1 })
+    await expect(allowTrace(io, l, 'paper', t!)).rejects.toThrow('paper has no such trace to allow')
+    expect(await declareEnvironment(io, l, 'paper', 'definition')).toBe('paper already declares the definition environment.')
+    expect(await declareEnvironment(io, l, 'paper', 'corollary')).toBe('Added \\newtheorem{corollary}{Corollary} to the preamble of paper (main.tex).')
+    expect(fs.read(`${DOC}/main.tex`)).toContain('\\date{}\n\\newtheorem{corollary}{Corollary}\n\n\\begin{document}')
+    await expect(declareEnvironment(io, l, 'paper', 'figure')).rejects.toThrow('"figure" is not an environment of a snippet\'s kind')
+  })
+})
+
 describe('markers and places', () => {
   test('a marker pair is two comment lines; a marker with no end is the user\'s own comment; spacing and case do not count', () => {
     const text = '%%% Section one %%%\nText.\n%%%Definition:  CutMix%%%\nA.\n  %%% END %%%\n%%% Lemma: X %%%\n%%% Lemma: Y %%%\nB.\n%%% end %%%\n%%% end %%%\n'
@@ -141,5 +237,12 @@ describe('markers and places', () => {
     const files = { 'a.tex': 'It reaches\n  73.2\\% here, and 73.2\\% there; 81 (not ours) and 9 in all.\n' }
     const got = locateValues(files, { values: [v('73.2', 'reaches ', '\\% '), v('73.2', 'and ', '\\% there'), v('80', '; ', ' (not ours)'), v('7', 'nowhere ', ' at all'), v('9', '', '')] })
     expect(got.map(x => [x.found, x.inDocument, x.line])).toEqual([['written', '73.2', 1], ['written', '73.2', 1], ['changed', '81', 1], [null, null, null], ['written', '9', 1]])
+  })
+
+  test('a word changed near a value does not lose it: less of the text around it is asked to match', () => {
+    const v = (written: string, before: string, after: string) => ({ kind: 'number' as const, from: 'E05', key: 'k', written, file: 'a.tex', before, after })
+    const files = { 'a.tex': 'In our words, the gap closes by 0.3 points overall; the rest, 12 of them, stays.\n' }
+    const got = locateValues(files, { values: [v('0.3', 'The gap closes by ', ' points in all.'), v('14', 'points; the rest, ', ' of them, stays.'), v('5', 'something else entirely ', ' was here before')] })
+    expect(got.map(x => [x.found, x.inDocument])).toEqual([['written', '0.3'], ['changed', '12'], [null, null]])
   })
 })

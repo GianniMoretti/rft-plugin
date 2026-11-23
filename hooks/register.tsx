@@ -28,7 +28,10 @@ import { candidates, candidatesReport } from './lib/rebalance'
 import { nextReport, supersede } from './lib/knowledge'
 import { suggestPriority } from './lib/priority'
 import { dismissVerified, keepVerified, toReview, verifyNote } from './lib/verify'
-import { markReviewed, manuscriptReport, manuscriptWarnings, migrateManuscript, newDocument, readManuscript, reviewCopy, setDocument, setSnippet } from './lib/manuscript'
+import {
+  allowTrace, declareEnvironment, markReviewed, manuscriptReport, manuscriptWarnings, migrateManuscript, newDocument, pointCopy, readManuscript, restoreMarkers,
+  reviewCopy, reviewValue, setDocument, setSnippet,
+} from './lib/manuscript'
 import { deckWarnings } from './lib/decks'
 import { addDeadline, addMeeting, checkDeadline, checkMeeting, deadlineQuestion, deadlinesLine, meetingQuestion, suggestDates, suggestDeadline } from './lib/schedule'
 import { RECALL_HINT, searchesVault } from './lib/recall'
@@ -522,6 +525,11 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
         return setDocument(io, loaded, { name: String(i.name ?? ''), [i.action]: String(i.id ?? ''), file: str(i.file), after: str(i.after) })
       }
       if (i.action === 'take' || i.action === 'keep') return reviewCopy(io, loaded, String(i.name ?? ''), String(i.id ?? ''), i.action)
+      if (i.action === 'take-value' || i.action === 'keep-value') return reviewValue(io, loaded, String(i.name ?? ''), Number(i.index), i.action === 'take-value' ? 'take' : 'keep')
+      if (i.action === 'allow') return allowTrace(io, loaded, String(i.name ?? ''), { file: String(i.file ?? ''), match: String(i.match ?? ''), text: String(i.text ?? '') })
+      if (i.action === 'declare') return declareEnvironment(io, loaded, String(i.name ?? ''), String(i.environment ?? ''))
+      if (i.action === 'point') return pointCopy(io, loaded, String(i.name ?? ''), String(i.id ?? ''), { file: String(i.file ?? ''), from: Number(i.from), to: Number(i.to) })
+      if (i.action === 'markers') return restoreMarkers(io, loaded, String(i.name ?? ''), String(i.id ?? ''))
       return setSnippet(io, loaded, { kind: i.kind, title: i.title, basis: strings(i.basis) }, today(), { byUser: true })
     }
     case 'rft_verify': {
@@ -771,7 +779,7 @@ const FROM_VIEW = [
   { line: 'RFT_SET_TYPE ', tool: 'rft_set_type', fields: ['id', 'type'], what: "change a note's type" },
   { line: 'RFT_MOVE_NODE ', tool: 'rft_move_node', fields: ['id', 'parent'], what: 'move a note' },
   { line: 'RFT_VERIFY ', tool: 'rft_verify', fields: ['id', 'action'], what: 'verify a note' },
-  { line: 'RFT_MANUSCRIPT ', tool: 'rft_manuscript_view', fields: ['action', 'id', 'kind', 'title', 'basis', 'name', 'after', 'file'], what: 'change the snippets or documents' },
+  { line: 'RFT_MANUSCRIPT ', tool: 'rft_manuscript_view', fields: ['action', 'id', 'kind', 'title', 'basis', 'name', 'after', 'file', 'index', 'match', 'text', 'environment', 'from', 'to'], what: 'change the snippets or documents' },
 ] as const
 
 /**

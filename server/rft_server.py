@@ -1869,7 +1869,7 @@ class Vault:
         for x in out["snippets"] + out["documents"]:
             x["threads"] = sum(1 for t in self._threads(x.get("id") or x["name"])["threads"] if t.get("state") == "open")
         for d in out["documents"]:
-            pdf = rft_manuscript.documents_dir(self.root) / ".build" / d["name"] / "main.pdf"
+            pdf = rft_manuscript.documents_dir(self.root) / ".build" / d["name"] / f"{Path(d['main']).stem}.pdf"
             if pdf.is_file():
                 d["built"] = int(pdf.stat().st_mtime)
         out["latexmk"] = bool(shutil.which("latexmk"))
@@ -1877,11 +1877,16 @@ class Vault:
 
     def manuscript_path(self, rel: str) -> Path | None:
         """A file the page may read and write: a snippet (snippets/S<n>.tex, an existing one) or a
-        document (documents/<name>/main.tex)."""
-        if not re.fullmatch(r"snippets/S\d+\.tex|documents/[a-z0-9][a-z0-9-]*/main\.tex", rel or ""):
+        .tex or .bib file of a document (documents/<name>/…, an existing one, no hidden file or folder)."""
+        if not re.fullmatch(r"snippets/S\d+\.tex|documents/[a-z0-9][a-z0-9-]*/[^\\\x00]+\.(?:tex|ltx|bib)", rel or ""):
+            return None
+        if any(part in ("", ".", "..") or part.startswith(".") for part in rel.split("/")):
             return None
         path = self.root / rel
-        return path if path.is_file() and not path.is_symlink() else None
+        if not path.is_file() or path.is_symlink():
+            return None
+        base = (self.root / "/".join(rel.split("/")[:2])).resolve() if rel.startswith("documents/") else rft_manuscript.snippets_dir(self.root).resolve()
+        return path if base in path.resolve().parents else None
 
     def manuscript_file(self, rel: str) -> tuple[int, dict]:
         path = self.manuscript_path(rel)
@@ -1894,11 +1899,6 @@ class Vault:
         else:
             name = rel.split("/")[1]
             out["locked"] = rft_manuscript.document_locked(rft_manuscript.read_docs_registry(self.root), name)
-            # the snippets' text each copy was taken from, for a copy in review: the snippet then and now
-            try:
-                out["taken"] = json.loads((rft_manuscript.documents_dir(self.root) / name / ".blocks.json").read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                out["taken"] = {}
         return 200, out
 
     def write_manuscript_file(self, rel: str, text: str, version: str | None) -> tuple[int, dict]:
@@ -1951,16 +1951,20 @@ class Vault:
         if snippet is not None:
             pdf = build / "_snippets" / f"{snippet}.pdf" if rft_manuscript.SNIPPET_ID.match(snippet) else None
         else:
-            pdf = build / doc / "main.pdf" if rft_manuscript.DOC_RE.match(doc or "") else None
+            pdf = build / doc / f"{Path(rft_latex.main_file(self.root, doc)).stem}.pdf" if rft_manuscript.DOC_RE.match(doc or "") else None
         return pdf if pdf is not None and pdf.is_file() else None
 
     def manuscript_ask(self, req: dict, ask) -> tuple[int, dict]:
         """What the session does for the page, as it does for Claude (hooks/lib/manuscript.ts), so
-        stamps and copies are made in one place: `new` {kind, title, basis} a snippet the user
-        starts; `reviewed` {id} its stamp taken anew; `document` {name, kind} a new document;
-        `place` {name, id, after?}, `move` {name, id, after?}, `remove` {name, id} a copy in a
-        document; `take` or `keep` {name, id} a copy in review answered. The answer comes once the
-        files show it."""
+        stamps, copies and a document's tracking file are made in one place: `new` {kind, title,
+        basis} a snippet the user starts; `reviewed` {id} its stamp taken anew; `document` {name,
+        kind} a new document; `place` {name, id, file?, after?} a copy of a snippet, `move` {name,
+        id, file?, after?} and `remove` {name, id} a copy (S04, or S04#2: the second of S04 there);
+        `take` or `keep` {name, id} a copy in review answered; `take-value` or `keep-value` {name,
+        index} a value of the tree answered; `point` {name, id, file, from, to} a lost copy found
+        again, or a passage made a copy of a snippet; `markers` {name, id} a copy's marker lines
+        put back; `allow` {name, file, match, text} a trace allowed; `declare` {name, environment}
+        a \\newtheorem line added. The answer comes once the files show it."""
         action = req.get("action")
         sdir, ddir = rft_manuscript.snippets_dir(self.root), rft_manuscript.documents_dir(self.root)
         stamp = lambda p: p.stat().st_mtime_ns if p.is_file() else 0  # noqa: E731
@@ -1983,24 +1987,46 @@ class Vault:
             if (ddir / name / "main.tex").exists():
                 return 409, {"error": f"there is already a document {name}"}
             found = lambda: name if (ddir / name / "main.tex").is_file() else None  # noqa: E731
-        elif action in ("place", "move", "remove", "take", "keep"):
+        elif action in ("place", "move", "remove", "take", "keep", "take-value", "keep-value", "point", "markers", "allow", "declare"):
             name, sid = req.get("name"), req.get("id")
             if not isinstance(name, str) or not rft_manuscript.DOC_RE.match(name) or not (ddir / name / "main.tex").is_file():
                 return 404, {"error": "no such document"}
-            if not isinstance(sid, str) or not rft_manuscript.SNIPPET_ID.match(sid):
-                return 400, {"error": f"expected {{action: {action}, name, id: a snippet, after?}}"}
-            held = {b["id"] for b in rft_manuscript.parse_blocks((ddir / name / "main.tex").read_text(encoding="utf-8", errors="replace"))}
-            if action == "place" and sid in held:
-                return 409, {"error": f"{name} already holds a copy of {sid}"}
-            if action != "place" and sid not in held:
-                return 404, {"error": f"{name} holds no copy of {sid}"}
-            doc, was = ddir / name / "main.tex", stamp(ddir / name / "main.tex")
-            found = lambda: sid if stamp(doc) != was else None  # noqa: E731
+            for k in ("file", "after", "match", "text", "environment"):
+                if k in req and not isinstance(req[k], str):
+                    return 400, {"error": f"{k} must be text"}
+            for k in ("index", "from", "to"):
+                if k in req and (not isinstance(req[k], int) or isinstance(req[k], bool) or req[k] < 0):
+                    return 400, {"error": f"{k} must be a number"}
+            if action in ("place", "point"):
+                if not isinstance(sid, str) or not (rft_manuscript.SNIPPET_ID if action == "place" else rft_manuscript.COPY_REF).match(sid):
+                    return 400, {"error": f"expected {{action: {action}, name, id: a snippet}}"}
+                if action == "point" and not all(k in req for k in ("file", "from", "to")):
+                    return 400, {"error": "expected {action: point, name, id, file, from, to}"}
+            elif action in ("move", "remove", "take", "keep", "markers"):
+                if not isinstance(sid, str) or not rft_manuscript.COPY_REF.match(sid):
+                    return 400, {"error": f"expected {{action: {action}, name, id: a copy (S04, or S04#2)}}"}
+                copies = rft_manuscript.locate_copies(rft_manuscript.document_texts(self.root, name)[0], rft_manuscript.read_tracking(self.root, name))
+                several = {c["snippet"] for c in copies if c["nth"] > 1}
+                if sid not in {f"{c['snippet']}#{c['nth']}" for c in copies} | {c["snippet"] for c in copies if c["snippet"] not in several}:
+                    return 404, {"error": f"{name} holds no copy {sid}" + (": name which one (S04#2)" if sid in several else "")}
+            elif action in ("take-value", "keep-value"):
+                if "index" not in req or req["index"] >= len(rft_manuscript.read_tracking(self.root, name)["values"]):
+                    return 404, {"error": f"{name} tracks no such value"}
+            elif action == "allow":
+                if not all(isinstance(req.get(k), str) for k in ("file", "match", "text")):
+                    return 400, {"error": "expected {action: allow, name, file, match, text}"}
+            elif not isinstance(req.get("environment"), str):
+                return 400, {"error": "expected {action: declare, name, environment}"}
+            # the document's own files and its tracking file: whichever the session writes shows it answered
+            watched = lambda: [ddir / rft_manuscript.TRACKING / name / "tracking.json", *(p for p in (ddir / name).rglob("*") if p.is_file())]  # noqa: E731
+            marks = lambda: sorted((str(p), stamp(p)) for p in watched())  # noqa: E731
+            was = marks()
+            found = lambda: (sid or name) if marks() != was else None  # noqa: E731
         else:
-            return 400, {"error": "action must be new, reviewed, document, place, move, remove, take or keep"}
+            return 400, {"error": "action must be new, reviewed, document, place, move, remove, take, keep, take-value, keep-value, point, markers, allow or declare"}
         with self._ask_lock:
             try:
-                ask("RFT_MANUSCRIPT", {k: v for k, v in req.items() if k in ("action", "id", "kind", "title", "basis", "name", "after")})
+                ask("RFT_MANUSCRIPT", {k: v for k, v in req.items() if k in ("action", "id", "kind", "title", "basis", "name", "after", "file", "index", "match", "text", "environment", "from", "to")})
             except (OSError, ValueError) as err:
                 return 503, {"error": gone(err)}
             deadline = time.monotonic() + NODE_WAIT_S
