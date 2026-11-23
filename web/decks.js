@@ -65,7 +65,7 @@
     return out
   }
 
-  /** The editor's mode for a deck: its frontmatter, separators, slide options, headings, notes, code, links and math. */
+  /** The editor's mode for a deck: its frontmatter, separators, slide options, boxes' and lines' comments, headings, notes, code, links and math. */
   function defineMode(CM) {
     if (!CM || CM.modes['rft-deck']) return
     const SEP = /^---\s*$/
@@ -84,7 +84,7 @@
           if (/^\s*(```|~~~)/.test(text)) { s.fence = !s.fence; return whole('string') }
           if (s.fence) return whole('string')
           if (SEP.test(text)) { s.notes = false; return whole('rft-sep') }
-          if (/^\s*<!--\s*slide\b.*-->\s*$/i.test(text)) return whole('rft-opt')
+          if (/^\s*<!--\s*(slide|box|line)\b.*-->\s*$/i.test(text) || /^\s*<!--\s*\/box\s*-->\s*$/i.test(text)) return whole('rft-opt')
           if (/^::right::\s*$/.test(text)) return whole('rft-sep')
           if (/^note:/i.test(text)) s.notes = true
           if (!s.notes && /^#{1,6}\s/.test(text)) return whole('header')
@@ -585,6 +585,10 @@
       const set = (k, v) => { if (typeof v === 'string' && v) css.setProperty(k, v) }
       set('--deck-fg', t.text); set('--deck-muted', t.muted); set('--deck-accent', t.accent)
       set('--deck-line', t.grid); set('--deck-fill', t.fill)
+      // those a box or a line may name besides (web/slides.js's COLORS)
+      set('--deck-contrast', t.contrast); set('--deck-baseline', t.baseline); set('--deck-neutral', t.neutral); set('--deck-axis', t.axis)
+      const cats = Array.isArray(t.categorical) ? t.categorical : []
+      for (let i = 0; cats.length && i < 6; i++) set(`--deck-c${i + 1}`, cats[i % cats.length])
       if (t.font) css.setProperty('--deck-font', font(t.font))
       if (t.headingFont) css.setProperty('--deck-head-font', font(t.headingFont))
     }).catch(() => {})

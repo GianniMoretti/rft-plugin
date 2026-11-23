@@ -1059,6 +1059,35 @@ note: start with E05
   the PDF. The rest is the notes' Markdown: links to notes, KaTeX math, tables, code, `###`
   headings and numbered lists, and images found as Obsidian finds them, so `![[E08_loss.svg]]` is
   the figure a notebook saved in `vault/figures/`.
+- **Boxes and lines**: what a layout does not place, you place yourself, as comment lines in the
+  slide's text (Obsidian's reading view hides them and shows a box's text as a paragraph):
+
+  ```markdown
+  <!-- box x="1180" y="620" w="520" color="contrast" size="40" -->
+  gap closes here
+  <!-- /box -->
+
+  <!-- box shape="ellipse" x="980" y="410" w="160" h="120" outline="contrast" -->
+  <!-- /box -->
+
+  <!-- line from="1180 660" to="1130 500" arrow="end" outline="contrast" -->
+  ```
+
+  A **box** has a place and a width in whole numbers of the 1920 × 1080 slide (`x`, `y`, `w`) and
+  holds Markdown: text, a figure (alone in its box, it fills the width, its proportions kept), or
+  nothing, which leaves a plain shape. `h` fixes its height; without it the box is as high as its
+  text. `shape` is `rect` or `ellipse`; `fill` and `outline` colour it (`weight`: `thin`,
+  `medium`, `thick`); `color`, `size` and `align` (`left`, `center`, `right`) style its text, and
+  `valign` (`top`, `middle`, `bottom`) places it in a box with a height. A **line** runs `from`
+  one point `to` another (`"x y"`), with `arrow` (`start`, `end`, `both`), `outline` and `weight`.
+  A colour is the name of one of the project's figure tokens (`text`, `muted`, `accent`,
+  `contrast`, `baseline`, `neutral`, `axis`, `grid`, `fill`, and `c1` to `c6`, the categorical
+  ones), so a change of tokens recolours the deck, or `#rrggbb`. They are drawn over the layout,
+  the later in the text in front, in the same place in the tab, the presentation and the PDF. One
+  written wrong (a box not closed, a position that is no whole number, an unknown option or
+  colour) is listed under the text by slide and line, and by `rft_validate`; the slide is still
+  drawn. Tools to place them on the slide itself are designed, not built
+  (`docs/design/presentations.md`).
 - **For**: `for:` lists where the deck is presented, one or more: a meeting's occurrence by the
   day its rule gives it (`G01 2026-11-24`; moved to the 25th, the deck goes with it), a once-only
   meeting by its id, a deadline by its id. A practice talk and the real one are one deck for both.
@@ -1169,7 +1198,9 @@ claude --plugin-dir .
 
 The first two check and test the mod, the third tests the server (and, with Chromium and
 `websocket-client` installed, the page at a phone's size: `tests/test_phone.py`, which
-`RFT_PHONE_SHOTS=<dir>` makes save a screenshot of each screen; and, with uv, the notebook's
+`RFT_PHONE_SHOTS=<dir>` makes save a screenshot of each screen; a slide's boxes and lines where
+their text puts them, in the tab, the presentation and the PDF's pages: `tests/test_slides.py`,
+which `RFT_SLIDES_SHOTS=<dir>` makes save the slides and the PDF; and, with uv, the notebook's
 editor in the view's theme against the marimo uv installs: `tests/test_notebook_theme.py`), and
 the last starts a session with the plugin loaded from this folder.
 
@@ -1207,7 +1238,7 @@ the last starts a session with the plugin loaded from this folder.
   renderer, footnotes and the map from the page back to the note's text; `scratchpad.js` the
   scratchpad's to-dos and lists, and its panel; `inbox.js` the inbox's panel; `queue.js` the experiment queue's monitor;
   `theme.js` the light and
-  dark themes; `manuscript.js` the Manuscript tab; `slides.js` a deck's slides, layouts and what it
+  dark themes; `manuscript.js` the Manuscript tab; `slides.js` a deck's slides, layouts, boxes and lines and what it
   is for, `decks.js` the Slides tab; vendored d3 and CodeMirror), one codebase for the live view and `/rft-view`, which shows the
   threads read-only.
 - `server/rft_server.py`: the local server (Python standard library); `server/rft_notebook.py` an

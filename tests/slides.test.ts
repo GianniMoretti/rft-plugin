@@ -233,3 +233,228 @@ describe('in the vault and in a session', () => {
     expect(w.fs.read(P01)).toContain('# Weekly wrap-up')
   })
 })
+
+// Boxes and lines (docs/design/presentations.md, "Boxes and lines"): what the user places on a slide
+// at a position and size of their choosing, written as comment lines in the slide's text.
+
+type Box = {
+  kind: 'box'; from: number; to: number; closed: boolean; x: number; y: number; w: number; h: number | null
+  shape: string; fill: string; outline: string; color: string; weight: string; size: number | null; align: string; valign: string; content: string
+}
+type Line = { kind: 'line'; from: number; to: number; x1: number | null; y1: number | null; x2: number | null; y2: number | null; arrow: string; outline: string; weight: string }
+type Placed = Slide & { items: (Box | Line)[]; problems: { line: number; text: string }[] }
+const COLORS = (P as unknown as { COLORS: string[] }).COLORS
+
+// the format's own example: a two-column slide, a text box, an ellipse, an arrow, a speaker note
+const EXAMPLE = [
+  '# Title', '', '---', '',
+  '<!-- slide layout="two-cols" -->', '',
+  '## Accuracy holds at 1k images', '',
+  '![[E08_loss.svg]]', '',
+  '::right::', '',
+  '- 3 seeds so far', '',
+  '<!-- box x="1180" y="620" w="520" color="accent" size="40" -->',
+  'gap closes here',
+  '<!-- /box -->', '',
+  '<!-- box shape="ellipse" x="980" y="410" w="160" h="120" outline="contrast" weight="medium" -->',
+  '<!-- /box -->', '',
+  '<!-- line from="1180 660" to="1130 500" arrow="end" outline="contrast" -->', '',
+  'note: say why 1k and not 10k',
+].join('\n')
+const placed = (text: string, k = 0) => P.split(text).slides[k] as Placed
+const said = (text: string) => P.problems({ id: 'P09', text }, MEETINGS, MILESTONES, S)
+
+describe('boxes and lines in a slide\'s text', () => {
+  test('the format\'s example: its boxes and its line in the order written, left out of the slots\' content', () => {
+    const s = placed(EXAMPLE, 1)
+    expect(s.body).toBe('## Accuracy holds at 1k images\n\n![[E08_loss.svg]]\n\n::right::\n\n- 3 seeds so far')
+    expect(s.notes).toBe('say why 1k and not 10k')
+    expect(s.problems).toEqual([])
+    expect(s.items).toEqual([
+      { kind: 'box', from: 14, to: 17, closed: true, x: 1180, y: 620, w: 520, h: null, shape: 'rect', fill: '', outline: '', color: 'accent', weight: '', size: 40, align: '', valign: '', content: 'gap closes here' },
+      { kind: 'box', from: 18, to: 20, closed: true, x: 980, y: 410, w: 160, h: 120, shape: 'ellipse', fill: '', outline: 'contrast', color: '', weight: 'medium', size: null, align: '', valign: '', content: '' },
+      { kind: 'line', from: 21, to: 22, x1: 1180, y1: 660, x2: 1130, y2: 500, arrow: 'end', outline: 'contrast', weight: '' },
+    ])
+    expect(said(EXAMPLE)).toEqual([])
+  })
+
+  test('a box belongs to its slide wherever its lines are: before the slots\' content, between its paragraphs, before a ---', () => {
+    const s = placed('<!-- box x="10" y="20" w="300" h="80" fill="#E4E3F5" align="center" valign="middle" -->\nA **label**\n\non two paragraphs\n<!-- /box -->\n## Head\none\n<!-- line from="0 0" to="-40 1080" -->\ntwo\n---\n# Next')
+    expect(s.body).toBe('## Head\none\n\ntwo') // the line's place is a break between paragraphs, as its comment is in a note
+    expect(s.items.map(i => i.kind)).toEqual(['box', 'line'])
+    expect(s.items[0]).toMatchObject({ from: 0, to: 5, h: 80, fill: '#E4E3F5', align: 'center', valign: 'middle', content: 'A **label**\n\non two paragraphs' })
+    expect(s.items[1]).toMatchObject({ from: 7, to: 8, x1: 0, y1: 0, x2: -40, y2: 1080, arrow: '' }) // a point may be off the slide
+    expect(placed('<!-- box x="10" y="20" w="300" -->\nmine\n<!-- /box -->\n---\n# Next', 1).items).toEqual([])
+  })
+
+  test('inside a code block they are code; inside a box, a note: line and a line\'s comment are the box\'s text', () => {
+    const fenced = placed('```html\n<!-- box x="1" y="2" w="3" -->\n<!-- /box -->\n<!-- line from="0 0" to="1 1" -->\n```')
+    expect(fenced.items).toEqual([])
+    expect(fenced.body).toContain('<!-- box x="1" y="2" w="3" -->')
+    const s = placed('<!-- box x="1" y="2" w="300" -->\nnote: on the slide\n```\n<!-- /box -->\n```\n<!-- line from="0 0" to="1 1" -->\n<!-- /box -->\nnote: the speaker\'s')
+    expect(s.items).toHaveLength(1)
+    expect(s.items[0]).toMatchObject({ to: 7, closed: true, content: 'note: on the slide\n```\n<!-- /box -->\n```\n<!-- line from="0 0" to="1 1" -->' })
+    expect(s.notes).toBe('the speaker\'s')
+  })
+
+  test('a colour is a token\'s name or #rrggbb', () => {
+    expect(COLORS).toEqual(['text', 'muted', 'accent', 'contrast', 'baseline', 'neutral', 'axis', 'grid', 'fill', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6'])
+    const s = placed('<!-- box x="1" y="2" w="300" fill="c3" outline="#df6752" color="Text" -->\n<!-- /box -->')
+    expect(s.items[0]).toMatchObject({ fill: 'c3', outline: '#df6752', color: 'text' })
+    expect(s.problems).toEqual([])
+  })
+})
+
+describe('a box or a line written wrong: said, and the slide still drawn', () => {
+  test('a box left open runs to the end of its slide, the speaker\'s notes kept out of it', () => {
+    const text = '# One\n---\n## Two\n<!-- box x="100" y="200" w="300" -->\nleft open\n\nand on\nnote: not on the slide\n---\n# Three'
+    const s = placed(text, 1)
+    expect(s.items[0]).toMatchObject({ from: 3, to: 7, closed: false, content: 'left open\n\nand on' })
+    expect(s.body).toBe('## Two')
+    expect(s.notes).toBe('not on the slide')
+    expect(placed(text, 2).items).toEqual([])
+    expect(said(text)).toEqual(['slide 2, line 4: this box is not closed: add <!-- /box --> after its text'])
+  })
+
+  test('a box opened in an open box ends it; a <!-- /box --> that closes none', () => {
+    const text = '<!-- box x="1" y="2" w="300" -->\nfirst\n<!-- box x="5" y="6" w="700" -->\nsecond\n<!-- /box -->\n<!-- /box -->\nafter'
+    const s = placed(text)
+    expect(s.items.map(i => [i.from, i.to, (i as Box).closed, (i as Box).content])).toEqual([[0, 2, false, 'first'], [2, 5, true, 'second']])
+    expect(s.body).toBe('after')
+    expect(said(text)).toEqual([
+      'slide 1, line 1: this box is not closed: add <!-- /box --> after its text',
+      'slide 1, line 6: this <!-- /box --> closes no box',
+    ])
+  })
+
+  test('a position that is no whole number, one missing, an option there is none of, a value it cannot take', () => {
+    const text = [
+      '<!-- box x="12.5" y="2" w="300" -->', 'a', '<!-- /box -->',
+      '<!-- box x="1" y="2" -->', 'b', '<!-- /box -->',
+      '<!-- box x="1" y="2" w="0" h="tall" size="big" colour="accent" shape="star" weight="4" align="middle" valign="center" -->', 'c', '<!-- /box -->',
+      '<!-- box x=1 y="2" w="300" -->', 'd', '<!-- /box -->',
+      '<!-- line from="10" to="1 2 3" arrow="yes" weight="fat" color="accent" -->',
+      '<!-- line to="1 2" -->',
+    ].join('\n')
+    expect(said(text)).toEqual([
+      'slide 1, line 1: x="12.5" is no whole number',
+      'slide 1, line 4: a box needs x, y and w: no w',
+      'slide 1, line 7: a box has no option "colour" (x, y, w, h, shape, fill, outline, weight, color, size, align, valign)',
+      'slide 1, line 7: w="0" is no whole number above 0',
+      'slide 1, line 7: h="tall" is no whole number above 0',
+      'slide 1, line 7: shape="star" is none of rect, ellipse',
+      'slide 1, line 7: weight="4" is none of thin, medium, thick',
+      'slide 1, line 7: size="big" is no whole number above 0',
+      'slide 1, line 7: align="middle" is none of left, center, right',
+      'slide 1, line 7: valign="center" is none of top, middle, bottom',
+      'slide 1, line 10: "x=1" is not read: an option is written name="value"',
+      'slide 1, line 10: a box needs x, y and w: no x',
+      'slide 1, line 13: a line has no option "color" (from, to, arrow, outline, weight)',
+      'slide 1, line 13: from="10" is no point: two whole numbers, as "1180 660"',
+      'slide 1, line 13: to="1 2 3" is no point: two whole numbers, as "1180 660"',
+      'slide 1, line 13: arrow="yes" is none of start, end, both',
+      'slide 1, line 13: weight="fat" is none of thin, medium, thick',
+      'slide 1, line 14: a line needs from and to: no from',
+    ])
+    // still drawn: at the slide's corner, 480 wide, as high as its text, in the layout's style
+    const s = placed(text)
+    expect(s.items[0]).toMatchObject({ x: 0, y: 2, w: 300, content: 'a' })
+    expect(s.items[1]).toMatchObject({ x: 1, y: 2, w: 480, content: 'b' })
+    expect(s.items[2]).toMatchObject({ w: 480, h: null, size: null, shape: 'rect', weight: '', align: '', valign: '', content: 'c' })
+    expect(s.items[4]).toMatchObject({ kind: 'line', x1: null, y1: null, x2: null, y2: null, arrow: '', weight: '' })
+  })
+
+  test('a colour there is none of is said, and drawn in the text\'s colour', () => {
+    const text = '# One\n---\n<!-- box x="1" y="2" w="300" fill="coral" outline="#fff" color="red" -->\nx\n<!-- /box -->\n<!-- line from="0 0" to="9 9" outline="blue" -->'
+    const names = 'a token\'s name (text, muted, accent, contrast, baseline, neutral, axis, grid, fill, c1 to c6) or #rrggbb'
+    expect(said(text)).toEqual([
+      `slide 2, line 3: no colour "coral": ${names}`,
+      `slide 2, line 3: no colour "#fff": ${names}`,
+      `slide 2, line 3: no colour "red": ${names}`,
+      `slide 2, line 6: no colour "blue": ${names}`,
+    ])
+    const s = placed(text, 1)
+    expect(s.items[0]).toMatchObject({ fill: 'currentColor', outline: 'currentColor', color: 'currentColor' })
+    expect(s.items[1]).toMatchObject({ outline: 'currentColor' })
+  })
+})
+
+describe('boxes and lines drawn on the slide, over its layout, the later in the text in front', () => {
+  const md = (src: string) => `<md>${src}</md>`
+  const draw = (text: string, k = 0) => P.slideHtml(placed(text, k), md)
+
+  test('the format\'s example', () => {
+    const html = draw(EXAMPLE, 1)
+    expect(html.startsWith('<div class="slide layout-two-cols" data-slide="2"><div class="slide-head"><md>## Accuracy holds at 1k images</md></div>' +
+      '<div class="slide-cols"><div class="slide-col"><md>\n![[E08_loss.svg]]\n</md></div><div class="slide-col"><md>\n- 3 seeds so far</md></div></div>')).toBe(true)
+    expect(html).toContain('<div class="slide-box" data-item="0" style="left:1180px;top:620px;width:520px;color:var(--slide-c-accent);font-size:40px"><div class="slide-box-text"><md>gap closes here</md></div></div>' +
+      '<div class="slide-box ellipse fixed" data-item="1" style="left:980px;top:410px;width:160px;height:120px;border:4px solid var(--slide-c-contrast)"></div>' +
+      '<svg class="slide-line" data-item="2" viewBox="0 0 1920 1080" style="color:var(--slide-c-contrast)">')
+    expect(html.endsWith('</svg></div>')).toBe(true)
+    expect(html).not.toContain('say why')
+  })
+
+  test('a box\'s fill, outline, text and place in its height; a figure alone in a box fills it', () => {
+    expect(draw('<!-- box x="-20" y="30" w="400" h="200" fill="fill" outline="#211A52" weight="thick" color="c2" align="center" valign="middle" -->\nA\n<!-- /box -->')).toContain(
+      '<div class="slide-box fixed valign-middle" data-item="0" style="left:-20px;top:30px;width:400px;height:200px;background:var(--slide-c-fill);border:8px solid #211A52;color:var(--slide-c-c2);text-align:center"><div class="slide-box-text"><md>A</md></div></div>')
+    expect(draw('<!-- box x="1" y="2" w="300" outline="text" weight="thin" valign="bottom" -->\n\n![[E08_loss.svg|400]]\n\n<!-- /box -->')).toContain(
+      '<div class="slide-box figure valign-bottom" data-item="0" style="left:1px;top:2px;width:300px;border:2px solid var(--slide-c-text)"><div class="slide-box-text"><md>![[E08_loss.svg|400]]</md></div></div>')
+    // an outline's weight alone draws none; a colour there is none of is the text's
+    expect(draw('<!-- box x="1" y="2" w="300" weight="thick" fill="nope" -->\n<!-- /box -->')).toContain('<div class="slide-box" data-item="0" style="left:1px;top:2px;width:300px;background:currentColor"></div>')
+  })
+
+  // a line's drawing: its stroke and the heads of its arrow, as numbers
+  const lineOf = (html: string) => {
+    const svg = /<svg class="slide-line"[^>]*>(.*?)<\/svg>/.exec(html)
+    if (!svg) return null
+    const l = /<line x1="([-\d.]+)" y1="([-\d.]+)" x2="([-\d.]+)" y2="([-\d.]+)" stroke="currentColor" stroke-width="(\d+)" stroke-linecap="round"\/>/.exec(svg[1]!)!
+    const heads = [...svg[1]!.matchAll(/<polygon points="([^"]+)" fill="currentColor"\/>/g)].map(m => m[1]!.split(' ').map(p => p.split(',').map(Number)))
+    return { from: [+l[1]!, +l[2]!], to: [+l[3]!, +l[4]!], width: +l[5]!, heads }
+  }
+
+  test('a line from point to point, in the text\'s colour and of medium weight unless it says', () => {
+    const html = draw('<!-- line from="100 200" to="500 200" -->')
+    expect(html).toContain('<svg class="slide-line" data-item="0" viewBox="0 0 1920 1080"><line x1="100" y1="200" x2="500" y2="200" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>')
+    expect(lineOf(draw('<!-- line from="100 200" to="500 200" weight="thin" -->'))!.width).toBe(2)
+    expect(lineOf(draw('<!-- line from="100 200" to="500 200" weight="thick" -->'))!.width).toBe(8)
+  })
+
+  test('an arrow\'s head has its tip on the line\'s end, and the stroke stops inside it', () => {
+    const end = lineOf(draw('<!-- line from="100 200" to="500 200" arrow="end" -->'))!
+    expect(end.from).toEqual([100, 200])
+    expect(end.heads).toHaveLength(1)
+    const [tip, a, b] = end.heads[0]!
+    expect(tip).toEqual([500, 200])
+    expect(a![0]).toBe(b![0]) // its base across the line
+    expect(Math.abs(a![1]! + b![1]! - 400)).toBeLessThan(0.01) // and its middle on it
+    expect(end.to[1]).toBe(200)
+    expect(end.to[0]).toBeGreaterThan(a![0]!)
+    expect(end.to[0]).toBeLessThan(500)
+    const both = lineOf(draw('<!-- line from="300 100" to="300 900" arrow="both" weight="thick" -->'))!
+    expect(both.heads.map(h => h[0])).toEqual([[300, 100], [300, 900]])
+    expect(both.from[1]).toBeGreaterThan(100)
+    expect(both.to[1]).toBeLessThan(900)
+    const start = lineOf(draw('<!-- line from="300 100" to="700 400" arrow="start" -->'))!
+    expect(start.heads.map(h => h[0])).toEqual([[300, 100]])
+    expect(start.to).toEqual([700, 400])
+  })
+
+  test('a line with no place is not drawn, the rest of the slide is; the order in the text is the order drawn', () => {
+    const html = draw('one\n<!-- line from="x" to="1 2" -->\n<!-- box x="1" y="2" w="3" -->\n<!-- /box -->\n<!-- line from="0 0" to="5 5" -->\n<!-- box x="4" y="5" w="6" -->\n<!-- /box -->')
+    expect([...html.matchAll(/data-item="(\d)"/g)].map(m => m[1])).toEqual(['1', '2', '3'])
+    expect(html).toContain('<div class="slide-content"><md>one</md></div><div class="slide-box" data-item="1"')
+  })
+})
+
+describe('boxes and lines in the vault', () => {
+  test('rft_validate says what the Slides tab says', async () => {
+    const text = '---\nid: P01\ntype: deck\nlocked: false\n---\n\n# One\n\n<!-- box x="1" y="2" w="300" fill="coral" -->\nopen\n'
+    const fs = new MemoryFs({ ...demoFiles(), 'vault/decks/P01 Weekly wrap-up.md': text })
+    const io = fs.io()
+    const l = await load(io, (await readConfig(io))!)
+    const lines = P.problems({ id: 'P01', text }, [], [], S)
+    expect(lines).toHaveLength(2)
+    expect(lines[1]).toBe('slide 1, line 9: this box is not closed: add <!-- /box --> after its text')
+    expect(await deckWarnings(io, l)).toEqual(lines.map(p => `vault/decks/P01 Weekly wrap-up.md: ${p}`))
+  })
+})

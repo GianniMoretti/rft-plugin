@@ -1140,6 +1140,27 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
 .slide.layout-figure .slide-figure p { margin: 0; }
 .slide.layout-figure .slide-figure img { height: 700px; width: auto; max-width: 1700px; object-fit: contain; }
 .slide.layout-figure .slide-caption { text-align: center; color: var(--slide-muted); font-size: 32px; }
+/* a slide's boxes and lines (web/slides.js): at their place in the slide's own units, over its
+   layout, the later in the text in front. A colour they name is one of the project's figure tokens
+   (--slide-c-<name>, the categorical ones c1 to c6) */
+.slide { --slide-c-text: var(--slide-fg); --slide-c-muted: var(--slide-muted); --slide-c-accent: var(--slide-accent); --slide-c-grid: var(--slide-line);
+  --slide-c-fill: var(--slide-code); --slide-c-contrast: var(--deck-contrast, #EC003F); --slide-c-baseline: var(--deck-baseline, #020617);
+  --slide-c-neutral: var(--deck-neutral, #A3ADBD); --slide-c-axis: var(--deck-axis, #90A1B9);
+  --slide-c-c1: var(--deck-c1, #8E51FF); --slide-c-c2: var(--deck-c2, #2B7FFF); --slide-c-c3: var(--deck-c3, #F0B100);
+  --slide-c-c4: var(--deck-c4, #3F8F4E); --slide-c-c5: var(--deck-c5, #EC003F); --slide-c-c6: var(--deck-c6, #00B8DB); }
+.slide .slide-box { position: absolute; box-sizing: border-box; display: flex; flex-direction: column; }
+.slide .slide-box.ellipse { border-radius: 50%; }
+.slide .slide-box.valign-middle { justify-content: center; }
+.slide .slide-box.valign-bottom { justify-content: flex-end; }
+.slide .slide-box-text { padding: 12px 20px; }
+.slide .slide-box-text > :last-child { margin-bottom: 0; }
+/* a figure or an image alone in a box fills its width, its proportions kept; in a box with a height, it is fitted in it */
+.slide .slide-box.figure .slide-box-text { padding: 0; }
+.slide .slide-box.figure p { margin: 0; }
+.slide .slide-box.figure img { display: block; width: 100%; height: auto; max-height: none; }
+.slide .slide-box.figure.fixed .slide-box-text, .slide .slide-box.figure.fixed p { height: 100%; }
+.slide .slide-box.figure.fixed img { height: 100%; object-fit: contain; }
+.slide .slide-line { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; overflow: visible; pointer-events: none; }
 
 /* the deck presented: full screen, black around the slide */
 .sl-show { position: fixed; inset: 0; z-index: 1000; background: #000; cursor: pointer; }
