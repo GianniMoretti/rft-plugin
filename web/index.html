@@ -154,6 +154,9 @@
     <div class="pad-head">
       <strong>Inbox</strong>
       <span id="inbox-count" class="muted"></span>
+      <span class="seg" role="group" aria-label="Order of the items">
+        <button type="button" data-inbox-order="priority" title="Order by reading priority: urgent first, the items without one last; newest first within each">Priority</button><button type="button" data-inbox-order="date" title="Order by date: the newest first, by the day each item was added">Date</button>
+      </span>
       <button id="inbox-close" type="button" title="Close (Esc)" aria-label="Close the inbox">✕</button>
     </div>
     <form id="inbox-add" autocomplete="off">

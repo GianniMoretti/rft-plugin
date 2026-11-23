@@ -86,10 +86,10 @@ describe('inbox: the file', () => {
     expect(box.processed).toEqual(EXPECTED.processed)
   })
 
-  test('the most pressing first, the newest first among equals, those with no day last', () => {
+  test('the most pressing first, the newest first among equals (of one day, the one added later), those with no day last', () => {
     const item = (key: string, priority: string, added: string) => ({ key, url: key, title: '', why: '', priority, added, duplicate: false, brief: null })
     const items = [item('a', '', '2026-11-20'), item('b', 'low', ''), item('c', 'urgent', '2026-11-01'), item('d', 'high', '2026-11-02'), item('e', 'high', '2026-11-09'), item('f', '', ''), item('g', '', '2026-11-21'), item('h', 'high', '2026-11-09')]
-    expect(byPriority(items).map(i => i.key).join('')).toBe('cehdbgaf')
+    expect(byPriority(items).map(i => i.key).join('')).toBe('chedbgaf')
     expect(items.map(i => i.key).join('')).toBe('abcdefgh')
   })
 

@@ -564,5 +564,291 @@ export const CASES = {
    "priority": "soon",
    "error": true
   }
+ ],
+ "changes": [
+  {
+   "name": "a reading priority on a bare link",
+   "text": "- https://a.org/x\n",
+   "key": "https://a.org/x",
+   "priority": "high",
+   "want": "- https://a.org/x \u00b7 high\n"
+  },
+  {
+   "name": "a reading priority taken away: the bullet and its spaces as typed",
+   "text": "-   [T](https://a.org/x)   urgent\n",
+   "key": "https://a.org/x",
+   "priority": "",
+   "want": "-   [T](https://a.org/x)\n"
+  },
+  {
+   "name": "another reading priority: the why and the day stay",
+   "text": "- https://a.org/x \u2014 why \u00b7 low \u00b7 added 2026-11-01\n",
+   "key": "https://a.org/x",
+   "priority": "urgent",
+   "want": "- https://a.org/x \u2014 why \u00b7 urgent \u00b7 added 2026-11-01\n"
+  },
+  {
+   "name": "a why: the link as typed, what follows it written again",
+   "text": "* arXiv:2406.01234v2 - same one \u00b7 high\n",
+   "key": "arxiv:2406.01234",
+   "why": "from Gianni",
+   "want": "* arXiv:2406.01234v2 \u2014 from Gianni \u00b7 high\n"
+  },
+  {
+   "name": "a link in angle brackets stays in them",
+   "text": "- <https://a.org/x> why\n",
+   "key": "https://a.org/x",
+   "priority": "high",
+   "want": "- <https://a.org/x> \u2014 why \u00b7 high\n"
+  },
+  {
+   "name": "a why taken away",
+   "text": "- https://a.org/x \u2014 why \u00b7 added 2026-11-01\n",
+   "key": "https://a.org/x",
+   "why": "",
+   "want": "- https://a.org/x \u00b7 added 2026-11-01\n"
+  },
+  {
+   "name": "both at once",
+   "text": "- https://a.org/x \u2014 old \u00b7 low\n",
+   "key": "https://a.org/x",
+   "why": "new",
+   "priority": "",
+   "want": "- https://a.org/x \u2014 new\n"
+  },
+  {
+   "name": "the second of two with one link",
+   "text": "- https://a.org/x\n- https://a.org/x/ \u2014 again\n",
+   "key": "https://a.org/x",
+   "nth": 1,
+   "priority": "low",
+   "want": "- https://a.org/x\n- https://a.org/x/ \u2014 again \u00b7 low\n"
+  },
+  {
+   "name": "the brief under it stays",
+   "text": "- https://a.org/x \u2014 why\n  - briefed 2026-11-20: claims x\n  - touches R07\n- https://b.org/y\n",
+   "key": "https://a.org/x",
+   "priority": "medium",
+   "want": "- https://a.org/x \u2014 why \u00b7 medium\n  - briefed 2026-11-20: claims x\n  - touches R07\n- https://b.org/y\n"
+  },
+  {
+   "name": "CRLF",
+   "text": "# Inbox\r\n\r\n- https://a.org/x\r\n",
+   "key": "https://a.org/x",
+   "priority": "high",
+   "want": "# Inbox\r\n\r\n- https://a.org/x \u00b7 high\r\n"
+  },
+  {
+   "name": "nothing changes: the line stays as typed",
+   "text": "- https://a.org/x - why \u00b7  LOW\n",
+   "key": "https://a.org/x",
+   "why": "why",
+   "priority": "low",
+   "want": "- https://a.org/x - why \u00b7  LOW\n"
+  },
+  {
+   "name": "a why in several lines is one",
+   "text": "- https://a.org/x\n",
+   "key": "https://a.org/x",
+   "why": " for\n D04,  maybe ",
+   "want": "- https://a.org/x \u2014 for D04, maybe\n"
+  },
+  {
+   "name": "a reading priority in capitals",
+   "text": "- https://a.org/x\n",
+   "key": "https://a.org/x",
+   "priority": " High ",
+   "want": "- https://a.org/x \u00b7 high\n"
+  },
+  {
+   "name": "a why that starts with a dash",
+   "text": "- https://a.org/x\n",
+   "key": "https://a.org/x",
+   "why": "- see R03",
+   "want": "- https://a.org/x \u2014 - see R03\n"
+  },
+  {
+   "name": "a why that is a reading priority",
+   "text": "- https://a.org/x\n",
+   "key": "https://a.org/x",
+   "why": "urgent",
+   "error": true
+  },
+  {
+   "name": "a why that is one beside the item's own",
+   "text": "- https://a.org/x \u00b7 high\n",
+   "key": "https://a.org/x",
+   "why": "low",
+   "error": true
+  },
+  {
+   "name": "a why that holds a date as a part",
+   "text": "- https://a.org/x\n",
+   "key": "https://a.org/x",
+   "why": "x \u00b7 added 2026-01-01",
+   "error": true
+  },
+  {
+   "name": "not a reading priority",
+   "text": "- https://a.org/x\n",
+   "key": "https://a.org/x",
+   "priority": "soon",
+   "error": true
+  },
+  {
+   "name": "no item has the link",
+   "text": "- https://a.org/x\n",
+   "key": "https://b.org/y",
+   "priority": "low",
+   "none": true
+  },
+  {
+   "name": "no second item has it",
+   "text": "- https://a.org/x\n",
+   "key": "https://a.org/x",
+   "nth": 1,
+   "priority": "low",
+   "none": true
+  },
+  {
+   "name": "a processed item is not in the inbox",
+   "text": "## Processed\n- https://a.org/x \u2014 discarded\n",
+   "key": "https://a.org/x",
+   "priority": "low",
+   "none": true
+  }
+ ],
+ "closes": [
+  {
+   "name": "under the processed ones, at their end",
+   "text": "# Inbox\n\n- https://a.org/x \u2014 why \u00b7 high \u00b7 added 2026-11-01\n- https://b.org/y\n\n## Processed\n\n- 2026-11-10 https://c.org/z \u2014 discarded\n",
+   "key": "https://a.org/x",
+   "today": "2026-11-23",
+   "want": "# Inbox\n\n- https://b.org/y\n\n## Processed\n\n- 2026-11-10 https://c.org/z \u2014 discarded\n- 2026-11-23 https://a.org/x \u2014 discarded\n",
+   "processed": {
+    "date": "2026-11-23",
+    "key": "https://a.org/x",
+    "title": "",
+    "outcome": "discarded"
+   }
+  },
+  {
+   "name": "no processed ones yet: the heading is made",
+   "text": "# Inbox\n\n- https://a.org/x\n",
+   "key": "https://a.org/x",
+   "today": "2026-11-23",
+   "want": "# Inbox\n\n## Processed\n\n- 2026-11-23 https://a.org/x \u2014 discarded\n"
+  },
+  {
+   "name": "the only line of the file",
+   "text": "- https://a.org/x",
+   "key": "https://a.org/x",
+   "today": "2026-11-23",
+   "want": "## Processed\n\n- 2026-11-23 https://a.org/x \u2014 discarded\n"
+  },
+  {
+   "name": "its brief goes with it",
+   "text": "- https://a.org/x \u2014 why\n  - briefed 2026-11-20: claims x\n  - touches R07\n- https://b.org/y\n\n## Processed\n",
+   "key": "https://a.org/x",
+   "today": "2026-11-23",
+   "want": "- https://b.org/y\n\n## Processed\n\n- 2026-11-23 https://a.org/x \u2014 discarded\n"
+  },
+  {
+   "name": "its title goes with it, the address as it opens",
+   "text": "- [A title](https://arxiv.org/pdf/2406.01234v2) \u2014 why\n\n## Processed\n\n- 2026-11-10 https://c.org/z \u2192 R03\n",
+   "key": "arxiv:2406.01234",
+   "today": "2026-11-23",
+   "want": "## Processed\n\n- 2026-11-10 https://c.org/z \u2192 R03\n- 2026-11-23 [A title](https://arxiv.org/abs/2406.01234) \u2014 discarded\n",
+   "processed": {
+    "date": "2026-11-23",
+    "key": "arxiv:2406.01234",
+    "title": "A title",
+    "outcome": "discarded"
+   }
+  },
+  {
+   "name": "no newline at the end",
+   "text": "- https://a.org/x\n- https://b.org/y",
+   "key": "https://b.org/y",
+   "today": "2026-11-23",
+   "want": "- https://a.org/x\n\n## Processed\n\n- 2026-11-23 https://b.org/y \u2014 discarded\n"
+  },
+  {
+   "name": "CRLF",
+   "text": "# Inbox\r\n\r\n- https://a.org/x\r\n- https://b.org/y\r\n\r\n## Processed\r\n\r\n- 2026-11-10 https://c.org/z \u2014 discarded\r\n",
+   "key": "https://a.org/x",
+   "today": "2026-11-23",
+   "want": "# Inbox\r\n\r\n- https://b.org/y\r\n\r\n## Processed\r\n\r\n- 2026-11-10 https://c.org/z \u2014 discarded\r\n- 2026-11-23 https://a.org/x \u2014 discarded\r\n"
+  },
+  {
+   "name": "a heading after the processed ones: before it, a blank line between",
+   "text": "# Inbox\n- https://a.org/x\n\n## Processed\n- 2026-11-10 https://c.org/z \u2014 discarded\n## Notes\nkeep\n",
+   "key": "https://a.org/x",
+   "today": "2026-11-23",
+   "want": "# Inbox\n\n## Processed\n- 2026-11-10 https://c.org/z \u2014 discarded\n- 2026-11-23 https://a.org/x \u2014 discarded\n\n## Notes\nkeep\n"
+  },
+  {
+   "name": "the heading in small letters",
+   "text": "- https://a.org/x\n\n## processed\n",
+   "key": "https://a.org/x",
+   "today": "2026-11-23",
+   "want": "## processed\n\n- 2026-11-23 https://a.org/x \u2014 discarded\n"
+  },
+  {
+   "name": "the second of two with one link: its own address",
+   "text": "- https://a.org/x\n- https://a.org/x/ \u2014 again\n",
+   "key": "https://a.org/x",
+   "nth": 1,
+   "today": "2026-11-23",
+   "want": "- https://a.org/x\n\n## Processed\n\n- 2026-11-23 https://a.org/x/ \u2014 discarded\n"
+  },
+  {
+   "name": "an outcome with its reason",
+   "text": "- https://a.org/x\n",
+   "key": "https://a.org/x",
+   "today": "2026-11-23",
+   "outcome": " discarded:  superseded\nby R07 ",
+   "want": "## Processed\n\n- 2026-11-23 https://a.org/x \u2014 discarded: superseded by R07\n",
+   "processed": {
+    "date": "2026-11-23",
+    "key": "https://a.org/x",
+    "title": "",
+    "outcome": "discarded: superseded by R07"
+   }
+  },
+  {
+   "name": "between two blank lines: one is left",
+   "text": "# Inbox\n\n- https://a.org/x\n\n### later\n- https://b.org/y\n",
+   "key": "https://a.org/x",
+   "today": "2026-11-23",
+   "want": "# Inbox\n\n### later\n- https://b.org/y\n\n## Processed\n\n- 2026-11-23 https://a.org/x \u2014 discarded\n"
+  },
+  {
+   "name": "no day",
+   "text": "- https://a.org/x\n",
+   "key": "https://a.org/x",
+   "today": "",
+   "want": "## Processed\n\n- https://a.org/x \u2014 discarded\n",
+   "processed": {
+    "date": "",
+    "key": "https://a.org/x",
+    "title": "",
+    "outcome": "discarded"
+   }
+  },
+  {
+   "name": "no item has the link",
+   "text": "- https://a.org/x\n",
+   "key": "https://b.org/y",
+   "today": "2026-11-23",
+   "none": true
+  },
+  {
+   "name": "a processed item is not in the inbox",
+   "text": "## Processed\n- https://a.org/x \u2014 discarded\n",
+   "key": "https://a.org/x",
+   "today": "2026-11-23",
+   "none": true
+  }
  ]
 }

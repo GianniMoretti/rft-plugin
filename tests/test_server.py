@@ -684,6 +684,97 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.add_inbox("https://example.org/y")[0], 422)
         self.assertEqual(p.read_bytes(), b"\xff\xfe not utf-8\n")
 
+    def change_inbox(self, action, key, value=None, nth=None, **kw):
+        payload = {"action": action, "key": key}
+        if value is not None:
+            payload[action] = value
+        if nth is not None:
+            payload["nth"] = nth
+        return self.write("POST", "/api/inbox", payload, **kw)
+
+    def test_inbox_reading_priority_is_one_plain_word_in_the_items_line(self):
+        fixture = (Path(__file__).resolve().parent / "fixtures" / "inbox" / "Inbox.md").read_bytes()
+        p = self.fresh_inbox(fixture)
+        before = fixture.decode().split("\n")
+        notes = {f: f.read_bytes() for f in self.root.rglob("*.md") if f != p}
+        blog = "https://lilianweng.github.io/posts/2021-05-31-contrastive"
+        at = before.index(f"- {blog}/")
+        status, got = self.change_inbox("priority", blog, "urgent")
+        self.assertEqual((status, got["item"]["priority"], got["name"]), (200, "urgent", "Inbox.md"))
+        self.assertEqual(p.read_text().split("\n"), before[:at] + [f"- {blog}/ \u00b7 urgent"] + before[at + 1:])
+        self.assertNotIn("#urgent", p.read_text())
+        self.assertEqual(got["items"], json.loads(self.get("/api/inbox")[2])["items"])
+        # no limit to how many are urgent: every item of the inbox, one after the other
+        seen = {}
+        for item in got["items"]:
+            n = seen[item["key"]] = seen.get(item["key"], -1) + 1
+            status, got = self.change_inbox("priority", item["key"], "urgent", nth=n)
+            self.assertEqual((status, got["item"]["priority"]), (200, "urgent"), item["key"])
+        self.assertEqual({i["priority"] for i in got["items"]}, {"urgent"})
+        # and taken away again
+        status, got = self.change_inbox("priority", blog, "")
+        self.assertEqual((status, got["item"]["priority"]), (200, ""))
+        self.assertIn(f"\n- {blog}/\n", p.read_text())
+        # nothing of it reaches a note: the tree's files are as they were
+        self.assertEqual({f: f.read_bytes() for f in self.root.rglob("*.md") if f != p}, notes)
+        now = p.read_bytes()
+        for value in ("soon", "URGENT!", "high low"):
+            status, got = self.change_inbox("priority", blog, value)
+            self.assertEqual((status, "reading priority" in got["error"]), (400, True), value)
+        self.assertEqual(p.read_bytes(), now)
+
+    def test_inbox_why_is_edited_and_the_second_of_two_is_reached(self):
+        p = self.fresh_inbox(b"# Inbox\r\n\r\n- https://a.org/x - old \xc2\xb7 high \xc2\xb7 added 2026-11-01\r\n  - briefed 2026-11-20: claims x\r\n- https://a.org/x/\r\n")
+        status, got = self.change_inbox("why", "https://a.org/x", " for\nD04 ")
+        self.assertEqual((status, got["item"]["why"], got["item"]["priority"], got["item"]["added"]), (200, "for D04", "high", "2026-11-01"))
+        status, got = self.change_inbox("why", "https://a.org/x", "again", nth=1)
+        self.assertEqual((status, got["item"]["why"], [i["why"] for i in got["items"]]), (200, "again", ["for D04", "again"]))
+        self.assertEqual(p.read_bytes().decode(), "# Inbox\r\n\r\n- https://a.org/x \u2014 for D04 \u00b7 high \u00b7 added 2026-11-01\r\n  - briefed 2026-11-20: claims x\r\n- https://a.org/x/ \u2014 again\r\n")
+        self.assertEqual(self.change_inbox("why", "https://a.org/x", "")[1]["item"]["why"], "")
+        now = p.read_bytes()
+        status, got = self.change_inbox("why", "https://a.org/x", "urgent")
+        self.assertEqual((status, "reading priority" in got["error"]), (400, True))
+        for action, key, value, nth in (("why", "https://a.org/x", "x", 2), ("priority", "https://b.org/none", "low", None), ("discard", "https://b.org/none", None, None)):
+            status, got = self.change_inbox(action, key, value, nth)
+            self.assertEqual((status, got["error"]), (409, "that item is no longer in the inbox"), (action, key))
+        self.assertEqual(p.read_bytes(), now)
+
+    def test_inbox_discard_moves_the_item_under_processed(self):
+        today = time.strftime("%Y-%m-%d")
+        p = self.fresh_inbox(b"# Inbox\n\n- [A title](https://arxiv.org/abs/2406.01234v2) \xe2\x80\x94 why \xc2\xb7 high\n  - briefed 2026-11-20: claims x\n- https://b.org/y\n")
+        status, got = self.change_inbox("discard", "arxiv:2406.01234")
+        self.assertEqual((status, got["processed"]), (200, {"date": today, "key": "arxiv:2406.01234", "title": "A title", "outcome": "discarded"}))
+        self.assertEqual([i["key"] for i in got["items"]], ["https://b.org/y"])
+        self.assertEqual(p.read_text(), f"# Inbox\n\n- https://b.org/y\n\n## Processed\n\n- {today} [A title](https://arxiv.org/abs/2406.01234) \u2014 discarded\n")
+        # the link added again is said to have been discarded, in any of its forms
+        status, got = self.add_inbox("https://arxiv.org/pdf/2406.01234")
+        self.assertEqual((status, got["error"], got["duplicate"]), (409, f"already processed on {today} (discarded)", {"in": "processed", "key": "arxiv:2406.01234"}))
+        self.assertEqual(self.change_inbox("discard", "arxiv:2406.01234")[0], 409)
+        self.assertEqual(self.change_inbox("discard", "https://b.org/y")[0], 200)
+        self.assertEqual(p.read_text(), f"# Inbox\n\n## Processed\n\n- {today} [A title](https://arxiv.org/abs/2406.01234) \u2014 discarded\n- {today} https://b.org/y \u2014 discarded\n")
+        self.assertEqual(json.loads(self.get("/api/inbox")[2])["items"], [])
+
+    def test_inbox_change_is_a_write_of_the_page(self):
+        p = self.fresh_inbox(b"- https://a.org/x\n")
+        for kw in ({"key": None}, {"key": "wrong"}, {"origin": "http://evil.example"}):
+            self.assertEqual(self.write("POST", "/api/inbox", {"action": "discard", "key": "https://a.org/x"}, **kw)[0], 403)
+        k = "https://a.org/x"
+        for payload in ({"action": "priority", "key": k}, {"action": "why", "key": k}, {"action": "priority", "key": k, "priority": 3},
+                        {"action": "priority", "key": k, "priority": None}, {"action": "why", "key": k, "why": "y" * 501},
+                        {"action": "discard"}, {"action": "discard", "key": ""}, {"action": "discard", "key": 3}, {"action": "discard", "key": "x" * 2001},
+                        {"action": "discard", "key": k, "nth": -1}, {"action": "discard", "key": k, "nth": True}, {"action": "discard", "key": k, "nth": "0"},
+                        {"action": "discard", "key": k, "nth": 0.0}, {"action": "process", "key": k}, {"action": 3, "key": k}, {"action": ["discard"], "key": k}):
+            self.assertEqual(self.write("POST", "/api/inbox", payload)[0], 400, str(payload)[:70])
+        self.assertEqual(p.read_bytes(), b"- https://a.org/x\n")
+        # not through a link out of the vault
+        p.unlink()
+        out = self.root / "outside.md"
+        out.write_text("- https://a.org/x\n")
+        self.addCleanup(out.unlink)
+        os.symlink(out, p)
+        self.assertEqual(self.change_inbox("discard", k)[0], 422)
+        self.assertEqual(out.read_text(), "- https://a.org/x\n")
+
     # ------------------------------------------------------------ comments, suggestions, lock
 
     def comment(self, nid, payload, **kw):

@@ -1,7 +1,8 @@
 """The inbox: links the user saved to read later, in one markdown file at the vault's top
 (Inbox.md, beside the scratchpad's), outside the tree. The file is the user's: they paste into it
 and edit it in Obsidian, so it is read as it is typed and nothing here rewrites it. A write (an
-item added, a title found for one) changes single lines and leaves the rest as it was.
+item added, its why or its reading priority set, a title found for it, the item taken out with
+what was decided for it) changes single lines and leaves the rest as it was.
 
     # Inbox
 
@@ -271,15 +272,101 @@ class Inbox:
             # or the processed heading is right there
             before = [""] if end > 0 and not (ITEM.match(self.lines[end - 1]) or SUB.match(self.lines[end - 1])) else []
             after = [""] if end == stop else []
-            put = before + [line] + after
-            if end == len(self.lines):
-                self.cr[end - 1] = self.crlf  # the last line had no ending: it has the file's now
-            self.lines[end:end] = put
-            self.cr[end:end] = [self.crlf] * len(put)
-            self.cr[-1] = False  # nothing ends the last line
+            self._put(end, before + [line] + after)
             at = end + len(before)
         self._read()
         return next({k: v for k, v in i.items() if k != "at"} for i in self.items if i["at"][0] == at)
+
+    def _put(self, end: int, put: list[str]) -> None:
+        """New lines before line `end` (after the last one, when there is none), with the file's endings."""
+        if end == len(self.lines) and end > 0:
+            self.cr[end - 1] = self.crlf  # the last line had no ending: it has the file's now
+        self.lines[end:end] = put
+        self.cr[end:end] = [self.crlf] * len(put)
+        self.cr[-1] = False  # nothing ends the last line
+
+    def nth(self, key: str, nth: int = 0) -> dict | None:
+        """The item with this link: the first, or the `nth` after it when the link was typed more than once."""
+        same = [i for i in self.items if i["key"] == key]
+        return same[nth] if 0 <= nth < len(same) else None
+
+    def _link(self, n: int) -> tuple[int, int]:
+        """Where the link of the item on line `n` starts and ends in its line."""
+        m = ITEM.match(self.lines[n])
+        rest = strip(m.group(1))
+        start = m.start(1) + m.group(1).index(rest)
+        return start, start + len(rest) - len(link_at(rest)[3])
+
+    def change(self, key: str, nth: int = 0, why: str | None = None, priority: str | None = None) -> dict | None:
+        """Sets why an item was saved, or its reading priority (None leaves one as it is, "" takes
+        it away): what follows the link on its line is written again, the link and what is before
+        it stay as typed, and so does the whole line when nothing changes. None when the inbox has
+        no such item. InboxError when the reading priority is not one, or the why would not read
+        back as a why."""
+        item = self.nth(key, nth)
+        if not item:
+            return None
+        why = item["why"] if why is None else one_line(why)
+        priority = item["priority"] if priority is None else one_line(priority).lower()
+        if priority and priority not in PRIORITIES:
+            raise InboxError(f"a reading priority is {', '.join(PRIORITIES[:-1])} or {PRIORITIES[-1]}")
+        n = item["at"][0]
+        if (why, priority) != (item["why"], item["priority"]):
+            tail = (f" \u2014 {why}" if why else "") + "".join(f" \u00b7 {p}" for p in (priority, f"added {item['added']}" if item["added"] else "") if p)
+            new = self.lines[n][:self._link(n)[1]] + tail
+            back = Inbox(new).shown()
+            want = {**{k: item[k] for k in ("key", "title", "added")}, "why": why, "priority": priority}
+            if len(back) != 1 or any(back[0][k] != v for k, v in want.items()):
+                raise InboxError("the why would read as a reading priority or a date: say it in other words")
+            self.lines[n] = new
+            self._read()
+        return next({k: v for k, v in i.items() if k != "at"} for i in self.items if i["at"][0] == n)
+
+    def close(self, key: str, nth: int = 0, outcome: str = "discarded", today: str = "") -> dict | None:
+        """Takes an item out of the inbox with what was decided for it: its line and its brief go
+        (and a blank line with them, where that would leave two or one at the file's top), and one line with the day, the link and the outcome is added at the end of the processed
+        ones (under a `## Processed` heading, made when there is none). Answers the processed item,
+        or None when the inbox has no such item."""
+        item = self.nth(key, nth)
+        if not item:
+            return None
+        outcome = one_line(outcome)
+        line = want = None
+        for t in ([item["title"], ""] if item["title"] else [""]):  # a title the line cannot carry is left out
+            link = f"[{t}]({item['url']})" if t else item["url"]
+            new = "- " + (f"{today} " if today else "") + link + (f" \u2014 {outcome}" if outcome else "")
+            want = {"date": today, "key": key, "title": t, "outcome": outcome}
+            if Inbox(f"## Processed\n{new}").processed == [want]:
+                line = new
+                break
+        if line is None:
+            raise InboxError("the outcome would not read back as it is: say it in other words")
+        a, b = item["at"]
+        del self.lines[a:b]
+        del self.cr[a:b]
+        if not self.lines:
+            self.lines, self.cr = [""], [False]
+        # where the item was: a blank line that is now the file's first, or the second of two, goes
+        if len(self.lines) > 1 and a < len(self.lines) and not strip(self.lines[a]) and (a == 0 or not strip(self.lines[a - 1])):
+            del self.lines[a]
+            del self.cr[a]
+        self.cr[-1] = False
+        head = next((n for n, l in enumerate(self.lines) if PROCESSED.match(l)), None)
+        if head is None:
+            # at the file's end, a blank line before the heading unless one is there
+            stop = len(self.lines)
+            end = stop - 1 if self.lines[-1] == "" else stop
+            put = ([""] if end > 0 and strip(self.lines[end - 1]) else []) + ["## Processed", "", line]
+        else:
+            # the end of the processed ones: before the next heading and the blank lines above it
+            stop = next((n for n in range(head + 1, len(self.lines)) if HEADING.match(self.lines[n])), len(self.lines))
+            end = stop
+            while end > head + 1 and not strip(self.lines[end - 1]):
+                end -= 1
+            put = ([] if ITEM.match(self.lines[end - 1]) or SUB.match(self.lines[end - 1]) else [""]) + [line]
+        self._put(end, put + ([""] if end == stop else []))
+        self._read()
+        return want
 
     def set_title(self, key: str, title: str) -> dict | None:
         """Gives the first untitled item with this link its title: the link on its line becomes
@@ -291,10 +378,7 @@ class Inbox:
             return None
         n = item["at"][0]
         line = self.lines[n]
-        m = ITEM.match(line)
-        rest = strip(m.group(1))
-        start = m.start(1) + m.group(1).index(rest)
-        end = start + len(rest) - len(link_at(rest)[3])
+        start, end = self._link(n)
         new = f"{line[:start]}[{title}]({item['url']}){line[end:]}"
         back = Inbox(new).shown()
         want = {**{k: item[k] for k in ("key", "why", "priority", "added")}, "title": title}

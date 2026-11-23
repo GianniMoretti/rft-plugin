@@ -444,10 +444,11 @@ class PhoneTest(unittest.TestCase):
             self.b.tap("#inbox-save")
 
         paste("https://example.org/phone/post/", "from the phone")
-        last = "(() => { const li = [...document.querySelectorAll('#inbox-list .inbox-item')].pop(); return [li.querySelector('.inbox-link').textContent, li.querySelector('.inbox-sub').textContent] })()"
+        last = ("(() => { const li = document.querySelector('#inbox-list .inbox-item[data-key=\"https://example.org/phone/post\"]');"
+                " return [li.querySelector('.inbox-link').textContent, li.querySelector('.inbox-under').textContent] })()")
         self.assertTrue(self.b.wait(f"document.querySelectorAll('#inbox-list .inbox-item').length === {n + 1}"), "the item is not in the list")
         today = datetime.date.today().isoformat()
-        self.assertEqual(self.b.js(last), ["example.org/phone/post", f"from the phone · added {today}"])
+        self.assertEqual(self.b.js(last), ["example.org/phone/post", f"from the phoneadded {today}"])
         self.assertEqual(self.b.js("[document.getElementById('inbox-link').value, document.getElementById('inbox-why').value, document.getElementById('inbox-add-msg').hidden,"
                                    " document.getElementById('inbox-count').textContent, document.getElementById('inbox-badge').textContent]"), ["", "", True, f"{n + 1} items", str(n + 1)])
         lines, now = before.split("\n"), box.read_text(encoding="utf-8").split("\n")
@@ -463,7 +464,117 @@ class PhoneTest(unittest.TestCase):
         time.sleep(2.5)  # a poll of the file leaves what was said
         self.assertEqual(self.b.js("document.getElementById('inbox-add-msg').textContent"), said)
         self.assertEqual(box.read_text(encoding="utf-8").split("\n"), now)
-        self.assertEqual(self.b.js("(() => { const m = document.getElementById('inbox-add-msg').getBoundingClientRect(); return m.right <= innerWidth && document.documentElement.scrollWidth <= innerWidth })()"), True)
+        self.assertEqual(self.b.js("(() => { const m = document.getElementById('inbox-add-msg').getBoundingClientRect(); return m.right <= innerWidth && innerWidth === %d && document.documentElement.scrollWidth <= innerWidth })()" % w), True)
+        self.assertEqual(self.b.errors, [])
+
+    def test_inbox_item_takes_a_reading_priority_a_why_and_a_discard(self):
+        box = self.tmp / "vault" / "Inbox.md"
+        before = box.read_text(encoding="utf-8")
+        self.addCleanup(box.write_text, before, encoding="utf-8")
+        lines = before.split("\n")
+        today = datetime.date.today().isoformat()
+        w, h = SIZES[0]
+        self.b.size(w, h)
+        self.screen([page("tree"), "document.getElementById('inbox-toggle').click()"])
+        keys = "[...document.querySelectorAll('#inbox-list .inbox-item')].map(li => li.dataset.key + ' ' + li.dataset.nth).join('|')"
+        pressed = "[...document.querySelectorAll('[data-inbox-order]')].map(b => b.dataset.inboxOrder + ' ' + b.getAttribute('aria-pressed')).join('|')"
+        blog, mae, mixup = "https://lilianweng.github.io/posts/2021-05-31-contrastive 0", "https://openreview.net/forum?id=abc123 0", "arxiv:2406.01234"
+        by_priority = [mae, f"{mixup} 0", "arxiv:2501.00001 0", "doi:10.1109/cvpr.2022.01553 0", blog, "arxiv:2311.09876 0", f"{mixup} 1", "doi:10.1007/s11263-021-01453-z 0"]
+        by_date = ["arxiv:2501.00001 0", f"{mixup} 0", "doi:10.1109/cvpr.2022.01553 0", blog, "arxiv:2311.09876 0", f"{mixup} 1", "doi:10.1007/s11263-021-01453-z 0", mae]
+        row = lambda k: "document.querySelector(%s)" % json.dumps('#inbox-list .inbox-item[data-key="%s"][data-nth="%s"]' % tuple(k.rsplit(" ", 1)))
+        self.assertEqual(self.b.js(keys).split("|"), by_priority)
+        self.assertEqual(self.b.js(pressed), "priority true|date false")
+        # the reading priority, the why and ✕ of every item are a finger's size, on the screen; so are the order's buttons
+        small = self.b.js("[...document.querySelectorAll('#inbox-list select.prio, #inbox-list .inbox-x, #inbox-list button.inbox-why, #inbox [data-inbox-order]')]"
+                          ".filter(e => { const r = e.getBoundingClientRect(); return !(r.height >= 44 && r.width >= 44 && r.left >= 0 && r.right <= innerWidth) })"
+                          ".map(e => e.className + ' ' + e.textContent.slice(0, 20) + ' ' + JSON.stringify(e.getBoundingClientRect()))")
+        self.assertEqual(small, [])
+        self.assertEqual(self.b.js("[document.querySelectorAll('#inbox-list select.prio').length, document.querySelectorAll('#inbox-list .inbox-x').length,"
+                                   " document.querySelectorAll('#inbox-list button.inbox-why').length, innerWidth, document.documentElement.scrollWidth <= innerWidth]"), [8, 8, 8, w, True])
+        self.assertEqual(self.b.js(f"[{row(mae)}.querySelector('select.prio').className, {row(mae)}.querySelector('select.prio').value, {row(blog)}.querySelector('select.prio').className]"),
+                         ["prio p-urgent", "urgent", "prio"])
+        # by date, and still so after the page is loaded again; the file is as it was
+        self.b.tap("[data-inbox-order=date]")
+        self.assertTrue(self.b.wait(f"{keys} === {json.dumps('|'.join(by_date))}"), self.b.js(keys))
+        self.b.open(self.url)
+        self.assertTrue(self.b.wait(f"!document.getElementById('inbox').hidden && {keys} === {json.dumps('|'.join(by_date))}"), self.b.js(keys))
+        self.assertEqual(self.b.js(pressed), "priority false|date true")
+        self.assertEqual(box.read_text(encoding="utf-8"), before)
+        self.b.tap("[data-inbox-order=priority]")
+        self.assertTrue(self.b.wait(f"{keys} === {json.dumps('|'.join(by_priority))}"), self.b.js(keys))
+        # a reading priority from the menu: one plain word in the item's line, and the item moves up
+        self.b.js(f"(() => {{ const s = {row(blog)}.querySelector('select.prio'); s.focus(); s.value = 'urgent'; s.dispatchEvent(new Event('change', {{ bubbles: true }})) }})()")
+        self.assertTrue(self.b.wait(f"{keys}.startsWith({json.dumps(blog + '|' + mae)})"), self.b.js(keys))
+        at = lines.index("- https://lilianweng.github.io/posts/2021-05-31-contrastive/")
+        lines[at] += " · urgent"
+        self.assertEqual(box.read_text(encoding="utf-8").split("\n"), lines)
+        self.assertEqual(self.b.js(f"[{row(blog)}.querySelector('select.prio').className, document.activeElement === {row(blog)}.querySelector('select.prio')]"), ["prio p-urgent", True])
+        self.b.js("document.activeElement.blur()")
+
+        def tap(selector):  # an item may be under the fold of the list
+            self.b.js(f"document.querySelector({json.dumps(selector)}).scrollIntoView({{ block: 'center' }})")
+            self.b.tap(selector)
+
+        def key(name, code):
+            for kind in ("keyDown", "keyUp"):
+                self.b.call("Input.dispatchKeyEvent", type=kind, key=name, code=name, windowsVirtualKeyCode=code)
+
+        # a why: a tap opens a field, Esc gives the edit up and not the panel, Enter saves it
+        paper = "arxiv:2311.09876 0"
+        why = f"{row(paper)}.querySelector('.inbox-why')?.textContent"
+        tap(f"#inbox-list .inbox-item[data-key='arxiv:2311.09876'] .inbox-why")
+        self.assertTrue(self.b.wait("document.activeElement.className === 'inbox-why-edit'"), "no field for the why")
+        self.assertEqual(self.b.js("(() => { const r = document.activeElement.getBoundingClientRect(); return r.height >= 44 && r.right <= innerWidth && parseFloat(getComputedStyle(document.activeElement).fontSize) >= 16 })()"), True)
+        self.b.call("Input.insertText", text="given up")
+        key("Escape", 27)
+        self.assertEqual(self.b.js(f"[document.getElementById('inbox').hidden, {why}, document.querySelectorAll('.inbox-why-edit').length]"), [False, "+ why", 0])
+        tap(f"#inbox-list .inbox-item[data-key='arxiv:2311.09876'] .inbox-why")
+        self.assertTrue(self.b.wait("document.activeElement.className === 'inbox-why-edit'"), "no field for the why")
+        self.b.call("Input.insertText", text="for the related work")
+        key("Enter", 13)
+        self.assertTrue(self.b.wait(f"{why} === 'for the related work'", 4), self.b.js("document.getElementById('inbox-msg').textContent"))
+        at = lines.index("- 2311.09876")
+        lines[at] += " — for the related work"
+        self.assertEqual(box.read_text(encoding="utf-8").split("\n"), lines)
+        # a why that would read as a reading priority is not taken: the foot says so, and it stays in its field
+        tap(f"#inbox-list .inbox-item[data-key='arxiv:2311.09876'] .inbox-why")
+        self.assertTrue(self.b.wait("document.activeElement.className === 'inbox-why-edit'"), "no field for the why")
+        self.b.js("document.activeElement.select()")
+        self.b.call("Input.insertText", text="urgent")
+        key("Enter", 13)
+        self.assertTrue(self.b.wait("document.getElementById('inbox-msg').textContent.startsWith('Not changed: ')"), "nothing said of a why not taken")
+        self.assertEqual(self.b.js("[document.querySelector('.inbox-why-edit').value, document.getElementById('inbox-msg').classList.contains('error')]"), ["urgent", True])
+        # the sentence wraps in the foot: the page is no wider for it
+        self.assertEqual(self.b.js("(() => { const m = document.getElementById('inbox-msg').getBoundingClientRect(); return [innerWidth, m.left >= 0 && m.right <= innerWidth, document.documentElement.scrollWidth <= innerWidth] })()"), [w, True, True])
+        key("Escape", 27)
+        self.assertEqual(self.b.js(f"[document.getElementById('inbox').hidden, {why}]"), [False, "for the related work"])
+        self.assertEqual(box.read_text(encoding="utf-8").split("\n"), lines)
+        # ✕ asks once: a first tap changes nothing, and leaving it takes the question back
+        x = "#inbox-list .inbox-item[data-key='arxiv:2311.09876'] .inbox-x"
+        said = f"document.querySelector({json.dumps(x)}).textContent"
+        tap(x)
+        self.assertTrue(self.b.wait(f"{said} === 'Discard?'"), self.b.js(said))
+        self.assertEqual(self.b.js("(() => { const r = document.querySelector('.inbox-x.armed').getBoundingClientRect(); return r.right <= innerWidth && r.height >= 44 })()"), True)
+        self.b.js("document.activeElement.blur()")
+        self.assertTrue(self.b.wait(f"{said} === '✕'"), self.b.js(said))
+        self.assertEqual(box.read_text(encoding="utf-8").split("\n"), lines)
+        # a second tap discards it: out of the list, and one line under Processed
+        tap(x)
+        self.assertTrue(self.b.wait(f"{said} === 'Discard?'"), self.b.js(said))
+        tap(x)
+        self.assertTrue(self.b.wait(f"!{row(paper)}", 4), self.b.js("document.getElementById('inbox-msg').textContent"))
+        self.assertEqual(self.b.js("[document.querySelectorAll('#inbox-list .inbox-item').length, document.getElementById('inbox-count').textContent, document.getElementById('inbox-badge').textContent]"), [7, "7 items", "7"])
+        del lines[at]
+        self.assertEqual(lines[-1], "")
+        lines[-1:] = [f"- {today} https://arxiv.org/abs/2311.09876 — discarded", ""]
+        self.assertEqual(box.read_text(encoding="utf-8").split("\n"), lines)
+        # the link saved again is said to have been discarded
+        self.b.js("(() => { const f = document.getElementById('inbox-link'); f.focus(); f.select() })()")
+        self.b.call("Input.insertText", text="2311.09876")
+        self.b.tap("#inbox-save")
+        note = f"Not added: already processed on {today} (discarded)."
+        self.assertTrue(self.b.wait(f"document.getElementById('inbox-add-msg').textContent === {json.dumps(note)}"), self.b.js("document.getElementById('inbox-add-msg').textContent"))
+        self.assertEqual(self.b.js("[innerWidth, visualViewport.offsetTop, document.documentElement.scrollWidth <= innerWidth]"), [w, 0, True])
         self.assertEqual(self.b.errors, [])
 
     def test_back_returns_from_a_deck_to_the_decks(self):

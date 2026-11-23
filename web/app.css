@@ -726,17 +726,27 @@ a.cal-dl-name:hover { text-decoration: underline; }
 #inbox-list:empty { display: none; }
 .inbox-item { padding: 7px 12px; border-bottom: 1px solid var(--line); }
 .inbox-item:last-child { border-bottom: 0; }
-.inbox-row { display: flex; align-items: baseline; gap: 8px; }
+.inbox-row { display: flex; align-items: baseline; gap: 6px; }
 .inbox-link { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--fg); text-decoration: none; }
 .inbox-link:hover { color: var(--accent); text-decoration: underline; }
-.inbox-prio { flex: none; font-size: 0.85em; font-weight: 600; }
-.inbox-prio.p-urgent { color: var(--p-urgent); }
-.inbox-prio.p-high { color: var(--p-high); }
-.inbox-prio.p-medium { color: var(--p-medium); }
-.inbox-prio.p-low { color: var(--p-low); }
-.inbox-sub { margin-top: 1px; font-size: 0.9em; overflow-wrap: anywhere; }
-#inbox-msg { flex: 1; min-width: 0; }
-#inbox-msg.error { color: var(--dropped); flex: none; }
+/* on an item: its reading priority (the kanban's menu and colours) and ✕, which asks once before it discards */
+.inbox-row select.prio { flex: none; font-size: 0.9em; }
+.inbox-x { flex: none; padding: 0 5px; border-color: transparent; background: none; color: var(--muted); white-space: nowrap; }
+.inbox-x:hover { color: var(--dropped); border-color: var(--line); }
+.inbox-x.armed { padding: 0 7px; color: var(--dropped); border-color: var(--dropped); font-weight: 600; }
+/* under it: why it is saved (a tap edits it), then the day it was added */
+.inbox-under { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; margin-top: 1px; font-size: 0.9em; }
+.inbox-why { min-width: 0; margin: 0; padding: 0; border: 0; border-radius: 3px; background: none; font: inherit; color: var(--muted);
+  text-align: left; overflow-wrap: anywhere; }
+button.inbox-why { cursor: text; }
+button.inbox-why:hover { color: var(--fg); }
+button.inbox-why.empty { opacity: 0.75; }
+.inbox-why-edit { flex: 1 1 100%; min-width: 0; font: inherit; padding: 1px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+.inbox-when { white-space: nowrap; }
+#inbox .pad-head .seg { gap: 3px; }
+/* what the server said of a change it did not make can be a sentence: it wraps, within the panel */
+#inbox-msg { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+#inbox-msg.error { color: var(--dropped); }
 
 /* a concept's artifact, in the drawer in a note's place: wider than a note by default (its own
    width once dragged), its header above a frame that scrolls on its own */
@@ -1234,10 +1244,18 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
   .inbox-add-row { gap: 8px; }
   #inbox-add button { padding: 3px 16px; }
   /* an item's link is what a finger opens: a full row's height, the why under it */
-  .inbox-item { padding: 2px 16px 10px; }
-  .inbox-row { align-items: center; }
+  .inbox-item { padding: 2px 8px 4px 16px; }
+  .inbox-row { align-items: center; gap: 8px; }
   .inbox-link { display: flex; align-items: center; min-height: 44px; }
-  .inbox-sub { margin-top: -6px; }
+  /* the reading priority and ✕ as chips a finger finds */
+  .inbox-row select.prio { padding: 0 12px; border-radius: 22px; }
+  .inbox-x { border-color: var(--line); border-radius: 22px; font-size: 14px; }
+  .inbox-x.armed { padding: 0 12px; }
+  .inbox-under { align-items: center; margin-top: -4px; padding-right: 8px; }
+  button.inbox-why { min-width: 44px; }
+  .inbox-under:has(.inbox-why-edit) { margin-top: 2px; padding-bottom: 6px; gap: 2px 8px; }
+  #inbox .pad-head .seg { gap: 6px; }
+  #inbox .pad-head .seg button { padding: 1px 12px; }
   .pad-head { padding: 4px 8px 4px 16px; }
   /* under one of them, a page keeps its whole width */
   main:has(#filters:not([hidden])) :is(#kanban, #calendar), main:has(#nbpane:not([hidden])) :is(#kanban, #calendar),

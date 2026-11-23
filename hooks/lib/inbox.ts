@@ -278,7 +278,7 @@ const RANK = (p: string) => {
 /** The items by reading priority (urgent first, those with none last), the newest first within one; as the page lists them. */
 export const byPriority = <T extends InboxItem>(items: readonly T[]): T[] =>
   items.map((item, at) => ({ item, at }))
-    .sort((a, b) => RANK(a.item.priority) - RANK(b.item.priority) || (a.item.added < b.item.added ? 1 : a.item.added > b.item.added ? -1 : 0) || a.at - b.at)
+    .sort((a, b) => RANK(a.item.priority) - RANK(b.item.priority) || (a.item.added < b.item.added ? 1 : a.item.added > b.item.added ? -1 : 0) || (a.item.added ? b.at - a.at : a.at - b.at))
     .map(x => x.item)
 
 /** The vault's inbox; an empty one when it has no file yet. */

@@ -77,6 +77,60 @@ class InboxFileTest(unittest.TestCase):
         self.assertEqual(box.shown(), self.want["items"] + [item])
         self.assertEqual(box.processed, self.want["processed"])
 
+    def test_change_case_by_case(self):
+        for case in self.cases["changes"]:
+            box = rft_inbox.Inbox(case["text"])
+            args = (case["key"], case.get("nth", 0), case.get("why"), case.get("priority"))
+            if case.get("error"):
+                with self.assertRaises(rft_inbox.InboxError, msg=case["name"]):
+                    box.change(*args)
+            else:
+                item = box.change(*args)
+                self.assertEqual(item is None, bool(case.get("none")), case["name"])
+                if item:
+                    self.assertIn(item, box.shown(), case["name"])
+                    for k in ("why", "priority"):
+                        if case.get(k) is not None:
+                            self.assertEqual(item[k], rft_inbox.one_line(case[k]).lower() if k == "priority" else rft_inbox.one_line(case[k]), case["name"])
+            self.assertEqual(box.text(), case.get("want", case["text"]), case["name"])
+            self.assertEqual(rft_inbox.Inbox(box.text()).shown(), box.shown(), case["name"])
+
+    def test_close_case_by_case(self):
+        for case in self.cases["closes"]:
+            box = rft_inbox.Inbox(case["text"])
+            before = box.shown()
+            done = box.close(case["key"], case.get("nth", 0), case.get("outcome", "discarded"), case["today"])
+            self.assertEqual(done is None, bool(case.get("none")), case["name"])
+            self.assertEqual(box.text(), case.get("want", case["text"]), case["name"])
+            again = rft_inbox.Inbox(box.text())
+            self.assertEqual((again.shown(), again.processed), (box.shown(), box.processed), case["name"])
+            if done:
+                self.assertEqual(done, case.get("processed", done), case["name"])
+                self.assertEqual(box.processed[-1], done, case["name"])
+                self.assertEqual(len(box.shown()), len(before) - 1, case["name"])
+
+    def test_a_change_and_a_close_in_the_fixture(self):
+        box = rft_inbox.Inbox(self.text)
+        before = self.text.split("\n")
+        # the reading priority of one item: its line, and no other
+        item = box.change("doi:10.1007/s11263-021-01453-z", priority="high")
+        self.assertEqual((item["why"], item["priority"]), ("IJCV survey, low", "high"))
+        after = box.text().split("\n")
+        at = before.index("- https://doi.org/10.1007/s11263-021-01453-z \u2014 IJCV survey, low")
+        self.assertEqual(after, before[:at] + ["- https://doi.org/10.1007/s11263-021-01453-z \u2014 IJCV survey, low \u00b7 high"] + before[at + 1:])
+        self.assertEqual([i for i in box.shown() if i != item], [i for i in self.want["items"] if i["key"] != item["key"]])
+        # the first item discarded: it and its brief go, one line more under Processed, and the one typed twice is alone
+        box = rft_inbox.Inbox(self.text)
+        done = box.close("arxiv:2406.01234", today="2026-11-23")
+        self.assertEqual(done, {"date": "2026-11-23", "key": "arxiv:2406.01234", "title": "Mixup at scale", "outcome": "discarded"})
+        self.assertEqual(box.text().split("\n"), before[:4] + before[8:-1] + ["- 2026-11-23 [Mixup at scale](https://arxiv.org/abs/2406.01234) \u2014 discarded", ""])
+        self.assertEqual(box.processed, self.want["processed"] + [done])
+        left = [dict(i, duplicate=False) if i["key"] == "arxiv:2406.01234" else i for i in self.want["items"][1:]]
+        self.assertEqual(box.shown(), left)
+        self.assertEqual(box.find("arxiv:2406.01234")[0], "item")
+        box.close("arxiv:2406.01234", today="2026-11-24")
+        self.assertEqual(box.find("arxiv:2406.01234"), ("processed", {"date": "2026-11-24", "key": "arxiv:2406.01234", "title": "", "outcome": "discarded"}))
+
     def test_a_title_changes_the_link_of_one_line(self):
         box = rft_inbox.Inbox(self.text)
         # the first untitled item with the link: the fixture's first one has its title already

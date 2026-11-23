@@ -11,7 +11,7 @@ dismissed); the meetings in vault/meetings/ (a new one, its times, how often it 
 occurrence skipped or moved, the notes it needs, or the meeting deleted); its discussion, the comments and suggestions on parts of its text, in
 vault/.comments/<id>.json (as hooks/lib/comments.ts reads it); and the user's scratchpad, quick
 notes and to-dos in vault/Scratchpad.md; the inbox, links saved to read later in vault/Inbox.md (a
-link added; for an arXiv paper its title, asked of arXiv's API in the background, the one host beyond
+link added, an item's reading priority or why changed, an item discarded; for an arXiv paper its title, asked of arXiv's API in the background, the one host beyond
 this machine the server ever contacts, and only for a link the user saved); and the slide decks in vault/decks/ (the user's edit of one, a
 new one, its lock: rft_decks.py beside it). It serves each concept's artifact (vault/artifacts/<id> <name>.html,
 written by Claude with rft_set_artifact) read-only, as a page of its own in a sandbox (GET api/artifact?concept=<id>):
@@ -1606,6 +1606,23 @@ class Vault:
             threading.Thread(target=self._arxiv_title, args=(key,), daemon=True).start()
         return status, answer
 
+    def change_inbox(self, action: str, key: str, nth: int = 0, value: str = "") -> tuple[int, dict]:
+        """One change to an item of the inbox, named by its link's key (and which one, when a link
+        was typed twice): its reading priority ("priority": one plain word in the item's line, ""
+        for none), its why ("why": "" for none), or the item removed ("discard": its line goes
+        under Processed with today's date, as discarded). Only that item's line changes; 409 when
+        the item is no longer there."""
+        today = time.strftime("%Y-%m-%d")
+
+        def edit(box):
+            if action == "discard":
+                done = box.close(key, nth, "discarded", today)
+                return (200, {"processed": done}) if done else (409, {"error": "that item is no longer in the inbox"})
+            item = box.change(key, nth, priority=value) if action == "priority" else box.change(key, nth, why=value)
+            return (200, {"item": item}) if item else (409, {"error": "that item is no longer in the inbox"})
+
+        return self._inbox_edit(edit)
+
     def _arxiv_title(self, key: str) -> None:
         """Asks arXiv's API for the title of an item just saved and writes it on the item's line.
         A lookup that fails leaves the item as it is; no other host is asked anything."""
@@ -2648,7 +2665,11 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             POST api/notebook {"id": "<id>"}: the address of the experiment's notebook in its repo's
             marimo editor ({"url"}, under notebook/ on this server), the editor started first if need be.
             POST api/inbox {"link": a URL, an arXiv id or a DOI, "why"?: "one line"}: the link saved in
-            the inbox ({"item", "items"}), or 409 with where it already is."""
+            the inbox ({"item", "items"}), or 409 with where it already is; {"action": "priority" |
+            "why" | "discard", "key": the item's key, "nth"?: which of the items with that key,
+            "priority" | "why"?: the new value, "" for none}: the item's reading priority or why
+            changed ({"item", "items"}), or the item moved under Processed as discarded
+            ({"processed", "items"})."""
             if self.path.startswith(NOTEBOOK_PREFIX):
                 return self._proxy()
             route = urlsplit(self.path).path
@@ -2724,6 +2745,15 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 if got is None:
                     return
                 _, req = got
+                action = req.get("action", "add")
+                if action in ("priority", "why", "discard"):
+                    key, nth, value = req.get("key"), req.get("nth", 0), req.get(action, "")
+                    if (not isinstance(key, str) or not key or len(key) > MAX_INBOX_LINK or type(nth) is not int or nth < 0
+                            or not isinstance(value, str) or len(value) > MAX_INBOX_WHY or (action != "discard" and action not in req)):
+                        return self._json(400, {"error": 'expected {"action": "priority" | "why" | "discard", "key": the item\'s key, "nth"?: which of them, "priority" | "why": the new value}'})
+                    return self._json(*vault.change_inbox(action, key, nth, value))
+                if action != "add":
+                    return self._json(400, {"error": 'expected "action": "add", "priority", "why" or "discard"'})
                 link, why = req.get("link"), req.get("why", "")
                 if not isinstance(link, str) or not isinstance(why, str) or len(link) > MAX_INBOX_LINK or len(why) > MAX_INBOX_WHY:
                     return self._json(400, {"error": 'expected {"link": a URL, an arXiv id or a DOI, "why"?: one line}'})
