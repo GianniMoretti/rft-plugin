@@ -521,6 +521,52 @@ class Documents(unittest.TestCase):
         self.assertEqual(rft_documents.template_name("aauPhdCollectionThesis/"), "aauPhdCollectionThesis")
         self.assertEqual(rft_documents.template_name(".."), "")
 
+    # ------------------------------------------------------------ the .bib of a document with several (ticket 19)
+
+    def test_which_bib_a_file_uses_the_cases_both_sides_are_held_to(self):
+        d = json.loads((FIXTURE / "bib.json").read_text(encoding="utf-8"))
+        for c in d["cases"]:
+            with self.subTest(c["why"]):
+                self.assertEqual(rft_manuscript.bib_for(c["files"], c["main"], c["file"], c.get("chosen")), c["want"])
+        self.assertEqual(rft_manuscript.taken_in_by({"main.tex": "\\input{a}\n\\input{b}", "a.tex": "\\input{b}", "b.tex": "", "c.tex": ""}, "main.tex"), {"a.tex": "main.tex", "b.tex": "a.tex"})
+
+    def test_the_page_is_told_which_bib_or_that_it_must_ask(self):
+        self.assertEqual(json.loads(self.get("/api/manuscript/bib?doc=paper&file=sections/method.tex")[2]), {"bib": "refs.bib"})
+        body = "\\begin{document}\n\\include{a}\n\\include{b}\n\\end{document}\n"
+        empty_document(self.vault, "two-bibs", {"main.tex": body, "a.tex": "A.\n", "b.tex": "B.\n\\bibliography{b}\n", "a.bib": "", "b.bib": ""})
+        self.assertEqual(json.loads(self.get("/api/manuscript/bib?doc=two-bibs&file=b.tex")[2]), {"bib": "b.bib"})
+        self.assertEqual(json.loads(self.get("/api/manuscript/bib?doc=two-bibs&file=a.tex")[2]), {"bib": "b.bib"})  # the only one the document names
+        (self.vault / "documents" / "two-bibs" / "main.tex").write_text(body.replace("\\end{document}", "\\bibliography{a}\n\\end{document}"))
+        self.assertEqual(json.loads(self.get("/api/manuscript/bib?doc=two-bibs&file=a.tex")[2]), {"bib": "a.bib"})  # covered by the main file's
+        (self.vault / "documents" / "two-bibs" / "main.tex").write_text(body)
+        (self.vault / "documents" / "two-bibs" / "b.tex").write_text("B.\n")
+        self.assertEqual(json.loads(self.get("/api/manuscript/bib?doc=two-bibs&file=a.tex")[2]), {"ask": ["a.bib", "b.bib"]})
+        # what the user chose, as the session records it, is not asked again
+        empty_document(self.vault, "two-bibs", {}, {"bibOf": {"a.tex": "a.bib"}})
+        self.assertEqual(json.loads(self.get("/api/manuscript/bib?doc=two-bibs&file=a.tex")[2]), {"bib": "a.bib"})
+        self.assertEqual(self.get("/api/manuscript/bib?doc=two-bibs&file=nope.tex")[0], 404)
+        self.assertEqual(self.get("/api/manuscript/bib?doc=nope&file=a.tex")[0], 404)
+        # the choice goes to the session with the placement
+        self.answer = lambda request: empty_document(self.vault, "two-bibs", {}, {"bibOf": {"b.tex": request["bib"]}})
+        status, _ = self.write("POST", "/api/manuscript/ask", {"action": "place", "name": "two-bibs", "id": "S01", "file": "b.tex", "bib": "b.bib"})
+        self.assertEqual((status, self.asked[-1][1]), (200, {"action": "place", "name": "two-bibs", "id": "S01", "file": "b.tex", "bib": "b.bib"}))
+
+    def test_a_citation_of_an_own_entry_is_listed_as_resting_on_no_reference_note_and_no_file_changes(self):
+        before = {p.relative_to(self.doc).as_posix(): p.read_bytes() for p in self.doc.rglob("*") if p.is_file()}
+        d = self.ms()
+        # zhang2018mixup was added to refs.bib by hand; yun2019cutmix came from the reference note R07
+        self.assertEqual({b["key"]: b["from"] for b in d["bib"]}, {"yun2019cutmix": "R07", "zhang2018mixup": None})
+        self.assertEqual(d["ownCited"], [{"key": "zhang2018mixup", "file": "main.tex", "line": 26}])
+        self.assertEqual({p.relative_to(self.doc).as_posix(): p.read_bytes() for p in self.doc.rglob("*") if p.is_file()}, before)
+        # a renamed .bib keeps what is tracked of it, in every file an entry stands in
+        t = self.tracking()
+        t["bib"]["yun2019cutmix"]["also"] = ["sections/extra.bib"]
+        (self.vault / "documents" / ".rft" / "paper" / "tracking.json").write_text(json.dumps(t))
+        (self.doc / "sections" / "extra.bib").write_text("")
+        self.assertEqual(self.files("move", "sections/extra.bib", to="sections/more.bib")[0], 200)
+        self.assertEqual(self.files("move", "refs.bib", to="literature.bib")[0], 200)
+        self.assertEqual(self.tracking()["bib"]["yun2019cutmix"], {"from": "R07", "file": "literature.bib", "also": ["sections/more.bib"]})
+
 
 if __name__ == "__main__":
     unittest.main()

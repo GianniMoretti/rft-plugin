@@ -10,7 +10,7 @@
 import type { Io, Loaded, RftNode } from './vault'
 import { compareNames, conceptOrder, join, resolveId } from './vault'
 import type { Located, LocatedValue } from './copies'
-import { bibKeys, copyAt, locateCopies, locateValues, mainOf, readingOrder } from './copies'
+import { bibFor, bibKeys, copyAt, locateCopies, locateValues, mainOf, readingOrder } from './copies'
 import type { Trace } from './scan'
 import { citedKeys, documentFiles, scanDocument, traceWords, tracesInText } from './scan'
 import type { DocsRegistry, Header, Kind, Registry, Snippet } from './snippets'
@@ -332,6 +332,17 @@ export function bibOf(d: Doc): { key: string; file: string; from: string | null 
     .flatMap(file => bibKeys(d.files[file]!).map(key => ({ key, file, from: d.tracking.bib[key]?.from ?? null })))
 }
 
+/** The citations of a document that rest on no reference note: each key cited in its .tex files whose entry, in one of its .bib files, is the user's own. Said in the page and to Claude, never written in the document. */
+export function ownCited(d: Doc): { key: string; file: string; line: number }[] {
+  const own = new Set(bibOf(d).filter(b => !b.from).map(b => b.key))
+  const out: { key: string; file: string; line: number }[] = []
+  if (!own.size) return out
+  for (const file of Object.keys(d.files).filter(f => TEX_FILE.test(f)).sort()) {
+    d.files[file]!.split('\n').forEach((l, i) => { for (const key of citedKeys(l)) if (own.has(key)) out.push({ key, file, line: i + 1 }) })
+  }
+  return out
+}
+
 /** The ids a document's files must not carry: the vault's notes and snippets. */
 export const vaultIds = (loaded: Loaded, ms: Pick<Manuscript, 'snippets'>) => new Set([...Object.keys(loaded.tree.nodes), ...ms.snippets.map(s => s.id)])
 
@@ -526,6 +537,8 @@ async function documentReport(io: Io, loaded: Loaded, ms: Manuscript, d: Doc, st
   if (notes.length) out.push(`Values of the tree written in it: ${notes.join('. ')}.`)
   const { traces } = await tracesOf(io, loaded, ms, d)
   if (traces.length) out.push(`Traces of the tree in its files, which are shared as they are (${traces.length}): ${traces.slice(0, 6).map(traceWords).join('; ')}${traces.length > 6 ? '; …' : ''}.`)
+  const own = ownCited(d)
+  if (own.length) out.push(`Cited from the user's own .bib entries, which rest on no reference note of the tree: ${[...new Set(own.map(o => o.key))].map(key => `${key} (${own.filter(o => o.key === key).map(o => `${o.file}:${o.line}`).join(', ')})`).join('; ')}.`)
   return out.join('\n')
 }
 
@@ -818,27 +831,39 @@ const trackedValues = (w: Written, file: string): TrackedValue[] => w.values.map
   before: w.text.slice(Math.max(0, v.at - CONTEXT), v.at), after: w.text.slice(v.at + v.written.length, v.at + v.written.length + CONTEXT),
 }))
 
-/** The .bib a document's entries go in: the one its \bibliography names, else its only one, else refs.bib. */
-function bibFile(files: Record<string, string>): string {
-  const tex = Object.entries(files).filter(([f]) => TEX_FILE.test(f)).map(([, text]) => uncommented(text)).join('\n')
-  const named = (/\\bibliography\{([^}]+)\}/.exec(tex)?.[1]?.split(',')[0] ?? /\\addbibresource(?:\[[^\]]*\])?\{([^}]+)\}/.exec(tex)?.[1])?.trim()
-  if (named) return /\.bib$/i.test(named) ? named : `${named}.bib`
-  return Object.keys(files).filter(f => /\.bib$/i.test(f)).sort()[0] ?? 'refs.bib'
+/**
+ * The .bib the entries brought into a file go in (bibFor in copies.ts): the one that file uses.
+ * When the document has several and nothing says which, the one the user picked in the page
+ * (`chosen`), remembered for that file; refused, with the choices, when there is no such pick.
+ */
+function bibOfFile(w: Work, d: Pick<Doc, 'name' | 'main'>, file: string, chosen?: string): string {
+  const r = bibFor(w.files, d.main, file, w.tracking.bibOf ?? {})
+  if ('bib' in r) return r.bib
+  const pick = chosen?.trim()
+  if (pick && r.ask.includes(pick)) {
+    w.tracking.bibOf = { ...(w.tracking.bibOf ?? {}), [file]: pick }
+    return pick
+  }
+  throw new ManuscriptError(`${d.name} has several .bib files (${r.ask.join(', ')}) and nothing in ${file}, nor in the files that take it in, says which one it uses: ` +
+    (pick ? `"${pick}" is not one of them` : 'the user places it from the page once, which asks which and remembers it (or gives the chapter its own \\bibliography line)'))
 }
 
-/** The entries a written-out snippet cites, added to the document's .bib when it does not have their key yet, and tracked. */
-function addEntries(w: Work, entries: Written['bib']): void {
+/** The entries a written-out snippet cites, added to the .bib its file uses when that .bib does not have their key yet, and tracked. */
+function addEntries(w: Work, d: Pick<Doc, 'name' | 'main'>, entries: Written['bib'], file: string, chosen?: string): void {
   if (!entries.length) return
-  const file = bibFile(w.files)
-  let text = w.files[file] ?? ''
+  const bib = bibOfFile(w, d, file, chosen)
+  let text = w.files[bib] ?? ''
   const have = new Set(bibKeys(text))
   for (const e of entries) {
-    if (have.has(e.key)) continue // the user's own entry of that key stays theirs
+    if (have.has(e.key)) continue // there already: the user's own entry of that key stays theirs, and none is added twice
     text = `${text.replace(/\s+$/, '')}${text.trim() ? '\n\n' : ''}${e.entry}\n`
     have.add(e.key)
-    w.tracking.bib[e.key] = { from: e.from, file }
+    // a bibliography per chapter: the same entry may stand in several .bib files of the document
+    const tracked = w.tracking.bib[e.key]
+    if (!tracked) w.tracking.bib[e.key] = { from: e.from, file: bib }
+    else if (tracked.file !== bib && !(tracked.also ?? []).includes(bib)) tracked.also = [...(tracked.also ?? []), bib]
   }
-  if (text !== (w.files[file] ?? '')) { w.files[file] = text; w.touched.add(file) }
+  if (text !== (w.files[bib] ?? '')) { w.files[bib] = text; w.touched.add(bib) }
 }
 
 /** A .bib text without the entry of `key`. */
@@ -859,8 +884,10 @@ function dropUnused(w: Work, d: Doc): void {
   const cited = new Set(tex.flatMap(citedKeys))
   for (const [key, e] of Object.entries(w.tracking.bib)) {
     if (cited.has(key) || cited.has('*')) continue
-    const next = w.files[e.file] === undefined ? undefined : withoutEntry(w.files[e.file]!, key)
-    if (next !== undefined && next !== w.files[e.file]) { w.files[e.file] = next; w.touched.add(e.file) }
+    for (const file of [e.file, ...(e.also ?? [])]) {
+      const next = w.files[file] === undefined ? undefined : withoutEntry(w.files[file]!, key)
+      if (next !== undefined && next !== w.files[file]) { w.files[file] = next; w.touched.add(file) }
+    }
     delete w.tracking.bib[key]
   }
   const still = new Set(w.tracking.values.filter(v => v.kind === 'figure').map(v => v.written))
@@ -884,10 +911,10 @@ function putCopy(w: Work, main: string, entry: TrackedCopy, block: string[], at:
 }
 
 /** A snippet written out into a document: its files copied in, its entries added, its values tracked in `file`. */
-async function bring(io: Io, vault: string, d: Doc, w: Work, out: Written, file: string): Promise<void> {
+async function bring(io: Io, vault: string, d: Doc, w: Work, out: Written, file: string, bib?: string): Promise<void> {
   w.tracking.values.push(...trackedValues(out, file))
+  addEntries(w, d, out.bib, file, bib) // first: it refuses when the user is still to say which .bib, before anything is copied in
   for (const f of out.files) await copyIn(io, join(vault, f.from), join(vault, DOCUMENTS_DIR, d.name, f.to))
-  addEntries(w, out.bib)
 }
 
 const broughtWords = (out: Written) => [
@@ -895,7 +922,7 @@ const broughtWords = (out: Written) => [
   out.bib.length ? `${out.bib.map(b => b.key).join(', ')} in its .bib` : '',
 ].filter(Boolean).join('; ')
 
-export type DocumentInput = { name?: string; place?: string; file?: string; after?: string; move?: string; remove?: string; template?: string }
+export type DocumentInput = { name?: string; place?: string; file?: string; after?: string; move?: string; remove?: string; template?: string; bib?: string }
 
 /**
  * rft_set_document: a change to a document's structure the user agreed to. `place`: the snippet
@@ -926,7 +953,7 @@ export async function setDocument(io: Io, loaded: Loaded, i: DocumentInput): Pro
     const at = insertion(d, i)
     const out = await writeOut(io, loaded, s, ms.snippets, vaultIds(loaded, ms), heldOf(d))
     putCopy(w, d.main, { snippet: id, marker: out.marker, file: at.file, stamp: contentFingerprint(contentOf(s.text)), placed: out.text }, markedText(out.marker, out.text).split('\n'), at)
-    await bring(io, vault, d, w, out, at.file)
+    await bring(io, vault, d, w, out, at.file, i.bib)
     await save(io, vault, d, w)
     const n = d.copies.filter(c => c.snippet === id).length + 1
     return `Placed a copy of ${id} in ${d.name}${where(at)}, written out as plain LaTeX${broughtWords(out) ? ` (${broughtWords(out)})` : ''}. It is the document's now: the user may adapt it; when ${id} changes, the copy goes to review.` +
@@ -972,7 +999,7 @@ export async function setDocument(io: Io, loaded: Loaded, i: DocumentInput): Pro
  * written out again in its place), or `keep` theirs (it answers to the snippet as it is now).
  * Either way it is no longer in review.
  */
-export async function reviewCopy(io: Io, loaded: Loaded, name: string, ref: string, action: 'take' | 'keep'): Promise<string> {
+export async function reviewCopy(io: Io, loaded: Loaded, name: string, ref: string, action: 'take' | 'keep', bib?: string): Promise<string> {
   const ms = await readManuscript(io, loaded)
   const d = ms?.documents.find(x => x.name === name)
   if (!ms || !d) throw new ManuscriptError(`"${name}" is no document`)
@@ -996,7 +1023,7 @@ export async function reviewCopy(io: Io, loaded: Loaded, name: string, ref: stri
   w.touched.add(c.file)
   w.tracking.copies[c.index] = { snippet: c.snippet, marker: out.marker, file: c.file, stamp, placed: out.text }
   w.tracking.values = w.tracking.values.filter((_, k) => !inside.includes(k))
-  await bring(io, vault, d, w, out, c.file)
+  await bring(io, vault, d, w, out, c.file, bib)
   dropUnused(w, d)
   await save(io, vault, d, w)
   return `The copy of ${words} in ${name} now holds the snippet's text, written out as plain LaTeX.`
@@ -1062,7 +1089,7 @@ export async function reviewValue(io: Io, loaded: Loaded, name: string, index: n
  */
 export async function insertFromTree(
   io: Io, loaded: Loaded, name: string, at: { file: string; line: number; ch: number },
-  what: { kind: 'number' | 'figure' | 'table' | 'citation'; from: string; key?: string },
+  what: { kind: 'number' | 'figure' | 'table' | 'citation'; from: string; key?: string }, bib?: string,
 ): Promise<string> {
   const ms = await readManuscript(io, loaded)
   const d = ms?.documents.find(x => x.name === name)
@@ -1094,8 +1121,8 @@ export async function insertFromTree(
     const from = offset + v.at, to = from + v.written.length
     w.tracking.values.push({ kind: v.kind, from: v.from, key: v.key, written: v.written, file: at.file, before: next.slice(Math.max(0, from - CONTEXT), from), after: next.slice(to, to + CONTEXT) })
   }
+  addEntries(w, d, out.bib, at.file, bib)
   for (const f of out.files) await copyIn(io, join(vault, f.from), join(vault, DOCUMENTS_DIR, d.name, f.to))
-  addEntries(w, out.bib)
   await save(io, vault, d, w)
   return what.kind === 'citation' ? `Cited ${id} in ${name} (${at.file}:${at.line}) as ${out.text}${broughtWords({ ...out, marker: '' }) ? ` (${broughtWords({ ...out, marker: '' })})` : ''}.`
     : `Wrote the ${what.kind} ${key} of ${id} in ${name} (${at.file}:${at.line})${what.kind === 'number' ? `: ${out.text}` : ''}${out.files.length ? ` (${out.files.map(f => f.to).join(', ')} copied in)` : ''}; it is watched: when the tree changes it, it goes to review.`

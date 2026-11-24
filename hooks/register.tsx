@@ -531,9 +531,9 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       if (i.action === 'reviewed') return markReviewed(io, loaded, String(i.id ?? ''), today())
       if (i.action === 'document') return newDocument(io, loaded, String(i.name ?? ''), str(i.template) ?? (i.kind === 'report' ? 'report' : 'article'), str(i.title))
       if (i.action === 'place' || i.action === 'move' || i.action === 'remove') {
-        return setDocument(io, loaded, { name: String(i.name ?? ''), [i.action]: String(i.id ?? ''), file: str(i.file), after: str(i.after) })
+        return setDocument(io, loaded, { name: String(i.name ?? ''), [i.action]: String(i.id ?? ''), file: str(i.file), after: str(i.after), bib: str(i.bib) })
       }
-      if (i.action === 'take' || i.action === 'keep') return reviewCopy(io, loaded, String(i.name ?? ''), String(i.id ?? ''), i.action)
+      if (i.action === 'take' || i.action === 'keep') return reviewCopy(io, loaded, String(i.name ?? ''), String(i.id ?? ''), i.action, str(i.bib))
       if (i.action === 'take-value' || i.action === 'keep-value') return reviewValue(io, loaded, String(i.name ?? ''), Number(i.index), i.action === 'take-value' ? 'take' : 'keep')
       if (i.action === 'allow') return allowTrace(io, loaded, String(i.name ?? ''), { file: String(i.file ?? ''), match: String(i.match ?? ''), text: String(i.text ?? '') })
       if (i.action === 'declare') return declareEnvironment(io, loaded, String(i.name ?? ''), String(i.environment ?? ''))
@@ -542,7 +542,7 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       if (i.action === 'insert') {
         const kind = String(i.kind ?? '')
         if (kind !== 'number' && kind !== 'figure' && kind !== 'table' && kind !== 'citation') throw new Error('insert a number, a figure, a table or a citation')
-        return insertFromTree(io, loaded, String(i.name ?? ''), { file: String(i.file ?? ''), line: Number(i.from), ch: Number(i.to) }, { kind, from: String(i.id ?? ''), key: str(i.match) })
+        return insertFromTree(io, loaded, String(i.name ?? ''), { file: String(i.file ?? ''), line: Number(i.from), ch: Number(i.to) }, { kind, from: String(i.id ?? ''), key: str(i.match) }, str(i.bib))
       }
       return setSnippet(io, loaded, { kind: i.kind, title: i.title, basis: strings(i.basis) }, today(), { byUser: true })
     }

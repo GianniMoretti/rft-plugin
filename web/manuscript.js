@@ -510,6 +510,8 @@
           el('span', { class: 'ms-title', text: valueWords(v) }),
           v.state !== 'lost' && v.now != null ? el('button', { type: 'button', text: v.kind === 'figure' ? 'Copy it again' : `Take ${v.kind === 'number' ? v.now : 'it'}`, title: 'Write the tree\'s value in its place', onclick: ev => { ev.stopPropagation(); void ask({ action: 'take-value', name: d.name, index: v.index }, 'take the value') } }) : null,
           el('button', { type: 'button', text: v.state === 'lost' || v.now == null ? 'Forget' : 'Keep mine', title: v.state === 'lost' || v.now == null ? 'Stop tracking it: what stands there is the document\'s own' : 'Keep what the document says: it is flagged again only when the tree changes', onclick: ev => { ev.stopPropagation(); void ask({ action: 'keep-value', name: d.name, index: v.index }, 'keep the value') } })))),
+        ...group('Cited without a reference note', 'Citations that rest on an entry you added to a .bib yourself: no reference note of the tree stands behind them, so nothing says the paper was read. Said here only: the document\'s files are not changed', (d.ownCited || []).slice(0, 40).map(x => el('li', { class: 'ms-item ms-wrap', title: 'Show it in the text', onclick: () => void goTo(x.file, x.line) },
+          el('span', { class: 'ms-title', text: `${x.key} · ${x.file}:${x.line}` })))),
         ...group(`Traces of the tree (${(d.traces || []).length})`, 'This document\'s files are shared with co-authors as they are: nothing in them should name the tree', (d.firstDesign ? [] : d.traces || []).slice(0, 40).map(x => el('li', { class: 'ms-item ms-wrap', title: x.text || x.file, onclick: () => void goTo(x.file, x.line) },
           el('span', { class: 'ms-title', text: traceWords(x) }),
           el('button', { type: 'button', text: 'Allow', title: 'A false alarm (a "Table S01" of a supplement): this occurrence is not flagged again', onclick: ev => { ev.stopPropagation(); void ask({ action: 'allow', name: d.name, file: x.file, match: x.match, text: x.text || '' }, 'allow it') } })))))
@@ -625,7 +627,9 @@
           const [kind, key] = [what.value.slice(0, what.value.indexOf(':')), what.value.slice(what.value.indexOf(':') + 1)]
           if (!cm || !kind) return
           const at = cm.getCursor()
-          const got = await ask({ action: 'insert', name: doc, kind, id: inserting.note, ...(kind === 'citation' ? {} : { match: key }), file: openRel(), from: at.line + 1, to: at.ch }, 'insert it')
+          const bib = kind === 'citation' ? await bibChoice(doc, openRel()) : undefined
+          if (bib === null) return
+          const got = await ask({ action: 'insert', name: doc, kind, id: inserting.note, ...(kind === 'citation' ? {} : { match: key }), file: openRel(), from: at.line + 1, to: at.ch, ...(bib ? { bib } : {}) }, 'insert it')
           if (got && cm) cm.focus()
         },
       })
@@ -681,7 +685,7 @@
             el('div', {}, el('div', { class: 'muted', text: 'The snippet as it was placed here' }), el('pre', { class: 'ms-diff-text', text: tracked.placed != null ? tracked.placed : '(not recorded)' })),
             el('div', {}, el('div', { class: 'muted', text: 'The snippet now' }), now)),
           el('div', { class: 'ms-head-row' },
-            el('button', { type: 'button', class: 'primary', text: 'Take the new text', title: 'Replace this copy with the snippet\'s text now, written out as plain LaTeX (what you adapted here is lost)', onclick: () => { if (confirm(`Replace the copy of ${c.name} in ${doc} with the snippet's text now? What you adapted here is lost.`)) void ask({ action: 'take', name: doc, id: c.name }, 'take the new text') } }),
+            el('button', { type: 'button', class: 'primary', text: 'Take the new text', title: 'Replace this copy with the snippet\'s text now, written out as plain LaTeX (what you adapted here is lost)', onclick: async () => { if (!confirm(`Replace the copy of ${c.name} in ${doc} with the snippet's text now? What you adapted here is lost.`)) return; const bib = await bibChoice(doc, c.file || openRel()); if (bib !== null) void ask({ action: 'take', name: doc, id: c.name, ...(bib ? { bib } : {}) }, 'take the new text') } }),
             el('button', { type: 'button', text: 'Keep mine', title: 'Keep this copy as it is: it answers to the snippet as it is now', onclick: () => ask({ action: 'keep', name: doc, id: c.name }, 'keep the copy') })))
       }
       return box
@@ -1321,9 +1325,29 @@
       return r.data
     }
 
+    /**
+     * The .bib that takes what a placement in a file cites, when the document has several and
+     * nothing in its files says which one that file uses: asked of the user, once for the file
+     * (the session remembers it). undefined: nothing to say; null: the user gave up.
+     */
+    async function bibChoice(name, rel) {
+      if (!rel) return undefined
+      let r
+      try { r = await api(`api/manuscript/bib?doc=${encodeURIComponent(name)}&file=${encodeURIComponent(rel)}`) } catch { return undefined }
+      const options = r.ok ? r.data.ask : null
+      if (!options || !options.length) return undefined
+      const typed = prompt(`${name} has several .bib files, and nothing says which one ${rel} uses.\nWhich one takes what is cited there? (Remembered for this file.)\n${options.map((o, i) => `${i + 1}: ${o}`).join('\n')}`, '1')
+      if (typed == null) return null
+      const pick = options[Number(typed) - 1] || options.find(o => o === typed.trim())
+      if (!pick) { notify('That is not one of them: nothing was written.'); return null }
+      return pick
+    }
+
     async function place(name, id, after, rel) {
       const before = ((ms.documents.find(d => d.name === name) || {}).copies || []).map(c => c.name)
-      const got = await ask({ action: 'place', name, id, ...(rel ? { file: rel } : {}), ...(after ? { after } : {}) }, 'place the copy')
+      const bib = await bibChoice(name, rel || ((ms.documents.find(d => d.name === name) || {}).main || ''))
+      if (bib === null) return
+      const got = await ask({ action: 'place', name, id, ...(rel ? { file: rel } : {}), ...(after ? { after } : {}), ...(bib ? { bib } : {}) }, 'place the copy')
       if (!got) return
       // the copy just made: the one of this snippet the document did not have (a copy placed before another takes its number)
       const copies = ((got.documents.find(d => d.name === name) || {}).copies || []).filter(c => c.id === id && c.state !== 'lost')

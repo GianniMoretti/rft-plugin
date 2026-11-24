@@ -2163,6 +2163,18 @@ class Vault:
             status, out = rft_documents.upload(self.root, doc, path, data, self.vault_ids(), replace)
         return status, ({**out, **self.manuscript()} if status < 300 else out)
 
+    def document_bib(self, doc: str, file: str) -> tuple[int, dict]:
+        """The .bib a file of a document uses, for what a placement there cites (rft_manuscript.bib_for):
+        `{bib}`, or `{ask: [...]}` when the document has several and nothing says which, so the
+        page asks the user before it asks the session."""
+        if not rft_manuscript.is_document(self.root, doc):
+            return 404, {"error": "no such document"}
+        files, _ = rft_manuscript.document_texts(self.root, doc)
+        if file not in files or not rft_manuscript.TEX_FILE.search(file):
+            return 404, {"error": f"{doc} has no .tex file {file}"}
+        tracking = rft_manuscript.read_tracking(self.root, doc)
+        return 200, rft_manuscript.bib_for(files, rft_manuscript.main_of(files, tracking["main"])[0], file, tracking["bibOf"])
+
     def load_template(self, name: str, data: bytes) -> tuple[int, dict]:
         """A template loaded from a zip into the vault's templates/ (rft_documents.load_template)."""
         with self._write_lock:
@@ -2248,7 +2260,7 @@ class Vault:
             name, sid = req.get("name"), req.get("id")
             if not isinstance(name, str) or not rft_manuscript.is_document(self.root, name):
                 return 404, {"error": "no such document"}
-            for k in ("file", "after", "match", "text", "environment"):
+            for k in ("file", "after", "match", "text", "environment", "bib"):
                 if k in req and not isinstance(req[k], str):
                     return 400, {"error": f"{k} must be text"}
             for k in ("index", "from", "to"):
@@ -2889,6 +2901,9 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 if pdf is None:
                     return self._json(404, {"error": "not compiled yet"}, head_only)
                 return self._send(200, pdf.read_bytes(), "application/pdf", head_only)
+            if route == "/api/manuscript/bib":
+                q = parse_qs(url.query)
+                return self._json(*vault.document_bib((q.get("doc") or [""])[0], (q.get("file") or [""])[0]), head_only)
             if route == "/api/manuscript/raw":
                 # an image or a PDF of a document, for the page carrying the key
                 given = self.headers.get("X-RFT-Token") or ""

@@ -107,6 +107,56 @@ export function readingOrder(files: Record<string, string>, main: string): { at:
   }
 }
 
+const BIB_NAMED = /\\(?:bibliography|addbibresource)\s*(?:\[[^\]]*\]\s*)?\{([^}]+)\}/g
+
+/** The file that takes each .tex file in: the first that does, in the order the document is read. The main file, and a file nothing takes in, have none. */
+export function takenInBy(files: Record<string, string>, main: string): Record<string, string> {
+  const folder = main.includes('/') ? main.slice(0, main.lastIndexOf('/') + 1) : ''
+  const parent: Record<string, string> = {}
+  const seen = new Set<string>()
+  const visit = (file: string) => {
+    if (seen.has(file) || files[file] === undefined) return
+    seen.add(file)
+    for (const l of files[file]!.split('\n')) {
+      for (const m of uncommentedLine(l).matchAll(INCLUDE_RE)) {
+        const name = folder + m[1]!.trim().replace(/^\.\//, '')
+        const target = files[name] !== undefined ? name : `${name}.tex`
+        if (files[target] === undefined || seen.has(target)) continue
+        parent[target] = file
+        visit(target)
+      }
+    }
+  }
+  visit(main)
+  for (const f of Object.keys(files).sort()) if (TEX_RE.test(f)) visit(f)
+  return parent
+}
+
+/**
+ * The .bib a file of a document uses, for an entry a placed snippet brings: the nearest
+ * \bibliography or \addbibresource that covers the file (in the file itself, else in the files
+ * that take it in, up to the main file); else what the user chose for it before (`chosen`, the
+ * tracking file's bibOf); else the one .bib the document names anywhere, or the one it has, or
+ * refs.bib beside the main file when it has none. With several and nothing to tell them apart,
+ * the user is asked (`ask`). bib_for in server/rft_manuscript.py reads the same way; the cases
+ * both are held to are tests/fixtures/local-overleaf/bib.json.
+ */
+export function bibFor(files: Record<string, string>, main: string, file: string, chosen: Record<string, string> = {}): { bib: string } | { ask: string[] } {
+  const folder = main.includes('/') ? main.slice(0, main.lastIndexOf('/') + 1) : ''
+  const path = (name: string) => folder + (/\.bib$/i.test(name) ? name : `${name}.bib`)
+  const named = (f: string) => [...(files[f] ?? '').split('\n').map(uncommentedLine).join('\n').matchAll(BIB_NAMED)].flatMap(m => m[1]!.split(',').map(n => n.trim()).filter(Boolean).map(path))
+  const parent = takenInBy(files, main)
+  const chain: string[] = []
+  for (let at: string | undefined = file; at && !chain.includes(at); at = parent[at]) chain.push(at)
+  for (const f of chain) if (named(f).length) return { bib: named(f)[0]! }
+  for (const f of chain) if (chosen[f]) return { bib: chosen[f]! }
+  const everywhere = [...new Set(Object.keys(files).filter(f => TEX_RE.test(f)).sort().flatMap(named))]
+  const there = Object.keys(files).filter(f => /\.bib$/i.test(f)).sort()
+  const options = everywhere.length ? everywhere : there
+  if (options.length === 1) return { bib: options[0]! }
+  return options.length ? { ask: [...options].sort() } : { bib: `${folder}refs.bib` }
+}
+
 /** A text with each run of whitespace made one space, and where each of its characters was. */
 function squeezed(text: string): { text: string; at: number[] } {
   let out = ''

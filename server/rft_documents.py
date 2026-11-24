@@ -148,6 +148,8 @@ def carry(d: dict, old: str, new: str) -> dict:
     for e in (d.get("bib") or {}).values() if isinstance(d.get("bib"), dict) else []:
         if isinstance(e, dict):
             e["file"] = moved(e.get("file"), old, new)
+            if isinstance(e.get("also"), list):
+                e["also"] = [moved(x, old, new) for x in e["also"]]
     for a in d.get("allowed") or []:
         if isinstance(a, dict):
             a["file"] = moved(a.get("file"), old, new)

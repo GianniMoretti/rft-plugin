@@ -9,12 +9,12 @@ import { describe, expect, test } from 'claude-code/testing'
 import { nextReport } from '../hooks/lib/knowledge'
 import {
   allowTrace, bibOf, copyState, declareEnvironment, documentMain, insertFromTree, manuscriptReport, manuscriptWarnings, pointCopy, readManuscript, restoreMarkers, reviewCopy, reviewValue,
-  setDocument, tracesOf, usedIn, valuesOf,
+  ownCited, setDocument, tracesOf, usedIn, valuesOf,
 } from '../hooks/lib/manuscript'
-import { locateCopies, locateValues, mainOf, parseMarkers, readingOrder } from '../hooks/lib/copies'
+import { bibFor, locateCopies, locateValues, mainOf, parseMarkers, readingOrder, takenInBy } from '../hooks/lib/copies'
 import { load, readConfig, rooted } from '../hooks/lib/vault'
 import { MemoryFs } from './fixture'
-import { EXPECTED, FILES } from './fixtures/local-overleaf'
+import { BIB, EXPECTED, FILES } from './fixtures/local-overleaf'
 
 const DOC = 'vault/documents/paper'
 const TRACKING = 'vault/documents/.rft/paper/tracking.json'
@@ -83,6 +83,7 @@ describe('the fixture\'s document', () => {
       '§ Discussion',
       'Lost (the plugin cannot find them in the document any more; the user points to them again in the page, or drops them): S06 Discussion: Limitations (was in main.tex).',
       'Values of the tree written in it: the tree changed since they were written: 81.4 in main.tex:45 (E05 acc.full), now 81.6. changed in the document, no longer the tree\'s: 3 in sections/method.tex:12 (E05 seeds), now 5 there.',
+      'Cited from the user\'s own .bib entries, which rest on no reference note of the tree: zhang2018mixup (main.tex:26).',
     ].join('\n'))
     expect(await manuscriptReport(io, l)).toContain('  paper (article, main.tex, pdfLaTeX): S05 (its markers are gone), S01#1, S01#2 (sections/method.tex; adapted), S04 (sections/method.tex; snippet changed since: to review), S03 (sections/method.tex), S07 (sections/method.tex; no such snippet), S02, S06 (lost: not found in main.tex any more)')
     expect(await manuscriptReport(io, l)).toContain('  S01 definition · CutMix · written · T02, R07 · used in paper (main.tex, sections/method.tex: adapted)')
@@ -350,5 +351,78 @@ describe('the main file, and what it takes in', () => {
     expect(await setDocument(io, l, { name: 'paper', remove: 'S02' })).toContain('Removed the copy of S02')
     // and recorded with the first thing written
     expect(JSON.parse(fs.read(TRACKING)).main).toBe('paper.tex')
+  })
+})
+
+describe('the .bib of a document with several', () => {
+  test('which .bib a file uses: the cases both sides are held to', () => {
+    for (const c of BIB.cases) expect([c.why, bibFor(c.files, c.main, c.file, c.chosen)]).toEqual([c.why, c.want])
+    expect(takenInBy({ 'main.tex': '\\input{a}\n\\input{b}', 'a.tex': '\\input{b}', 'b.tex': '', 'c.tex': '' }, 'main.tex')).toEqual({ 'a.tex': 'main.tex', 'b.tex': 'a.tex' })
+  })
+
+  // a thesis by papers, as the AAU kit lays one out: a bibliography per paper, paper A with a .bib of its own, paper B through the kit's macro
+  const THESIS: Record<string, string> = {
+    'vault/documents/thesis/master.tex': '\\input{setup/macros.tex}\n\\begin{document}\n\\includepaper{papers/paperA/paperA}\n\\includepaper{papers/paperB/paperB}\n\\end{document}\n',
+    'vault/documents/thesis/setup/macros.tex': '\\newcommand{\\papersbib}{\\bibliographystyle{IEEEtran}\\bibliography{bib/mybib}}\n',
+    'vault/documents/thesis/papers/paperA/paperA.tex': '\\chapter{Paper A}\n\\input{papers/paperA/sections/introduction.tex}\n\\bibliographystyle{IEEEtran}\n\\bibliography{papers/paperA/refs}\n',
+    'vault/documents/thesis/papers/paperA/sections/introduction.tex': '\\section{Introduction}\nText of paper A.\n',
+    'vault/documents/thesis/papers/paperA/refs.bib': '@article{own2020,\n  title={Mine}\n}\n',
+    'vault/documents/thesis/papers/paperB/paperB.tex': '\\chapter{Paper B}\n\\input{papers/paperB/sections/introduction.tex}\n\\papersbib\n',
+    'vault/documents/thesis/papers/paperB/sections/introduction.tex': '\\section{Introduction}\nText of paper B, after \\cite{own2020}.\n',
+    'vault/documents/thesis/bib/mybib.bib': '',
+    'vault/documents/.rft/thesis/tracking.json': JSON.stringify({ version: 1, main: 'master.tex', template: 'aau', copies: [], values: [], bib: {}, allowed: [] }),
+  }
+  const A = 'vault/documents/thesis/papers/paperA/refs.bib', SHARED = 'vault/documents/thesis/bib/mybib.bib'
+  const tracking = (fs: MemoryFs) => JSON.parse(fs.read('vault/documents/.rft/thesis/tracking.json'))
+
+  test('a snippet citing a reference note, placed in paper A\'s file, adds the entry to paper A\'s .bib only; placed twice, once', async () => {
+    const { fs, io, l } = await setup(THESIS)
+    // S01 (Definition: CutMix) cites R07, whose entry is yun2019cutmix
+    expect(await setDocument(io, l, { name: 'thesis', place: 'S01', file: 'papers/paperA/sections/introduction.tex' })).toContain('yun2019cutmix in its .bib')
+    expect(fs.read(A)).toContain('@inproceedings{yun2019cutmix,')
+    expect(fs.read(A)).toContain('@article{own2020,')
+    expect(fs.read(SHARED)).toBe('')
+    expect(tracking(fs).bib).toEqual({ yun2019cutmix: { from: 'R07', file: 'papers/paperA/refs.bib' } })
+    await setDocument(io, l, { name: 'thesis', place: 'S01', file: 'papers/paperA/paperA.tex', after: 'Paper A' })
+    expect(fs.read(A).split('@inproceedings{yun2019cutmix,').length - 1).toBe(1)
+    expect(fs.read(SHARED)).toBe('')
+    expect(fs.read('vault/documents/thesis/papers/paperA/sections/introduction.tex')).toContain('%%% Definition: CutMix %%%')
+  })
+
+  test('where nothing says which .bib a chapter uses, the session refuses with the choices; the page\'s pick is used and remembered', async () => {
+    const { fs, io, l } = await setup(THESIS)
+    const place = { name: 'thesis', place: 'S01', file: 'papers/paperB/sections/introduction.tex' }
+    await expect(setDocument(io, l, place)).rejects.toThrow('thesis has several .bib files (bib/mybib.bib, papers/paperA/refs.bib) and nothing in papers/paperB/sections/introduction.tex, nor in the files that take it in, says which one it uses')
+    // nothing was written: not the copy, not an entry
+    expect(fs.read('vault/documents/thesis/papers/paperB/sections/introduction.tex')).not.toContain('%%%')
+    expect([fs.read(SHARED), tracking(fs).copies]).toEqual(['', []])
+    await expect(setDocument(io, l, { ...place, bib: 'refs.bib' })).rejects.toThrow('"refs.bib" is not one of them')
+    await setDocument(io, l, { ...place, bib: 'bib/mybib.bib' })
+    expect(fs.read(SHARED)).toContain('@inproceedings{yun2019cutmix,')
+    expect(fs.read(A)).not.toContain('yun2019cutmix')
+    expect(tracking(fs).bibOf).toEqual({ 'papers/paperB/sections/introduction.tex': 'bib/mybib.bib' })
+    // asked once: the next placement in that file needs no pick
+    await setDocument(io, l, { name: 'thesis', place: 'S02', file: 'papers/paperB/sections/introduction.tex' })
+    expect(tracking(fs).copies.map((c: { snippet: string }) => c.snippet)).toEqual(['S01', 'S02'])
+    // the same entry in a second .bib of the document: added there too, and both are tracked
+    await setDocument(io, l, { name: 'thesis', place: 'S01', file: 'papers/paperA/sections/introduction.tex' })
+    expect(fs.read(A)).toContain('@inproceedings{yun2019cutmix,')
+    expect(tracking(fs).bib.yun2019cutmix).toEqual({ from: 'R07', file: 'bib/mybib.bib', also: ['papers/paperA/refs.bib'] })
+    // once no file cites it any more, it leaves both
+    await setDocument(io, l, { name: 'thesis', remove: 'S01#1' })
+    await setDocument(io, l, { name: 'thesis', remove: 'S01' })
+    expect([fs.read(SHARED).includes('yun2019cutmix'), fs.read(A).includes('yun2019cutmix'), fs.read(A).includes('own2020')]).toEqual([false, false, true])
+    expect(tracking(fs).bib).toEqual({})
+  })
+
+  test('a citation of the user\'s own entry is said to rest on no reference note; the document\'s files are unchanged', async () => {
+    const { fs, io, l, ms } = await setup(THESIS)
+    const before = JSON.stringify([...fs.files].filter(([k]) => k.startsWith('vault/documents/thesis/')))
+    const d = (await ms()).documents.find(x => x.name === 'thesis')!
+    expect(ownCited(d)).toEqual([{ key: 'own2020', file: 'papers/paperB/sections/introduction.tex', line: 2 }])
+    expect(await manuscriptReport(io, l, 'thesis')).toContain('Cited from the user\'s own .bib entries, which rest on no reference note of the tree: own2020 (papers/paperB/sections/introduction.tex:2).')
+    expect(JSON.stringify([...fs.files].filter(([k]) => k.startsWith('vault/documents/thesis/')))).toBe(before)
+    // the fixture's paper: zhang2018mixup was added by hand; yun2019cutmix came from R07
+    expect(ownCited((await ms()).documents.find(x => x.name === 'paper')!)).toEqual([{ key: 'zhang2018mixup', file: 'main.tex', line: 26 }])
   })
 })

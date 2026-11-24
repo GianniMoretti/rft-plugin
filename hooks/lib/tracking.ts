@@ -13,7 +13,8 @@
 //            its file, the fingerprint of the snippet's content it answers to, that snippet written out
 //   values   each number, figure and table of the tree written out in the document: where it came
 //            from, what was written, its file and the text before and after it
-//   bib      each entry of the document's .bib that came from a reference note
+//   bib      each entry of the document's .bib files that came from a reference note: the note, the
+//            .bib it was added to, and any other .bib of the document it was added to since (`also`)
 //   allowed  occurrences the scan flagged and the user allowed
 
 import type { Io } from './vault'
@@ -62,7 +63,7 @@ export type Tracking = {
   bibOf?: Record<string, string>
   copies: TrackedCopy[]
   values: TrackedValue[]
-  bib: Record<string, { from: string; file: string }>
+  bib: Record<string, { from: string; file: string; also?: string[] }>
   allowed: Allowed[]
 }
 
@@ -76,7 +77,8 @@ export function parseTracking(raw: unknown): Tracking {
   if (d.bib && typeof d.bib === 'object') {
     for (const [key, v] of Object.entries(d.bib as Record<string, unknown>)) {
       const e = v && typeof v === 'object' ? (v as Record<string, unknown>) : {}
-      if (str(e.from)) bib[key] = { from: str(e.from), file: str(e.file) }
+      const also = Array.isArray(e.also) ? e.also.filter((x): x is string => typeof x === 'string' && !!x) : []
+      if (str(e.from)) bib[key] = { from: str(e.from), file: str(e.file), ...(also.length ? { also } : {}) }
     }
   }
   const bibOf: Record<string, string> = {}

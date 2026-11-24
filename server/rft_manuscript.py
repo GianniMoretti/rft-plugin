@@ -400,6 +400,61 @@ def reading_order(files: dict[str, str], main: str):
     return at, included
 
 
+BIB_NAMED = re.compile(r"\\(?:bibliography|addbibresource)\s*(?:\[[^\]]*\]\s*)?\{([^}]+)\}")
+
+
+def taken_in_by(files: dict[str, str], main: str) -> dict[str, str]:
+    """The file that takes each .tex file in (takenInBy in copies.ts): the first that does, in the
+    order the document is read. The main file, and a file nothing takes in, have none."""
+    folder = main.rsplit("/", 1)[0] + "/" if "/" in main else ""
+    parent: dict[str, str] = {}
+    seen: set[str] = set()
+
+    def visit(file: str) -> None:
+        if file in seen or file not in files:
+            return
+        seen.add(file)
+        for line in files[file].split("\n"):
+            for m in INCLUDE_RE.finditer(_uncommented_line(line)):
+                name = folder + re.sub(r"^\./", "", m.group(1).strip())
+                target = name if name in files else f"{name}.tex"
+                if target in files and target not in seen:
+                    parent[target] = file
+                    visit(target)
+
+    visit(main)
+    for f in sorted(files):
+        if TEX_FILE.search(f):
+            visit(f)
+    return parent
+
+
+def bib_for(files: dict[str, str], main: str, file: str, chosen: dict[str, str] | None = None) -> dict:
+    """The .bib a file of a document uses, for an entry a placed snippet brings (bibFor in
+    copies.ts; the cases both are held to: tests/fixtures/local-overleaf/bib.json). `{"bib": path}`,
+    or `{"ask": [paths]}` when the document has several and nothing says which."""
+    folder = main.rsplit("/", 1)[0] + "/" if "/" in main else ""
+    path = lambda name: folder + (name if name.lower().endswith(".bib") else f"{name}.bib")  # noqa: E731
+    named = lambda f: [path(n.strip()) for m in BIB_NAMED.finditer(uncommented(files.get(f, ""))) for n in m.group(1).split(",") if n.strip()]  # noqa: E731
+    parent = taken_in_by(files, main)
+    chain, at = [], file
+    while at and at not in chain:
+        chain.append(at)
+        at = parent.get(at, "")
+    for f in chain:
+        if named(f):
+            return {"bib": named(f)[0]}
+    for f in chain:
+        if (chosen or {}).get(f):
+            return {"bib": chosen[f]}
+    everywhere = list(dict.fromkeys(b for f in sorted(files) if TEX_FILE.search(f) for b in named(f)))
+    there = sorted(f for f in files if f.lower().endswith(".bib"))
+    options = everywhere or there
+    if len(options) == 1:
+        return {"bib": options[0]}
+    return {"ask": sorted(options)} if options else {"bib": f"{folder}refs.bib"}
+
+
 def _squeezed(text: str) -> tuple[str, list[int]]:
     """A text with each run of whitespace made one space, and where each of its characters was."""
     out, at, gap = [], [], False
@@ -516,6 +571,17 @@ def copy_at(copies: list[dict], file: str, line: int) -> dict | None:
 
 def bib_keys(bib: str) -> list[str]:
     return [k for k in re.findall(r"^\s*@\w+\s*\{\s*([^,\s]+)\s*,", bib, re.M) if not re.fullmatch(r"string|comment|preamble", k, re.I)]
+
+
+def own_cited(files: dict[str, str], tracking: dict) -> list[dict]:
+    """The citations of a document that rest on no reference note (ownCited in manuscript.ts):
+    each key cited in its .tex files whose entry, in one of its .bib files, is the user's own."""
+    own = {k for f in files if f.lower().endswith(".bib") for k in bib_keys(files[f])} - set(tracking["bib"])
+    out = []
+    for file in sorted(f for f in files if TEX_FILE.search(f)) if own else []:
+        for i, line in enumerate(files[file].split("\n")):
+            out.extend({"key": key, "file": file, "line": i + 1} for key in sorted(rft_scan.cited_keys(line)) if key in own)
+    return out
 
 
 def _leaves(x, key: str = "", out: dict | None = None) -> dict:
@@ -686,6 +752,7 @@ def summary(vault: Path, tree: dict, read) -> dict:
                      "notIncluded": sorted(f for f in files if TEX_FILE.search(f) and f not in included),
                      "locked": document_locked(dreg, name), "copies": copies, "values": values_of(vault, name, files, tracking, located),
                      "bib": [{"key": k, "file": f, "from": (tracking["bib"].get(k) or {}).get("from")} for f in sorted(files) if f.lower().endswith(".bib") for k in bib_keys(files[f])],
+                     "ownCited": own_cited(files, tracking),
                      "traces": scan["traces"], "allowedTraces": scan["allowed"],
                      "firstDesign": any(is_first_design(text) for f, text in files.items() if TEX_FILE.search(f))})
     return {"exists": True, "locked": reg["locked"], "unlocked": reg["unlocked"], "docsLocked": dreg["locked"], "docsUnlocked": dreg["unlocked"],

@@ -384,6 +384,237 @@ export const TRACES = {
   }
  ]
 }
+// which .bib a file of a document uses: the cases both sides are held to (bib.json)
+export const BIB: { cases: { why: string; main: string; files: Record<string, string>; file: string; chosen?: Record<string, string>; want: { bib?: string; ask?: string[] } }[] } = {
+ "cases": [
+  {
+   "why": "one bibliography in the main file covers the main file",
+   "main": "main.tex",
+   "files": {
+    "main.tex": "\\begin{document}\n\\bibliographystyle{plainnat}\n\\bibliography{refs}\n\\end{document}\n",
+    "refs.bib": ""
+   },
+   "file": "main.tex",
+   "want": {
+    "bib": "refs.bib"
+   }
+  },
+  {
+   "why": "and every file the main file takes in",
+   "main": "main.tex",
+   "files": {
+    "main.tex": "\\begin{document}\n\\input{sections/method}\n\\bibliography{refs}\n\\end{document}\n",
+    "sections/method.tex": "\\section{Method}\n",
+    "refs.bib": "",
+    "other.bib": ""
+   },
+   "file": "sections/method.tex",
+   "want": {
+    "bib": "refs.bib"
+   }
+  },
+  {
+   "why": "a bibliography per chapter: the chapter's own",
+   "main": "thesis.tex",
+   "files": {
+    "thesis.tex": "\\begin{document}\n\\include{chapters/a}\n\\include{chapters/b}\n\\end{document}\n",
+    "chapters/a.tex": "\\chapter{A}\n\\input{chapters/a/intro}\n\\bibliography{chapters/a}\n",
+    "chapters/a/intro.tex": "Intro.\n",
+    "chapters/b.tex": "\\chapter{B}\n\\bibliography{chapters/b}\n",
+    "chapters/a.bib": "",
+    "chapters/b.bib": ""
+   },
+   "file": "chapters/b.tex",
+   "want": {
+    "bib": "chapters/b.bib"
+   }
+  },
+  {
+   "why": "a section of a chapter: the chapter's, found through the file that takes the section in",
+   "main": "thesis.tex",
+   "files": {
+    "thesis.tex": "\\begin{document}\n\\include{chapters/a}\n\\include{chapters/b}\n\\end{document}\n",
+    "chapters/a.tex": "\\chapter{A}\n\\input{chapters/a/intro}\n\\bibliography{chapters/a}\n",
+    "chapters/a/intro.tex": "Intro.\n",
+    "chapters/b.tex": "\\chapter{B}\n\\bibliography{chapters/b}\n",
+    "chapters/a.bib": "",
+    "chapters/b.bib": ""
+   },
+   "file": "chapters/a/intro.tex",
+   "want": {
+    "bib": "chapters/a.bib"
+   }
+  },
+  {
+   "why": "the AAU thesis as it comes: each paper's bibliography is a macro of setup/macros.tex, and the document names one .bib in all",
+   "main": "master.tex",
+   "files": {
+    "master.tex": "\\input{setup/macros.tex}\n\\begin{document}\n\\includepaper{papers/paperA/paperA}\n\\includepaper{papers/paperB/paperB}\n\\end{document}\n",
+    "setup/macros.tex": "\\newcommand{\\introbib}{\\bibliographystyle{IEEEtranS}\\bibliography{bib/mybib}}\n\\newcommand{\\papersbib}{%\n  \\bibliographystyle{IEEEtran}\n  \\bibliography{bib/mybib}\n}\n",
+    "papers/paperA/paperA.tex": "\\input{papers/paperA/sections/introduction.tex}\n\\papersbib\n",
+    "papers/paperA/sections/introduction.tex": "Intro.\n",
+    "papers/paperB/paperB.tex": "\\papersbib\n",
+    "bib/mybib.bib": ""
+   },
+   "file": "papers/paperA/sections/introduction.tex",
+   "want": {
+    "bib": "bib/mybib.bib"
+   }
+  },
+  {
+   "why": "the AAU thesis with a .bib of paper A's own: paper A's files use it",
+   "main": "master.tex",
+   "files": {
+    "master.tex": "\\input{setup/macros.tex}\n\\begin{document}\n\\includepaper{papers/paperA/paperA}\n\\includepaper{papers/paperB/paperB}\n\\end{document}\n",
+    "setup/macros.tex": "\\newcommand{\\papersbib}{\\bibliographystyle{IEEEtran}\\bibliography{bib/mybib}}\n",
+    "papers/paperA/paperA.tex": "\\input{papers/paperA/sections/introduction.tex}\n\\bibliographystyle{IEEEtran}\n\\bibliography{papers/paperA/refs}\n",
+    "papers/paperA/sections/introduction.tex": "Intro.\n",
+    "papers/paperB/paperB.tex": "\\papersbib\n",
+    "bib/mybib.bib": "",
+    "papers/paperA/refs.bib": ""
+   },
+   "file": "papers/paperA/sections/introduction.tex",
+   "want": {
+    "bib": "papers/paperA/refs.bib"
+   }
+  },
+  {
+   "why": "and paper B, whose bibliography is still the macro's: two .bib files are named and nothing covers paper B, so the user is asked",
+   "main": "master.tex",
+   "files": {
+    "master.tex": "\\input{setup/macros.tex}\n\\begin{document}\n\\includepaper{papers/paperA/paperA}\n\\includepaper{papers/paperB/paperB}\n\\end{document}\n",
+    "setup/macros.tex": "\\newcommand{\\papersbib}{\\bibliographystyle{IEEEtran}\\bibliography{bib/mybib}}\n",
+    "papers/paperA/paperA.tex": "\\bibliography{papers/paperA/refs}\n",
+    "papers/paperB/paperB.tex": "\\input{papers/paperB/sections/introduction}\n\\papersbib\n",
+    "papers/paperB/sections/introduction.tex": "Intro.\n",
+    "bib/mybib.bib": "",
+    "papers/paperA/refs.bib": ""
+   },
+   "file": "papers/paperB/sections/introduction.tex",
+   "want": {
+    "ask": [
+     "bib/mybib.bib",
+     "papers/paperA/refs.bib"
+    ]
+   }
+  },
+  {
+   "why": "asked once: what the user chose for a file stands for it, and for the files it takes in",
+   "main": "master.tex",
+   "files": {
+    "master.tex": "\\input{setup/macros.tex}\n\\begin{document}\n\\includepaper{papers/paperA/paperA}\n\\includepaper{papers/paperB/paperB}\n\\end{document}\n",
+    "setup/macros.tex": "\\newcommand{\\papersbib}{\\bibliographystyle{IEEEtran}\\bibliography{bib/mybib}}\n",
+    "papers/paperA/paperA.tex": "\\bibliography{papers/paperA/refs}\n",
+    "papers/paperB/paperB.tex": "\\input{papers/paperB/sections/introduction}\n\\papersbib\n",
+    "papers/paperB/sections/introduction.tex": "Intro.\n",
+    "bib/mybib.bib": "",
+    "papers/paperA/refs.bib": ""
+   },
+   "file": "papers/paperB/sections/introduction.tex",
+   "chosen": {
+    "papers/paperB/paperB.tex": "bib/mybib.bib"
+   },
+   "want": {
+    "bib": "bib/mybib.bib"
+   }
+  },
+  {
+   "why": "biblatex: \\addbibresource, with its extension and an option",
+   "main": "main.tex",
+   "files": {
+    "main.tex": "\\usepackage{biblatex}\n\\addbibresource[label=main]{literature.bib}\n\\begin{document}\n\\input{sections/one}\n\\printbibliography\n\\end{document}\n",
+    "sections/one.tex": "One.\n",
+    "literature.bib": "",
+    "old.bib": ""
+   },
+   "file": "sections/one.tex",
+   "want": {
+    "bib": "literature.bib"
+   }
+  },
+  {
+   "why": "several files in one \\bibliography: the first",
+   "main": "main.tex",
+   "files": {
+    "main.tex": "\\begin{document}\n\\bibliography{mine, strings ,other}\n\\end{document}\n",
+    "mine.bib": "",
+    "strings.bib": "",
+    "other.bib": ""
+   },
+   "file": "main.tex",
+   "want": {
+    "bib": "mine.bib"
+   }
+  },
+  {
+   "why": "a bibliography in a comment names nothing; the document's one .bib is used",
+   "main": "main.tex",
+   "files": {
+    "main.tex": "\\begin{document}\n% \\bibliography{old}\n\\end{document}\n",
+    "literature.bib": ""
+   },
+   "file": "main.tex",
+   "want": {
+    "bib": "literature.bib"
+   }
+  },
+  {
+   "why": "no .bib named and none there: refs.bib, beside the main file",
+   "main": "main.tex",
+   "files": {
+    "main.tex": "\\begin{document}\n\\end{document}\n"
+   },
+   "file": "main.tex",
+   "want": {
+    "bib": "refs.bib"
+   }
+  },
+  {
+   "why": "no .bib named and two there: asked",
+   "main": "main.tex",
+   "files": {
+    "main.tex": "\\begin{document}\n\\end{document}\n",
+    "a.bib": "",
+    "b.bib": ""
+   },
+   "file": "main.tex",
+   "want": {
+    "ask": [
+     "a.bib",
+     "b.bib"
+    ]
+   }
+  },
+  {
+   "why": "a main file in a folder: what it names is read from that folder",
+   "main": "src/paper.tex",
+   "files": {
+    "src/paper.tex": "\\begin{document}\n\\input{parts/one}\n\\bibliography{refs}\n\\end{document}\n",
+    "src/parts/one.tex": "One.\n",
+    "src/refs.bib": "",
+    "refs.bib": ""
+   },
+   "file": "src/parts/one.tex",
+   "want": {
+    "bib": "src/refs.bib"
+   }
+  },
+  {
+   "why": "a file nothing takes in: the one .bib the document names",
+   "main": "main.tex",
+   "files": {
+    "main.tex": "\\begin{document}\n\\bibliography{refs}\n\\end{document}\n",
+    "draft.tex": "A draft.\n",
+    "refs.bib": "",
+    "old.bib": ""
+   },
+   "file": "draft.tex",
+   "want": {
+    "bib": "refs.bib"
+   }
+  }
+ ]
+}
 // the built-in templates' files, made with the title "Small data & more": what a new document from each holds (the server's tests compile them)
 export const BUILT_IN: Record<string, Record<string, string>> = {
  "article": {
