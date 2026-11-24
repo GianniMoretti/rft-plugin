@@ -146,6 +146,41 @@
     return out.filter(f => (d.files || [d.main]).includes(f))
   }
 
+  /** The most a file of a document may weigh (MAX_UPLOAD in server/rft_documents.py). */
+  const MAX_UPLOAD = 20000000
+  const ENGINES = [['pdflatex', 'pdfLaTeX'], ['xelatex', 'XeLaTeX'], ['lualatex', 'LuaLaTeX']]
+  const megabytes = n => `${(n / 1e6).toFixed(1)} MB`
+
+  /** The rows of a document's file list: every file and folder of its tree, as the server lists them (a folder, then what it holds), each with its name, its depth and the folder it is in. */
+  function treeRows(d) {
+    const tree = (d && d.tree) || ((d && d.files) || []).map(f => ({ path: f, kind: 'file', edit: true, show: null }))
+    return tree.map(e => {
+      const parts = e.path.split('/')
+      return { ...e, name: parts[parts.length - 1], depth: parts.length - 1, folder: parts.slice(0, -1).join('/') }
+    })
+  }
+
+  /** The files of a document the editor opens, by their path inside it. */
+  function editable(d) {
+    return treeRows(d).filter(e => e.kind === 'file' && e.edit).map(e => e.path)
+  }
+
+  /** A path typed for a file or a folder of a document, tidied (spaces and slashes at its ends dropped, `folder` before a bare name); and why it will not do, or ''. */
+  function typedPath(typed, folder) {
+    const t = String(typed || '').trim().replace(/^\/+|\/+$/g, '')
+    const path = t && folder && !t.includes('/') ? `${folder}/${t}` : t
+    const parts = path.split('/')
+    const problem = !path ? 'Give it a name'
+      : /[\\<>:"|?*\u0000-\u001f]/.test(path) ? 'A name holds no \\ < > : " | ? *'
+        : parts.some(x => !x || x === '.' || x === '..' || x.startsWith('.') || x !== x.trim()) ? 'No part of the path may be empty, start with a dot or be ..' : ''
+    return { path, problem }
+  }
+
+  /** Why a file will not be uploaded, said before it is sent; '' when it may be. */
+  function uploadProblem(name, size) {
+    return size > MAX_UPLOAD ? `${name} is ${megabytes(size)}: a file of a document is at most ${megabytes(MAX_UPLOAD)}` : ''
+  }
+
   /** The snippets resting on a note. */
   function writtenIn(ms, id) {
     return ms && ms.snippets ? ms.snippets.filter(s => (s.basis || []).includes(id)).map(s => s.id) : []
@@ -177,6 +212,9 @@
     const listEl = $('ms-list'), headEl = $('ms-head'), threadsEl = $('ms-threads'), emptyEl = $('ms-empty'), body = $('ms-body')
     const pdfFrame = $('ms-pdf-frame'), pdfNote = $('ms-pdf-note'), errorsEl = $('ms-errors'), statusEl = $('ms-status')
     const docSel = $('ms-doc'), lockBtn = $('ms-lock'), compileBtn = $('ms-compile')
+    const viewEl = $('ms-view'), cmEl = $('ms-cm'), uploadInput = $('ms-upload')
+    let viewing = null // an image or a PDF of the document shown where the editor is: { rel, kind, url }
+    let uploadTo = '' // the folder the picker's files go in
     let ms = null // api/manuscript
     let level = store.get('msLevel', 'snippets') === 'documents' ? 'documents' : 'snippets'
     let doc = store.get('msDoc', '')
@@ -271,7 +309,7 @@
     // what is discussed: the open snippet, or the open document through its main file (its threads are anchored on that file's text)
     const subject = () => (level === 'snippets' ? (file && sid) : (theDoc() && openRel() === theDoc().main ? doc : '')) || null
     /** The open document's file in the editor: the one last chosen, while the document still has it; else its main file. */
-    const openRel = () => { const d = theDoc(); return d && (d.files || []).includes(docFile) ? docFile : (d && d.main) || 'main.tex' }
+    const openRel = () => { const d = theDoc(); const all = editable(d); return all.includes(docFile) ? docFile : (d && d.main) || all[0] || 'main.tex' }
     const pathOf = () => (level === 'snippets' ? (sid ? `snippets/${sid}.tex` : '') : doc ? `documents/${doc}/${openRel()}` : '')
     const outline = () => (level === 'documents' && file ? outlineOf(cm ? cm.getValue() : file.text, (theDoc() || {}).copies, openRel()) : [])
 
@@ -358,28 +396,58 @@
       const items = outline()
       const go = line => () => { if (cm) { cm.setCursor({ line, ch: 0 }); cm.scrollIntoView({ line, ch: 0 }, 80); cm.focus() } }
       const titleOf = id => (theSnippet(id) || {}).title || ''
-      const copyRow = (o, onclick) => el('li', { class: `ms-item ms-copy${focusCopy && focusCopy.name === o.name ? ' open' : ''}`, title: `A copy of ${o.id}${o.markers === false ? ' (its marker lines are gone)' : ''}`, onclick },
+      const copyRow = (o, onclick, depth = 0) => el('li', { class: `ms-item ms-copy${focusCopy && focusCopy.name === o.name ? ' open' : ''}`, style: `padding-left:${24 + 14 * depth}px`, title: `A copy of ${o.id}${o.markers === false ? ' (its marker lines are gone)' : ''}`, onclick },
         el('span', { class: 'ms-id', text: o.name }), el('span', { class: 'ms-title', text: titleOf(o.id) || o.marker || '' }), copyBadge(o),
         o.markers === false && o.state !== 'lost' ? el('span', { class: 'ms-flag', text: '%', title: 'Its marker lines are gone: found by its text. Open it to put them back' }) : null,
+        o.included === false && o.state !== 'lost' ? el('span', { class: 'ms-flag', text: '∅', title: 'Not in the document: the main file does not take its file in' }) : null,
         o.snippetReview ? el('span', { class: 'ms-flag', text: '!', title: 'Its snippet is in review: its notes changed' }) : null)
       const own = (d.bib || []).filter(b => !b.from)
-      // each file of the document; under the open one its outline, under the others the copies they hold
-      const rows = fileOrder(d).flatMap(f => [
-        el('li', {
-          class: `ms-item ms-doc-item${f === here ? ' open' : ''}`,
-          title: `${f === d.main ? 'The main file' : 'A file of the document'}${(d.notIncluded || []).includes(f) ? ': the main file does not take it in, so its copies are not in the document' : ''} (click: open it)`,
-          onclick: () => (f === here ? go(0)() : void openDocFile(f)),
-        }, el('span', { class: 'ms-id', text: f }), f === d.main ? el('span', { class: 'ms-title', text: d.name }) : el('span', { class: 'ms-title' }),
-        (d.notIncluded || []).includes(f) ? el('span', { class: 'ms-flag', text: '∅', title: 'The main file does not take this file in' }) : null,
-        f === d.main && d.threads ? el('span', { class: 'ms-threads-n', text: String(d.threads), title: `${d.threads} open thread(s)` }) : null),
-        ...(f === here
-          ? items.map(o => o.type === 'heading'
-            ? el('li', { class: `ms-item ms-heading ms-h-${o.level}`, onclick: go(o.line) }, el('span', { class: 'ms-title', text: `§ ${o.title}` }))
-            : copyRow(o, () => { focusCopy = o; go(o.line + 1)(); renderList(); renderHead() }))
-          : (d.copies || []).filter(c => c.file === f && c.state !== 'lost').map(c => copyRow(c, () => void showCopy(d.name, c.name, f)))),
-        ...(/\.bib$/i.test(f) && own.some(b => b.file === f) ? [el('li', { class: 'ms-item ms-note muted', title: 'Entries you added yourself: no reference note of the tree stands behind them' },
-          el('span', { class: 'ms-title', text: `Your own: ${own.filter(b => b.file === f).map(b => b.key).join(', ')}` }))] : []),
-      ])
+      const out = (d.notIncluded || [])
+      const shownRel = viewing ? viewing.rel : here
+      const act = (word, label, title, onclick) => el('button', { type: 'button', class: 'ms-row-act', 'aria-label': label, title, text: word, onclick: ev => { ev.stopPropagation(); onclick() } })
+      // every file and folder of the document; under the open file its outline, under the others the copies they hold
+      const rows = treeRows(d).flatMap(e => {
+        const pad = `padding-left:${10 + 14 * e.depth}px`
+        if (e.kind === 'folder') {
+          return [el('li', { class: 'ms-item ms-file ms-folder', style: pad, 'data-folder': e.path, title: `The folder ${e.path} (drop files here to upload them into it)` },
+            el('span', { class: 'ms-title', text: `${e.name}/` }),
+            el('span', { class: 'ms-row-acts' },
+              act('+', `New file in ${e.path}`, 'A new file in this folder', () => void newEntry('file', e.path)),
+              act('↑', `Upload into ${e.path}`, 'Upload files into this folder', () => pickFiles(e.path)),
+              act('✎', `Rename ${e.path}`, 'Rename or move this folder, with what it holds', () => void renameEntry(e)),
+              act('×', `Delete ${e.path}`, 'Delete this folder and all it holds', () => void deleteEntry(e))))]
+        }
+        const f = e.path
+        const tex = (d.files || []).includes(f)
+        return [
+          el('li', {
+            class: `ms-item ms-file${f === shownRel ? ' open' : ''}${e.edit || e.show ? '' : ' ms-file-other'}`, style: pad, 'data-folder': e.folder,
+            title: `${f === d.main ? 'The main file' : e.edit ? 'A file of the document' : e.show ? `${e.show === 'pdf' ? 'A PDF' : 'An image'} of the document` : 'A file of the document, which the page neither opens nor shows'}${out.includes(f) ? ': the main file does not take it in, so its copies are not in the document' : ''}${e.edit || e.show ? ' (click: open it)' : ''}`,
+            onclick: () => (e.edit ? (f === here && !viewing ? go(0)() : void openDocFile(f)) : e.show ? void showFile(e) : notify(`${f} is neither text nor an image: it is part of the document, and compiled with it.`)),
+          }, el('span', { class: 'ms-title', text: e.name }),
+          f === d.main ? el('span', { class: 'ms-main', text: 'main', title: `The main file: the one with \\begin{document}, which is compiled (${d.name})` }) : null,
+          out.includes(f) ? el('span', { class: 'ms-flag', text: '∅', title: 'The main file does not take this file in' }) : null,
+          f === d.main && d.threads ? el('span', { class: 'ms-threads-n', text: String(d.threads), title: `${d.threads} open thread(s)` }) : null,
+          el('span', { class: 'ms-row-acts' },
+            act('✎', `Rename ${f}`, 'Rename or move this file (its copies and values stay its own)', () => void renameEntry(e)),
+            act('×', `Delete ${f}`, 'Delete this file', () => void deleteEntry(e)))),
+          ...(!tex ? [] : f === here && !viewing
+            ? items.map(o => o.type === 'heading'
+              ? el('li', { class: `ms-item ms-heading ms-h-${o.level}`, style: `padding-left:${24 + 14 * e.depth}px`, onclick: go(o.line) }, el('span', { class: 'ms-title', text: `§ ${o.title}` }))
+              : copyRow(o, () => { focusCopy = o; go(o.line + 1)(); renderList(); renderHead() }, e.depth))
+            : (d.copies || []).filter(c => c.file === f && c.state !== 'lost').map(c => copyRow(c, () => void showCopy(d.name, c.name, f), e.depth))),
+          ...(/\.bib$/i.test(f) && own.some(x => x.file === f) ? [el('li', { class: 'ms-item ms-note muted', title: 'Entries you added yourself: no reference note of the tree stands behind them' },
+            el('span', { class: 'ms-title', text: `Your own: ${own.filter(x => x.file === f).map(x => x.key).join(', ')}` }))] : []),
+        ]
+      })
+      const bar = el('div', { class: 'ms-files-bar' },
+        el('button', { type: 'button', text: '+ File', title: 'A new file of this document (a path makes its folders: chapters/intro.tex)', onclick: () => void newEntry('file', '') }),
+        el('button', { type: 'button', text: '+ Folder', title: 'A new folder of this document', onclick: () => void newEntry('folder', '') }),
+        el('button', { type: 'button', text: 'Upload', title: 'Upload images, PDFs or any other file into this document (20 MB a file at most); or drop them on the list', onclick: () => pickFiles('') }))
+      // several files have \begin{document} and none was chosen: the page asks
+      const asked = (d.mainAsked || []).length ? el('div', { class: 'ms-pad ms-ask' },
+        el('p', { class: 'ms-flag-text', text: 'Several files of this document have \\begin{document}. Which one is its main file, the one that is compiled?' }),
+        d.mainAsked.map(f => el('button', { type: 'button', text: f, title: `Make ${f} the main file (you can change it later, in the document's head)`, onclick: () => void setting({ main: f }, 'choose the main file') }))) : null
       const lost = (d.copies || []).filter(c => c.state === 'lost')
       const values = (d.values || []).filter(v => v.state !== 'current')
       const group = (word, title, lis) => (lis.length ? [el('div', { class: 'ms-sub ms-flag-text', text: word, title }), el('ul', {}, lis)] : [])
@@ -387,7 +455,7 @@
       const old = d.firstDesign ? el('div', { class: 'ms-pad ms-old' },
         el('p', { class: 'ms-flag-text', text: 'This document was written before documents became plain LaTeX: it holds markers and macros of the plugin, so it cannot be shared and its copies are not shown.' }),
         el('button', { type: 'button', class: 'primary', text: 'Convert it', title: 'Its copies get marker lines that say only their kind and title, its numbers, figures and citations are written out, and the file as it is now is kept beside its tracking file', onclick: () => void ask({ action: 'convert', name: d.name }, 'convert the document') })) : null
-      listEl.replaceChildren(...(old ? [old] : []), el('ul', {}, rows),
+      listEl.replaceChildren(...(old ? [old] : []), bar, ...(asked ? [asked] : []), el('ul', { class: 'ms-tree' }, rows),
         ...group('Lost copies', 'Copies the plugin cannot find in the document any more: their marker lines and their text were changed elsewhere', lost.map(c => el('li', { class: 'ms-item ms-copy ms-wrap' },
           el('span', { class: 'ms-id', text: c.name }), el('span', { class: 'ms-title', text: `${c.marker} (was in ${c.file})` }),
           el('button', { type: 'button', text: 'It is the selection', title: 'Select the passage in the editor first: it becomes this copy again, between its marker lines', onclick: () => void pointAt(c.name) }),
@@ -454,6 +522,12 @@
             title: d.locked ? 'Its text is yours: Claude places copies you agree to and suggests (click: let Claude edit it)' : 'Claude may edit its text (click: yours again)',
             onclick: () => setLock('documents', !d.locked, d.name),
           }, lockIcon(d.locked)) : null,
+          d ? el('label', { class: 'ms-set', title: 'What compiles this document. latexmk picks bibtex or biber itself' }, 'Engine ',
+            el('select', { 'aria-label': 'Engine', onchange: ev => void setting({ engine: ev.target.value }, 'change the engine') }, ENGINES.map(([v, word]) => el('option', { value: v, text: word, selected: v === (d.engine || 'pdflatex') })))) : null,
+          d && ((d.mainCandidates || []).length > 1 || (d.mainAsked || []).length) ? el('label', { class: 'ms-set', title: 'The file that is compiled: one with \\begin{document}' }, 'Main file ',
+            el('select', { 'aria-label': 'Main file', onchange: ev => void setting({ main: ev.target.value }, 'change the main file') },
+              (d.mainAsked || []).length ? el('option', { value: '', text: 'choose…', selected: true, disabled: true }) : null,
+              (d.mainCandidates || []).map(f => el('option', { value: f, text: f, selected: !(d.mainAsked || []).length && f === d.main })))) : null,
           el('span', { class: 'ms-spacer' }), el('span', { class: 'ms-acts' }, selButton('comment'), selButton('suggestion'), saveBtn)))
         const extra = focusCopy ? copyPanel(focusCopy) : placeRow()
         if (extra) headEl.append(extra)
@@ -669,7 +743,161 @@
       dirty = false
       docFile = rel
       focusCopy = null
+      closeView()
       return openFile(pathOf())
+    }
+
+    /** The editor back where an image or a PDF was shown. */
+    function closeView() {
+      if (!viewing) return
+      URL.revokeObjectURL(viewing.url)
+      viewing = null
+      viewEl.hidden = true
+      viewEl.replaceChildren()
+      cmEl.hidden = false
+      if (cm) setTimeout(() => cm.refresh(), 0)
+    }
+
+    /** Shows an image or a PDF of the open document where the editor is: it is not opened as text. */
+    async function showFile(e) {
+      if (!canWrite()) { needKey('see the file'); return }
+      if (dirty && !confirm('Leave the unsaved changes?')) return
+      let res
+      try { res = await fetch(`api/manuscript/raw?doc=${encodeURIComponent(doc)}&path=${encodeURIComponent(e.path)}`, { cache: 'no-store', headers: { 'X-RFT-Token': key() } }) } catch { notify('The server is not answering.'); return }
+      if (!res.ok) { notify(`${e.path} could not be shown (${res.status})`); return }
+      closeView()
+      dirty = false
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      // an image is shown from a data: address, which the page's policy lets an <img> have (a blob: one it does not)
+      const src = e.show !== 'image' ? url : await new Promise(done => { const r = new FileReader(); r.onload = () => done(r.result); r.onerror = () => done(''); r.readAsDataURL(blob) })
+      viewing = { rel: e.path, kind: e.show, url }
+      const size = e.size == null ? '' : ` · ${e.size >= 1e5 ? megabytes(e.size) : `${Math.max(1, Math.round(e.size / 1000))} kB`}`
+      viewEl.replaceChildren(
+        el('div', { class: 'ms-view-head' }, el('strong', { text: e.path }), el('span', { class: 'muted', text: `${e.show === 'pdf' ? 'a PDF' : 'an image'}${size}` }),
+          el('span', { class: 'ms-spacer' }), el('a', { href: url, target: '_blank', rel: 'noopener', text: 'Open' }),
+          el('button', { type: 'button', text: 'Back to the text', onclick: () => { closeView(); renderList(); renderHead() } })),
+        e.show === 'image' ? el('img', { src, alt: e.path }) : drawn ? el('p', { class: 'muted ms-pad', text: 'This browser shows no PDF inside a page: Open shows it on its own.' })
+          : el('iframe', { src: url, title: e.path }))
+      viewEl.hidden = false
+      cmEl.hidden = true
+      renderList()
+      renderHead()
+    }
+
+    // ---------------------------------------------------------------- the document's files
+
+    /** A change to the open document's file list, asked of the server; a deletion that would lose copies is asked about first. The manuscript as it is then, or null. */
+    async function filesAsk(body, whatFor) {
+      if (!canWrite()) { needKey(whatFor); return null }
+      let r = await api('api/manuscript/files', { method: 'POST', body: { doc, ...body } })
+      if (r.status === 409 && r.data.ask) {
+        if (!confirm(r.data.error)) return null
+        r = await api('api/manuscript/files', { method: 'POST', body: { doc, ...body, sure: true } })
+      }
+      if (!r.ok) { notify(r.data.error || `Could not ${whatFor} (${r.status})`); return null }
+      ms = r.data
+      return r.data
+    }
+
+    /** Unsaved text is saved, or dropped, before the files under it change. */
+    async function settle() {
+      if (!dirty) return true
+      if (confirm('The open file has unsaved changes: save them first? (Cancel: drop them)')) await save(false)
+      else dirty = false
+      return !dirty
+    }
+
+    async function newEntry(kind, folder) {
+      const typed = prompt(kind === 'file' ? `A new file${folder ? ` in ${folder}/` : ''}: its name (a path makes its folders, e.g. chapters/intro.tex)` : `A new folder${folder ? ` in ${folder}/` : ''}: its name`, kind === 'file' ? '.tex' : '')
+      if (typed == null) return
+      const { path, problem } = typedPath(typed, folder)
+      if (problem) { notify(problem); return }
+      const got = await filesAsk({ action: kind === 'file' ? 'new-file' : 'new-folder', path }, `make the ${kind}`)
+      if (!got) return
+      if (kind === 'file') { render(); await openDocFile(got.path) } else render()
+    }
+
+    async function renameEntry(e) {
+      const typed = prompt(`Rename or move ${e.path} (a path inside the document):`, e.path)
+      if (typed == null) return
+      const { path, problem } = typedPath(typed, '')
+      if (problem) { notify(problem); return }
+      if (path === e.path || !(await settle())) return
+      const got = await filesAsk({ action: 'move', path: e.path, to: path }, 'rename it')
+      if (!got) return
+      // the open file follows its new name
+      const follow = rel => (rel === e.path ? path : rel.startsWith(`${e.path}/`) ? path + rel.slice(e.path.length) : rel)
+      const was = docFile || (file && level === 'documents' ? openRel() : '')
+      if (viewing) closeView()
+      docFile = follow(was)
+      render()
+      if (file && docFile !== was) await openFile(pathOf())
+      const d = theDoc()
+      if (d && (d.notIncluded || []).includes(path)) notify(`${path} is no longer taken in by the main file: change the line that names it (\\input{…}) to its new name.`)
+    }
+
+    async function deleteEntry(e) {
+      if (!(await settle())) return
+      // a file with nothing tracked in it is asked about here; one that holds copies, by the server, which says what would be lost
+      const d = theDoc()
+      const holds = ((d && d.copies) || []).some(c => c.state !== 'lost' && (c.file === e.path || c.file.startsWith(`${e.path}/`)))
+      const isMain = d && (d.main === e.path || d.main.startsWith(`${e.path}/`))
+      if (!holds && !isMain && !confirm(e.kind === 'folder' ? `Delete the folder ${e.path} and all it holds?` : `Delete ${e.path}?`)) return
+      const was = openRel()
+      const got = await filesAsk({ action: 'delete', path: e.path }, 'delete it')
+      if (!got) return
+      if (viewing && (viewing.rel === e.path || viewing.rel.startsWith(`${e.path}/`))) closeView()
+      render()
+      if (was === e.path || was.startsWith(`${e.path}/`)) { docFile = ''; file = null; if (pathOf() && editable(theDoc()).length) await openFile(pathOf()); else if (cm) { loading = true; cm.setValue(''); loading = false; renderHead() } }
+    }
+
+    /** A document's main file or engine, kept by the server. */
+    async function setting(body, whatFor) {
+      if (!canWrite()) { needKey(whatFor); render(); return false }
+      const r = await api('api/manuscript/settings', { method: 'POST', body: { doc, ...body } })
+      if (!r.ok) { notify(r.data.error || `Could not ${whatFor} (${r.status})`); render(); return false }
+      ms = r.data
+      render()
+      if (body.main) await loadPdf()
+      return true
+    }
+
+    function pickFiles(folder) {
+      if (!canWrite()) { needKey('upload'); return }
+      uploadTo = folder
+      uploadInput.value = ''
+      uploadInput.click()
+    }
+
+    /** Files of the user's machine put in a folder of the open document, one by one, their bytes as they are. */
+    async function uploadFiles(list, folder) {
+      if (!canWrite()) { needKey('upload'); return }
+      const d = theDoc()
+      if (!d || !list.length) return
+      let done = 0
+      for (const f of list) {
+        const { path, problem } = typedPath(f.name, folder)
+        const why = problem || uploadProblem(f.name, f.size)
+        if (why) { notify(problem ? `${f.name}: ${problem}` : why); continue }
+        renderStatus(`Uploading ${path}…`)
+        const send = replace => fetch(`api/manuscript/upload?doc=${encodeURIComponent(d.name)}&path=${encodeURIComponent(path)}${replace ? '&replace=1' : ''}`,
+          { method: 'PUT', cache: 'no-store', headers: { 'Content-Type': 'application/octet-stream', 'X-RFT-Token': key() }, body: f })
+        try {
+          let res = await send(false)
+          let data = await res.json().catch(() => ({}))
+          if (res.status === 409 && data.ask) {
+            if (!confirm(`${d.name} already has ${path}. Replace it?`)) continue
+            res = await send(true)
+            data = await res.json().catch(() => ({}))
+          }
+          if (!res.ok) { notify(data.error || `${path} was not uploaded (${res.status})`); continue }
+          ms = data
+          done++
+        } catch { notify('The server is not answering.'); break }
+      }
+      renderStatus(done ? `Uploaded ${done} file${done === 1 ? '' : 's'}` : '')
+      render()
     }
 
     /** Shows a place of the open document: its file, at a line (from 1). */
@@ -697,6 +925,7 @@
       store.set('msLevel', level)
       file = null
       focusCopy = null
+      closeView()
       render()
       renderErrors({})
       const path = pathOf()
@@ -771,6 +1000,15 @@
             if (e.line && cm) { cm.setCursor({ line: e.line - 1, ch: 0 }); cm.focus() }
           },
         }))
+        // the document asks for another engine: one action sets it and compiles again
+        if (e.engine && level === 'documents') {
+          const word = (ENGINES.find(x => x[0] === e.engine) || [])[1] || e.engine
+          errorsEl.append(el('button', {
+            type: 'button', class: 'ms-fix', text: `Set the engine to ${word} and compile`,
+            title: `This document's engine becomes ${word} (LuaLaTeX is in the Engine menu too)`,
+            onclick: async () => { if (await setting({ engine: e.engine }, 'change the engine')) await compile() },
+          }))
+        }
         // a copy's environment the document does not declare: one action adds its line to the preamble
         if (e.declare && THEOREM_NAMES[e.declare] && level === 'documents') {
           errorsEl.append(el('button', {
@@ -1153,6 +1391,18 @@
       store.set('msDoc', doc)
       await setLevel('documents', true)
     })
+    uploadInput.addEventListener('change', () => void uploadFiles([...uploadInput.files], uploadTo))
+    // files dropped on the list go into the folder they are dropped on (a file's row: its folder), else the document's top folder
+    const dropping = ev => level === 'documents' && !!theDoc() && [...(ev.dataTransfer ? ev.dataTransfer.types : [])].includes('Files')
+    listEl.addEventListener('dragover', ev => { if (!dropping(ev)) return; ev.preventDefault(); ev.dataTransfer.dropEffect = 'copy'; listEl.classList.add('ms-drop') })
+    listEl.addEventListener('dragleave', ev => { if (!listEl.contains(ev.relatedTarget)) listEl.classList.remove('ms-drop') })
+    listEl.addEventListener('drop', ev => {
+      if (!dropping(ev)) return
+      ev.preventDefault()
+      listEl.classList.remove('ms-drop')
+      const row = ev.target instanceof Element ? ev.target.closest('[data-folder]') : null
+      void uploadFiles([...ev.dataTransfer.files], row ? row.dataset.folder : '')
+    })
     lockBtn.addEventListener('click', () => ms && setLock(level, !(level === 'snippets' ? ms.locked : ms.docsLocked)))
     compileBtn.addEventListener('click', () => save(true))
 
@@ -1178,5 +1428,5 @@
     return { show, writtenIn: id => writtenIn(ms, id), openSnippet: id => { void show().then(() => openSnippet(id)) }, get summary() { return ms }, stop: () => clearInterval(timer) }
   }
 
-  root.RftManuscript = { CONTEXT, KINDS, anchorOf, contentOf, byKind, stateOf, usedWords, usedCount, parseMarkers, outlineOf, valueWords, traceWords, fileOrder, writtenIn, slugOf, docNameProblem, errorText, mount }
+  root.RftManuscript = { CONTEXT, KINDS, MAX_UPLOAD, anchorOf, contentOf, byKind, stateOf, usedWords, usedCount, parseMarkers, outlineOf, valueWords, traceWords, fileOrder, treeRows, editable, typedPath, uploadProblem, writtenIn, slugOf, docNameProblem, errorText, mount }
 })(typeof window !== 'undefined' ? window : globalThis)

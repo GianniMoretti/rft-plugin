@@ -1,8 +1,14 @@
 // A document's tracking file (docs/adr/0003-a-document-holds-no-trace.md): what ties the document
 // to the tree, kept outside the document's folder so that the folder can be shared as it is.
-// `documents/.rft/<name>/tracking.json`, written by the plugin only:
+// `documents/.rft/<name>/tracking.json`, written by the plugin only (the session for all that
+// concerns copies and values; the server, server/rft_documents.py, only to carry a renamed file's
+// paths and the main file and engine the user chose in the page):
 //
-//   main     the document's main file
+//   main     the document's main file, once it is recorded (the user's choice, or what a template said);
+//            until then it is the one file with \begin{document} (mainOf in copies.ts)
+//   engine   what compiles it: pdflatex (the default), xelatex or lualatex
+//   template the template it was made from
+//   bibOf    the .bib the user chose for a file's entries, where the document itself does not say
 //   copies   each copy of a snippet, in the order of the document: its snippet, its marker's words,
 //            its file, the fingerprint of the snippet's content it answers to, that snippet written out
 //   values   each number, figure and table of the tree written out in the document: where it came
@@ -45,9 +51,15 @@ export type TrackedValue = {
   kept?: string
 }
 export type Allowed = { file: string; match: string; text: string }
+export const ENGINES = ['pdflatex', 'xelatex', 'lualatex'] as const
+export type Engine = (typeof ENGINES)[number]
 export type Tracking = {
   version: 1
+  /** The main file as recorded; '' while it is not. */
   main: string
+  engine?: Engine
+  template?: string
+  bibOf?: Record<string, string>
   copies: TrackedCopy[]
   values: TrackedValue[]
   bib: Record<string, { from: string; file: string }>
@@ -67,9 +79,14 @@ export function parseTracking(raw: unknown): Tracking {
       if (str(e.from)) bib[key] = { from: str(e.from), file: str(e.file) }
     }
   }
+  const bibOf: Record<string, string> = {}
+  if (d.bibOf && typeof d.bibOf === 'object') for (const [k, v] of Object.entries(d.bibOf as Record<string, unknown>)) if (str(v)) bibOf[k] = str(v)
   return {
     version: 1,
-    main: str(d.main) || 'main.tex',
+    main: str(d.main),
+    ...((ENGINES as readonly string[]).includes(str(d.engine)) ? { engine: str(d.engine) as Engine } : {}),
+    ...(str(d.template) ? { template: str(d.template) } : {}),
+    ...(Object.keys(bibOf).length ? { bibOf } : {}),
     copies: list(d.copies).filter(c => str(c.snippet) && str(c.file))
       .map(c => ({ snippet: str(c.snippet), marker: str(c.marker), file: str(c.file), stamp: str(c.stamp), placed: str(c.placed), ...(str(c.seen) ? { seen: str(c.seen) } : {}) })),
     values: list(d.values).filter(v => ['number', 'figure', 'table'].includes(str(v.kind)) && str(v.from) && str(v.file))

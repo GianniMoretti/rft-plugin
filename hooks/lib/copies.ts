@@ -41,8 +41,26 @@ export function parseMarkers(text: string): Marker[] {
 const norm = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase()
 const squeeze = (s: string) => s.replace(/\s+/g, ' ').trim()
 
-const INCLUDE_RE = /\\(?:input|include|subfile)\s*\{([^}]+)\}/g
 const uncommentedLine = (l: string) => l.replace(/(^|[^\\])%.*$/, '$1')
+/** Any command that takes a file in: \input, \include, \subfile, and a template's own (\includepaper); what its argument names must be a file of the document. */
+const INCLUDE_RE = /\\(?!include(?:only|graphics|pdf|svg)\b)[A-Za-z]*(?:input|include|subfile)[A-Za-z]*\*?\s*(?:\[[^\]]*\]\s*)?\{([^}]+)\}/g
+const TEX_RE = /\.(tex|ltx)$/i
+const BEGIN_DOCUMENT = /\\begin\s*\{document\}/
+
+/**
+ * A document's main file: the one its tracking file records, while the document has it; else the
+ * one file with \begin{document}, whatever its name. With several such files and none recorded
+ * the user is asked: `asked` lists them, and `main` is what is read meanwhile. `files`: the
+ * document's texts by path. (main_of in server/rft_manuscript.py reads the same way.)
+ */
+export function mainOf(files: Record<string, string>, recorded: string): { main: string; asked: string[] } {
+  const tex = Object.keys(files).filter(f => TEX_RE.test(f)).sort()
+  if (tex.includes(recorded)) return { main: recorded, asked: [] }
+  const found = tex.filter(f => BEGIN_DOCUMENT.test(files[f]!.split('\n').map(uncommentedLine).join('\n')))
+  if (found.length === 1) return { main: found[0]!, asked: [] }
+  if (found.length) return { main: found.includes('main.tex') ? 'main.tex' : found[0]!, asked: found }
+  return { main: tex.includes('main.tex') ? 'main.tex' : tex[0] ?? '', asked: [] }
+}
 
 /**
  * The order a document is read in: its main file, each file it takes in (\input, \include,
@@ -53,6 +71,8 @@ export function readingOrder(files: Record<string, string>, main: string): { at:
   const spans: { file: string; from: number; to: number; base: number }[] = []
   const seen = new Set<string>()
   let base = 0
+  // what a file takes in is named from the main file's folder
+  const folder = main.includes('/') ? main.slice(0, main.lastIndexOf('/') + 1) : ''
   const visit = (file: string) => {
     if (seen.has(file) || files[file] === undefined) return
     seen.add(file)
@@ -66,7 +86,7 @@ export function readingOrder(files: Record<string, string>, main: string): { at:
     }
     lines.forEach((l, i) => {
       for (const m of uncommentedLine(l).matchAll(INCLUDE_RE)) {
-        const name = m[1]!.trim().replace(/^\.\//, '')
+        const name = folder + m[1]!.trim().replace(/^\.\//, '')
         const target = files[name] !== undefined ? name : `${name}.tex`
         if (files[target] === undefined || seen.has(target)) continue
         flush(i)

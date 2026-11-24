@@ -123,7 +123,7 @@ describe('in a session', () => {
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
     const first = await $.tool.call({ tool: 'mcp__rft__rft_manuscript' } as never)
     expect(first.text).toContain('paper: converted to plain LaTeX, which compiles from its folder alone and names nothing of the tree (5 copies')
-    expect(first.text).toContain('  paper: S01, S04 (snippet changed since: to review), S03, S02 (adapted), S07 (no such snippet)')
+    expect(first.text).toContain('  paper (article, main.tex, pdfLaTeX): S01, S04 (snippet changed since: to review), S03, S02 (adapted), S07 (no such snippet)')
     expect((await $.tool.call({ tool: 'mcp__rft__rft_manuscript' } as never)).text).not.toContain('converted')
   })
 })

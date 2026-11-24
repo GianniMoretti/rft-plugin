@@ -2152,7 +2152,7 @@ class ManuscriptTest(unittest.TestCase):
         paper, thesis = m["documents"]
         self.assertEqual((paper["name"], paper["main"], paper["files"], paper["others"], paper["notIncluded"]), ("paper", "main.tex", ["main.tex", "refs.bib"], [], []))
         self.assertEqual(paper["copies"], [{"id": "S01", "name": "S01", "nth": 1, "marker": "Result: CutMix", "file": "main.tex", "state": "placed", "markers": True,
-                                            "line": 6, "end": 9, "placed": "\\paragraph{CutMix}\nThe gap closes by 0.3 \\cite{zhang2018mixup}.", "snippetReview": False}])
+                                            "line": 6, "end": 9, "placed": "\\paragraph{CutMix}\nThe gap closes by 0.3 \\cite{zhang2018mixup}.", "snippetReview": False, "included": True}])
         self.assertEqual(thesis["copies"][0]["state"], "adapted")
         # the number the copy holds is the tree's; the entry it cites came from R01; an id of the vault in its words is a trace ("Table S1" is not)
         self.assertEqual(paper["values"], [{"index": 0, "kind": "number", "from": "E05", "key": "gap", "written": "0.3", "file": "main.tex", "line": 8,

@@ -10,16 +10,16 @@
 import type { Io, Loaded, RftNode } from './vault'
 import { compareNames, conceptOrder, join, resolveId } from './vault'
 import type { Located, LocatedValue } from './copies'
-import { bibKeys, copyAt, locateCopies, locateValues, readingOrder } from './copies'
+import { bibKeys, copyAt, locateCopies, locateValues, mainOf, readingOrder } from './copies'
 import type { Trace } from './scan'
 import { citedKeys, documentFiles, scanDocument, traceWords, tracesInText } from './scan'
 import type { DocsRegistry, Header, Kind, Registry, Snippet } from './snippets'
 import {
   DOCUMENTS_DIR, DOCUMENTS_REGISTRY, KINDS, ManuscriptError, SNIPPETS_DIR, SNIPPETS_REGISTRY, THEOREMS, blockText, blocksRel, bodyAfterHeader,
-  contentFingerprint, contentOf, documentRel, headerText, isDocumentLocked, isDocumentName, isKind, isSnippetLocked, listDocuments,
+  contentFingerprint, contentOf, documentRel, headerText, isDocument, isDocumentLocked, isDocumentName, isKind, isSnippetLocked, listDocuments,
   listSnippets, readDocsRegistry, readRegistry, snippetRel, uncommented, writeDocsRegistry, writeRegistry,
 } from './snippets'
-import type { TrackedCopy, TrackedValue, Tracking } from './tracking'
+import type { Engine, TrackedCopy, TrackedValue, Tracking } from './tracking'
 import { readTracking, writeTracking } from './tracking'
 import { substanceFingerprint } from './verify'
 import type { Held, Written } from './writeout'
@@ -37,8 +37,15 @@ export type Doc = {
   /** Its main file, relative to the vault, and that file's text. */
   path: string
   text: string
-  /** Its main file inside its folder, and its .tex and .bib files by their path there. */
+  /** Its main file inside its folder (the one with \begin{document}, whatever its name; '' when it has no .tex file), and its .tex and .bib files by their path there. */
   main: string
+  /** The files the user is asked to pick the main file from: several have \begin{document} and none is recorded. */
+  mainAsked: string[]
+  /** The .tex files the main file takes in, itself among them: a copy in any other file is not in the document. */
+  included: Set<string>
+  /** What compiles it, and the template it was made from. */
+  engine: Engine
+  template: string
   files: Record<string, string>
   /** Its other files (figures, classes, styles), by their path there. */
   others: string[]
@@ -49,7 +56,13 @@ export type Doc = {
 }
 export type Manuscript = { registry: Registry; docs: DocsRegistry; snippets: Snippet[]; documents: Doc[] }
 
-/** One document as it is on disk: its files, its tracking file, its copies found. Null when its main file is missing. */
+/** The template a document made before templates is read as: the built-in one of its class, as its kind was. */
+export const templateOf = (mainText: string) => (/\\documentclass(?:\[[^\]]*\])?\{report\}/.test(uncommented(mainText)) ? 'report' : 'article')
+
+/** The engines as they are said. */
+export const ENGINE_NAMES: Record<Engine, string> = { pdflatex: 'pdfLaTeX', xelatex: 'XeLaTeX', lualatex: 'LuaLaTeX' }
+
+/** One document as it is on disk: its files, its tracking file, its main file, its copies found. */
 export async function readDocument(io: Io, vault: string, name: string, locked: boolean): Promise<Doc | null> {
   const files: Record<string, string> = {}
   const others: string[] = []
@@ -62,9 +75,19 @@ export async function readDocument(io: Io, vault: string, name: string, locked: 
     else files[f.rel] = text
   }
   const tracking = await readTracking(io, vault, name)
-  const main = files[tracking.main] !== undefined ? tracking.main : 'main.tex'
-  if (files[main] === undefined) return null
-  return { name, path: `${DOCUMENTS_DIR}/${name}/${main}`, text: files[main]!, main, files, others, tracking, copies: locateCopies(files, tracking), locked }
+  const { main, asked } = mainOf(files, tracking.main)
+  const text = files[main] ?? ''
+  return {
+    name, path: `${DOCUMENTS_DIR}/${name}/${main || 'main.tex'}`, text, main, mainAsked: asked, included: readingOrder(files, main).included,
+    engine: tracking.engine ?? 'pdflatex', template: tracking.template || templateOf(text), files, others, tracking, copies: locateCopies(files, tracking), locked,
+  }
+}
+
+/** A document's main file, by its path inside the vault; null when `name` is no document or has none. */
+export async function documentMain(io: Io, vault: string, name: string): Promise<string | null> {
+  if (!(await isDocument(io, vault, name))) return null
+  const d = await readDocument(io, vault, name, true)
+  return d && d.main ? `${DOCUMENTS_DIR}/${name}/${d.main}` : null
 }
 
 /** Snippets and documents as they are on disk; null when the vault has neither. */
@@ -215,13 +238,13 @@ export const copyName = (d: Pick<Doc, 'copies'>, c: Located) =>
 /** Where a snippet is used: per document and file, how many copies it has there, and their states. */
 export type Use = { doc: string; file: string; count: number; states: CopyState[] }
 
-/** The documents and files holding copies of a snippet (lost copies left out: they are nowhere). */
+/** The documents and files holding copies of a snippet (left out: a lost copy, which is nowhere, and one in a file the main file does not take in, which is not in the document). */
 export function usedIn(ms: Manuscript, id: string): Use[] {
   const s = ms.snippets.find(x => x.id === id)
   const out: Use[] = []
   for (const d of ms.documents) {
     for (const c of d.copies) {
-      if (c.snippet !== id || !c.found) continue
+      if (c.snippet !== id || !c.found || !d.included.has(c.file)) continue
       let u = out.find(x => x.doc === d.name && x.file === c.file)
       if (!u) out.push((u = { doc: d.name, file: c.file, count: 0, states: [] }))
       u.count++
@@ -385,14 +408,22 @@ const copyWords = (c: Located, st: Copy) => [
   c.found === 'text' ? 'its markers are gone' : '', st.snippetReview ? 'its snippet is in review' : '',
 ].filter(Boolean)
 
+/** Said of a copy in a file the main file never takes in. */
+const NOT_INCLUDED = 'not in the document: the main file does not take its file in'
+const outside = (d: Pick<Doc, 'included'>, c: Located) => !!c.found && !d.included.has(c.file)
+
 /** The copies of a document with their states, in a few words. */
 function copiesWords(d: Doc, byId: Map<string, Snippet>, review: (id: string) => boolean): string {
   if (!d.copies.length) return 'no copies yet'
   return d.copies.map(c => {
-    const notes = [c.found && c.file !== d.main ? c.file : '', ...copyWords(c, copyState(c, byId.get(c.snippet), review(c.snippet)))].filter(Boolean)
+    const notes = [c.found && c.file !== d.main ? c.file : '', outside(d, c) ? NOT_INCLUDED : '', ...copyWords(c, copyState(c, byId.get(c.snippet), review(c.snippet)))].filter(Boolean)
     return `${copyName(d, c)}${notes.length ? ` (${notes.join('; ')})` : ''}`
   }).join(', ')
 }
+
+/** A document's settings in a few words: its template, its main file, its engine. */
+const settingsWords = (d: Doc) =>
+  `template ${d.template}, main file ${d.main || 'none'}${d.mainAsked.length ? ` (the user has still to choose it among ${d.mainAsked.join(', ')})` : ''}, ${ENGINE_NAMES[d.engine]}`
 
 /** rft_manuscript: the snippets (the library), the documents with their copies, what is still to write; or one snippet, or one document. */
 export async function manuscriptReport(io: Io, loaded: Loaded, ref?: string): Promise<string> {
@@ -415,8 +446,8 @@ export async function manuscriptReport(io: Io, loaded: Loaded, ref?: string): Pr
     out.push(`  ${s.id} ${s.kind} · ${s.title} · ${stateWords(st)} · ${st.basis.join(', ') || 'no basis'} · ${usedWords(usedIn(ms, s.id))}`)
   }
   if (!ms.snippets.length) out.push('  none yet')
-  out.push(`Documents (${vault}/${DOCUMENTS_DIR}/), built from copies of snippets, ${docLock(ms.docs)}:`)
-  for (const d of ms.documents) out.push(`  ${d.name}: ${copiesWords(d, byId, id => !!states.get(id)?.review.length)}`)
+  out.push(`Documents (${vault}/${DOCUMENTS_DIR}/; each with its template, main file and engine), built from copies of snippets, ${docLock(ms.docs)}:`)
+  for (const d of ms.documents) out.push(`  ${d.name} (${d.template}, ${d.main || 'no main file'}${d.mainAsked.length ? '?' : ''}, ${ENGINE_NAMES[d.engine]}): ${copiesWords(d, byId, id => !!states.get(id)?.review.length)}`)
   if (!ms.documents.length) out.push('  none yet')
   const todo = stillToWrite(loaded, ms, cites)
   if (todo.length) {
@@ -462,7 +493,12 @@ async function documentReport(io: Io, loaded: Loaded, ms: Manuscript, d: Doc, st
   const vault = loaded.config.vault
   const tex = Object.keys(d.files).filter(f => TEX_FILE.test(f))
   const order = readingOrder(d.files, d.main)
-  const out = [`${d.name} (${vault}/${DOCUMENTS_DIR}/${d.name}/, main file ${d.main}${tex.length > 1 ? `; also ${tex.filter(f => f !== d.main).join(', ')}` : ''}): ${d.locked ? 'locked: its text is the user\'s' : 'unlocked: you may edit its text'}. Its outline:`]
+  const rest = [...Object.keys(d.files).filter(f => f !== d.main), ...d.others].sort()
+  const out = [
+    `${d.name} (${vault}/${DOCUMENTS_DIR}/${d.name}/, ${settingsWords(d)}): ${d.locked ? 'locked: its text is the user\'s' : 'unlocked: you may edit its .tex and .bib files'}.`,
+    `Its files: ${[d.main, ...rest].filter(Boolean).join(', ') || 'none'}.`,
+    'Its outline:',
+  ]
   const items: { file: string; line: number; text: string }[] = []
   for (const file of tex) {
     const inCopy = (line: number) => !!copyAt(d.copies, file, line)
@@ -475,7 +511,7 @@ async function documentReport(io: Io, loaded: Loaded, ms: Manuscript, d: Doc, st
     if (!c.found) continue
     const s = byId.get(c.snippet)
     const st = copyState(c, s, !!states.get(c.snippet)?.review.length)
-    items.push({ file: c.file, line: c.begin!, text: `  ${copyName(d, c)} ${s ? `${s.kind} · ${s.title}` : c.marker}: ${[st.state === 'placed' ? 'as the snippet' : '', ...copyWords(c, st)].filter(Boolean).join('; ')}` })
+    items.push({ file: c.file, line: c.begin!, text: `  ${copyName(d, c)} ${s ? `${s.kind} · ${s.title}` : c.marker}: ${[st.state === 'placed' ? 'as the snippet' : '', outside(d, c) ? 'not in the document' : '', ...copyWords(c, st)].filter(Boolean).join('; ')}` })
   }
   let file = d.main
   for (const x of items.sort((a, b) => order.at(a.file, a.line) - order.at(b.file, b.line))) {
@@ -678,6 +714,9 @@ const CONTEXT = 28
 
 type Holding = Pick<Doc, 'name' | 'main' | 'files' | 'copies'>
 
+/** A document that has no .tex file takes no copy. */
+const NO_MAIN = (name: string) => `${name} has no .tex file yet: the user makes its main file (the one with \\begin{document}) in the page first`
+
 /** The copy a reference names in a document: `S04`, or `S04#2` when the document holds several of S04. */
 export function findCopy(d: Holding, ref: string): Located {
   const m = COPY_REF.exec(ref.trim().toUpperCase())
@@ -713,6 +752,7 @@ function insertion(d: Holding, i: { file?: string; after?: string }, copyOf: (re
     }
     throw new ManuscriptError(`"${after}" is neither a copy in ${d.name} nor one of its headings${file ? ` in ${file}` : ''} (rft_manuscript ${d.name} shows its outline)`)
   }
+  if (d.files[file ?? d.main] === undefined) throw new ManuscriptError(NO_MAIN(d.name))
   const lines = d.files[file ?? d.main]!.split('\n')
   let at = lines.findIndex(l => END_OF_DOC.test(l) && !l.trimStart().startsWith('%'))
   if (at < 0) at = lines.length
@@ -737,7 +777,12 @@ function withoutLines(lines: string[], begin: number, end: number): string[] {
 
 /** A change to a document being made: its files and its tracking as they will be, the files to write and to delete. */
 type Work = { files: Record<string, string>; tracking: Tracking; touched: Set<string>; removed: string[] }
-const workOn = (d: Doc): Work => ({ files: { ...d.files }, tracking: JSON.parse(JSON.stringify(d.tracking)) as Tracking, touched: new Set(), removed: [] })
+const workOn = (d: Doc): Work => {
+  const tracking = JSON.parse(JSON.stringify(d.tracking)) as Tracking
+  // the main file is recorded with the first thing written, once there is no doubt which it is
+  if ((!tracking.main || d.files[tracking.main] === undefined) && !d.mainAsked.length) tracking.main = d.main
+  return { files: { ...d.files }, tracking, touched: new Set(), removed: [] }
+}
 
 async function save(io: Io, vault: string, d: Doc, w: Work): Promise<void> {
   for (const f of w.touched) await io.write(join(vault, DOCUMENTS_DIR, d.name, f), w.files[f]!)

@@ -37,7 +37,10 @@ END_RE = re.compile(r"^%\s*rft-end\s+(S\d+)\s*$")
 COPY_REF = re.compile(r"^S\d+(?:#\d+)?$")
 MARK_END_RE = re.compile(r"^\s*%%%\s*end\s*%%%\s*$", re.I)
 MARK_RE = re.compile(r"^\s*%%%\s*(\S.*?)\s*%%%\s*$")
-INCLUDE_RE = re.compile(r"\\(?:input|include|subfile)\s*\{([^}]+)\}")
+# any command that takes a file in: \input, \include, \subfile, and a template's own (\includepaper); what its argument names must be a file of the document
+INCLUDE_RE = re.compile(r"\\(?!include(?:only|graphics|pdf|svg)\b)[A-Za-z]*(?:input|include|subfile)[A-Za-z]*\*?\s*(?:\[[^\]]*\]\s*)?\{([^}]+)\}")
+BEGIN_DOCUMENT = re.compile(r"\\begin\s*\{document\}")
+ENGINES = ("pdflatex", "xelatex", "lualatex")
 TEXT_FILE = re.compile(r"\.(tex|ltx|bib)$", re.I)
 TEX_FILE = re.compile(r"\.(tex|ltx)$", re.I)
 MAX_FILE = 2_000_000
@@ -206,9 +209,34 @@ def is_first_design(text: str) -> bool:
                 or re.search(r"\\rft(?:num|fig|table|snippet)\b", uncommented(text)))
 
 
+def is_document(vault: Path, name: str) -> bool:
+    """Whether documents/<name>/ is a document: a folder the plugin made one (it has a tracking
+    file), or one from before a main file could have any name (it has a main.tex)."""
+    d = documents_dir(vault)
+    folder = d / name
+    return bool(isinstance(name, str) and DOC_RE.match(name) and folder.is_dir() and not folder.is_symlink()
+                and ((d / TRACKING / name / "tracking.json").is_file() or (folder / "main.tex").is_file()))
+
+
 def document_names(vault: Path) -> list[str]:
     d = documents_dir(vault)
-    return sorted(p.name for p in d.iterdir() if p.is_dir() and DOC_RE.match(p.name) and (p / "main.tex").is_file()) if d.is_dir() else []
+    return sorted(p.name for p in d.iterdir() if is_document(vault, p.name)) if d.is_dir() else []
+
+
+def main_of(files: dict[str, str], recorded: str) -> tuple[str, list[str]]:
+    """A document's main file (mainOf in hooks/lib/copies.ts): the one its tracking file records,
+    while the document has it; else the one file with \\begin{document}, whatever its name. With
+    several such files and none recorded the user is asked: the second answer lists them, and the
+    first is what is read meanwhile. `files`: the document's .tex and .bib texts by path."""
+    tex = sorted(f for f in files if TEX_FILE.search(f))
+    if recorded in tex:
+        return recorded, []
+    found = [f for f in tex if BEGIN_DOCUMENT.search(uncommented(files[f]))]
+    if len(found) == 1:
+        return found[0], []
+    if found:
+        return ("main.tex" if "main.tex" in found else found[0]), found
+    return ("main.tex" if "main.tex" in tex else tex[0] if tex else ""), []
 
 
 def snippet_files(vault: Path) -> list[Path]:
@@ -233,7 +261,9 @@ def read_tracking(vault: Path, name: str) -> dict:
               for v in rows(d.get("values")) if v.get("kind") in ("number", "figure", "table") and text(v.get("from")) and text(v.get("file"))]
     bib = {k: {"from": text(e.get("from")), "file": text(e.get("file"))} for k, e in (d.get("bib") if isinstance(d.get("bib"), dict) else {}).items()
            if isinstance(e, dict) and text(e.get("from"))}
-    return {"main": text(d.get("main")) or "main.tex", "copies": copies, "values": values, "bib": bib,
+    bib_of = {k: v for k, v in (d.get("bibOf") if isinstance(d.get("bibOf"), dict) else {}).items() if text(v)}
+    return {"main": text(d.get("main")), "engine": d.get("engine") if d.get("engine") in ENGINES else "pdflatex", "template": text(d.get("template")),
+            "copies": copies, "values": values, "bib": bib, "bibOf": bib_of,
             "allowed": [a for a in rows(d.get("allowed")) if text(a.get("file")) and text(a.get("match"))]}
 
 
@@ -253,6 +283,45 @@ def document_texts(vault: Path, name: str) -> tuple[dict[str, str], list[str]]:
         else:
             files[rel] = text
     return files, others
+
+
+# what the page's editor opens (the rest is shown, or only listed), and what it shows instead of opening
+EDITED = re.compile(r"\.(tex|ltx|bib|sty|cls|bst|bbx|cbx|lbx|def|cfg|clo|txt|md)$", re.I)
+SHOWN = {".png": "image", ".jpg": "image", ".jpeg": "image", ".gif": "image", ".webp": "image", ".svg": "image", ".pdf": "pdf"}
+
+
+def tree_of(vault: Path, name: str) -> list[dict]:
+    """Every file and folder of a document, by its path inside it, folders first met first: each
+    with its `kind` (file or folder), a file with its size and how the page takes it (`edit`: in
+    the editor; `show`: an image or a PDF, shown; neither: only listed). Hidden files and folders
+    are the document's too (a .latexmkrc, a .gitignore), and listed; links are not followed."""
+    folder = documents_dir(vault) / name
+    out: list[dict] = []
+
+    def visit(d: Path) -> None:
+        for p in sorted(d.iterdir(), key=lambda x: (not (x.is_dir() and not x.is_symlink()), x.name)):
+            rel = p.relative_to(folder).as_posix()
+            if p.is_dir() and not p.is_symlink():
+                out.append({"path": rel, "kind": "folder"})
+                visit(p)
+            else:
+                try:
+                    size = p.lstat().st_size
+                except OSError:
+                    size = 0
+                edit = bool(EDITED.search(rel)) and not p.is_symlink() and size <= MAX_FILE
+                out.append({"path": rel, "kind": "file", "size": size, "edit": edit, "show": None if p.is_symlink() else SHOWN.get(p.suffix.lower())})
+
+    if folder.is_dir():
+        visit(folder)
+    return out
+
+
+def template_of(main_text: str) -> str:
+    """The template a document made before templates is read as: the built-in one of its class
+    (`report` for a report, else `article`), as its kind was."""
+    m = re.search(r"\\documentclass(?:\[[^\]]*\])?\{(\w+)\}", uncommented(main_text))
+    return "report" if m and m.group(1) == "report" else "article"
 
 
 def parse_markers(text: str) -> list[dict]:
@@ -291,6 +360,7 @@ def reading_order(files: dict[str, str], main: str):
     spans: list[tuple[str, int, int, int]] = []
     seen: set[str] = set()
     base = 0
+    folder = main.rsplit("/", 1)[0] + "/" if "/" in main else ""  # what a file takes in is named from the main file's folder
 
     def visit(file: str) -> None:
         nonlocal base
@@ -310,7 +380,7 @@ def reading_order(files: dict[str, str], main: str):
 
         for i, line in enumerate(lines):
             for m in INCLUDE_RE.finditer(_uncommented_line(line)):
-                name = re.sub(r"^\./", "", m.group(1).strip())
+                name = folder + re.sub(r"^\./", "", m.group(1).strip())
                 target = name if name in files else f"{name}.tex"
                 if target not in files or target in seen:
                     continue
@@ -587,9 +657,8 @@ def summary(vault: Path, tree: dict, read) -> dict:
     for name in document_names(vault):
         files, others = document_texts(vault, name)
         tracking = read_tracking(vault, name)
-        main = tracking["main"] if tracking["main"] in files else "main.tex"
-        if main not in files:
-            continue
+        main, asked = main_of(files, tracking["main"])
+        _, included = reading_order(files, main)
         located = locate_copies(files, tracking)
         several = {c["snippet"] for c in located if c["nth"] > 1}
         copies = []
@@ -600,17 +669,20 @@ def summary(vault: Path, tree: dict, read) -> dict:
             copies.append({"id": c["snippet"], "name": f"{c['snippet']}#{c['nth']}" if c["snippet"] in several else c["snippet"], "nth": c["nth"],
                            "marker": c["marker"], "file": c["file"], "state": state, "markers": c["found"] == "markers",
                            "line": None if c["begin"] is None else c["begin"] + 1, "end": None if c["end"] is None else c["end"] + 1,
-                           "placed": c["placed"], "snippetReview": bool(c["found"] and s and s["review"])})
-            if s is not None and c["found"]:
+                           "placed": c["placed"], "snippetReview": bool(c["found"] and s and s["review"]),
+                           # a copy in a file the main file never takes in is not in the document
+                           "included": bool(c["found"] and c["file"] in included)})
+            if s is not None and c["found"] and c["file"] in included:
                 use = next((u for u in s["usedIn"] if u["doc"] == name and u["file"] == c["file"]), None)
                 if use is None:
                     use = {"doc": name, "file": c["file"], "count": 0, "states": []}
                     s["usedIn"].append(use)
                 use["count"] += 1
                 use["states"].append(state)
-        _, included = reading_order(files, main)
         scan = rft_scan.scan_document(vault, name, ids, set(cites))
-        docs.append({"name": name, "path": f"{DOCUMENTS}/{name}/{main}", "main": main, "files": sorted(files), "others": others,
+        docs.append({"name": name, "path": f"{DOCUMENTS}/{name}/{main}", "main": main, "mainAsked": asked,
+                     "mainCandidates": [f for f in sorted(files) if TEX_FILE.search(f) and BEGIN_DOCUMENT.search(uncommented(files[f]))], "engine": tracking["engine"],
+                     "template": tracking["template"] or template_of(files.get(main, "")), "files": sorted(files), "others": others, "tree": tree_of(vault, name),
                      "notIncluded": sorted(f for f in files if TEX_FILE.search(f) and f not in included),
                      "locked": document_locked(dreg, name), "copies": copies, "values": values_of(vault, name, files, tracking, located),
                      "bib": [{"key": k, "file": f, "from": (tracking["bib"].get(k) or {}).get("from")} for f in sorted(files) if f.lower().endswith(".bib") for k in bib_keys(files[f])],

@@ -213,7 +213,7 @@ describe('documents, built from copies of snippets', () => {
     const ms = (await readManuscript(io, l))!
     expect(ms.documents[0]!.copies.map(c => [c.snippet, c.nth, c.file])).toEqual([['S02', 1, 'sections/method.tex'], ['S02', 2, 'main.tex']])
     expect(usedIn(ms, 'S02')).toEqual([{ doc: 'paper', file: 'sections/method.tex', count: 1, states: ['placed'] }, { doc: 'paper', file: 'main.tex', count: 1, states: ['placed'] }])
-    expect(await manuscriptReport(io, l)).toContain('  paper: S02#1 (sections/method.tex), S02#2')
+    expect(await manuscriptReport(io, l)).toContain('  paper (article, main.tex, pdfLaTeX): S02#1 (sections/method.tex), S02#2')
     await expect(setDocument(io, l, { name: 'paper', move: 'S02', after: 'Method' })).rejects.toThrow('paper holds 2 copies of S02: name one, S02#1 (sections/method.tex), S02#2 (main.tex)')
     await expect(setDocument(io, l, { name: 'paper', place: 'S01', file: 'sections/nope.tex' })).rejects.toThrow('paper has no file sections/nope.tex to place a copy in (its .tex files: main.tex, sections/method.tex)')
     await expect(setDocument(io, l, { name: 'paper', place: 'S01', file: 'main.tex', after: 'S02#1' })).rejects.toThrow('the copy S02#1 is in sections/method.tex, not in main.tex')
@@ -226,7 +226,7 @@ describe('documents, built from copies of snippets', () => {
     expect((await readManuscript(io, l))!.documents[0]!.copies.map(c => [c.snippet, c.file])).toEqual([['S02', 'sections/method.tex'], ['S02', 'main.tex'], ['S01', 'main.tex']])
     expect(await setDocument(io, l, { name: 'paper', remove: 'S02#1' })).toBe('Removed the copy of S02#1 from paper (the snippet itself stays).')
     expect(fs.read('vault/documents/paper/sections/method.tex')).toBe('\\section{Method}\nWe train longer.\n')
-    expect(await manuscriptReport(io, l)).toContain('  paper: S02, S01')
+    expect(await manuscriptReport(io, l)).toContain('  paper (article, main.tex, pdfLaTeX): S02, S01')
   })
 
   test('placing copies a figure in under its own name and adds what it cites to the document\'s .bib; removing takes out what nothing else uses', async () => {
@@ -291,7 +291,7 @@ describe('documents, built from copies of snippets', () => {
     expect([JSON.parse(fs.read(TRACKING)).values.length, kept.values.length]).toEqual([1, 1])
     const report = await manuscriptReport(io, l)
     expect(report).toContain('S01 result · Training length at 1k images · written · E01 · used in paper (main.tex); thesis (main.tex: adapted)')
-    expect(report).toContain('  paper: S01\n  thesis: S01 (adapted)')
+    expect(report).toContain('  paper (article, main.tex, pdfLaTeX): S01\n  thesis (report, main.tex, pdfLaTeX): S01 (adapted)')
     // a kept copy whose markers a co-author then deletes is still found, by the text it had
     fs.write(THESIS, fs.read(THESIS).replace('%%% Result: Training length at 1k images %%%\n', '').replace('%%% end %%%\n', ''))
     const found = (await readManuscript(io, l))!.documents.find(d => d.name === 'thesis')!.copies[0]!
@@ -309,7 +309,9 @@ describe('documents, built from copies of snippets', () => {
     await setDocument(io, l, { name: 'paper', place: 'S01', after: 'Results' })
     const line = fs.read(PAPER).split('\n').findIndex(x => x.includes('\\cref{S01}')) + 1
     expect(await manuscriptReport(io, l, 'paper')).toBe([
-      'paper (vault/documents/paper/, main file main.tex): locked: its text is the user\'s. Its outline:',
+      'paper (vault/documents/paper/, template article, main file main.tex, pdfLaTeX): locked: its text is the user\'s.',
+      'Its files: main.tex, refs.bib.',
+      'Its outline:',
       '§ Results',
       '  S01 result · Training length at 1k images: as the snippet',
       `Traces of the tree in its files, which are shared as they are (1): main.tex:${line}: the id S01.`,
@@ -350,8 +352,8 @@ describe('what a snippet rests on', () => {
     const all = await manuscriptReport(io, l)
     expect(all).toContain('Snippets (vault/snippets/), the building blocks, locked: the user writes them')
     expect(all).toContain('  S01 result · Training length at 1k images · written · E01 · in no document')
-    expect(all).toContain('Documents (vault/documents/), built from copies of snippets, locked: their text is the user\'s')
-    expect(all).toContain('  paper: no copies yet')
+    expect(all).toContain('Documents (vault/documents/; each with its template, main file and engine), built from copies of snippets, locked: their text is the user\'s')
+    expect(all).toContain('  paper (article, main.tex, pdfLaTeX): no copies yet')
     const one = await manuscriptReport(io, l, 'S01')
     expect(one).toContain('S01 result · Training length at 1k images (vault/snippets/S01.tex): written; in no document; locked: the user writes it.')
     expect(one).toContain('    numbers: \\rftnum{E01}{acc.1k} = 71.3, \\rftnum{E01}{acc.10k} = 88.2, \\rftnum{E01}{seeds} = 3')

@@ -191,6 +191,7 @@ SCREENS = [
     ("timeline", [page("calendar"), "document.querySelector('[data-cal-mode=timeline]').click()"]),
     ("month", [page("calendar"), "document.querySelector('[data-cal-mode=month]').click()"]),
     ("manuscript", [page("manuscript")]),
+    ("manuscript-files", MS_PDF[:2]),  # a document's file list: its bar, a row's own actions
     ("manuscript-pdf", MS_PDF),
     ("slides", [page("slides")]),
     ("slides-text", [page("slides"), "document.querySelector('.sl-item').click()"]),

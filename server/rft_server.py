@@ -80,6 +80,7 @@ from html import escape as html_escape, unescape as html_unescape
 from urllib.parse import parse_qs, quote, urlsplit
 
 import rft_decks  # the slide decks as the page reads them
+import rft_documents  # a document as a folder of files: its file list, uploads, main file and engine
 import rft_latex  # the manuscript's LaTeX: its generated files and the compile
 import rft_manuscript  # the manuscript as the page shows it
 import rft_notebook
@@ -1028,7 +1029,9 @@ class Vault:
             path = (rft_manuscript.snippets_dir(self.root) / f"{nid}.tex").resolve()
             return path if path.parent == rft_manuscript.snippets_dir(self.root).resolve() and path.is_file() else None
         if rft_manuscript.DOC_RE.match(nid or "") and not ID_RE.match(nid):
-            path = rft_manuscript.documents_dir(self.root) / nid / "main.tex"
+            if not rft_manuscript.is_document(self.root, nid):
+                return None
+            path = rft_manuscript.documents_dir(self.root) / nid / (rft_latex.main_file(self.root, nid) or "main.tex")
             return path if path.is_file() and not path.is_symlink() else None
         return self.note_path(nid)
 
@@ -2055,7 +2058,7 @@ class Vault:
         for x in out["snippets"] + out["documents"]:
             x["threads"] = sum(1 for t in self._threads(x.get("id") or x["name"])["threads"] if t.get("state") == "open")
         for d in out["documents"]:
-            pdf = rft_manuscript.documents_dir(self.root) / ".build" / d["name"] / f"{Path(d['main']).stem}.pdf"
+            pdf = rft_latex.build_dir(self.root, d["name"], d["main"]) / f"{Path(d['main']).stem}.pdf"
             if pdf.is_file():
                 d["built"] = int(pdf.stat().st_mtime)
         out["latexmk"] = bool(shutil.which("latexmk"))
@@ -2063,8 +2066,11 @@ class Vault:
 
     def manuscript_path(self, rel: str) -> Path | None:
         """A file the page may read and write: a snippet (snippets/S<n>.tex, an existing one) or a
-        .tex or .bib file of a document (documents/<name>/…, an existing one, no hidden file or folder)."""
-        if not re.fullmatch(r"snippets/S\d+\.tex|documents/[a-z0-9][a-z0-9-]*/[^\\\x00]+\.(?:tex|ltx|bib)", rel or ""):
+        text file of a document (documents/<name>/…: .tex, .bib, a class or style file and the
+        like, rft_manuscript.EDITED; an existing one, no hidden file or folder)."""
+        if not re.fullmatch(r"snippets/S\d+\.tex|documents/[a-z0-9][a-z0-9-]*/[^\\\x00]+", rel or ""):
+            return None
+        if rel.startswith("documents/") and not rft_manuscript.EDITED.search(rel):
             return None
         if any(part in ("", ".", "..") or part.startswith(".") for part in rel.split("/")):
             return None
@@ -2125,6 +2131,46 @@ class Vault:
             os.replace(tmp, path)
         return 200, self.manuscript()
 
+    def vault_ids(self) -> set[str]:
+        """The ids a document's files must not carry: the vault's notes and snippets."""
+        return {n["id"] for n in self.tree()["nodes"]} | {p.stem for p in rft_manuscript.snippet_files(self.root)}
+
+    def document_files(self, req: dict) -> tuple[int, dict]:
+        """What the user does in a document's file list (rft_documents): `new-file` or
+        `new-folder` {doc, path}; `move` {doc, path, to} a file or a folder renamed or moved, what
+        is tracked of it following; `delete` {doc, path, sure?} (one that holds copies, or the main
+        file, only once `sure`). The answer carries the manuscript as it is then."""
+        doc, action, path = req.get("doc"), req.get("action"), req.get("path")
+        if not isinstance(doc, str) or not isinstance(path, str) or ("to" in req and not isinstance(req["to"], str)):
+            return 400, {"error": "expected {doc, action: new-file, new-folder, move or delete, path, to?, sure?}"}
+        with self._write_lock:
+            if action == "new-file":
+                status, out = rft_documents.new_file(self.root, doc, path, self.vault_ids())
+            elif action == "new-folder":
+                status, out = rft_documents.new_folder(self.root, doc, path, self.vault_ids())
+            elif action == "move":
+                status, out = rft_documents.move(self.root, doc, path, req.get("to"), self.vault_ids())
+            elif action == "delete":
+                status, out = rft_documents.delete(self.root, doc, path, req.get("sure") is True)
+            else:
+                return 400, {"error": "action must be new-file, new-folder, move or delete"}
+        return status, ({**out, **self.manuscript()} if status < 300 else out)
+
+    def document_upload(self, doc: str, path: str, data: bytes, replace: bool) -> tuple[int, dict]:
+        """A file uploaded into a document (rft_documents.upload), its bytes as they came."""
+        with self._write_lock:
+            status, out = rft_documents.upload(self.root, doc, path, data, self.vault_ids(), replace)
+        return status, ({**out, **self.manuscript()} if status < 300 else out)
+
+    def document_settings(self, req: dict) -> tuple[int, dict]:
+        """A document's main file ({doc, main}) or its engine ({doc, engine}), kept in its tracking file."""
+        doc = req.get("doc")
+        if not isinstance(doc, str) or ("main" in req) == ("engine" in req):
+            return 400, {"error": "expected {doc, main: a .tex file of it} or {doc, engine: pdflatex, xelatex or lualatex}"}
+        with self._write_lock:
+            status, out = rft_documents.set_main(self.root, doc, req["main"]) if "main" in req else rft_documents.set_engine(self.root, doc, req["engine"])
+        return status, ({**out, **self.manuscript()} if status < 300 else out)
+
     def compile_manuscript(self, doc: str | None = None, snippet: str | None = None) -> tuple[int, dict]:
         """Compiles a document (rft_latex.compile_doc), or a snippet alone (compile_snippet), one compile at a time."""
         with self._compile_lock:
@@ -2137,7 +2183,7 @@ class Vault:
         if snippet is not None:
             pdf = build / "_snippets" / f"{snippet}.pdf" if rft_manuscript.SNIPPET_ID.match(snippet) else None
         else:
-            pdf = build / doc / f"{Path(rft_latex.main_file(self.root, doc)).stem}.pdf" if rft_manuscript.DOC_RE.match(doc or "") else None
+            pdf = rft_latex.pdf_path(self.root, doc) if rft_manuscript.is_document(self.root, doc or "") else None
         return pdf if pdf is not None and pdf.is_file() else None
 
     def manuscript_saved(self, nid: str) -> tuple[int, dict]:
@@ -2184,12 +2230,12 @@ class Vault:
             if not isinstance(name, str) or not rft_manuscript.DOC_RE.match(name) or kind not in ("article", "report") \
                     or not isinstance(title, str) or len(title) > 200 or "\n" in title:
                 return 400, {"error": "expected {action: document, name: lowercase letters, digits and dashes, kind: article or report, title?: one line}"}
-            if (ddir / name / "main.tex").exists():
+            if (ddir / name).exists():
                 return 409, {"error": f"there is already a document {name}"}
-            found = lambda: name if (ddir / name / "main.tex").is_file() else None  # noqa: E731
+            found = lambda: name if rft_manuscript.is_document(self.root, name) else None  # noqa: E731
         elif action in ("place", "move", "remove", "take", "keep", "take-value", "keep-value", "point", "markers", "allow", "declare", "convert", "insert"):
             name, sid = req.get("name"), req.get("id")
-            if not isinstance(name, str) or not rft_manuscript.DOC_RE.match(name) or not (ddir / name / "main.tex").is_file():
+            if not isinstance(name, str) or not rft_manuscript.is_document(self.root, name):
                 return 404, {"error": "no such document"}
             for k in ("file", "after", "match", "text", "environment"):
                 if k in req and not isinstance(req[k], str):
@@ -2832,6 +2878,16 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 if pdf is None:
                     return self._json(404, {"error": "not compiled yet"}, head_only)
                 return self._send(200, pdf.read_bytes(), "application/pdf", head_only)
+            if route == "/api/manuscript/raw":
+                # an image or a PDF of a document, for the page carrying the key
+                given = self.headers.get("X-RFT-Token") or ""
+                if not token or not secrets.compare_digest(given, token):
+                    return self._json(403, {"error": "the key is missing or out of date: open the address /rft printed"}, head_only)
+                q = parse_qs(url.query)
+                got = rft_documents.shown(vault.root, (q.get("doc") or [""])[0], (q.get("path") or [""])[0])
+                if got is None:
+                    return self._json(404, {"error": "no such image or PDF in that document"}, head_only)
+                return self._send(200, got[0].read_bytes(), got[1], head_only, csp=IMAGE_CSP)
             # no queue until this machine is paired with it (rft_queue.Queue.pair): the page shows no monitor
             if route.startswith("/api/queue") and not vault.queue.paired():
                 return self._json(404, {"error": NOT_PAIRED}, head_only)
@@ -2883,6 +2939,31 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 return self._json(400, {"error": "expected a JSON object"})
             return url, req
 
+        def _bytes_request(self, route: str, limit: int):
+            """The URL and the body, as bytes, of an upload to `route` from the page itself; None
+            once refused. A body over `limit` is refused before it is read, with its size said."""
+            if not self._host_ok():
+                return self._send(403, b"forbidden host", "text/plain")
+            url = urlsplit(self.path)
+            if url.path != route or not token:
+                return self._refuse()
+            if not self._may_write():
+                return self._json(403, {"error": "the key is missing or out of date: open the address /rft printed"})
+            try:
+                length = int(self.headers.get("Content-Length") or "")
+            except ValueError:
+                return self._json(411, {"error": "no length"})
+            if length < 0:
+                return self._json(400, {"error": "no length"})
+            if length > limit:
+                # the body is read and dropped while it is a few files' worth, so the page gets its answer; a larger one is not read at all
+                left = length if length <= 3 * limit else 0
+                while left > 0:
+                    left -= len(self.rfile.read(min(left, 1 << 20))) or left
+                self.close_connection = True
+                return self._json(413, {"error": f"the file is {rft_documents.megabytes(length)}: a file of a document is at most {rft_documents.megabytes(limit)}"})
+            return url, self.rfile.read(length)
+
         def do_PUT(self):
             """PUT api/note?id=<id> {"body": "...", "version": "<as read>"} or {"body": "...", "force": true};
             PUT api/scratchpad {"text": "...", "version": "<as read>" or null} or {"text": "...", "force": true};
@@ -2890,6 +2971,14 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             read>" or null} or {"key", "text", "force": true}."""
             if self.path.startswith(NOTEBOOK_PREFIX):
                 return self._proxy()
+            if urlsplit(self.path).path == "/api/manuscript/upload":
+                # PUT api/manuscript/upload?doc=<name>&path=<in the document>[&replace=1], the body the file's bytes
+                got = self._bytes_request("/api/manuscript/upload", rft_documents.MAX_UPLOAD)
+                if got is None:
+                    return
+                url, data = got
+                q = parse_qs(url.query)
+                return self._json(*vault.document_upload((q.get("doc") or [""])[0], (q.get("path") or [""])[0], data, (q.get("replace") or [""])[0] == "1"))
             if urlsplit(self.path).path == "/api/manuscript/file":
                 got = self._write_request("/api/manuscript/file", MAX_NOTE_BYTES)
                 if got is None:
@@ -3125,6 +3214,16 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 if not (isinstance(req.get("doc"), str) or isinstance(req.get("snippet"), str)):
                     return self._json(400, {"error": "expected {doc} or {snippet}"})
                 return self._json(*vault.compile_manuscript(req.get("doc"), req.get("snippet")))
+            if route == "/api/manuscript/files":
+                got = self._write_request("/api/manuscript/files", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                return self._json(*vault.document_files(got[1]))
+            if route == "/api/manuscript/settings":
+                got = self._write_request("/api/manuscript/settings", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                return self._json(*vault.document_settings(got[1]))
             if route == "/api/manuscript/lock":
                 got = self._write_request("/api/manuscript/lock", MAX_NODE_BYTES)
                 if got is None:

@@ -8,10 +8,10 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { nextReport } from '../hooks/lib/knowledge'
 import {
-  allowTrace, bibOf, copyState, declareEnvironment, insertFromTree, manuscriptReport, manuscriptWarnings, pointCopy, readManuscript, restoreMarkers, reviewCopy, reviewValue,
+  allowTrace, bibOf, copyState, declareEnvironment, documentMain, insertFromTree, manuscriptReport, manuscriptWarnings, pointCopy, readManuscript, restoreMarkers, reviewCopy, reviewValue,
   setDocument, tracesOf, usedIn, valuesOf,
 } from '../hooks/lib/manuscript'
-import { locateCopies, locateValues, parseMarkers, readingOrder } from '../hooks/lib/copies'
+import { locateCopies, locateValues, mainOf, parseMarkers, readingOrder } from '../hooks/lib/copies'
 import { load, readConfig, rooted } from '../hooks/lib/vault'
 import { MemoryFs } from './fixture'
 import { EXPECTED, FILES } from './fixtures/local-overleaf'
@@ -65,7 +65,9 @@ describe('the fixture\'s document', () => {
   test('rft_manuscript: its outline across its files, its lost copy, its values to look at; rft_next and rft_validate say the same', async () => {
     const { io, l } = await setup()
     expect(await manuscriptReport(io, l, 'paper')).toBe([
-      'paper (vault/documents/paper/, main file main.tex; also sections/method.tex): locked: its text is the user\'s. Its outline:',
+      'paper (vault/documents/paper/, template article, main file main.tex, pdfLaTeX): locked: its text is the user\'s.',
+      'Its files: main.tex, figures/loss.pdf, refs.bib, sections/method.tex.',
+      'Its outline:',
       '§ Introduction',
       '  S05 motivation · Why low data: as the snippet; its markers are gone',
       '  S01#1 definition · CutMix: as the snippet',
@@ -82,7 +84,7 @@ describe('the fixture\'s document', () => {
       'Lost (the plugin cannot find them in the document any more; the user points to them again in the page, or drops them): S06 Discussion: Limitations (was in main.tex).',
       'Values of the tree written in it: the tree changed since they were written: 81.4 in main.tex:45 (E05 acc.full), now 81.6. changed in the document, no longer the tree\'s: 3 in sections/method.tex:12 (E05 seeds), now 5 there.',
     ].join('\n'))
-    expect(await manuscriptReport(io, l)).toContain('  paper: S05 (its markers are gone), S01#1, S01#2 (sections/method.tex; adapted), S04 (sections/method.tex; snippet changed since: to review), S03 (sections/method.tex), S07 (sections/method.tex; no such snippet), S02, S06 (lost: not found in main.tex any more)')
+    expect(await manuscriptReport(io, l)).toContain('  paper (article, main.tex, pdfLaTeX): S05 (its markers are gone), S01#1, S01#2 (sections/method.tex; adapted), S04 (sections/method.tex; snippet changed since: to review), S03 (sections/method.tex), S07 (sections/method.tex; no such snippet), S02, S06 (lost: not found in main.tex any more)')
     expect(await manuscriptReport(io, l)).toContain('  S01 definition · CutMix · written · T02, R07 · used in paper (main.tex, sections/method.tex: adapted)')
     const next = await nextReport(io, l, '2026-11-24')
     expect(next).toContain('Copies in documents whose snippet changed since (the user takes the new text or keeps theirs): paper: S04 (sections/method.tex).')
@@ -289,5 +291,64 @@ describe('markers and places', () => {
     const files = { 'a.tex': 'In our words, the gap closes by 0.3 points overall; the rest, 12 of them, stays.\n' }
     const got = locateValues(files, { values: [v('0.3', 'The gap closes by ', ' points in all.'), v('14', 'points; the rest, ', ' of them, stays.'), v('5', 'something else entirely ', ' was here before')] })
     expect(got.map(x => [x.found, x.inDocument])).toEqual([['written', '0.3'], ['changed', '12'], [null, null]])
+  })
+})
+
+describe('the main file, and what it takes in', () => {
+  const body = (text: string) => `\\documentclass{article}\n\\begin{document}\n${text}\n\\end{document}\n`
+
+  test('the main file is the one with \\begin{document}, whatever its name; with several the user is asked; a recorded one stands', () => {
+    // as main_of in server/rft_manuscript.py reads them (tests/test_documents.py)
+    expect(mainOf({ 'example_paper.tex': body('Hello.'), 'notes.tex': '% \\begin{document} in a comment\n', 'refs.bib': '' }, '')).toEqual({ main: 'example_paper.tex', asked: [] })
+    expect(mainOf({ 'setup/preamble.tex': '\\documentclass{book}\n', 'master.tex': '\\input{setup/preamble}\n\\begin{document}\n\\end{document}\n' }, '')).toEqual({ main: 'master.tex', asked: [] })
+    expect(mainOf({ 'paper.tex': body('P'), 'supplement.tex': body('S') }, '')).toEqual({ main: 'paper.tex', asked: ['paper.tex', 'supplement.tex'] })
+    expect(mainOf({ 'paper.tex': body('P'), 'main.tex': body('M') }, '')).toEqual({ main: 'main.tex', asked: ['main.tex', 'paper.tex'] })
+    expect(mainOf({ 'paper.tex': body('P'), 'supplement.tex': body('S') }, 'supplement.tex')).toEqual({ main: 'supplement.tex', asked: [] })
+    // a recorded file the document no longer has is forgotten; a document with no \begin{document} reads through its main.tex, or its first file
+    expect(mainOf({ 'paper.tex': body('P') }, 'gone.tex')).toEqual({ main: 'paper.tex', asked: [] })
+    expect(mainOf({ 'b.tex': 'B', 'a.tex': 'A' }, '')).toEqual({ main: 'a.tex', asked: [] })
+    expect(mainOf({ 'refs.bib': '' }, '')).toEqual({ main: '', asked: [] })
+  })
+
+  test('a file is taken in by \\input, \\include, \\subfile or a template\'s own command, named from the main file\'s folder', () => {
+    const files = {
+      'master.tex': '\\input{setup/preamble.tex}\n\\begin{document}\n\\include{introduction/introduction}\n\\includepaper{papers/paperA/paperA}\n\\includegraphics{figures/logo}\n\\includeonly{old}\n\\end{document}\n',
+      'setup/preamble.tex': '\\documentclass{book}\n', 'introduction/introduction.tex': '\\input{introduction/sec1}\n', 'introduction/sec1.tex': 'One.\n',
+      'papers/paperA/paperA.tex': 'A.\n', 'old.tex': 'Old.\n', 'figures/logo.tex': 'not taken in by \\includegraphics\n',
+    }
+    expect([...readingOrder(files, 'master.tex').included].sort()).toEqual(['introduction/introduction.tex', 'introduction/sec1.tex', 'master.tex', 'papers/paperA/paperA.tex', 'setup/preamble.tex'])
+    const nested = { 'src/paper.tex': '\\begin{document}\n\\input{parts/one}\n\\end{document}\n', 'src/parts/one.tex': 'One.\n', 'parts/one.tex': 'Another.\n' }
+    expect([...readingOrder(nested, 'src/paper.tex').included].sort()).toEqual(['src/paper.tex', 'src/parts/one.tex'])
+  })
+
+  test('a copy in a file nothing takes in is not in the document: not in Used in, and said in rft_manuscript', async () => {
+    const main = FILES[`${DOC}/main.tex`]!
+    expect(main).toContain('\\input{sections/method}')
+    const { io, l, ms } = await setup({ [`${DOC}/main.tex`]: main.replace('\\input{sections/method}', '% \\input{sections/method}') })
+    const m = await ms()
+    const d = m.documents[0]!
+    expect([...d.included]).toEqual(['main.tex'])
+    const got = Object.fromEntries(m.snippets.map(s => [s.id, Object.fromEntries(usedIn(m, s.id).map(u => [u.file, u.count]))]).filter(([, files]) => Object.keys(files as object).length))
+    expect(got).toEqual({ S01: { 'main.tex': 1 }, S02: { 'main.tex': 1 }, S05: { 'main.tex': 1 } })
+    const report = await manuscriptReport(io, l, 'paper')
+    expect(report).toContain('sections/method.tex (the main file does not take it in):')
+    expect(report).toContain('  S03 figure · Training loss: as the snippet; not in the document')
+    expect(await manuscriptReport(io, l)).toContain('S03 (sections/method.tex; not in the document: the main file does not take its file in)')
+  })
+
+  test('a document whose main file has another name is read, placed in and discussed through it', async () => {
+    const files = Object.fromEntries(Object.entries(FILES).map(([k, v]) => [k === `${DOC}/main.tex` ? `${DOC}/paper.tex` : k, v]))
+    const fs = new MemoryFs(files)
+    const io = fs.io()
+    const l = await load(io, (await readConfig(io))!)
+    // the tracking file still says main.tex, which the document no longer has: the one file with \begin{document} is read
+    const d = (await readManuscript(io, l))!.documents[0]!
+    expect([d.main, d.path, d.mainAsked, d.engine, d.template]).toEqual(['paper.tex', 'documents/paper/paper.tex', [], 'pdflatex', 'article'])
+    expect(d.copies.filter(c => c.found).length).toBe(7)
+    expect(await documentMain(io, 'vault', 'paper')).toBe('documents/paper/paper.tex')
+    expect(await manuscriptReport(io, l, 'paper')).toContain('template article, main file paper.tex, pdfLaTeX')
+    expect(await setDocument(io, l, { name: 'paper', remove: 'S02' })).toContain('Removed the copy of S02')
+    // and recorded with the first thing written
+    expect(JSON.parse(fs.read(TRACKING)).main).toBe('paper.tex')
   })
 })

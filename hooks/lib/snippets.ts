@@ -193,13 +193,15 @@ export function parseBlocks(text: string): Block[] {
 /** A copy as a document of the first design held it: `stamp`, the fingerprint of the snippet's content it answers to. */
 export const blockText = (id: string, stamp: string, content: string) => `% rft-begin ${id} ${stamp}\n${content}\n% rft-end ${id}`
 
+/** Whether documents/<name>/ is a document: a folder the plugin made one (it has a tracking file), or one from before a main file could have any name (it has a main.tex). */
+export const isDocument = async (io: Io, vault: string, name: string) =>
+  DOC_NAME.test(name) && ((await io.exists(join(vault, DOCUMENTS_DIR, '.rft', name, 'tracking.json'))) || (await io.exists(join(vault, documentRel(name)))))
+
 /** The documents, by name. */
 export async function listDocuments(io: Io, vault: string): Promise<string[]> {
   const dir = join(vault, DOCUMENTS_DIR)
   if (!(await io.exists(dir))) return []
   const out: string[] = []
-  for (const f of await io.list(dir)) {
-    if (f.kind === 'dir' && DOC_NAME.test(f.name) && (await io.exists(join(vault, documentRel(f.name))))) out.push(f.name)
-  }
+  for (const f of await io.list(dir)) if (f.kind === 'dir' && (await isDocument(io, vault, f.name))) out.push(f.name)
   return out.sort()
 }

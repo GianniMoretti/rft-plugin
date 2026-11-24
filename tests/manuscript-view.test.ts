@@ -29,6 +29,11 @@ type Api = {
   slugOf: (title: string) => string
   docNameProblem: (name: string, taken: string[]) => string
   errorText: (e: { file: string; in?: string; snippet?: string; line: number | null; message: string; context?: string }) => string
+  MAX_UPLOAD: number
+  treeRows: (d: { tree?: Record<string, unknown>[]; files?: string[] } | null) => { path: string; kind: string; name: string; depth: number; folder: string; edit?: boolean }[]
+  editable: (d: { tree?: Record<string, unknown>[]; files?: string[] } | null) => string[]
+  typedPath: (typed: string | null, folder: string) => { path: string; problem: string }
+  uploadProblem: (name: string, size: number) => string
 }
 const M = (globalThis as unknown as { RftManuscript: Api }).RftManuscript
 
@@ -136,5 +141,31 @@ describe('the manuscript tab', () => {
       .toBe('S02:4: Undefined control sequence. (l.4 \\rftnu)')
     expect(M.errorText({ file: 'documents/paper/main.tex', line: null, message: 'Emergency stop.' })).toBe('documents/paper/main.tex: Emergency stop.')
     expect(M.errorText({ file: 'documents/paper/sections/method.tex', in: 'sections/method.tex', line: 12, message: 'Undefined control sequence.' })).toBe('sections/method.tex:12: Undefined control sequence.')
+  })
+
+  test('a document\'s file list: every file and folder with its depth; the files the editor opens', () => {
+    const d = { tree: [
+      { path: 'figures', kind: 'folder' }, { path: 'figures/logo.png', kind: 'file', size: 90, edit: false, show: 'image' },
+      { path: 'papers', kind: 'folder' }, { path: 'papers/paperA', kind: 'folder' }, { path: 'papers/paperA/paperA.tex', kind: 'file', size: 10, edit: true, show: null },
+      { path: 'icml2027.sty', kind: 'file', size: 10, edit: true, show: null }, { path: 'main.tex', kind: 'file', size: 10, edit: true, show: null },
+    ] }
+    expect(M.treeRows(d).map(e => [e.name, e.depth, e.folder, e.kind])).toEqual([
+      ['figures', 0, '', 'folder'], ['logo.png', 1, 'figures', 'file'], ['papers', 0, '', 'folder'], ['paperA', 1, 'papers', 'folder'],
+      ['paperA.tex', 2, 'papers/paperA', 'file'], ['icml2027.sty', 0, '', 'file'], ['main.tex', 0, '', 'file'],
+    ])
+    expect(M.editable(d)).toEqual(['papers/paperA/paperA.tex', 'icml2027.sty', 'main.tex'])
+    // a summary from before the tree was listed: its text files
+    expect(M.treeRows({ files: ['main.tex', 'refs.bib'] }).map(e => e.path)).toEqual(['main.tex', 'refs.bib'])
+    expect(M.treeRows(null)).toEqual([])
+  })
+
+  test('a path typed for a file or a folder, and a file too large to upload, said before anything is sent', () => {
+    expect(M.typedPath(' /chapters/intro.tex/ ', '')).toEqual({ path: 'chapters/intro.tex', problem: '' })
+    expect(M.typedPath('logo.png', 'figures')).toEqual({ path: 'figures/logo.png', problem: '' })
+    expect(M.typedPath('other/logo.png', 'figures').path).toBe('other/logo.png')
+    for (const bad of ['', '  ', '../x.tex', 'a/../b.tex', '.hidden', 'a//b.tex', 'a\\b.tex', 'what?.tex']) expect(M.typedPath(bad, '').problem).not.toBe('')
+    expect(M.typedPath(null, '').problem).toBe('Give it a name')
+    expect(M.uploadProblem('big.pdf', 21_000_000)).toBe('big.pdf is 21.0 MB: a file of a document is at most 20.0 MB')
+    expect(M.uploadProblem('ok.pdf', M.MAX_UPLOAD)).toBe('')
   })
 })
