@@ -339,6 +339,7 @@ export const rooted = (io: Io, root: string): Io => {
     list: path => io.list(at(path)),
     exists: path => io.exists(at(path)),
     remove: path => io.remove(at(path)),
+    ...(io.copy ? { copy: (from: string, to: string) => io.copy!(at(from), at(to)) } : {}),
   }
 }
 

@@ -12,7 +12,7 @@ import {
   setDocument, tracesOf, usedIn, valuesOf,
 } from '../hooks/lib/manuscript'
 import { locateCopies, locateValues, parseMarkers, readingOrder } from '../hooks/lib/copies'
-import { load, readConfig } from '../hooks/lib/vault'
+import { load, readConfig, rooted } from '../hooks/lib/vault'
 import { MemoryFs } from './fixture'
 import { EXPECTED, FILES } from './fixtures/local-overleaf'
 
@@ -247,6 +247,17 @@ describe('what the user answers in the page', () => {
     expect(await declareEnvironment(io, l, 'paper', 'corollary')).toBe('Added \\newtheorem{corollary}{Corollary} to the preamble of paper (main.tex).')
     expect(fs.read(`${DOC}/main.tex`)).toContain('\\date{}\n\\newtheorem{corollary}{Corollary}\n\n\\begin{document}')
     await expect(declareEnvironment(io, l, 'paper', 'figure')).rejects.toThrow('"figure" is not an environment of a snippet\'s kind')
+  })
+})
+
+describe('a file copied as it is', () => {
+  test('the session\'s files, rooted at the project, still copy a file bytes and all', async () => {
+    const calls: string[] = []
+    const io = rooted({ ...new MemoryFs({}).io(), copy: async (from, to) => { calls.push(`${from} -> ${to}`) } }, '/work/demo')
+    await io.copy!('vault/figures/E08_loss.pdf', 'vault/documents/paper/figures/loss.pdf')
+    expect(calls).toEqual(['/work/demo/vault/figures/E08_loss.pdf -> /work/demo/vault/documents/paper/figures/loss.pdf'])
+    const { copy: _, ...plain } = new MemoryFs({}).io()
+    expect(rooted(plain, '/work/demo').copy).toBeUndefined()
   })
 })
 

@@ -96,7 +96,8 @@ describe('in a session', () => {
   test('the first time Claude reads the documents, one of the first design is converted and said to be; a placement in it converts it first', async ($: Engine, on: On) => {
     const { fs } = await setup()
     mock.clock(on)
-    const w = world(on, Object.fromEntries([...fs.files].map(([k, v]) => [k, v.text])))
+    const ran: string[] = []
+    const w = world(on, Object.fromEntries([...fs.files].map(([k, v]) => [k, v.text])), { process: argv => { ran.push(argv.join(' ')); return undefined } })
     on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
     const placed = await $.tool.call({ tool: 'mcp__rft__rft_set_document', name: 'paper', place: 'S05', after: 'Introduction' } as never)
@@ -105,6 +106,10 @@ describe('in a session', () => {
     expect(doc).toContain('\\section{Introduction}\n\n%%% Motivation: Why low data %%%\nLabelled images are scarce')
     expect(doc).not.toMatch(/rft|S0\d|E0\d/)
     expect(w.fs.read(`${KEPT}/main.tex`)).toBe(FIRST_DESIGN.before['main.tex'])
+    // the figure went in as a file copied, bytes and all (cp), not read and written as text
+    expect(ran.filter(c => c.startsWith('cp '))).toEqual([`cp -f -- ${CWD}/vault/figures/E08_loss.pdf ${CWD}/${DOC}/figures/loss.pdf`])
+    expect(ran).toContain(`mkdir -p -- ${CWD}/${DOC}/figures`)
+    expect(w.fs.read(`${DOC}/figures/loss.pdf`)).toBe(FILES['vault/figures/E08_loss.pdf'])
     const report = await $.tool.call({ tool: 'mcp__rft__rft_manuscript', ref: 'paper' } as never)
     expect(report.text).not.toContain('converted')
     expect(report.text).toContain('  S05 motivation · Why low data: as the snippet\n  S01 definition · CutMix: as the snippet')
