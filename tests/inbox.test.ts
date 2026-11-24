@@ -386,11 +386,14 @@ describe('inbox: in a session', () => {
     expect(w.fs.read(dir)).not.toMatch(/priority|urgent/)
   })
 
-  test('Process in the tree view becomes a turn of the chat, at the next tick; an item that is gone is said', async ($, on) => {
+  test('Process and Discuss in the tree view become turns of the chat, at the next tick; an item that is gone, or not marked as read, is said', async ($, on) => {
     const clock = mock.clock(on)
     on('prompt.compose', () => ({ sections: [] }))
     const files = demoFiles()
-    files[FILE] = INBOX_MD
+    // one item the user marked as read
+    const marked = INBOX_MD.replace('- 2311.09876\n', '- 2311.09876 · read 2026-11-24\n')
+    expect(marked).not.toBe(INBOX_MD)
+    files[FILE] = marked
     const w = world(on, files)
     const prompts: string[] = []
     on('prompt.submit', (_$, e) => { prompts.push(String(e.text)); return { text: e.text } as never })
@@ -409,16 +412,23 @@ describe('inbox: in a session', () => {
     await $.command.run({ command: 'rft', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } } as never)
     // the second of the two items with one link, then one that is no longer there
     lines.push(`RFT_PROCESS ${JSON.stringify({ key: 'arxiv:2406.01234', nth: 1 })}\n`, `RFT_PROCESS ${JSON.stringify({ key: 'https://example.org/gone', nth: 0 })}\n`)
+    // the read mark, or Discuss, on the item marked as read; Discuss on one that is not; Process on the read one, which is discussed
+    lines.push(`RFT_DISCUSS ${JSON.stringify({ key: 'arxiv:2311.09876', nth: 0 })}\n`, `RFT_DISCUSS ${JSON.stringify({ key: 'arxiv:2501.00001', nth: 0 })}\n`, `RFT_PROCESS ${JSON.stringify({ key: 'arxiv:2311.09876', nth: 0 })}\n`)
     wake()
-    for (let i = 0; i < 200 && !w.toasts.length; i++) await new Promise(resolve => setTimeout(resolve, 5))
+    for (let i = 0; i < 200 && w.toasts.length < 2; i++) await new Promise(resolve => setTimeout(resolve, 5))
     expect(w.toasts.join()).toContain('the tree view could not process the inbox item (that item is no longer in the inbox)')
+    expect(w.toasts.join()).toContain('the tree view could not discuss the inbox item (that item is not marked as read)')
     await clock.advance(5000)
-    expect(prompts).toHaveLength(1)
+    expect(prompts).toHaveLength(3)
+    for (const p of prompts.slice(1)) {
+      expect(p.split('\n')[0]).toMatch(/^Discuss this inbox item with me \(read the manual's "Discussing an item" \(.*skills\/rft-manual\/inbox\.md\) first\): https:\/\/arxiv\.org\/abs\/2311\.09876\. I have read it and marked it as read \(2026-11-24\)\.$/)
+      expect(p).toContain('First call rft_inbox {link: "https://arxiv.org/abs/2311.09876", reading: true}')
+    }
     expect(prompts[0]!.split('\n')[0]).toMatch(/^Process this inbox item \(read the manual's "Processing an item" \(.*skills\/rft-manual\/inbox\.md\) first\): https:\/\/arxiv\.org\/abs\/2406\.01234 \(saved because: same one from Gianni\?\)\.$/)
     expect(prompts[0]).toContain('save your impression with rft_inbox {link: "https://arxiv.org/abs/2406.01234", impression}')
     expect(prompts[0]).toContain('save its brief with rft_inbox {link: "https://arxiv.org/abs/2406.01234", brief}')
     // nothing was written by asking
-    expect(w.fs.read(FILE)).toBe(INBOX_MD)
+    expect(w.fs.read(FILE)).toBe(marked)
   })
 
   test('/rft-inbox prints the inbox, and with a link saves it with the reading priority the user gave', async ($, on) => {

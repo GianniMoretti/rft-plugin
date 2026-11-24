@@ -175,7 +175,7 @@ updates notes in `phd/notes/`, and nothing is written beside the code.
   | `rft_machine` | pairs this machine with the experiment queue, which turns the queue on: `probe` reads the machine with no model (its NVIDIA GPUs, the disks for the runs' outputs, conda and uv), `add` pairs it with the outputs' root and the GPUs you keep out, `status` says how it stands (see The experiment queue) |
   | `rft_queue` | queues a run of an experiment on this machine's GPUs (command, folder, GPUs, a label); it starts once its GPUs are free, in your order (see The experiment queue). Only on a paired machine |
   | `rft_jobs` | the queue in a few lines: the GPUs, the jobs running and waiting (with why each waits), the last ones that ended, the results still to record; one job with its run record (the code it ran, its outputs, the end of its traceback) and the end of its output |
-  | `rft_inbox` | the inbox, links saved to read later: lists the items, saves one (a link already in the inbox, processed or a reference's Source is reported, not added), saves the brief of an item you asked to process, and closes it with the outcome you picked (the note it became, or why it was discarded); it never sets a reading priority |
+  | `rft_inbox` | the inbox, links saved to read later: lists the items, saves one (a link already in the inbox, processed or a reference's Source is reported, not added), saves its impression and its brief of an item you asked to process, gives an item's reading note (your part only once you marked the item as read), and closes it with the outcome you picked (the note it became, or why it was discarded; your quotes word for word in the note); it never sets a reading priority or the read mark |
   | `rft_job` | changes the queue when you ask: moves one waiting job to the top, the end, or before another (answering the new order in one line), cancels one, retries one that ended, pauses or resumes the queue |
 
 - **The outline pane** opens as a sidebar at session start in the terminal and VS Code where the
@@ -364,15 +364,36 @@ are in the prompt only once the vault holds one.
   presses and a red **!** for urgent, and a tap on it steps to the next (none, low, medium, high,
   urgent, none again), written a moment after the last tap. The list is ordered by **Priority** or by **Date**; a tap
   on an item's why edits it, and **✕** (asked twice) discards it.
-  **Process** on an item asks Claude, in the chat that ran `/rft`, to read it: Claude saves a
-  **brief** of at most three lines on the item (what it claims, which notes it touches, the
-  outcome it recommends) and waits. You pick the **outcome**: a reference note, an entry in a
+  Each item can have a **reading note**, opened by the page sign on its row (the whole screen on
+  a phone, a wide pane at the desk): one plain markdown box for quotes from the item (lines
+  after `>`; **Paste as quote** puts what you copied in as one, or marks the lines you selected)
+  and lines of your own. It saves itself as the scratchpad does, into one file per item in
+  `Reading notes/` at the vault's top, made on your first words and never for a note you only
+  opened. The sign is lit once the note holds something of yours.
+  **Process** on an item asks Claude, in the chat that ran `/rft`, to read it on its own: Claude
+  saves its **impression** in the reading note (about one screen, always the same five parts:
+  what it claims, how, the key results with their numbers and where they are, its bearing on
+  notes of your tree, what it leaves open) and a **brief** of at most three lines on the item
+  (what it claims, which notes it touches, the outcome it recommends), says the brief and stops.
+  Until you mark the item as read, Claude cannot open your part of the reading note: its
+  impression is a second point of view, not an echo of yours, and a second Process rewrites it
+  from the paper alone. The view shows the impression folded under your text.
+  **mark read** on the row (asked twice) is yours alone to set and to take off. It freezes the
+  impression and starts the **discussion** in the chat: Claude opens your part for the first
+  time, says where its reading and yours differ, and waits. The row's button reads **Discuss**
+  from then on. You pick the **outcome**: a reference note, an entry in a
   literature note, a direction citing its reference, discard, or later. Claude writes what that
-  needs and closes the item, which moves under `## Processed` with its date and what it became
-  (`→ R15`, or `— discarded: why`); *later* leaves it in the inbox with its brief, which the
-  panel shows at a tap on **briefed**. With no chat on the tree, Process is refused at once,
-  saying so. Claude never processes an item unasked; a literature search saves the papers it
-  found and did not read here. `/rft-inbox` alone prints the inbox, and `/rft-view` leaves it out.
+  needs, with your quotes word for word (the item is not closed while one is missing or
+  changed) and your own lines rephrased only as you accept in the chat, and closes the item,
+  which moves under `## Processed` with its date and what it became (`→ R15`, or `— discarded:
+  why`); its reading note is removed, what it held being in the tree. A discard asks first, in
+  the chat and on **✕**, while the note holds something of yours. *Later* leaves the item in the
+  inbox with its brief (shown at a tap on **briefed**), its reading note and its read mark.
+  With no chat on the tree, Process is refused at once, saying so; a read mark is saved all the
+  same, the row says *waiting for chat connection*, and **Discuss** starts the discussion once a
+  chat is there. Claude never processes an item unasked. A literature search saves every paper
+  it lists, and those it found and did not read, here. `/rft-inbox` alone prints the inbox, and
+  `/rft-view` leaves it out.
 - It follows the vault live, and keeps the zoom, layout, folds, filters and text size between
   visits.
 
@@ -802,7 +823,7 @@ It prints the address `/rft` prints, key included, on the config's `webPort` (se
 address, and a bookmark of it, stay the same; with none it takes a free port). Reading, editing,
 comments, the kanban, the calendar, the scratchpad, the inbox and the queue work as from a chat. What the
 page asks of the session (**Add child**, **Change type**, **Move**, **Verify**, the Manuscript's
-changes, **Ask Claude**, the inbox's **Process**) a chat makes: `/rft` in a chat on the same tree shows the terminal's
+changes, **Ask Claude**, the inbox's **Process** and **Discuss**) a chat makes: `/rft` in a chat on the same tree shows the terminal's
 address and makes them from there, and the terminal says when a chat connects or leaves. With no
 chat, they are refused at once, saying so. A chat already serving the tree on that port keeps it,
 and the terminal serves it once the chat ends; a terminal that stops while a chat is open leaves
@@ -1302,8 +1323,12 @@ the last starts a session with the plugin loaded from this folder.
 - `hooks/lib/handoff.ts`: the handoff a session leaves for the next one in its folder: its file,
   who gets it in full, the repositories checked for uncommitted work.
 - `hooks/lib/inbox.ts`: the inbox as the session reads and writes it (`rft_inbox`, `/rft-inbox`,
-  the Process prompt); `server/rft_inbox.py` the same file as the page reads and writes it. Both
-  are held to one fixture, `tests/fixtures/inbox/`.
+  the Process and Discuss prompts); `server/rft_inbox.py` the same file as the page reads and
+  writes it. Both are held to one fixture, `tests/fixtures/inbox/`.
+- `hooks/lib/reading.ts`: an inbox item's reading note as the session reads it and writes its
+  impression, what `rft_inbox` refuses of it and checks at closing; `server/rft_reading.py` the
+  same file as the page writes the user's part. Both are held to one fixture,
+  `tests/fixtures/reading-note/`, whose `SCENARIOS.md` states the three cases step by step.
 - `hooks/lib/tools.ts`: which tools sit in the prompt from the start, and which only report;
   `hooks/lib/shell.ts` the files a shell command writes (the guards' input); `hooks/lib/answers.ts` the subagents that
   answer threads; `hooks/lib/update.ts` `/rft-update` and the vault's format.
@@ -1312,7 +1337,7 @@ the last starts a session with the plugin loaded from this folder.
   concept artifact's state, links and frame, `frame.js` and `frame.css` the runtime and base style
   inside the artifact's frame, `latex.js` its tables as LaTeX; `markdown.js` the note
   renderer, footnotes and the map from the page back to the note's text; `scratchpad.js` the
-  scratchpad's to-dos and lists, and its panel; `inbox.js` the inbox's panel; `queue.js` the experiment queue's monitor;
+  scratchpad's to-dos and lists, and its panel; `inbox.js` the inbox's panel; `reading.js` an inbox item's reading note; `queue.js` the experiment queue's monitor;
   `theme.js` the light and
   dark themes; `manuscript.js` the Manuscript tab; `slides.js` a deck's slides, layouts, boxes and lines and what it
   is for, `decks.js` the Slides tab, `slide-tools.js` the tools on its slide and `slide-edit.js` their edits of the deck's text; vendored d3 and CodeMirror), one codebase for the live view and `/rft-view`, which shows the

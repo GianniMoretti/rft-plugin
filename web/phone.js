@@ -112,6 +112,7 @@
       { name: 'filters', el: '#filters', open: () => shown('#filters'), close: () => click('#filters-close') },
       { name: 'pad', el: '#pad', open: () => shown('#pad'), close: () => click('#pad-close') },
       { name: 'inbox', el: '#inbox', open: () => shown('#inbox'), close: () => click('#inbox-close') },
+      { name: 'reading', el: '#reading', open: () => shown('#reading'), close: () => click('#reading-close') },
       { name: 'jobs', el: '#jobs', open: () => shown('#jobs'), close: () => click('#jobs-close') },
       { name: 'menu', el: '#bar-more', open: () => Boolean(more && more.classList.contains('open')), close: () => setMenu(false) },
       { name: 'show', el: '#sl-show', open: () => shown('#sl-show'), close: () => click('.sl-show-close') },

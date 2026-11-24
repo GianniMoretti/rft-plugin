@@ -175,6 +175,27 @@
       <span class="pad-file muted" title="In the vault's top folder, beside Scratchpad.md: plain markdown that Obsidian shows too, and not a note of the tree">Inbox.md</span>
     </div>
   </section>
+  <!-- an inbox item's reading note (web/reading.js), opened from its row: in the inbox's place, wider -->
+  <section id="reading" hidden aria-label="Reading note">
+    <div class="pad-head">
+      <button id="reading-close" type="button" title="Back to the inbox (Esc)" aria-label="Close the reading note: back to the inbox">‹ Inbox</button>
+      <a id="reading-title" target="_blank" rel="noopener noreferrer"></a>
+      <span id="reading-count" class="muted"></span>
+      <button id="reading-quote" type="button" aria-pressed="false" disabled title="Paste as quote: the text you copied goes in as a quote (lines after >). With lines selected, they become the quote">Paste as quote</button>
+    </div>
+    <textarea id="reading-text" aria-label="Your part of the reading note, in markdown" readonly
+      placeholder="Quotes from it and lines of your own, saved as you type.&#10;&#10;> a quote is a line after >&#10;&#10;Claude does not see this until you mark the item as read."></textarea>
+    <details id="reading-imp" hidden>
+      <summary id="reading-imp-head">Claude's impression</summary>
+      <pre id="reading-imp-text"></pre>
+    </details>
+    <div class="pad-foot">
+      <span id="reading-msg" role="status"></span>
+      <button id="reading-keep" type="button" class="primary" hidden title="Save your text over the newer one">Keep mine</button>
+      <button id="reading-take" type="button" hidden title="Drop your text and take the newer one">Take theirs</button>
+      <span id="reading-file" class="pad-file muted" title="In the vault's Reading notes folder: plain markdown that Obsidian shows too, and not a note of the tree. Your part is under its My reading heading"></span>
+    </div>
+  </section>
   <aside id="legend" class="closed" aria-label="Legend and filter">
     <div id="legend-body">
     <div class="legend-title">Type <span class="muted">(the colour)</span></div>
@@ -561,6 +582,7 @@
 <script src="concepts.js" data-rft-inline></script>
 <script src="markdown.js" data-rft-inline></script>
 <script src="scratchpad.js" data-rft-inline></script>
+<script src="reading.js"></script>
 <script src="inbox.js"></script>
 <script src="queue.js"></script>
 <script src="vendor/codemirror.v5.65.16.min.js"></script>

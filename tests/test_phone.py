@@ -101,7 +101,7 @@ AUDIT_JS = r"""
     if (el.matches('input, select, textarea') && el.closest('label') && !el.closest('label').querySelector('input[type=checkbox], input[type=radio]')) { /* a field in a label: its own target */ }
     const r = el.getBoundingClientRect()
     const off = r.right > W + 1 || r.left < -1 || r.top < -1 || r.bottom > H + 1
-    if (off && !inScroller(el) && !el.closest('#canvas, #concept-canvas, #drawer, #filters, #pad, #inbox, #jobs, .kb-cols, .cal-body, .ms-body, .sl-body, #kanban, #calendar, #manuscript, #slides, #legend, #bar-more')) {
+    if (off && !inScroller(el) && !el.closest('#canvas, #concept-canvas, #drawer, #filters, #pad, #inbox, #reading, #jobs, .kb-cols, .cal-body, .ms-body, .sl-body, #kanban, #calendar, #manuscript, #slides, #legend, #bar-more')) {
       out.push(`${name(el)} is off the screen (x ${Math.round(r.left)}–${Math.round(r.right)}, y ${Math.round(r.top)}–${Math.round(r.bottom)})`)
       continue
     }
@@ -185,6 +185,7 @@ SCREENS = [
     ("filters", [page("tree"), "document.getElementById('filters-toggle').click()"]),
     ("pad", [page("tree"), "document.getElementById('pad-toggle').click()"]),
     ("inbox", [page("tree"), "document.getElementById('inbox-toggle').click()"]),
+    ("reading-note", [page("tree"), "document.getElementById('inbox-toggle').click()", "document.querySelector('#inbox-list .inbox-note').click()"]),
     ("concepts", [page("concepts")]),
     ("kanban", [page("kanban")]),
     ("timeline", [page("calendar"), "document.querySelector('[data-cal-mode=timeline]').click()"]),
@@ -421,6 +422,13 @@ class PhoneTest(unittest.TestCase):
         self.back_closes(w, h, [page("tree"), "document.getElementById('filters-toggle').click()"], "!document.getElementById('filters').hidden", "the filters")
         self.back_closes(w, h, [page("tree"), "document.getElementById('pad-toggle').click()"], "!document.getElementById('pad').hidden", "the scratchpad")
         self.back_closes(w, h, [page("tree"), "document.getElementById('inbox-toggle').click()"], "!document.getElementById('inbox').hidden", "the inbox")
+        # an item's reading note: Back gives the page back to the inbox, and a second Back closes that
+        self.back_closes(w, h, [page("tree"), "document.getElementById('inbox-toggle').click()", "document.querySelector('#inbox-list .inbox-note').click()"],
+                         "!document.getElementById('reading').hidden", "a reading note")
+        self.assertFalse(self.b.js("document.getElementById('inbox').hidden"), "Back from a reading note: the inbox is not back")
+        self.b.js("history.back()")
+        time.sleep(0.8)
+        self.assertEqual(self.b.js("[document.getElementById('inbox').hidden, document.getElementById('reading').hidden]"), [True, True], "a second Back: the inbox is still open")
 
     def test_inbox_takes_a_link_at_its_top(self):
         box = self.tmp / "vault" / "Inbox.md"
@@ -448,7 +456,7 @@ class PhoneTest(unittest.TestCase):
                 " return [li.querySelector('.inbox-link').textContent, li.querySelector('.inbox-under').textContent] })()")
         self.assertTrue(self.b.wait(f"document.querySelectorAll('#inbox-list .inbox-item').length === {n + 1}"), "the item is not in the list")
         today = datetime.date.today().isoformat()
-        self.assertEqual(self.b.js(last), ["example.org/phone/post", f"from the phoneadded {today}Process"])
+        self.assertEqual(self.b.js(last), ["example.org/phone/post", f"from the phoneadded {today}mark readProcess"])
         self.assertEqual(self.b.js("[document.getElementById('inbox-link').value, document.getElementById('inbox-why').value, document.getElementById('inbox-add-msg').hidden,"
                                    " document.getElementById('inbox-count').textContent, document.getElementById('inbox-badge').textContent]"), ["", "", True, f"{n + 1} items", str(n + 1)])
         lines, now = before.split("\n"), box.read_text(encoding="utf-8").split("\n")
@@ -590,6 +598,103 @@ class PhoneTest(unittest.TestCase):
         self.assertEqual(self.b.js("[innerWidth, visualViewport.offsetTop, document.documentElement.scrollWidth <= innerWidth]"), [w, 0, True])
         self.assertEqual(self.b.errors, [])
 
+    def test_inbox_item_has_a_reading_note_a_read_mark_and_discuss(self):
+        """Case A as far as the page goes: the user quotes on the phone in the item's reading note,
+        which saves itself into a file of its own; marks the item as read, in two taps; and the
+        row's button reads Discuss from then on."""
+        vault = self.tmp / "vault"
+        box, folder = vault / "Inbox.md", vault / "Reading notes"
+        before = box.read_text(encoding="utf-8")
+        self.addCleanup(box.write_text, before, encoding="utf-8")
+        self.addCleanup(shutil.rmtree, folder, True)
+        w, h = SIZES[0]
+        self.b.size(w, h)
+        self.screen([page("tree"), "document.getElementById('inbox-toggle').click()"])
+        item = "#inbox-list .inbox-item[data-key='arxiv:2311.09876']"
+
+        def tap(selector):  # an item may be under the fold of the list
+            self.b.js(f"document.querySelector({json.dumps(selector)}).scrollIntoView({{ block: 'center' }})")
+            self.b.tap(selector)
+
+        # every item has the sign, faint while its note holds nothing; none has a file
+        self.assertEqual(self.b.js("[document.querySelectorAll('#inbox-list .inbox-note').length, document.querySelectorAll('#inbox-list .inbox-note.mine').length]"), [8, 0])
+        tap(f"{item} .inbox-note")
+        self.assertTrue(self.b.wait("!document.getElementById('reading').hidden && !document.getElementById('reading-text').readOnly"), "the reading note did not open")
+        # the whole page, in the inbox's place; the text takes most of it; no file for a note only opened
+        at = self.b.js("(() => { const r = document.getElementById('reading').getBoundingClientRect(), t = document.getElementById('reading-text').getBoundingClientRect(),"
+                       " q = document.getElementById('reading-quote').getBoundingClientRect(), c = document.getElementById('reading-close').getBoundingClientRect();"
+                       " const m = document.querySelector('main').getBoundingClientRect();"
+                       " return [Math.round(r.left), Math.round(r.top - m.top), Math.round(r.width) === innerWidth, r.height > m.height - 4, t.height > innerHeight * 0.6, Math.min(q.height, c.height, c.width) >= 44,"
+                       " document.getElementById('inbox').hidden, document.getElementById('reading-title').textContent, document.getElementById('reading-imp').hidden,"
+                       " document.documentElement.scrollWidth <= innerWidth] })()")
+        self.assertEqual(at, [0, 0, True, True, True, True, True, "arXiv 2311.09876", True, True])
+        self.assertFalse(folder.exists())
+        # a quote and a line of the user's own: saved a moment after typing stops
+        self.b.js("document.getElementById('reading-text').focus()")
+        self.b.call("Input.insertText", text="> The gain vanishes below 1k images\n\nmine")
+        msg = "document.getElementById('reading-msg').textContent"
+        self.assertTrue(self.b.wait(f"{msg} === 'Saved'", 4), self.b.js(msg))
+        note = folder / "arxiv-2311.09876.md"
+        self.assertEqual(note.read_text(encoding="utf-8"), "# arXiv 2311.09876\n<https://arxiv.org/abs/2311.09876>\n\n## My reading\n\n> The gain vanishes below 1k images\n\nmine\n")
+        self.assertEqual(self.b.js("[document.getElementById('reading-count').textContent, document.getElementById('reading-file').textContent]"), ["1 quote", "Reading notes/arxiv-2311.09876.md"])
+        # Paste as quote, with a line selected: the line becomes a quote
+        self.b.js("(() => { const t = document.getElementById('reading-text'); t.focus(); t.setSelectionRange(t.value.length - 4, t.value.length) })()")
+        tap("#reading-quote")
+        self.assertTrue(self.b.wait("document.getElementById('reading-text').value.endsWith('\\n\\n> mine')"), self.b.js("document.getElementById('reading-text').value"))
+        # with nothing selected it waits for the user's own paste, which goes in as a quote of its own
+        self.b.js("(() => { const t = document.getElementById('reading-text'); t.focus(); t.setSelectionRange(t.value.length, t.value.length) })()")
+        tap("#reading-quote")
+        armed = "document.getElementById('reading-quote').getAttribute('aria-pressed') === 'true'"
+        if self.b.wait(armed, 2):
+            self.b.js("(() => { const d = new DataTransfer(); d.setData('text/plain', '  pasted one\\r\\npasted two\\n\\n'); "
+                      "document.getElementById('reading-text').dispatchEvent(new ClipboardEvent('paste', { clipboardData: d, bubbles: true, cancelable: true })) })()")
+            self.assertTrue(self.b.wait("document.getElementById('reading-text').value.endsWith('> mine\\n\\n>   pasted one\\n> pasted two\\n\\n')"), self.b.js("document.getElementById('reading-text').value"))
+            self.assertFalse(self.b.js(armed))
+        self.assertTrue(self.b.wait(f"{msg} === 'Saved'", 4), self.b.js(msg))
+        self.assertIn("\n\n> mine\n", note.read_text(encoding="utf-8"))
+        # Claude saves its impression meanwhile (the plugin's write): shown folded under the text, and no conflict with what is typed next
+        text = note.read_text(encoding="utf-8")
+        note.write_text(text + "\n## Claude's impression (2026-11-24)\n\n### Claims\n\nIt claims x.\n", encoding="utf-8")
+        self.assertTrue(self.b.wait("!document.getElementById('reading-imp').hidden", 5), "the impression is not shown")
+        self.assertEqual(self.b.js("[document.getElementById('reading-imp').open, document.getElementById('reading-imp-head').textContent, document.getElementById('reading-imp-text').textContent]"),
+                         [False, "Claude's impression · 2026-11-24", "### Claims\n\nIt claims x."])
+        self.b.js("(() => { const t = document.getElementById('reading-text'); t.focus(); t.setSelectionRange(0, 0) })()")
+        self.b.call("Input.insertText", text="first\n\n")
+        self.assertTrue(self.b.wait(f"{msg} === 'Saved'", 4), self.b.js(msg))
+        now = note.read_text(encoding="utf-8")
+        self.assertTrue(now.startswith("# arXiv 2311.09876\n<https://arxiv.org/abs/2311.09876>\n\n## My reading\n\nfirst\n\n> The gain") and now.endswith("\n\n## Claude's impression (2026-11-24)\n\n### Claims\n\nIt claims x.\n"), now)
+        self.assertEqual(self.b.js("(() => { const m = document.getElementById('reading').getBoundingClientRect(); return [innerWidth, m.right <= innerWidth, document.documentElement.scrollWidth <= innerWidth] })()"), [w, True, True])
+        # closed: the inbox is back, the sign is lit, and the inbox's file was never written
+        tap("#reading-close")
+        self.assertTrue(self.b.wait(f"document.getElementById('reading').hidden && !document.getElementById('inbox').hidden && !!document.querySelector({json.dumps(item + ' .inbox-note.mine.imp')})", 5), "back in the inbox, the sign is not lit")
+        self.assertEqual(box.read_text(encoding="utf-8"), before)
+        # the read mark: the first tap asks, the second sets it and asks the chat; the button reads Discuss
+        mark, button, foot = f"{item} .inbox-read", f"{item} .inbox-process", "document.getElementById('inbox-msg').textContent"
+        self.assertEqual(self.b.js(f"[document.querySelector({json.dumps(mark)}).textContent, document.querySelector({json.dumps(button)}).textContent]"), ["mark read", "Process"])
+        tap(mark)
+        self.assertTrue(self.b.wait(f"document.querySelector({json.dumps(mark)}).textContent === 'Mark as read?'"), "the mark did not ask")
+        self.assertEqual(box.read_text(encoding="utf-8"), before)
+        fits = self.b.js(f"(() => {{ const r = document.querySelector({json.dumps(mark)}).getBoundingClientRect(); return r.right <= innerWidth && r.height >= 44 && document.documentElement.scrollWidth <= innerWidth }})()")
+        self.assertTrue(fits, "the question does not fit the row")
+        tap(mark)
+        self.assertTrue(self.b.wait(f"{foot}.startsWith('Marked as read.')", 4), self.b.js(foot))
+        today = datetime.date.today().isoformat()
+        self.assertIn(f"- 2311.09876 · read {today}\n", box.read_text(encoding="utf-8"))
+        self.assertTrue(self.b.wait(f"document.querySelector({json.dumps(button)}).textContent === 'Discuss'"), "the button does not read Discuss")
+        self.assertEqual(self.b.js(f"[document.querySelector({json.dumps(mark)}).textContent, document.querySelector({json.dumps(mark)}).getAttribute('aria-pressed'), document.querySelectorAll('#inbox-list .inbox-process[data-action=discuss]').length]"), ["✓ read", "true", 1])
+        time.sleep(0.3)
+        # ✕ on an item whose note holds what the user wrote says so before it discards
+        tap(f"{item} .inbox-x")
+        self.assertTrue(self.b.wait(f"document.querySelector({json.dumps(item + ' .inbox-x')}).textContent === 'Discard, notes too?'"), "✕ did not ask about the notes")
+        self.assertEqual(self.b.js(f"(() => {{ const r = document.querySelector({json.dumps(item + ' .inbox-x')}).getBoundingClientRect(); return r.right <= innerWidth && document.documentElement.scrollWidth <= innerWidth }})()"), True)
+        self.b.js("document.activeElement && document.activeElement.blur()")
+        self.assertTrue(note.exists())
+        # the mark taken off, in one tap: the line as it was
+        tap(mark)
+        self.assertTrue(self.b.wait(f"document.querySelector({json.dumps(button)}).textContent === 'Process'", 4), "the mark was not taken off")
+        self.assertEqual(box.read_text(encoding="utf-8"), before)
+        self.assertEqual(self.b.errors, [])
+
     def test_inbox_process_is_a_chip_and_a_brief_shows_at_a_tap(self):
         box = self.tmp / "vault" / "Inbox.md"
         before = box.read_text(encoding="utf-8")
@@ -602,7 +707,7 @@ class PhoneTest(unittest.TestCase):
             self.b.tap(selector)
 
         # Process on every item and the mark of the briefed one: a finger's size, on the screen
-        small = self.b.js("[...document.querySelectorAll('#inbox-list .inbox-process, #inbox-list .inbox-briefed')]"
+        small = self.b.js("[...document.querySelectorAll('#inbox-list .inbox-process, #inbox-list .inbox-briefed, #inbox-list .inbox-note, #inbox-list .inbox-read')]"
                           ".filter(e => { const r = e.getBoundingClientRect(); return !(r.height >= 44 && r.width >= 44 && r.left >= 0 && r.right <= innerWidth) })"
                           ".map(e => e.className + ' ' + e.textContent.slice(0, 20) + ' ' + JSON.stringify(e.getBoundingClientRect()))")
         self.assertEqual(small, [])
@@ -630,11 +735,11 @@ class PhoneTest(unittest.TestCase):
         foot = "document.getElementById('inbox-msg').textContent"
         first = "#inbox-list .inbox-item[data-key='arxiv:2406.01234'][data-nth='0'] .inbox-process"
         tap(first)
-        self.assertTrue(self.b.wait(f"{foot} === 'Asked in the chat: Claude starts from its brief there.'", 4), self.b.js(foot))
+        self.assertTrue(self.b.wait(f"{foot} === 'Asked in the chat: Claude reads it on its own and gives its brief there.'", 4), self.b.js(foot))
         self.assertEqual(self.b.js(f"[document.querySelector({json.dumps(first)}).disabled, document.getElementById('inbox-msg').classList.contains('error')]"), [True, False])
         other = "#inbox-list .inbox-item[data-key='arxiv:2311.09876'] .inbox-process"
         tap(other)
-        self.assertTrue(self.b.wait(f"{foot} === 'Asked in the chat: Claude reads it and gives its brief there.'", 4), self.b.js(foot))
+        self.assertTrue(self.b.wait(f"{foot} === 'Asked in the chat: Claude reads it on its own and gives its brief there.'", 4), self.b.js(foot))
         self.assertEqual(self.b.js("[...document.querySelectorAll('#inbox-list .inbox-process')].filter(b => b.disabled).length"), 2)
         self.assertEqual(self.b.js("(() => { const m = document.getElementById('inbox-msg').getBoundingClientRect(); return [innerWidth, m.left >= 0 && m.right <= innerWidth, document.documentElement.scrollWidth <= innerWidth] })()"), [w, True, True])
         self.assertEqual(box.read_text(encoding="utf-8"), before)

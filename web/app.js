@@ -1674,6 +1674,9 @@
     const pad = document.getElementById('pad')
     // the open scratchpad or inbox stands in the legend's place: the ? closes it and shows the legend
     const inbox = document.getElementById('inbox')
+    const reading = document.getElementById('reading')
+    // (an item's reading note stands in the inbox's place: closed first, it gives the place back)
+    if (reading && !reading.hidden) document.getElementById('reading-close').click()
     const open = (pad && !pad.hidden) || (inbox && !inbox.hidden) || legend.classList.contains('closed')
     if (pad && !pad.hidden) document.getElementById('pad-close').click()
     if (inbox && !inbox.hidden) document.getElementById('inbox-close').click()
@@ -4694,7 +4697,9 @@
     // before it existed serves neither its script nor api/scratchpad
     if (!EMBED && window.RftScratchpad) window.RftScratchpad.mount({ key: editKey, store, every: POLL_MS })
     // the inbox too (the standalone page leaves its script out)
-    if (!EMBED && window.RftInbox) window.RftInbox.mount({ key: editKey, store, every: POLL_MS })
+    // and an item's reading note, which its row in the inbox opens
+    const reading = !EMBED && window.RftInbox && window.RftReading ? window.RftReading.mount({ key: editKey, every: POLL_MS }) : null
+    if (!EMBED && window.RftInbox) window.RftInbox.mount({ key: editKey, store, every: POLL_MS, reading })
     // the experiment queue's monitor: only on the server too (the standalone page leaves its script out)
     if (!EMBED && window.RftQueue) {
       window.RftQueue.mount({

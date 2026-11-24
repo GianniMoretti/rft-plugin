@@ -124,7 +124,7 @@ main { position: relative; flex: 1; min-height: 0; }
   color: var(--muted); opacity: 0.45; transition: opacity 0.15s, color 0.15s; }
 .legend-mark:hover, .legend-mark:focus-visible { opacity: 0.9; }
 .legend-mark[aria-expanded="true"] { color: var(--accent); opacity: 0.8; }
-#corner:has(> :is(#pad, #inbox):not([hidden])) .legend-mark { color: var(--muted); opacity: 0.45; }
+#corner:has(> :is(#pad, #inbox, #reading):not([hidden])) .legend-mark { color: var(--muted); opacity: 0.45; }
 #legend { padding: 8px 10px; border-radius: 8px; min-height: 0;
   background: var(--panel); border: 1px solid var(--line); font-size: 12px; max-width: 240px; }
 .legend-title { font-weight: 600; margin: 4px 0 2px; }
@@ -683,7 +683,7 @@ a.cal-dl-name:hover { text-decoration: underline; }
   background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
   box-shadow: 0 6px 24px light-dark(#1f232822, #00000066); font-size: calc(13px * var(--font-scale)); }
 #pad[hidden] { display: none; }
-#corner:has(> :is(#pad, #inbox):not([hidden])) > #legend { display: none; }
+#corner:has(> :is(#pad, #inbox, #reading):not([hidden])) > #legend { display: none; }
 .pad-head { display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--line); }
 .pad-head #pad-count { flex: 1; font-size: 0.9em; }
 .pad-head button { padding: 1px 7px; }
@@ -765,6 +765,41 @@ button.inbox-why.empty { opacity: 0.75; }
 .inbox-brief[hidden] { display: none; }
 #inbox .pad-head .seg { gap: 3px; }
 /* what the server said of a change it did not make can be a sentence: it wraps, within the panel */
+/* an item's reading note on its row: the sign that opens it, the user's read mark, and what waits for a chat */
+.inbox-note { flex: none; display: inline-flex; align-items: center; padding: 0 4px; border-color: transparent; background: none; color: var(--muted); opacity: 0.6; }
+.inbox-note::before { content: '\200b'; }
+.inbox-note .ico { width: 15px; height: 15px; }
+.inbox-note:hover { border-color: var(--line); opacity: 1; }
+.inbox-note.mine { color: var(--accent); opacity: 1; }
+.inbox-note.imp:not(.mine) { opacity: 1; }
+.inbox-read { flex: none; margin: 0; padding: 0; border: 0; border-radius: 3px; background: none; font: inherit; color: var(--muted); white-space: nowrap; }
+.inbox-read:hover:not(:disabled) { color: var(--fg); }
+.inbox-read:disabled { opacity: 1; }
+.inbox-read[aria-pressed="true"] { color: var(--done); }
+.inbox-read.armed { padding: 0 6px; border: 1px solid var(--accent); color: var(--accent); font-weight: 600; }
+.inbox-waiting { color: var(--p-high); }
+/* the reading note of an inbox item (web/reading.js): in the inbox's place, a wider pane; the user's part in one box */
+#reading { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0;
+  width: min(calc(720px * var(--font-scale)), calc(100vw - 20px)); height: calc(640px * var(--font-scale));
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 6px 24px light-dark(#1f232822, #00000066); font-size: calc(13px * var(--font-scale)); }
+#reading[hidden] { display: none; }
+#reading .pad-head { padding-left: 8px; }
+#reading-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--fg); text-decoration: none; }
+#reading-title:hover { color: var(--accent); text-decoration: underline; }
+#reading-count { flex: none; font-size: 0.9em; white-space: nowrap; }
+#reading-quote { flex: none; white-space: nowrap; }
+#reading-quote.armed { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+#reading-text { flex: 1; min-height: 0; width: 100%; resize: none; border: 0; padding: 10px 12px; margin: 0;
+  background: var(--panel); color: var(--fg); tab-size: 4; outline: none;
+  font: calc(13px * var(--font-scale))/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+#reading-text::placeholder { color: var(--muted); opacity: 0.8; }
+#reading-imp { flex: none; max-height: 45%; overflow-y: auto; border-top: 1px solid var(--line); }
+#reading-imp[hidden] { display: none; }
+#reading-imp > summary { padding: 4px 12px; color: var(--accent); cursor: pointer; }
+#reading-imp-text { margin: 0; padding: 0 12px 8px; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+#reading-msg { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+#reading-msg.error { color: var(--dropped); }
 #inbox-msg { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 #inbox-msg.error { color: var(--dropped); }
 
@@ -1364,9 +1399,16 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
   #corner { left: max(12px, env(safe-area-inset-left)); bottom: 12px; }
   #pad-toggle, #inbox-toggle { width: 52px; height: 52px; justify-content: center; border-radius: 16px; box-shadow: 0 4px 14px light-dark(#1f232826, #00000088); }
   #pad-toggle .ico, #inbox-toggle .ico { width: 22px; height: 22px; }
-  #corner:has(> :is(#pad, #inbox):not([hidden])) { inset: 0; max-height: none; align-items: stretch; z-index: 6; }
-  #corner:has(> :is(#pad, #inbox):not([hidden])) > .corner-btns { display: none; }
-  #pad, #inbox { flex: 1 1 auto; width: 100%; height: auto; border: 0; border-radius: 0; box-shadow: none; font-size: 15px; }
+  #corner:has(> :is(#pad, #inbox, #reading):not([hidden])) { inset: 0; max-height: none; align-items: stretch; z-index: 6; }
+  #corner:has(> :is(#pad, #inbox, #reading):not([hidden])) > .corner-btns { display: none; }
+  #pad, #inbox, #reading { flex: 1 1 auto; width: 100%; height: auto; border: 0; border-radius: 0; box-shadow: none; font-size: 15px; }
+  #reading-text { padding: 12px 16px; font-size: 16px; }
+  #reading-title { min-height: 44px; display: flex; align-items: center; }
+  #reading-close, #reading-quote { padding: 1px 12px; border-radius: 22px; font-size: 14px; }
+  #reading-imp > summary { min-height: 44px; display: flex; align-items: center; padding: 0 16px; }
+  #reading-imp-text { padding: 0 16px 10px; }
+  .inbox-note, .inbox-read { min-width: 44px; }
+  .inbox-note { justify-content: center; border-color: var(--line); border-radius: 22px; }
   #inbox-add { gap: 8px; padding: 10px 16px; }
   .inbox-add-row { gap: 8px; }
   #inbox-add button { padding: 3px 16px; }

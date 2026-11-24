@@ -69,6 +69,20 @@
     return rows.sort(by === 'date' ? byDate : (a, b) => rank(a.item.priority) - rank(b.item.priority) || byDate(a, b))
   }
 
+  /**
+   * What an item's row says of its reading: whether its reading note holds the user's part or
+   * Claude's impression (`notes`, by key, as the server gives them), the user's read mark, whether
+   * its discussion still waits for a chat (`waiting`: the keys of those that do), and what its one
+   * button asks of the chat: Process before the mark, Discuss after it.
+   */
+  function reading(item, notes, waiting) {
+    const note = (notes && notes[item.key]) || {}
+    const read = item.read || ''
+    return { mine: !!note.mine, impression: !!note.impression, read, waiting: !!read && (waiting || []).includes(item.key), action: read ? 'discuss' : 'process' }
+  }
+
+  const NOTE_ICON = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M9 10.5v3.5M9 10.5h1.5M13 10.5v3.5M13 10.5h1.5"/></svg>'
+
   const READ_ONLY = 'Read-only: open the address /rft printed (it ends in ?token=…) once to add here.'
 
   /**
@@ -88,17 +102,21 @@
    * field at its top saves a link; on each item, its reading priority as an icon a tap steps, its why to edit,
    * ✕ to discard it (two taps: a discarded link is not added again from here), and Process, which
    * asks Claude in the chat that ran /rft to read it and discuss what becomes of it; an item Claude
-   * has briefed says so, and shows its brief at a tap. `key()`: the
+   * has briefed says so, and shows its brief at a tap. An item's reading note opens from its row
+   * (`reading`: the view, web/reading.js); its read mark is the user's to set and take off, and
+   * its button reads Process before the mark and Discuss after it. `key()`: the
    * key for writes ('' : read-only); `store`: the page's storage for this project (whether the
    * panel is open, the order of the list).
    */
-  function mount({ key = () => '', store, every = 2000 }) {
+  function mount({ key = () => '', store, every = 2000, reading: view = null }) {
     const $ = id => document.getElementById(id)
     const btn = $('inbox-toggle'), badge = $('inbox-badge'), panel = $('inbox'), list = $('inbox-list')
     const total = $('inbox-count'), msg = $('inbox-msg')
     const link = $('inbox-link'), why = $('inbox-why'), save = $('inbox-save'), note = $('inbox-add-msg')
     let shown = null // what was last drawn: the order, whether the page may write, and the items as JSON
     let last = [] // the items as last read
+    let notes = {} // what the reading notes of the items hold, by key
+    let waiting = [] // the read items whose discussion found no chat, by key
     let order = ORDERS.includes(store.get('inboxOrder', 'priority')) ? store.get('inboxOrder', 'priority') : 'priority'
     let keep = 0 // until when the line at the foot stays, said of a write that failed
     let reads = 0 // counts what was asked of the server: an answer older than the last one drawn is dropped
@@ -141,13 +159,15 @@
     const rowOf = (k, nth) => [...list.children].find(li => li.dataset.key === k && li.dataset.nth === String(nth))
 
     /**
-     * One change to an item (its reading priority, its why, or the item discarded), written by the
-     * server. `from`: the control that asked, which the redraw may replace. True when it was made.
+     * One change to an item (its reading priority, its why, its read mark, or the item discarded),
+     * written by the server. `from`: the control that asked, which the redraw may replace; `more`:
+     * what else the request carries; `refused(status, got)`: true when the caller says itself what
+     * a refusal means. The server's answer when it was made, else null.
      */
-    async function change(r, action, value, from) {
-      const body = { action, key: r.item.key, nth: r.nth }
+    async function change(r, action, value, from, more = {}, refused = null) {
+      const body = { action, key: r.item.key, nth: r.nth, ...more }
       if (action !== 'discard') body[action] = value
-      const what = action === 'discard' ? 'Not discarded' : 'Not changed'
+      const what = action === 'discard' ? 'Not discarded' : action === 'read' ? 'Not marked' : 'Not changed'
       try {
         const res = await fetch('api/inbox', {
           method: 'POST',
@@ -157,17 +177,25 @@
         const got = await res.json().catch(() => ({}))
         reads++
         if (!res.ok || !Array.isArray(got.items)) {
-          setMsg(refusal(res.status, got, what), true)
-          return false
+          // a server from before the read mark knows no such action
+          if (!(refused && refused(res.status, got))) setMsg(refusal(action === 'read' && res.status === 400 ? 404 : res.status, got, what), true)
+          return null
         }
         setMsg('')
         shown = null
+        take(got)
         draw(got.items, from)
-        return true
+        return got
       } catch (e) {
         setMsg(`${what}: the server did not answer.`, true)
-        return false
+        return null
       }
+    }
+
+    /** What an answer of the server says of the reading notes. */
+    function take(got) {
+      notes = got.notes && typeof got.notes === 'object' ? got.notes : {}
+      waiting = Array.isArray(got.waiting) ? got.waiting : []
     }
 
     /**
@@ -266,19 +294,27 @@
       return b
     }
 
-    /** ✕ on an item: the first tap asks, the second discards it (its line goes under Processed). */
+    /**
+     * ✕ on an item: the first tap asks, the second discards it (its line goes under Processed).
+     * When its reading note holds what the user wrote, the question says so, and the note goes
+     * with the item; the server asks the same of a page that did not know.
+     */
     function discardOf(r) {
       const { item } = r
       const x = el('button', 'inbox-x', '✕')
       x.type = 'button'
-      let timer = 0
+      let timer = 0, holds = false
       const arm = on => {
         clearTimeout(timer)
+        if (on) holds = holds || reading(item, notes, waiting).mine
+        else holds = false
         x.classList.toggle('armed', on)
-        x.textContent = on ? 'Discard?' : '✕'
-        x.title = on ? 'Tap again to discard it: it leaves the inbox and is kept under Processed as discarded' : 'Discard: take it out of the inbox'
-        x.setAttribute('aria-label', on ? `Discard ${label(item)}: again to confirm` : `Discard ${label(item)}`)
-        if (on) timer = setTimeout(() => { arm(false); draw(last) }, 5000)
+        x.textContent = on ? (holds ? 'Discard, notes too?' : 'Discard?') : '✕'
+        x.title = !on ? 'Discard: take it out of the inbox'
+          : holds ? 'Its reading note holds what you wrote. Tap again to discard the item and remove the note with it'
+            : 'Tap again to discard it: it leaves the inbox and is kept under Processed as discarded'
+        x.setAttribute('aria-label', !on ? `Discard ${label(item)}` : holds ? `Discard ${label(item)} and the reading note that holds what you wrote: again to confirm` : `Discard ${label(item)}: again to confirm`)
+        if (on) timer = setTimeout(() => { arm(false); draw(last) }, holds ? 8000 : 5000)
       }
       arm(false)
       x.addEventListener('blur', () => arm(false))
@@ -287,17 +323,82 @@
         clearTimeout(timer)
         const at = [...list.children].indexOf(x.closest('li'))
         const focused = document.activeElement === x || document.activeElement === document.body
+        const confirm = holds
         x.disabled = true
         x.classList.remove('armed')
-        if (await change(r, 'discard', '', x)) {
+        // the server found a reading note this page did not know of: asked again, saying so
+        let asked = false
+        const again = (status, got) => {
+          if (status !== 409 || !got || !got.holds || confirm) return false
+          asked = true
+          return true
+        }
+        if (await change(r, 'discard', '', x, confirm ? { confirm: true } : {}, again)) {
           const next = list.children[Math.min(at, list.children.length - 1)]
           if (focused && !list.contains(document.activeElement)) (next ? next.querySelector('.inbox-link') : $('inbox-close')).focus()
         } else if (x.isConnected) {
           x.disabled = false
-          arm(false)
+          holds = asked
+          arm(asked)
+          if (asked && focused) x.focus()
         }
       })
       return x
+    }
+
+    /** The sign of an item's reading note, which opens it: lit when it holds the user's part, plain with Claude's impression alone, faint with none. */
+    function noteOf(r) {
+      const { item } = r
+      const s = reading(item, notes, waiting)
+      const b = el('button', `inbox-note${s.mine ? ' mine' : ''}${s.impression ? ' imp' : ''}`)
+      b.type = 'button'
+      b.innerHTML = NOTE_ICON
+      const holds = [s.mine ? 'your quotes and lines' : '', s.impression ? "Claude's impression" : ''].filter(Boolean).join(' and ')
+      b.title = `Reading note: ${holds ? `it holds ${holds}` : 'quotes from it and lines of your own, as you read it'}`
+      b.setAttribute('aria-label', `Reading note of ${label(item)}${holds ? `, with ${holds}` : ''}`)
+      b.addEventListener('click', () => view.open(item))
+      return b
+    }
+
+    /**
+     * The user's mark that they have read an item, theirs alone to set and to take off. Setting it
+     * opens their part of the reading note to Claude and starts the discussion in the chat, which
+     * cannot be taken back: the first tap asks, the second sets it. With no chat the mark is saved
+     * all the same and the row says the discussion waits.
+     */
+    function readOf(r) {
+      const { item } = r
+      if (!key()) return item.read ? el('span', 'inbox-read', '✓ read') : null
+      const b = el('button', 'inbox-read')
+      b.type = 'button'
+      let timer = 0
+      const show = armed => {
+        clearTimeout(timer)
+        b.classList.toggle('armed', armed)
+        b.setAttribute('aria-pressed', String(!!item.read))
+        b.textContent = armed ? 'Mark as read?' : item.read ? '✓ read' : 'mark read'
+        b.title = armed ? 'Tap again: your part of its reading note opens to Claude, and the discussion starts in the chat'
+          : item.read ? `Marked as read ${item.read}. Tap to take the mark off: your part of its reading note is closed to Claude again`
+            : 'Mark as read once you have read it and written what you meant to: Claude then opens your part of its reading note and discusses the item with you in the chat'
+        b.setAttribute('aria-label', armed ? `Mark ${label(item)} as read: again to confirm` : item.read ? `${label(item)} is marked as read. Take the mark off` : `Mark ${label(item)} as read`)
+        if (armed) timer = setTimeout(() => { show(false); draw(last) }, 5000)
+      }
+      show(false)
+      b.addEventListener('blur', () => show(false))
+      b.addEventListener('click', async () => {
+        if (!item.read && !b.classList.contains('armed')) return show(true)
+        clearTimeout(timer)
+        const set = !item.read
+        b.disabled = true
+        b.classList.remove('armed')
+        const got = await change(r, 'read', set, b)
+        if (!got) {
+          if (b.isConnected) { b.disabled = false; show(false) }
+          return
+        }
+        if (set) setMsg(got.asked ? 'Marked as read. Asked in the chat: Claude opens your part of the reading note there.' : 'Marked as read. No chat is connected: Discuss starts the discussion once one is.', false, ASKED_MS)
+      })
+      return b
     }
 
     /** That an item has a brief, and the brief itself, which a tap on the mark shows under the item. */
@@ -322,17 +423,23 @@
     }
 
     /**
-     * Process: the item asked of Claude in the chat that ran /rft, where it reads it, gives its
-     * brief and waits for the user to pick what becomes of it. Nothing changes here until Claude
-     * saves the brief; with no chat, the line at the foot says so and nothing waits.
+     * The item's one button. Process, before the read mark: the item asked of Claude in the chat
+     * that ran /rft, where it reads it on its own and saves its impression and its brief. Discuss,
+     * after it: Claude opens the user's part of the reading note there, says where the two readings
+     * differ, and the user picks what becomes of the item. Nothing changes here until Claude writes;
+     * with no chat, the line at the foot says so and nothing waits.
      */
     function processOf(r) {
       const { item } = r
       const id = `${r.nth} ${item.key}`
-      const b = el('button', 'inbox-process', 'Process')
+      const discuss = reading(item, notes, waiting).action === 'discuss'
+      const b = el('button', 'inbox-process', discuss ? 'Discuss' : 'Process')
       b.type = 'button'
-      b.title = item.brief ? 'Process: Claude starts from its brief in the chat, and you pick what becomes of it' : 'Process: Claude reads it in the chat, gives its brief, and you pick what becomes of it'
-      b.setAttribute('aria-label', `Process ${label(item)} in the chat`)
+      b.dataset.action = discuss ? 'discuss' : 'process'
+      b.title = discuss ? 'Discuss: Claude opens your part of its reading note in the chat, says where its reading and yours differ, and you pick what becomes of it'
+        : item.brief ? 'Process again: Claude reads it again on its own in the chat and rewrites its impression and its brief'
+          : 'Process: Claude reads it on its own in the chat and saves its impression and its brief. You read it yourself and mark it as read to discuss it'
+      b.setAttribute('aria-label', `${discuss ? 'Discuss' : 'Process'} ${label(item)} in the chat`)
       b.disabled = (asked.get(id) || 0) > Date.now()
       // the button as the list has it now: a redraw may have replaced this one
       const free = () => {
@@ -344,22 +451,24 @@
         if ((asked.get(id) || 0) > Date.now()) return
         asked.set(id, Date.now() + ASKED_MS)
         b.disabled = true
+        const what = discuss ? 'Not discussed' : 'Not processed'
         try {
           const res = await fetch('api/inbox', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-RFT-Token': key() },
-            body: JSON.stringify({ action: 'process', key: item.key, nth: r.nth }),
+            body: JSON.stringify({ action: discuss ? 'discuss' : 'process', key: item.key, nth: r.nth }),
           })
           const got = await res.json().catch(() => ({}))
           if (!res.ok || !got.asked) {
-            // a server from before Process knows no such action
-            setMsg(refusal(res.status === 400 ? 404 : res.status, got, 'Not processed'), true)
+            // a server from before Process, or before Discuss, knows no such action
+            setMsg(refusal(res.status === 400 ? 404 : res.status, got, what), true)
             return free()
           }
-          setMsg(`Asked in the chat: Claude ${item.brief ? 'starts from its brief' : 'reads it and gives its brief'} there.`, false, ASKED_MS)
+          setMsg(discuss ? 'Asked in the chat: Claude opens your part of the reading note there.' : 'Asked in the chat: Claude reads it on its own and gives its brief there.', false, ASKED_MS)
           setTimeout(free, ASKED_MS)
+          if (discuss) load()
         } catch (e) {
-          setMsg('Not processed: the server did not answer.', true)
+          setMsg(`${what}: the server did not answer.`, true)
           free()
         }
       })
@@ -377,16 +486,20 @@
       a.target = '_blank'
       a.rel = 'noopener noreferrer'
       a.title = item.url
-      head.append(a, priorityButton(r))
+      head.append(a)
+      if (view) head.append(noteOf(r))
+      head.append(priorityButton(r))
       if (key()) head.append(discardOf(r))
       li.append(head)
       const under = el('div', 'inbox-under')
       // what is said of it, which wraps, and Process at its right
       const about = el('div', 'inbox-about')
-      const why = whyOf(r), day = when(item), brief = briefOf(r)
+      const why = whyOf(r), day = when(item), brief = briefOf(r), mark = readOf(r)
       if (why) about.append(why)
       if (day) about.append(el('span', 'inbox-when muted', day))
       if (brief) about.append(brief.mark)
+      if (mark) about.append(mark)
+      if (reading(item, notes, waiting).waiting) about.append(el('span', 'inbox-waiting', 'waiting for chat connection'))
       if (about.firstChild || key()) under.append(about)
       if (key()) under.append(processOf(r))
       if (under.firstChild) li.append(under)
@@ -402,7 +515,7 @@
     function engaged(from) {
       const a = document.activeElement
       if (a && a !== from && list.contains(a) && a.matches('input.inbox-why-edit')) return true
-      return [...list.querySelectorAll('.inbox-x.armed, .inbox-prio.pending')].some(x => x !== from)
+      return [...list.querySelectorAll('.inbox-x.armed, .inbox-prio.pending, .inbox-read.armed')].some(x => x !== from)
     }
 
     function draw(items, from) {
@@ -415,13 +528,13 @@
       btn.title = name
       btn.setAttribute('aria-label', name)
       panel.querySelectorAll('[data-inbox-order]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.inboxOrder === order)))
-      const json = `${order}${key() ? ' w ' : ' r '}${JSON.stringify(items)}`
+      const json = `${order}${key() ? ' w ' : ' r '}${JSON.stringify([items, notes, waiting])}`
       // drawn once they leave it (the list's focusout), or at the next read
       if (json === shown || engaged(from)) return
       shown = json
       // a redraw under a reading priority, the brief's mark or Process leaves the focus on the one that replaces it
       const a = document.activeElement
-      const cls = a && list.contains(a) && ['inbox-prio', 'inbox-briefed', 'inbox-process'].find(c => a.classList.contains(c))
+      const cls = a && list.contains(a) && ['inbox-prio', 'inbox-briefed', 'inbox-process', 'inbox-note', 'inbox-read'].find(c => a.classList.contains(c))
       const at = cls ? { ...a.closest('li').dataset, cls } : null
       list.replaceChildren(...ordered(items, order).map(row))
       const now = at && rowOf(at.key, at.nth)
@@ -442,6 +555,7 @@
           return true
         }
         if (Date.now() > keep) setMsg('')
+        take(got)
         draw(got.items)
       } catch (e) {
         // the page's own light says when the server is gone
@@ -470,6 +584,7 @@
         link.value = why.value = ''
         setNote('')
         setMsg('')
+        take(got)
         draw(got.items)
         const rows = [...list.children].filter(li => li.dataset.key === got.item.key).sort((a, b) => Number(a.dataset.nth) - Number(b.dataset.nth))
         if (rows.length) rows[rows.length - 1].scrollIntoView({ block: 'nearest' })
@@ -496,7 +611,13 @@
       } else if (panel.contains(document.activeElement)) btn.focus()
     }
 
-    btn.addEventListener('click', () => setOpen(panel.hidden))
+    btn.addEventListener('click', () => {
+      // an item's reading note stands in the panel's place: the button closes it, and the panel is back
+      if (view && view.isOpen()) return view.close()
+      setOpen(panel.hidden)
+    })
+    // back from a reading note: its sign on the row says what it holds now
+    if ($('reading')) $('reading').addEventListener('rft:reading-closed', () => load())
     $('inbox-close').addEventListener('click', () => setOpen(false))
     $('inbox-add').addEventListener('submit', ev => {
       ev.preventDefault()
@@ -528,5 +649,5 @@
     })
   }
 
-  root.RftInbox = { count, label, when, refusal, ORDERS, PRIORITIES, nextPriority, priorityIcon, ordered, mount }
+  root.RftInbox = { count, label, when, refusal, ORDERS, PRIORITIES, nextPriority, priorityIcon, ordered, reading, mount }
 })(typeof globalThis !== 'undefined' ? globalThis : window)

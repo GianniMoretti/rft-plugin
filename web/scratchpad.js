@@ -228,6 +228,7 @@
 
     function setOpen(open, focus = true) {
       // one panel in the corner: the inbox gives its place
+      if (open && $('reading') && !$('reading').hidden) $('reading-close').click() // an item's reading note first: it gives its place back to the inbox
       if (open && $('inbox') && !$('inbox').hidden) $('inbox-close').click()
       panel.hidden = !open
       btn.setAttribute('aria-expanded', String(open))
