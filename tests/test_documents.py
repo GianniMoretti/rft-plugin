@@ -63,7 +63,7 @@ def kit_document(vault: Path, name: str, kit: str) -> Path:
     return folder
 
 
-class Documents(unittest.TestCase):
+class Server(unittest.TestCase):
     """Each test on a fresh copy of the fixture's vault, behind a server of its own."""
 
     def setUp(self):
@@ -99,6 +99,9 @@ class Documents(unittest.TestCase):
     def states(self, name: str = "paper") -> dict:
         return {c["name"]: c["state"] for c in self.ms(name)["copies"]}
 
+
+
+class Documents(Server):
     # ------------------------------------------------------------ the file list (ticket 13)
 
     def test_a_folder_and_a_file_are_made_from_the_page_and_a_copy_placed_there_is_listed(self):
@@ -566,6 +569,114 @@ class Documents(unittest.TestCase):
         self.assertEqual(self.files("move", "sections/extra.bib", to="sections/more.bib")[0], 200)
         self.assertEqual(self.files("move", "refs.bib", to="literature.bib")[0], 200)
         self.assertEqual(self.tracking()["bib"]["yun2019cutmix"], {"from": "R07", "file": "literature.bib", "also": ["sections/more.bib"]})
+
+
+@unittest.skipUnless(LATEXMK, "latexmk is not installed")
+class KitsWithASnippet(Server):
+    """Step 2's referee (ticket 20): a document made from each real kit compiles unmodified through
+    the server, then with one snippet of the fixture's vault placed in a chapter or section file
+    (not the main file), from a copy of its folder alone, and the scan finds nothing in it.
+
+    The placement itself is the session's (hooks/lib/manuscript.ts), which a test here cannot
+    run: what it writes is taken from the fixture (S01 as its tracking file has it written out,
+    and the entry R07 gives in refs.bib) and written the same way, and tests/copies.test.ts holds
+    the session to exactly that (what a placement writes into a kit's chapter file)."""
+
+    def place_s01(self, name: str, file: str) -> str:
+        """S01's copy at the end of `file`, its entry in the .bib that file uses, and both in the tracking file; the .bib."""
+        fixture = json.loads((FIXTURE / "project" / "vault" / "documents" / ".rft" / "paper" / "tracking.json").read_text())
+        s01 = next(c for c in fixture["copies"] if c["snippet"] == "S01" and c["file"] == "main.tex")
+        entry = (FIXTURE / "project" / "vault" / "documents" / "paper" / "refs.bib").read_text().split("\n\n")[0]
+        folder = self.vault / "documents" / name
+        chapter = folder / file
+        chapter.write_text(chapter.read_text().rstrip("\n") + f"\n\n%%% {s01['marker']} %%%\n{s01['placed']}\n%%% end %%%\n")
+        got = json.loads(self.get(f"/api/manuscript/bib?doc={name}&file={quote(file)}")[2])
+        bib = folder / got["bib"]
+        text = bib.read_text()
+        bib.write_text(text.rstrip() + ("\n\n" if text.strip() else "") + entry + "\n")
+        t = self.tracking(name)
+        t.setdefault("copies", []).append({"snippet": "S01", "marker": s01["marker"], "file": file, "stamp": s01["stamp"], "placed": s01["placed"]})
+        t.setdefault("bib", {})["yun2019cutmix"] = {"from": "R07", "file": got["bib"]}
+        (self.vault / "documents" / ".rft" / name / "tracking.json").write_text(json.dumps(t))
+        return got["bib"]
+
+    def declare(self, name: str, main: str, environment: str, heading: str) -> None:
+        """The page's one action for an environment the document lacks, as the session does it: a line at the end of the main file's preamble."""
+        path = self.vault / "documents" / name / main
+        lines = path.read_text().split("\n")
+        at = next(i for i, line in enumerate(lines) if "\\begin{document}" in line and not line.lstrip().startswith("%"))
+        before = lines[:at]
+        while before and not before[-1].strip():
+            before.pop()
+        path.write_text("\n".join([*before, f"\\newtheorem{{{environment}}}{{{heading}}}", "", *lines[at:]]))
+
+    def compiled(self, name: str) -> dict:
+        status, r = self.write("POST", "/api/manuscript/compile", {"doc": name})
+        self.assertEqual(status, 200)
+        return r
+
+    def alone(self, name: str, main: str) -> None:
+        """A copy of the document's folder in an empty directory compiles with plain latexmk: what a co-author gets."""
+        import test_kits
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / name
+            shutil.copytree(self.vault / "documents" / name, folder)
+            code, log = test_kits.latexmk(folder, main)
+            self.assertEqual(code, 0, log[-2000:])
+            self.assertTrue((folder / f"{Path(main).stem}.pdf").is_file())
+            self.assertEqual(test_kits.undefined(log), [])
+
+    def check(self, name: str, file: str, bib: str) -> None:
+        d = self.ms(name)
+        self.assertEqual([(c["id"], c["file"], c["state"], c["included"], c["markers"]) for c in d["copies"]], [("S01", file, "placed", True, True)])
+        self.assertEqual([b for b in d["bib"] if b["from"]], [{"key": "yun2019cutmix", "file": bib, "from": "R07"}])
+        self.assertEqual((d["traces"], d["notIncluded"]), ([], []), "the scan finds nothing, and every file is in the document")
+        used = next(s for s in json.loads(self.get("/api/manuscript")[2])["snippets"] if s["id"] == "S01")["usedIn"]
+        self.assertIn({"doc": name, "file": file, "count": 1, "states": ["placed"]}, used)
+
+    def test_the_icml_kit_with_a_snippet_in_a_section_file(self):
+        if fetch_kits.kit("icml2027") is None:
+            self.skipTest(fetch_kits.missing("icml2027"))
+        kit_document(self.vault, "icml", "icml2027")
+        r = self.compiled("icml")
+        self.assertEqual((r["ok"], r["errors"]), (True, []), "unmodified")
+        # the kit is one file: a section file of the user's own, made in the page and taken in by the main file
+        self.assertEqual(self.files("new-file", "sections/method.tex", name="icml")[0], 201)
+        (self.vault / "documents" / "icml" / "sections" / "method.tex").write_text("\\section{Method}\nA section of our own.\n")
+        main = self.vault / "documents" / "icml" / "example_paper.tex"
+        text = main.read_text()
+        self.assertEqual(text.count("\n\\bibliography{example_paper}"), 1)
+        main.write_text(text.replace("\n\\bibliography{example_paper}", "\n\\input{sections/method}\n\n\\bibliography{example_paper}"))
+        bib = self.place_s01("icml", "sections/method.tex")
+        self.assertEqual(bib, "example_paper.bib")
+        r = self.compiled("icml")
+        # the kit declares its own definition environment: nothing to add
+        self.assertEqual((r["ok"], r["errors"], [w for w in r["warnings"] if "undefined" in w]), (True, [], []))
+        self.check("icml", "sections/method.tex", "example_paper.bib")
+        self.alone("icml", "example_paper.tex")
+
+    def test_the_aau_thesis_with_a_snippet_in_a_papers_section_file(self):
+        if fetch_kits.kit("aau-thesis") is None:
+            self.skipTest(fetch_kits.missing("aau-thesis"))
+        kit_document(self.vault, "thesis", "aau-thesis")
+        r = self.compiled("thesis")
+        self.assertEqual((r["ok"], r["errors"]), (True, []), "unmodified")
+        file = "papers/paperA/sections/introduction.tex"
+        bib = self.place_s01("thesis", file)
+        self.assertEqual(bib, "bib/mybib.bib", "the one .bib the kit names, through its macro")
+        # the kit has no definition environment: the compile says which, and offers the one line that declares it
+        r = self.compiled("thesis")
+        self.assertEqual(r["ok"], False)
+        asked = [e for e in r["errors"] if e.get("declare")]
+        self.assertEqual([(e["declare"], e["in"]) for e in asked], [("definition", file)])
+        self.declare("thesis", "master.tex", "definition", "Definition")
+        r = self.compiled("thesis")
+        self.assertEqual((r["ok"], r["errors"], [w for w in r["warnings"] if "undefined" in w]), (True, [], []))
+        self.check("thesis", file, "bib/mybib.bib")
+        self.alone("thesis", "master.tex")
+        # paper A's bibliography now lists the entry: bibtex ran on that chapter's own .aux
+        self.assertIn("\\bibitem{yun2019cutmix}", (self.vault / "documents" / ".build" / "thesis" / "papers" / "paperA" / "paperA.bbl").read_text())
+        self.assertNotIn("yun2019cutmix", (self.vault / "documents" / ".build" / "thesis" / "papers" / "paperB" / "paperB.bbl").read_text())
 
 
 if __name__ == "__main__":

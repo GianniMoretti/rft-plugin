@@ -374,6 +374,7 @@ describe('the .bib of a document with several', () => {
   }
   const A = 'vault/documents/thesis/papers/paperA/refs.bib', SHARED = 'vault/documents/thesis/bib/mybib.bib'
   const tracking = (fs: MemoryFs) => JSON.parse(fs.read('vault/documents/.rft/thesis/tracking.json'))
+  const ms_ = async (io: ReturnType<MemoryFs['io']>, l: Awaited<ReturnType<typeof load>>) => (await readManuscript(io, l))!
 
   test('a snippet citing a reference note, placed in paper A\'s file, adds the entry to paper A\'s .bib only; placed twice, once', async () => {
     const { fs, io, l } = await setup(THESIS)
@@ -387,6 +388,25 @@ describe('the .bib of a document with several', () => {
     expect(fs.read(A).split('@inproceedings{yun2019cutmix,').length - 1).toBe(1)
     expect(fs.read(SHARED)).toBe('')
     expect(fs.read('vault/documents/thesis/papers/paperA/sections/introduction.tex')).toContain('%%% Definition: CutMix %%%')
+  })
+
+  test('what a placement writes into a kit\'s chapter file is what the server\'s tests compile there (tests/test_documents.py, the kits with a snippet placed)', async () => {
+    // the fixture's own tracking file holds S01 as it was written out, and its refs.bib the entry R07 gives: a placement
+    // in another document's chapter file writes exactly those, at the end of the file, and declares the environment the kit lacks
+    const { fs, io, l } = await setup(THESIS)
+    const fixture = JSON.parse(FILES[TRACKING]!) as { copies: { snippet: string; file: string; placed: string; marker: string }[] }
+    const s01 = fixture.copies.find(c => c.snippet === 'S01' && c.file === 'main.tex')!
+    const chapter = 'vault/documents/thesis/papers/paperA/sections/introduction.tex'
+    await setDocument(io, l, { name: 'thesis', place: 'S01', file: 'papers/paperA/sections/introduction.tex' })
+    expect(fs.read(chapter)).toBe(`\\section{Introduction}\nText of paper A.\n\n%%% ${s01.marker} %%%\n${s01.placed}\n%%% end %%%\n`)
+    expect(tracking(fs).copies).toEqual([{ snippet: 'S01', marker: s01.marker, file: 'papers/paperA/sections/introduction.tex', stamp: tracking(fs).copies[0].stamp, placed: s01.placed }])
+    const entry = FILES[`${DOC}/refs.bib`]!.split('\n\n')[0]!
+    expect(entry).toContain('@inproceedings{yun2019cutmix,')
+    expect(fs.read(A)).toBe(`@article{own2020,\n  title={Mine}\n}\n\n${entry}\n`)
+    // the kit declares no definition environment: one line, at the end of the main file's preamble
+    expect(await declareEnvironment(io, l, 'thesis', 'definition')).toBe('Added \\newtheorem{definition}{Definition} to the preamble of thesis (master.tex).')
+    expect(fs.read('vault/documents/thesis/master.tex')).toBe('\\input{setup/macros.tex}\n\\newtheorem{definition}{Definition}\n\n\\begin{document}\n\\includepaper{papers/paperA/paperA}\n\\includepaper{papers/paperB/paperB}\n\\end{document}\n')
+    expect((await tracesOf(io, l, await ms_(io, l), (await ms_(io, l)).documents.find(x => x.name === 'thesis')!)).traces).toEqual([])
   })
 
   test('where nothing says which .bib a chapter uses, the session refuses with the choices; the page\'s pick is used and remembered', async () => {
