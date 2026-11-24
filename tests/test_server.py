@@ -2026,6 +2026,17 @@ class ManuscriptTest(unittest.TestCase):
         self.assertEqual(self.write("POST", "/api/manuscript/ask", {"action": "remove", "name": "paper", "id": "S01"})[0], 200)
         status, got = self.write("POST", "/api/manuscript/ask", {"action": "allow", "name": "paper", "file": "main.tex", "match": "S02", "text": "See Table S1 and \\ref{S02}.", "extra": 1})
         self.assertEqual((status, self.asked[-1][1]), (200, {"action": "allow", "name": "paper", "file": "main.tex", "match": "S02", "text": "See Table S1 and \\ref{S02}."}))
+        # what a note gives a document, for the page's Insert; the insertion is the session's
+        self.assertEqual(json.loads(self.get("/api/manuscript/saved?id=E05")[2]), {"id": "E05", "numbers": {"gap": "0.3", "seeds": "3"}, "figures": [], "tables": [], "reference": False})
+        self.assertEqual(json.loads(self.get("/api/manuscript/saved?id=R01")[2]), {"id": "R01", "numbers": {}, "figures": [], "tables": [], "reference": True})
+        self.assertEqual(self.get("/api/manuscript/saved?id=E99")[0], 404)
+        type(self).answer = lambda request: tracking.write_text(tracking.read_text() + "\n")
+        status, got = self.write("POST", "/api/manuscript/ask", {"action": "insert", "name": "paper", "kind": "number", "id": "E05", "match": "gap", "file": "main.tex", "from": 5, "to": 0})
+        self.assertEqual((status, self.asked[-1][1]), (200, {"action": "insert", "name": "paper", "kind": "number", "id": "E05", "match": "gap", "file": "main.tex", "from": 5, "to": 0}))
+        for bad, code in (({"action": "insert", "name": "paper", "kind": "number", "id": "E05", "file": "main.tex", "from": 5, "to": 0}, 400),
+                          ({"action": "insert", "name": "paper", "kind": "essay", "id": "E05", "match": "gap", "file": "main.tex", "from": 5, "to": 0}, 400),
+                          ({"action": "insert", "name": "paper", "kind": "citation", "id": "R77", "file": "main.tex", "from": 5, "to": 0}, 400)):
+            self.assertEqual(self.write("POST", "/api/manuscript/ask", bad)[0], code, bad)
         for bad, code in (({"action": "new", "kind": "result"}, 400), ({"action": "drop"}, 400), ({"action": "document", "name": "My Paper"}, 400),
                           ({"action": "document", "name": "notes", "title": "two\nlines"}, 400), ({"action": "document", "name": "notes", "title": 3}, 400),
                           ({"action": "reviewed", "id": "S42"}, 404), ({"action": "document", "name": "paper"}, 409),

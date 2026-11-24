@@ -210,6 +210,7 @@
     let marks = []
     let copyLines = [] // the editor's line classes on the copies
     let focusCopy = null // the copy shown in the document's head
+    const inserting = { note: '', saved: null, pick: '' } // the document head's Insert: the note typed, what it gives, what is picked
     const canWrite = () => !!key()
 
     const cm = root.CodeMirror ? root.CodeMirror($('ms-cm'), {
@@ -395,7 +396,7 @@
           el('span', { class: 'ms-title', text: valueWords(v) }),
           v.state !== 'lost' && v.now != null ? el('button', { type: 'button', text: v.kind === 'figure' ? 'Copy it again' : `Take ${v.kind === 'number' ? v.now : 'it'}`, title: 'Write the tree\'s value in its place', onclick: ev => { ev.stopPropagation(); void ask({ action: 'take-value', name: d.name, index: v.index }, 'take the value') } }) : null,
           el('button', { type: 'button', text: v.state === 'lost' || v.now == null ? 'Forget' : 'Keep mine', title: v.state === 'lost' || v.now == null ? 'Stop tracking it: what stands there is the document\'s own' : 'Keep what the document says: it is flagged again only when the tree changes', onclick: ev => { ev.stopPropagation(); void ask({ action: 'keep-value', name: d.name, index: v.index }, 'keep the value') } })))),
-        ...group(`Traces of the tree (${(d.traces || []).length})`, 'This document\'s files are shared with co-authors as they are: nothing in them should name the tree', (d.traces || []).slice(0, 40).map(x => el('li', { class: 'ms-item ms-wrap', title: x.text || x.file, onclick: () => void goTo(x.file, x.line) },
+        ...group(`Traces of the tree (${(d.traces || []).length})`, 'This document\'s files are shared with co-authors as they are: nothing in them should name the tree', (d.firstDesign ? [] : d.traces || []).slice(0, 40).map(x => el('li', { class: 'ms-item ms-wrap', title: x.text || x.file, onclick: () => void goTo(x.file, x.line) },
           el('span', { class: 'ms-title', text: traceWords(x) }),
           el('button', { type: 'button', text: 'Allow', title: 'A false alarm (a "Table S01" of a supplement): this occurrence is not flagged again', onclick: ev => { ev.stopPropagation(); void ask({ action: 'allow', name: d.name, file: x.file, match: x.match, text: x.text || '' }, 'allow it') } })))))
     }
@@ -456,6 +457,8 @@
           el('span', { class: 'ms-spacer' }), el('span', { class: 'ms-acts' }, selButton('comment'), selButton('suggestion'), saveBtn)))
         const extra = focusCopy ? copyPanel(focusCopy) : placeRow()
         if (extra) headEl.append(extra)
+        const insert = focusCopy ? null : insertRow()
+        if (insert) headEl.append(insert)
       }
       renderSelectionButtons()
     }
@@ -479,6 +482,53 @@
       return el('div', { class: 'ms-head-row' }, el('span', { class: 'muted', text: 'Place' }), which, el('span', { class: 'muted', text: 'after' }), after,
         el('button', { type: 'button', text: 'Place', title: 'Write the snippet out here as plain LaTeX, between two marker lines, referenced to it', onclick: () => place(doc, which.value, after.value, openRel()) }),
         el('button', { type: 'button', class: 'ms-sel-copy', text: 'Selection is a copy', title: 'The selected passage becomes a copy of this snippet as it is: text a co-author wrote, tied to the tree without being replaced', onclick: () => void pointAt(which.value) }))
+    }
+
+    /** What a note gives a document, as the Insert menu offers it: `number:acc.1k`, `figure:loss`, `table:by_seed`, `citation:`. */
+    const insertChoices = saved => (!saved ? [] : [
+      ...(saved.reference ? [['citation:', 'cite it']] : []),
+      ...Object.entries(saved.numbers || {}).map(([k, v]) => [`number:${k}`, `${k} = ${v}`]),
+      ...(saved.figures || []).map(f => [`figure:${f}`, `figure ${f}`]), ...(saved.tables || []).map(x => [`table:${x}`, `table ${x}`]),
+    ])
+
+    /** A document's row for writing something of the tree at the cursor, outside any copy: a note's saved number, figure or table, or a citation of a reference. It is plain LaTeX there, and tracked. */
+    function insertRow() {
+      const d = theDoc()
+      if (!d || !/\.(tex|ltx)$/i.test(openRel())) return null
+      const all = [...nodes().values()].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }))
+      const note = el('input', { type: 'text', list: 'ms-insert-notes', size: 10, autocomplete: 'off', spellcheck: 'false', placeholder: 'E05, R07…', 'aria-label': 'The note it comes from' })
+      note.value = inserting.note
+      const what = el('select', { 'aria-label': 'What of the note' })
+      const go = el('button', {
+        type: 'button', text: 'Insert', title: 'Write it at the cursor as plain LaTeX. It is tracked: when the tree changes it, it is listed under Values to look at',
+        onclick: async () => {
+          const [kind, key] = [what.value.slice(0, what.value.indexOf(':')), what.value.slice(what.value.indexOf(':') + 1)]
+          if (!cm || !kind) return
+          const at = cm.getCursor()
+          const got = await ask({ action: 'insert', name: doc, kind, id: inserting.note, ...(kind === 'citation' ? {} : { match: key }), file: openRel(), from: at.line + 1, to: at.ch }, 'insert it')
+          if (got && cm) cm.focus()
+        },
+      })
+      const fill = () => {
+        const choices = insertChoices(inserting.saved)
+        what.replaceChildren(...(choices.length ? choices.map(([value, text]) => el('option', { value, text, selected: value === inserting.pick }))
+          : [el('option', { value: '', text: inserting.note ? (inserting.saved ? 'nothing saved to insert' : 'no such note') : 'a number, figure, table or citation' })]))
+        what.disabled = go.disabled = !choices.length
+      }
+      const look = async () => {
+        inserting.note = note.value.trim().toUpperCase()
+        inserting.saved = null
+        if (/^[A-Z]\d+$/.test(inserting.note)) {
+          try { const r = await api(`api/manuscript/saved?id=${encodeURIComponent(inserting.note)}`); if (r.ok) inserting.saved = r.data } catch { /* the next try */ }
+        }
+        fill()
+      }
+      note.addEventListener('change', () => void look())
+      note.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); void look() } })
+      what.addEventListener('change', () => { inserting.pick = what.value })
+      fill()
+      return el('div', { class: 'ms-head-row' }, el('span', { class: 'muted', text: 'Insert from' }), note,
+        el('datalist', { id: 'ms-insert-notes' }, all.map(n => el('option', { value: n.id, text: `${n.id} ${n.title}` }))), what, go)
     }
 
     /** Where in the open file: the end (before the bibliography), after a heading, or after a copy. */
@@ -973,7 +1023,7 @@
 
     async function ask(body, whatFor) {
       if (!canWrite()) { needKey(whatFor); return null }
-      if (dirty && level === 'documents' && ['take', 'keep', 'place', 'move', 'remove', 'take-value', 'keep-value', 'point', 'markers', 'allow', 'declare', 'convert'].includes(body.action)) {
+      if (dirty && level === 'documents' && ['take', 'keep', 'place', 'move', 'remove', 'take-value', 'keep-value', 'point', 'markers', 'allow', 'declare', 'convert', 'insert'].includes(body.action)) {
         if (confirm('The document has unsaved changes: save them first? (Cancel: drop them)')) await save(false)
         else dirty = false
       }

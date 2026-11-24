@@ -12,7 +12,7 @@ import { compareNames, conceptOrder, join, resolveId } from './vault'
 import type { Located, LocatedValue } from './copies'
 import { bibKeys, copyAt, locateCopies, locateValues, readingOrder } from './copies'
 import type { Trace } from './scan'
-import { citedKeys, documentFiles, scanDocument, traceWords } from './scan'
+import { citedKeys, documentFiles, scanDocument, traceWords, tracesInText } from './scan'
 import type { DocsRegistry, Header, Kind, Registry, Snippet } from './snippets'
 import {
   DOCUMENTS_DIR, DOCUMENTS_REGISTRY, KINDS, ManuscriptError, SNIPPETS_DIR, SNIPPETS_REGISTRY, THEOREMS, blockText, blocksRel, bodyAfterHeader,
@@ -23,7 +23,7 @@ import type { TrackedCopy, TrackedValue, Tracking } from './tracking'
 import { readTracking, writeTracking } from './tracking'
 import { substanceFingerprint } from './verify'
 import type { Held, Written } from './writeout'
-import { figureRel, markedText, savedNumbers, tableRel, writeOut } from './writeout'
+import { figureRel, markedText, savedNumbers, tableRel, writeContext, writeOut, writeText } from './writeout'
 
 export { ManuscriptError }
 
@@ -1005,6 +1005,53 @@ export async function reviewValue(io: Io, loaded: Loaded, name: string, index: n
   w.tracking.values[index] = entry
   await save(io, vault, d, w)
   return v.kind === 'figure' ? `${what} is the tree's again: its file was copied in anew.` : `${what} now reads ${v.kind === 'number' ? v.now : 'as the tree has it'}.`
+}
+
+/**
+ * The user inserts something of the tree at the cursor of a document's file (the tree view),
+ * outside any copy: a note's saved number, figure or table, or a citation of a reference note,
+ * written out as plain LaTeX and tracked as a copy's values are, so a number in the abstract is
+ * watched too. `line` from 1, `ch` from 0.
+ */
+export async function insertFromTree(
+  io: Io, loaded: Loaded, name: string, at: { file: string; line: number; ch: number },
+  what: { kind: 'number' | 'figure' | 'table' | 'citation'; from: string; key?: string },
+): Promise<string> {
+  const ms = await readManuscript(io, loaded)
+  const d = ms?.documents.find(x => x.name === name)
+  if (!ms || !d) throw new ManuscriptError(`"${name}" is no document`)
+  const text = d.files[at.file]
+  if (text === undefined || !TEX_FILE.test(at.file)) throw new ManuscriptError(`${name} has no .tex file ${at.file}`)
+  const id = resolveId(loaded.tree, what.from) ?? what.from.trim()
+  if (!loaded.tree.nodes[id]) throw new ManuscriptError(`"${what.from}" is not a note of the tree`)
+  const key = (what.key ?? '').trim()
+  if (what.kind !== 'citation' && (!key || /[{}]/.test(key))) throw new ManuscriptError(`say which ${what.kind} of ${id}`)
+  const source = what.kind === 'number' ? `\\rftnum{${id}}{${key}}` : what.kind === 'figure' ? `\\rftfig[width=\\linewidth]{${id}}{${key}}`
+    : what.kind === 'table' ? `\\rfttable{${id}}{${key}}` : `\\cite{${id}}`
+  if (what.kind === 'citation' && loaded.tree.nodes[id]!.type !== 'reference') throw new ManuscriptError(`${id} is not a reference note: only a reference is cited`)
+  const lines = text.split('\n')
+  const line = Math.floor(at.line) - 1
+  if (!(line >= 0 && line < lines.length)) throw new ManuscriptError(`line ${at.line} is not in ${at.file}`)
+  const ch = Math.max(0, Math.min(Math.floor(at.ch) || 0, lines[line]!.length))
+  const offset = lines.slice(0, line).reduce((n, l) => n + l.length + 1, 0) + ch
+  const out = await writeText(io, loaded, source, ms.snippets, writeContext(loaded, heldOf(d)))
+  const traces = tracesInText(out.text, vaultIds(loaded, ms))
+  if (traces.length) throw new ManuscriptError(`written out, it would carry a trace of the tree (${traces.map(x => x.match).join(', ')}): a document's files must not`)
+  const vault = loaded.config.vault
+  const w = workOn(d)
+  const next = text.slice(0, offset) + out.text + text.slice(offset)
+  w.files[at.file] = next
+  w.touched.add(at.file)
+  // each value with the text now around it in the file, which finds it again
+  for (const v of out.values) {
+    const from = offset + v.at, to = from + v.written.length
+    w.tracking.values.push({ kind: v.kind, from: v.from, key: v.key, written: v.written, file: at.file, before: next.slice(Math.max(0, from - CONTEXT), from), after: next.slice(to, to + CONTEXT) })
+  }
+  for (const f of out.files) await copyIn(io, join(vault, f.from), join(vault, DOCUMENTS_DIR, d.name, f.to))
+  addEntries(w, out.bib)
+  await save(io, vault, d, w)
+  return what.kind === 'citation' ? `Cited ${id} in ${name} (${at.file}:${at.line}) as ${out.text}${broughtWords({ ...out, marker: '' }) ? ` (${broughtWords({ ...out, marker: '' })})` : ''}.`
+    : `Wrote the ${what.kind} ${key} of ${id} in ${name} (${at.file}:${at.line})${what.kind === 'number' ? `: ${out.text}` : ''}${out.files.length ? ` (${out.files.map(f => f.to).join(', ')} copied in)` : ''}; it is watched: when the tree changes it, it goes to review.`
 }
 
 /** The user allows one occurrence the scan flagged (a false alarm: "Table S01" of a supplement): remembered in the tracking file, not flagged again. */

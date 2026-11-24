@@ -8,7 +8,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { nextReport } from '../hooks/lib/knowledge'
 import {
-  allowTrace, bibOf, copyState, declareEnvironment, manuscriptReport, manuscriptWarnings, pointCopy, readManuscript, restoreMarkers, reviewCopy, reviewValue,
+  allowTrace, bibOf, copyState, declareEnvironment, insertFromTree, manuscriptReport, manuscriptWarnings, pointCopy, readManuscript, restoreMarkers, reviewCopy, reviewValue,
   setDocument, tracesOf, usedIn, valuesOf,
 } from '../hooks/lib/manuscript'
 import { locateCopies, locateValues, parseMarkers, readingOrder } from '../hooks/lib/copies'
@@ -198,6 +198,40 @@ describe('what the user answers in the page', () => {
     await expect(pointCopy(io, l, 'paper', 'S09', { file: 'main.tex', from: 1, to: 1 })).rejects.toThrow('S09 is no snippet')
     await expect(pointCopy(io, l, 'paper', 'S02', { file: 'main.tex', from: 900, to: 901 })).rejects.toThrow('lines 900 to 901 are not in main.tex')
     expect((await tracesOf(io, l, await s.ms(), (await s.ms()).documents[0]!)).traces).toEqual([])
+  })
+
+  test('a number, a figure, a table or a citation of the tree inserted at the cursor is plain LaTeX there, and tracked outside any copy', async () => {
+    const tabular = '\\begin{tabular}{lr}\n\\toprule\nseed & acc \\\\\n\\bottomrule\n\\end{tabular}'
+    const s = await setup({ 'vault/tables/E05_by_seed.tex': tabular + '\n', [`${DOC}/refs.bib`]: FILES[`${DOC}/refs.bib`]!.split('\n\n')[1]! })
+    const { fs, io, l } = s
+    const main = () => fs.read(`${DOC}/main.tex`).split('\n')
+    const line = main().findIndex(x => x.startsWith('accuracy, most of the way')) + 1
+    expect(await insertFromTree(io, l, 'paper', { file: 'main.tex', line, ch: 9 }, { kind: 'number', from: 'E05', key: 'acc.full' }))
+      .toBe(`Wrote the number acc.full of E05 in paper (main.tex:${line}): 81.6; it is watched: when the tree changes it, it goes to review.`)
+    expect(main()[line - 1]).toBe('accuracy,81.6 most of the way to training on the full set.')
+    let values = await valuesOf(io, l, (await s.ms()).documents[0]!)
+    expect(values.map(v => [v.key, v.written, v.state, v.inCopyOf]).at(-1)).toEqual(['acc.full', '81.6', 'current', null])
+    // the result changes: the inserted number goes to review, with the others of that name
+    fs.write('vault/results/E05.json', FILES['vault/results/E05.json']!.replace('81.6', '82.1'))
+    values = await valuesOf(io, l, (await s.ms()).documents[0]!)
+    expect(values.filter(v => v.state === 'review').map(v => [v.written, v.now, v.line])).toEqual([['81.4', '82.1', 44], ['81.6', '82.1', line - 1]])
+    // a citation: the reference's own key, its entry added to the document's .bib
+    expect(fs.read(`${DOC}/refs.bib`)).not.toContain('yun2019cutmix')
+    const cited = await insertFromTree(io, l, 'paper', { file: 'sections/method.tex', line: 1, ch: 16 }, { kind: 'citation', from: 'R07' })
+    expect(cited).toBe('Cited R07 in paper (sections/method.tex:1) as \\cite{yun2019cutmix} (yun2019cutmix in its .bib).')
+    expect(fs.read(`${DOC}/sections/method.tex`).split('\n')[0]).toBe('\\section{Method}\\cite{yun2019cutmix}')
+    expect(fs.read(`${DOC}/refs.bib`)).toContain('@inproceedings{zhang2018mixup,')
+    expect(fs.read(`${DOC}/refs.bib`)).toContain('\n\n@inproceedings{yun2019cutmix,')
+    // a figure the document already has is not copied again; a table is its tabular
+    expect(await insertFromTree(io, l, 'paper', { file: 'main.tex', line: 17, ch: 0 }, { kind: 'figure', from: 'E08', key: 'loss' })).toContain('Wrote the figure loss of E08 in paper (main.tex:17); it is watched')
+    expect(main()[16]).toBe('\\includegraphics[width=\\linewidth]{figures/loss.pdf}\\maketitle')
+    await insertFromTree(io, l, 'paper', { file: 'main.tex', line: 18, ch: 0 }, { kind: 'table', from: 'E05', key: 'by_seed' })
+    expect(main().slice(17, 22).join('\n')).toBe(tabular)
+    expect((await tracesOf(io, l, await s.ms(), (await s.ms()).documents[0]!)).traces).toEqual([])
+    await expect(insertFromTree(io, l, 'paper', { file: 'main.tex', line: 2, ch: 0 }, { kind: 'number', from: 'E05', key: 'acc.5k' })).rejects.toThrow('\\rftnum{E05}{acc.5k} is not a number or a text')
+    await expect(insertFromTree(io, l, 'paper', { file: 'main.tex', line: 2, ch: 0 }, { kind: 'citation', from: 'E05' })).rejects.toThrow('E05 is not a reference note')
+    await expect(insertFromTree(io, l, 'paper', { file: 'refs.bib', line: 1, ch: 0 }, { kind: 'number', from: 'E05', key: 'seeds' })).rejects.toThrow('paper has no .tex file refs.bib')
+    await expect(insertFromTree(io, l, 'paper', { file: 'main.tex', line: 999, ch: 0 }, { kind: 'number', from: 'E05', key: 'seeds' })).rejects.toThrow('line 999 is not in main.tex')
   })
 
   test('a trace that is a false alarm is allowed once and remembered; an environment the document lacks is declared in one line', async () => {

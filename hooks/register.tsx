@@ -29,7 +29,7 @@ import { nextReport, supersede } from './lib/knowledge'
 import { suggestPriority } from './lib/priority'
 import { dismissVerified, keepVerified, toReview, verifyNote } from './lib/verify'
 import {
-  allowTrace, declareEnvironment, markReviewed, manuscriptReport, manuscriptWarnings, migrateManuscript, newDocument, pointCopy, readManuscript, restoreMarkers,
+  allowTrace, declareEnvironment, insertFromTree, markReviewed, manuscriptReport, manuscriptWarnings, migrateManuscript, newDocument, pointCopy, readManuscript, restoreMarkers,
   reviewCopy, reviewValue, setDocument, setSnippet,
 } from './lib/manuscript'
 import { convertDocuments } from './lib/convert'
@@ -534,6 +534,11 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       if (i.action === 'declare') return declareEnvironment(io, loaded, String(i.name ?? ''), String(i.environment ?? ''))
       if (i.action === 'point') return pointCopy(io, loaded, String(i.name ?? ''), String(i.id ?? ''), { file: String(i.file ?? ''), from: Number(i.from), to: Number(i.to) })
       if (i.action === 'markers') return restoreMarkers(io, loaded, String(i.name ?? ''), String(i.id ?? ''))
+      if (i.action === 'insert') {
+        const kind = String(i.kind ?? '')
+        if (kind !== 'number' && kind !== 'figure' && kind !== 'table' && kind !== 'citation') throw new Error('insert a number, a figure, a table or a citation')
+        return insertFromTree(io, loaded, String(i.name ?? ''), { file: String(i.file ?? ''), line: Number(i.from), ch: Number(i.to) }, { kind, from: String(i.id ?? ''), key: str(i.match) })
+      }
       return setSnippet(io, loaded, { kind: i.kind, title: i.title, basis: strings(i.basis) }, today(), { byUser: true })
     }
     case 'rft_verify': {

@@ -1954,6 +1954,17 @@ class Vault:
             pdf = build / doc / f"{Path(rft_latex.main_file(self.root, doc)).stem}.pdf" if rft_manuscript.DOC_RE.match(doc or "") else None
         return pdf if pdf is not None and pdf.is_file() else None
 
+    def manuscript_saved(self, nid: str) -> tuple[int, dict]:
+        """What a note gives a document, for the page's Insert: the numbers its run saved (each as
+        the text a document holds), its figures that have a PDF, its tables that have LaTeX, and
+        whether it is a reference (cited)."""
+        node = next((n for n in self.tree()["nodes"] if n["id"] == nid), None)
+        if node is None:
+            return 404, {"error": "no such note"}
+        names = lambda folder, ext: sorted(p.name[len(nid) + 1:-len(ext)] for p in (self.root / folder).glob(f"{nid}_*{ext}") if p.is_file())  # noqa: E731
+        return 200, {"id": nid, "numbers": rft_manuscript.saved_numbers(self.root, nid) or {}, "figures": names("figures", ".pdf"), "tables": names("tables", ".tex"),
+                     "reference": node["type"] == "reference"}
+
     def manuscript_ask(self, req: dict, ask) -> tuple[int, dict]:
         """What the session does for the page, as it does for Claude (hooks/lib/manuscript.ts), so
         stamps, copies and a document's tracking file are made in one place: `new` {kind, title,
@@ -1965,7 +1976,9 @@ class Vault:
         again, or a passage made a copy of a snippet; `markers` {name, id} a copy's marker lines
         put back; `allow` {name, file, match, text} a trace allowed; `declare` {name, environment}
         a \\newtheorem line added; `convert` {name} a document of the first design brought to clean
-        source. The answer comes once the files show it."""
+        source; `insert` {name, kind, id, match, file, from, to} a note's saved number, figure or
+        table, or a citation of a reference, written as plain LaTeX at a line and column of a file
+        and tracked. The answer comes once the files show it."""
         action = req.get("action")
         sdir, ddir = rft_manuscript.snippets_dir(self.root), rft_manuscript.documents_dir(self.root)
         stamp = lambda p: p.stat().st_mtime_ns if p.is_file() else 0  # noqa: E731
@@ -1988,7 +2001,7 @@ class Vault:
             if (ddir / name / "main.tex").exists():
                 return 409, {"error": f"there is already a document {name}"}
             found = lambda: name if (ddir / name / "main.tex").is_file() else None  # noqa: E731
-        elif action in ("place", "move", "remove", "take", "keep", "take-value", "keep-value", "point", "markers", "allow", "declare", "convert"):
+        elif action in ("place", "move", "remove", "take", "keep", "take-value", "keep-value", "point", "markers", "allow", "declare", "convert", "insert"):
             name, sid = req.get("name"), req.get("id")
             if not isinstance(name, str) or not rft_manuscript.DOC_RE.match(name) or not (ddir / name / "main.tex").is_file():
                 return 404, {"error": "no such document"}
@@ -2016,6 +2029,11 @@ class Vault:
             elif action == "allow":
                 if not all(isinstance(req.get(k), str) for k in ("file", "match", "text")):
                     return 400, {"error": "expected {action: allow, name, file, match, text}"}
+            elif action == "insert":
+                # {name, kind, id: the note, match: its number's, figure's or table's name, file, from: the line, to: the column}
+                if req.get("kind") not in ("number", "figure", "table", "citation") or not isinstance(sid, str) or self.text_path(sid) is None \
+                        or not all(k in req for k in ("file", "from", "to")) or (req["kind"] != "citation" and not isinstance(req.get("match"), str)):
+                    return 400, {"error": "expected {action: insert, name, kind: number, figure, table or citation, id: a note, match: its name there, file, from: a line, to: a column}"}
             elif action == "declare" and not isinstance(req.get("environment"), str):
                 return 400, {"error": "expected {action: declare, name, environment}"}
             # the document's own files and its tracking file: whichever the session writes shows it answered
@@ -2024,7 +2042,7 @@ class Vault:
             was = marks()
             found = lambda: (sid or name) if marks() != was else None  # noqa: E731
         else:
-            return 400, {"error": "action must be new, reviewed, document, place, move, remove, take, keep, take-value, keep-value, point, markers, allow, declare or convert"}
+            return 400, {"error": "action must be new, reviewed, document, place, move, remove, take, keep, take-value, keep-value, point, markers, allow, declare, convert or insert"}
         with self._ask_lock:
             try:
                 ask("RFT_MANUSCRIPT", {k: v for k, v in req.items() if k in ("action", "id", "kind", "title", "basis", "name", "after", "file", "index", "match", "text", "environment", "from", "to")})
@@ -2583,6 +2601,8 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 return self._json(200, vault.manuscript(), head_only)
             if route == "/api/manuscript/file":
                 return self._json(*vault.manuscript_file((parse_qs(url.query).get("path") or [""])[0]), head_only)
+            if route == "/api/manuscript/saved":
+                return self._json(*vault.manuscript_saved((parse_qs(url.query).get("id") or [""])[0]), head_only)
             if route == "/api/manuscript/pdf":
                 # the PDF only for the page carrying the key: a document may hold what no note shows
                 given = self.headers.get("X-RFT-Token") or ""
