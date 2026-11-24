@@ -1964,7 +1964,8 @@ class Vault:
         index} a value of the tree answered; `point` {name, id, file, from, to} a lost copy found
         again, or a passage made a copy of a snippet; `markers` {name, id} a copy's marker lines
         put back; `allow` {name, file, match, text} a trace allowed; `declare` {name, environment}
-        a \\newtheorem line added. The answer comes once the files show it."""
+        a \\newtheorem line added; `convert` {name} a document of the first design brought to clean
+        source. The answer comes once the files show it."""
         action = req.get("action")
         sdir, ddir = rft_manuscript.snippets_dir(self.root), rft_manuscript.documents_dir(self.root)
         stamp = lambda p: p.stat().st_mtime_ns if p.is_file() else 0  # noqa: E731
@@ -1987,7 +1988,7 @@ class Vault:
             if (ddir / name / "main.tex").exists():
                 return 409, {"error": f"there is already a document {name}"}
             found = lambda: name if (ddir / name / "main.tex").is_file() else None  # noqa: E731
-        elif action in ("place", "move", "remove", "take", "keep", "take-value", "keep-value", "point", "markers", "allow", "declare"):
+        elif action in ("place", "move", "remove", "take", "keep", "take-value", "keep-value", "point", "markers", "allow", "declare", "convert"):
             name, sid = req.get("name"), req.get("id")
             if not isinstance(name, str) or not rft_manuscript.DOC_RE.match(name) or not (ddir / name / "main.tex").is_file():
                 return 404, {"error": "no such document"}
@@ -2015,7 +2016,7 @@ class Vault:
             elif action == "allow":
                 if not all(isinstance(req.get(k), str) for k in ("file", "match", "text")):
                     return 400, {"error": "expected {action: allow, name, file, match, text}"}
-            elif not isinstance(req.get("environment"), str):
+            elif action == "declare" and not isinstance(req.get("environment"), str):
                 return 400, {"error": "expected {action: declare, name, environment}"}
             # the document's own files and its tracking file: whichever the session writes shows it answered
             watched = lambda: [ddir / rft_manuscript.TRACKING / name / "tracking.json", *(p for p in (ddir / name).rglob("*") if p.is_file())]  # noqa: E731
@@ -2023,7 +2024,7 @@ class Vault:
             was = marks()
             found = lambda: (sid or name) if marks() != was else None  # noqa: E731
         else:
-            return 400, {"error": "action must be new, reviewed, document, place, move, remove, take, keep, take-value, keep-value, point, markers, allow or declare"}
+            return 400, {"error": "action must be new, reviewed, document, place, move, remove, take, keep, take-value, keep-value, point, markers, allow, declare or convert"}
         with self._ask_lock:
             try:
                 ask("RFT_MANUSCRIPT", {k: v for k, v in req.items() if k in ("action", "id", "kind", "title", "basis", "name", "after", "file", "index", "match", "text", "environment", "from", "to")})

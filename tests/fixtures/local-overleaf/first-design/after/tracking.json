@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "main": "main.tex",
+  "copies": [
+    {
+      "snippet": "S01",
+      "marker": "Definition: CutMix",
+      "file": "main.tex",
+      "stamp": "2a248ff2",
+      "placed": "\\begin{definition}[CutMix]\\label{def:cutmix}\nGiven two labelled images $(x_A, y_A)$ and $(x_B, y_B)$, CutMix~\\cite{yun2019cutmix} forms\n$\\tilde{x} = M \\odot x_A + (1 - M) \\odot x_B$ and $\\tilde{y} = \\lambda y_A + (1 - \\lambda) y_B$,\nwhere $M$ is a binary box mask and $\\lambda$ is the fraction of $x_A$ that it keeps.\n\\end{definition}"
+    },
+    {
+      "snippet": "S04",
+      "marker": "Method: Training setup",
+      "file": "main.tex",
+      "stamp": "df889d41",
+      "placed": "We train a ResNet-50 for 200 epochs with SGD, a cosine schedule and a batch size of 256. CutMix is\napplied to every batch with $\\lambda \\sim \\mathrm{Beta}(1, 1)$."
+    },
+    {
+      "snippet": "S03",
+      "marker": "Figure: Training loss",
+      "file": "main.tex",
+      "stamp": "913f49be",
+      "placed": "\\begin{figure}[t]\n  \\centering\n  \\includegraphics[width=.8\\linewidth]{figures/loss.pdf}\n  \\caption{Training loss}\\label{fig:training-loss}\n\\end{figure}"
+    },
+    {
+      "snippet": "S02",
+      "marker": "Result: CutMix at 1k images",
+      "file": "main.tex",
+      "stamp": "ac5a9b18",
+      "placed": "\\paragraph{CutMix at 1k images.}\nWith 1k labelled images, CutMix reaches 73.2\\% top-1 accuracy, against 81.6\\% when trained on the\nfull set."
+    },
+    {
+      "snippet": "S07",
+      "marker": "Lemma: Mixing bound",
+      "file": "main.tex",
+      "stamp": "0badf00d",
+      "placed": "\\begin{lemma}[Mixing bound]\\label{lem:mixing-bound}\nThe mixed label $\\tilde{y}$ lies in the convex hull of $y_A$ and $y_B$.\n\\end{lemma}"
+    }
+  ],
+  "values": [
+    {
+      "kind": "number",
+      "from": "E05",
+      "key": "acc.1k",
+      "written": "73.2",
+      "file": "main.tex",
+      "before": "s are available. It reaches ",
+      "after": "\\% top-1\naccuracy over \\text"
+    },
+    {
+      "kind": "figure",
+      "from": "E08",
+      "key": "loss",
+      "written": "figures/loss.pdf",
+      "file": "main.tex",
+      "before": "raphics[width=.8\\linewidth]{",
+      "after": "}\n  \\caption{Training loss}\\"
+    },
+    {
+      "kind": "number",
+      "from": "E05",
+      "key": "acc.1k",
+      "written": "73.2",
+      "file": "main.tex",
+      "before": "our setting, CutMix reaches ",
+      "after": "\\% top-1 accuracy with 1k la"
+    }
+  ],
+  "bib": {
+    "yun2019cutmix": {
+      "from": "R07",
+      "file": "refs.bib"
+    }
+  },
+  "allowed": []
+}

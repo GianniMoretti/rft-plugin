@@ -6,6 +6,7 @@ compiles from its folder alone and the scan finds nothing in it.
 """
 import importlib.util
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -166,6 +167,56 @@ class Compile(unittest.TestCase):
             self.assertEqual(sorted(p.name for p in (vault / "documents").iterdir()), [".build", ".rft", "documents.json", "paper"])
             self.assertEqual(sorted(p.relative_to(vault / "documents" / "paper").as_posix() for p in (vault / "documents" / "paper").rglob("*") if p.is_file()),
                              ["figures/loss.pdf", "main.tex", "refs.bib", "sections/method.tex"])
+
+
+class Converted(unittest.TestCase):
+    """A document of the first design as hooks/lib/convert.ts leaves it (tests/convert.test.ts holds
+    the conversion to these files): the step's check, and its copies' states as the page reads them."""
+    AFTER = FIXTURE / "first-design" / "after"
+
+    def vault(self, tmp: str) -> Path:
+        vault = Path(tmp) / "vault"
+        shutil.copytree(VAULT, vault)
+        shutil.rmtree(vault / "documents" / "paper")
+        shutil.copytree(self.AFTER, vault / "documents" / "paper")
+        (vault / "documents" / "paper" / "tracking.json").rename(vault / "documents" / ".rft" / "paper" / "tracking.json")
+        return vault
+
+    def test_it_scans_clean_and_its_copies_keep_their_states(self):
+        want = json.loads((FIXTURE / "first-design" / "expected.json").read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self.vault(tmp)
+            self.assertEqual(rft_scan.scan_document(vault, "paper", IDS, {"R07", "yun2019cutmix"}), {"traces": [], "allowed": 0})
+            doc = summary(vault)["documents"][0]
+            self.assertEqual([{"snippet": c["id"], "state": c["state"]} for c in doc["copies"]], want["copies"])
+            self.assertEqual([(v["written"], v["state"], v["inCopyOf"]) for v in doc["values"]], [("73.2", "current", None), ("figures/loss.pdf", "current", "S03"), ("73.2", "current", "S02")])
+            self.assertEqual((doc["traces"], doc["firstDesign"]), ([], False))
+            # as the first design had it, it is said to be so, and its markers and macros are traces
+            before = FIXTURE / "first-design" / "before"
+            shutil.rmtree(vault / "documents" / "paper")
+            shutil.copytree(before, vault / "documents" / "paper")
+            (vault / "documents" / ".rft" / "paper" / "tracking.json").unlink()
+            doc = summary(vault)["documents"][0]
+            self.assertEqual((doc["firstDesign"], doc["copies"], len(doc["traces"]) > 10), (True, [], True))
+
+    @unittest.skipUnless(shutil.which("latexmk") and shutil.which("pdftotext"), "latexmk or pdftotext is not on PATH")
+    def test_it_compiles_from_its_folder_alone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            doc = Path(tmp) / "paper"
+            shutil.copytree(self.AFTER, doc)
+            (doc / "tracking.json").unlink()
+            r = subprocess.run(["latexmk", "-pdf", "-interaction=nonstopmode", "-halt-on-error", "main.tex"], cwd=doc, capture_output=True, text=True, timeout=180,
+                               env={"PATH": __import__("os").environ["PATH"], "HOME": tmp})
+            log = (doc / "main.log").read_text(encoding="utf-8", errors="replace") if (doc / "main.log").exists() else r.stdout
+            self.assertEqual(r.returncode, 0, log[-2000:])
+            warnings = "\n".join(line for line in log.splitlines() if "Warning" in line)
+            # the citation of a paper the tree does not hold was undefined before the conversion too
+            self.assertEqual(re.findall(r"(Reference|Citation) `(.+?)'", warnings), [("Citation", "zhang2018mixup")] * len(re.findall(r"Citation `zhang2018mixup'", warnings)))
+            self.assertNotIn("multiply defined", warnings)
+            text = " ".join(subprocess.run(["pdftotext", str(doc / "main.pdf"), "-"], capture_output=True, text=True, check=True).stdout.split())
+            for part in ("It reaches 73.2% top-1 accuracy over ?? runs", "Definition 1 (CutMix)", "Lemma 1 (Mixing bound)", "Figure 1: Training loss",
+                         "see Definition 1, Lemma 1 and Figure 1", "for 200 epochs", "Sangdoo Yun"):
+                self.assertIn(part, text)
 
 
 if __name__ == "__main__":

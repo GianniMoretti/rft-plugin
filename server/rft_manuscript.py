@@ -199,6 +199,13 @@ def parse_blocks(text: str) -> list[dict]:
     return out
 
 
+def is_first_design(text: str) -> bool:
+    """Whether a text is of the first design (isFirstDesign in hooks/lib/convert.ts): its markers,
+    its package or its macros. The session converts such a document to clean source, once."""
+    return bool(re.search(r"^\s*%\s*rft-(?:begin|end)\b", text, re.M) or re.search(r"\\usepackage(?:\[[^\]]*\])?\{rft\}", text)
+                or re.search(r"\\rft(?:num|fig|table|snippet)\b", uncommented(text)))
+
+
 def document_names(vault: Path) -> list[str]:
     d = documents_dir(vault)
     return sorted(p.name for p in d.iterdir() if p.is_dir() and DOC_RE.match(p.name) and (p / "main.tex").is_file()) if d.is_dir() else []
@@ -607,6 +614,7 @@ def summary(vault: Path, tree: dict, read) -> dict:
                      "notIncluded": sorted(f for f in files if TEX_FILE.search(f) and f not in included),
                      "locked": document_locked(dreg, name), "copies": copies, "values": values_of(vault, name, files, tracking, located),
                      "bib": [{"key": k, "file": f, "from": (tracking["bib"].get(k) or {}).get("from")} for f in sorted(files) if f.lower().endswith(".bib") for k in bib_keys(files[f])],
-                     "traces": scan["traces"], "allowedTraces": scan["allowed"]})
+                     "traces": scan["traces"], "allowedTraces": scan["allowed"],
+                     "firstDesign": any(is_first_design(text) for f, text in files.items() if TEX_FILE.search(f))})
     return {"exists": True, "locked": reg["locked"], "unlocked": reg["unlocked"], "docsLocked": dreg["locked"], "docsUnlocked": dreg["unlocked"],
             "documents": docs, "snippets": snippets}

@@ -32,6 +32,7 @@ import {
   allowTrace, declareEnvironment, markReviewed, manuscriptReport, manuscriptWarnings, migrateManuscript, newDocument, pointCopy, readManuscript, restoreMarkers,
   reviewCopy, reviewValue, setDocument, setSnippet,
 } from './lib/manuscript'
+import { convertDocuments } from './lib/convert'
 import { deckWarnings } from './lib/decks'
 import { addDeadline, addMeeting, checkDeadline, checkMeeting, deadlineQuestion, deadlinesLine, meetingQuestion, suggestDates, suggestDeadline } from './lib/schedule'
 import { RECALL_HINT, searchesVault } from './lib/recall'
@@ -518,6 +519,9 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
     case 'rft_set_status':
       return unlocking($, unlock => setStatus(io, loaded, String(i.id ?? ''), String(i.status ?? ''), str(i.note), str(i.summary), today(), unlock))
     case 'rft_manuscript_view': {
+      // a document written under the first design is brought to clean source before anything is done to it
+      if (i.action === 'convert') return (await convertDocuments(io, loaded, String(i.name ?? ''))).join('\n') || `${String(i.name ?? '')} is plain LaTeX already: nothing to convert.`
+      if (typeof i.name === 'string' && i.action !== 'document') await convertDocuments(io, loaded, i.name)
       // the Manuscript tab's + Snippet, Reviewed and + Document (never a tool of the model's: only FROM_VIEW reaches it)
       if (i.action === 'reviewed') return markReviewed(io, loaded, String(i.id ?? ''), today())
       if (i.action === 'document') return newDocument(io, loaded, String(i.name ?? ''), i.kind === 'report' ? 'report' : 'article', str(i.title))
@@ -638,14 +642,18 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       return artifactReport(io, loaded, String(i.concept ?? ''), { full: i.full === true, notes: strings(i.notes), section: str(i.section) })
     case 'rft_set_artifact':
       return setArtifact(io, loaded, String(i.concept ?? ''), { html: i.html, edits: i.edits }, today())
-    case 'rft_manuscript':
-      return manuscriptReport(io, loaded, str(i.ref))
+    case 'rft_manuscript': {
+      // the first read of a document of the first design converts it, once, and says so
+      const converted = await convertDocuments(io, loaded)
+      return [...converted, await manuscriptReport(io, loaded, str(i.ref))].join('\n')
+    }
     case 'rft_set_snippet':
       return setSnippet(io, loaded, {
         id: str(i.id), kind: i.kind, title: i.title, basis: i.basis === undefined ? undefined : strings(i.basis), outline: i.outline,
         text: i.text, edits: i.edits,
       }, today())
     case 'rft_set_document':
+      await convertDocuments(io, loaded, str(i.name))
       return setDocument(io, loaded, { name: str(i.name), place: str(i.place), file: str(i.file), move: str(i.move), remove: str(i.remove), after: str(i.after) })
     case 'rft_tree':
       return treeReport(loaded, { root: str(i.root), depth: typeof i.depth === 'number' ? i.depth : undefined, vault: shownVault(h, loaded.config) })
@@ -1544,6 +1552,9 @@ export const register: Register = (on, options) => {
       // a vault started before the two levels: brought to them first
       const migrated = await migrateManuscript(io, loaded)
       if (migrated) { await refresh($, true); return { text: migrated } }
+      // documents of the first design (markers and macros in their text) brought to clean source, once
+      const converted = await convertDocuments(io, loaded)
+      if (converted.length) { await refresh($, true); return { text: converted.join('\n') } }
       const ms = await readManuscript(io, loaded)
       if (args[0] === 'new' || !ms) {
         const [name = 'paper', kind = 'article'] = args[0] === 'new' ? args.slice(1) : args

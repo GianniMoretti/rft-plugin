@@ -382,7 +382,11 @@
       const lost = (d.copies || []).filter(c => c.state === 'lost')
       const values = (d.values || []).filter(v => v.state !== 'current')
       const group = (word, title, lis) => (lis.length ? [el('div', { class: 'ms-sub ms-flag-text', text: word, title }), el('ul', {}, lis)] : [])
-      listEl.replaceChildren(el('ul', {}, rows),
+      // a document from before documents were plain LaTeX: one action brings it over
+      const old = d.firstDesign ? el('div', { class: 'ms-pad ms-old' },
+        el('p', { class: 'ms-flag-text', text: 'This document was written before documents became plain LaTeX: it holds markers and macros of the plugin, so it cannot be shared and its copies are not shown.' }),
+        el('button', { type: 'button', class: 'primary', text: 'Convert it', title: 'Its copies get marker lines that say only their kind and title, its numbers, figures and citations are written out, and the file as it is now is kept beside its tracking file', onclick: () => void ask({ action: 'convert', name: d.name }, 'convert the document') })) : null
+      listEl.replaceChildren(...(old ? [old] : []), el('ul', {}, rows),
         ...group('Lost copies', 'Copies the plugin cannot find in the document any more: their marker lines and their text were changed elsewhere', lost.map(c => el('li', { class: 'ms-item ms-copy ms-wrap' },
           el('span', { class: 'ms-id', text: c.name }), el('span', { class: 'ms-title', text: `${c.marker} (was in ${c.file})` }),
           el('button', { type: 'button', text: 'It is the selection', title: 'Select the passage in the editor first: it becomes this copy again, between its marker lines', onclick: () => void pointAt(c.name) }),
@@ -969,7 +973,7 @@
 
     async function ask(body, whatFor) {
       if (!canWrite()) { needKey(whatFor); return null }
-      if (dirty && level === 'documents' && ['take', 'keep', 'place', 'move', 'remove', 'take-value', 'keep-value', 'point', 'markers', 'allow', 'declare'].includes(body.action)) {
+      if (dirty && level === 'documents' && ['take', 'keep', 'place', 'move', 'remove', 'take-value', 'keep-value', 'point', 'markers', 'allow', 'declare', 'convert'].includes(body.action)) {
         if (confirm('The document has unsaved changes: save them first? (Cancel: drop them)')) await save(false)
         else dirty = false
       }

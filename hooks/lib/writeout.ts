@@ -233,35 +233,58 @@ function free(base: string, taken: (name: string) => boolean): string {
   for (let k = 2; ; k++) if (!taken(`${base}-${k}`)) return `${base}-${k}`
 }
 
-/**
- * A snippet's text as a document holds it. `snippets`: every snippet, for a reference to another
- * one (\ref{S02}); `ids`: the ids of the vault's notes and snippets, which the result must not
- * carry; `held`: what the document already has.
- */
-export async function writeOut(io: Io, loaded: Loaded, s: Snippet, snippets: readonly Snippet[], ids: ReadonlySet<string>, held: Held = {}): Promise<Written> {
-  const vault = loaded.config.vault
-  const problems = await macroProblems(io, loaded, s.text)
-  if (problems.length) throw new ManuscriptError(`${s.id} cannot be placed: its macros name what no notebook saved:\n${problems.join('\n')}`)
-  const source = withoutComments(contentOf(s.text)).replace(/^(\s*\n)+/, '').replace(/\s+$/, '')
-  const cites = citeIndex(loaded)
-  const numbers: Record<string, Record<string, string> | null> = {}
-  const labelsHeld = new Set(held.labels ?? [])
-  const filesHeld: Record<string, string> = { ...(held.files ?? {}) }
-  const out: Written = { text: '', marker: markerWords(s.kind, s.title), values: [], files: [], bib: [], labels: [] }
+/** What writing out into one document has decided so far, so that several texts written into it agree: the labels given, the files it holds, what was read of the tree. */
+export type WriteContext = {
+  /** A label of a snippet's text (its id, or a name of its own) and the label it is in the document. */
+  renamed: Map<string, string>
+  labels: Set<string>
+  files: Record<string, string>
+  numbers: Record<string, Record<string, string> | null>
+  cites: Record<string, string>
+}
 
-  // the labels the snippet defines, each given a name the document does not have yet
-  const renamed = new Map<string, string>()
+export const writeContext = (loaded: Loaded, held: Held = {}): WriteContext =>
+  ({ renamed: new Map(), labels: new Set(held.labels ?? []), files: { ...(held.files ?? {}) }, numbers: {}, cites: citeIndex(loaded) })
+
+/** A context as it is now, for a text written out beside the document and not into it (it takes no label and no file name from it). */
+export const sameContext = (c: WriteContext): WriteContext =>
+  ({ renamed: new Map(c.renamed), labels: new Set(c.labels), files: { ...c.files }, numbers: c.numbers, cites: c.cites })
+
+export type WrittenText = Omit<Written, 'marker'> & {
+  /** With `missing: 'mark'`: what named nothing saved and was written as ??, as the macros printed it. */
+  missing: string[]
+}
+
+/**
+ * A text's macros, citations, labels and references written out as plain LaTeX. `own`: the
+ * snippet the text is of (its \label{S04} becomes its label). `missing`: what to do with a macro that names nothing saved: `refuse` (a snippet being placed),
+ * or `mark` it ?? as the macros printed it (a document of the first design being converted).
+ */
+export async function writeText(
+  io: Io, loaded: Loaded, source: string, snippets: readonly Snippet[], ctx: WriteContext,
+  opts: { own?: Pick<Snippet, 'id' | 'kind' | 'title'>; missing?: 'refuse' | 'mark' } = {},
+): Promise<WrittenText> {
+  const vault = loaded.config.vault
+  const mark = opts.missing === 'mark'
+  const out: WrittenText = { text: '', values: [], files: [], bib: [], labels: [], missing: [] }
+  const byId = (id: string) => snippets.find(x => x.id === id)
+
+  // the labels the text defines: a snippet's id becomes its label, and each gets a name the document does not have yet
+  const local = new Map<string, string>()
   for (const m of source.matchAll(/\\label\{([^}]*)\}/g)) {
     const name = m[1]!.trim()
-    if (renamed.has(name)) continue
-    const label = free(name === s.id ? labelOf(s.kind, s.title) : name, l => labelsHeld.has(l))
-    renamed.set(name, label)
-    labelsHeld.add(label)
+    if (local.has(name)) continue
+    const of = name === opts.own?.id ? opts.own : byId(name)
+    const base = of ? labelOf(of.kind, of.title) : name
+    const label = free(base, l => ctx.labels.has(l))
+    local.set(name, label)
+    ctx.renamed.set(name, label)
+    ctx.labels.add(label)
     out.labels.push(label)
   }
   const refTo = (name: string) => {
-    const other = snippets.find(x => x.id === name)
-    return renamed.get(name) ?? (other ? labelOf(other.kind, other.title) : name)
+    const other = byId(name)
+    return local.get(name) ?? ctx.renamed.get(name) ?? (other ? labelOf(other.kind, other.title) : name)
   }
 
   let text = '', last = 0
@@ -272,46 +295,72 @@ export async function writeOut(io: Io, loaded: Loaded, s: Snippet, snippets: rea
       out.values.push({ kind, from, key, written, at: text.length + lead.length })
       text += lead + written + tail
     }
+    const none = (why: string, boxed = false) => {
+      if (!mark) throw new ManuscriptError(why)
+      out.missing.push(m[0])
+      text += boxed ? '\\fbox{\\textbf{??}}' : '\\textbf{??}'
+    }
     if (m[1] !== undefined) {
       const id = resolveId(loaded.tree, m[1].trim()) ?? m[1].trim(), key = m[2]!.trim()
-      const saved = id in numbers ? numbers[id]! : (numbers[id] = await savedNumbers(io, vault, id))
+      const saved = id in ctx.numbers ? ctx.numbers[id]! : (ctx.numbers[id] = await savedNumbers(io, vault, id))
       const written = saved?.[key]
-      if (written === undefined) throw new ManuscriptError(`${s.id} cannot be placed: \\rftnum{${m[1]}}{${key}} is not a number or a text (${id}'s saved RESULTS give it no value to write)`)
-      value('number', id, key, written)
+      if (written === undefined) none(`\\rftnum{${m[1]}}{${key}} is not a number or a text (${id}'s saved RESULTS give it no value to write)`)
+      else value('number', id, key, written)
     } else if (m[4] !== undefined) {
       const id = resolveId(loaded.tree, m[4].trim()) ?? m[4].trim(), name = m[5]!.trim()
       const from = figureRel(id, name)
       if (!(await io.exists(join(vault, from)))) {
-        throw new ManuscriptError(`${s.id} cannot be placed: ${id}'s figure ${name} has no PDF (${vault}/${from}); a notebook saves one for a matplotlib figure`)
+        none(`${id}'s figure ${name} has no PDF (${vault}/${from}); a notebook saves one for a matplotlib figure`, true)
+        continue
       }
       const src = `${id} ${name}`
-      const to = free(`figures/${name}`, base => (filesHeld[`${base}.pdf`] ?? src) !== src) + '.pdf'
-      if (filesHeld[to] === undefined) out.files.push({ from, to })
-      filesHeld[to] = src
+      const to = free(`figures/${name}`, base => (ctx.files[`${base}.pdf`] ?? src) !== src) + '.pdf'
+      if (ctx.files[to] === undefined) out.files.push({ from, to })
+      ctx.files[to] = src
       value('figure', id, name, to, `\\includegraphics${m[3] ?? ''}{`, '}')
     } else if (m[6] !== undefined) {
       const id = resolveId(loaded.tree, m[6].trim()) ?? m[6].trim(), name = m[7]!.trim()
-      let tabular: string
-      try { tabular = (await io.read(join(vault, tableRel(id, name)))).replace(/\r\n/g, '\n').trim() } catch {
-        throw new ManuscriptError(`${s.id} cannot be placed: ${id}'s table ${name} has no LaTeX (${vault}/${tableRel(id, name)})`)
-      }
-      value('table', id, name, tabular)
+      let tabular: string | null = null
+      try { tabular = (await io.read(join(vault, tableRel(id, name)))).replace(/\r\n/g, '\n').trim() } catch { tabular = null }
+      if (tabular === null) none(`${id}'s table ${name} has no LaTeX (${vault}/${tableRel(id, name)})`, true)
+      else value('table', id, name, tabular)
     } else if (m[8] !== undefined) {
       const keys = m[8].split(',').map(k => k.trim()).filter(Boolean).map(k => {
-        const c = citationOf(loaded, cites, k)
+        let c: ReturnType<typeof citationOf>
+        try { c = citationOf(loaded, ctx.cites, k) } catch (err) {
+          if (!mark) throw err
+          out.missing.push(`\\cite{${k}}`)
+          return k
+        }
         if (!c) return k
-        if (!out.bib.some(b => b.key === c.key)) out.bib.push(c)
+        if (!out.bib.some(b => b.key === c!.key)) out.bib.push(c)
         return c.key
       })
       text += m[0].slice(0, m[0].lastIndexOf('{') + 1) + keys.join(',') + '}'
     } else if (m[9] !== undefined) {
-      text += `\\label{${renamed.get(m[9].trim()) ?? m[9]}}`
+      text += `\\label{${local.get(m[9].trim()) ?? m[9]}}`
     } else {
       text += m[0].slice(0, m[0].lastIndexOf('{') + 1) + m[10]!.split(',').map(r => refTo(r.trim())).join(',') + '}'
     }
   }
   out.text = text + source.slice(last)
+  return out
+}
 
+/**
+ * A snippet's text as a document holds it. `snippets`: every snippet, for a reference to another
+ * one (\ref{S02}); `ids`: the ids of the vault's notes and snippets, which the result must not
+ * carry; `held`: what the document already has.
+ */
+export async function writeOut(io: Io, loaded: Loaded, s: Snippet, snippets: readonly Snippet[], ids: ReadonlySet<string>, held: Held = {}): Promise<Written> {
+  const problems = await macroProblems(io, loaded, s.text)
+  if (problems.length) throw new ManuscriptError(`${s.id} cannot be placed: its macros name what no notebook saved:\n${problems.join('\n')}`)
+  const source = withoutComments(contentOf(s.text)).replace(/^(\s*\n)+/, '').replace(/\s+$/, '')
+  let written: WrittenText
+  try { written = await writeText(io, loaded, source, snippets, writeContext(loaded, held), { own: s }) } catch (err) {
+    throw err instanceof ManuscriptError ? new ManuscriptError(`${s.id} cannot be placed: ${err.message}`) : err
+  }
+  const out: Written = { text: written.text, marker: markerWords(s.kind, s.title), values: written.values, files: written.files, bib: written.bib, labels: written.labels }
   const traces = [...tracesInText(out.text, ids), ...tracesInText(out.marker, ids)]
   if (traces.length) {
     throw new ManuscriptError(`${s.id} cannot be placed: written out, it would still carry a trace of the tree, which a document's files must not (${[...new Set(traces.map(t => `${t.match} in "${t.text.slice(0, 80)}"`))].join('; ')}). ` +
