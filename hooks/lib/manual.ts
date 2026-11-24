@@ -8,7 +8,7 @@
 export const MANUAL_DIR = 'skills/rft-manual'
 
 /** The parts, in the order of the core's index. */
-export const PARTS = ['concepts-code', 'literature', 'map', 'artifacts', 'notebooks', 'planning', 'queue', 'writing', 'comments', 'inbox'] as const
+export const PARTS = ['concepts-code', 'literature', 'map', 'artifacts', 'notebooks', 'planning', 'queue', 'writing', 'slides', 'comments', 'inbox'] as const
 
 export type Part = (typeof PARTS)[number]
 

@@ -65,7 +65,7 @@
     return out
   }
 
-  /** The editor's mode for a deck: its frontmatter, separators, slide options, headings, notes, code, links and math. */
+  /** The editor's mode for a deck: its frontmatter, separators, slide options, boxes' and lines' comments, headings, notes, code, links and math. */
   function defineMode(CM) {
     if (!CM || CM.modes['rft-deck']) return
     const SEP = /^---\s*$/
@@ -84,7 +84,7 @@
           if (/^\s*(```|~~~)/.test(text)) { s.fence = !s.fence; return whole('string') }
           if (s.fence) return whole('string')
           if (SEP.test(text)) { s.notes = false; return whole('rft-sep') }
-          if (/^\s*<!--\s*slide\b.*-->\s*$/i.test(text)) return whole('rft-opt')
+          if (/^\s*<!--\s*(slide|box|line)\b.*-->\s*$/i.test(text) || /^\s*<!--\s*\/box\s*-->\s*$/i.test(text)) return whole('rft-opt')
           if (/^::right::\s*$/.test(text)) return whole('rft-sep')
           if (/^note:/i.test(text)) s.notes = true
           if (!s.notes && /^#{1,6}\s/.test(text)) return whole('header')
@@ -148,6 +148,13 @@
         if (k !== cur) { cur = k; drawPreview(); markThumb() }
       })
     }
+
+    // the tools on the slide (web/slide-tools.js): they edit the text in `cm`, and the slide is drawn again from it
+    const tools = cm && root.RftSlideTools ? root.RftSlideTools.mount({
+      cm, stage: previewEl, bar: $('sl-tools'), body, store, notify, slide: () => parsed.slides[cur] || null,
+      api: (path, opts) => api(path, opts), deck: () => did, imageUrl: src => imageUrl(src),
+      noteName: id => { const n = nodes().get(id); return n ? n.name : id },
+    }) : null
 
     // ---------------------------------------------------------------- the server
 
@@ -352,8 +359,10 @@
       } catch { /* below */ }
       return `<code class="math">${escH(display ? `$$${src}$$` : `$${src}$`)}</code>`
     }
+    /** The address of an image the open deck shows. */
+    const imageUrl = src => `api/image?deck=${encodeURIComponent(did)}&src=${encodeURIComponent(src)}${key() ? `&token=${encodeURIComponent(key())}` : ''}`
     function image(src, alt, size) {
-      const url = `api/image?deck=${encodeURIComponent(did)}&src=${encodeURIComponent(src)}${key() ? `&token=${encodeURIComponent(key())}` : ''}`
+      const url = imageUrl(src)
       const dims = size ? ` width="${size[1]}"` + (size[2] ? ` height="${size[2]}"` : '') : ''
       return `<img src="${escH(url)}" alt="${escH(alt || '')}" data-label="${escH(alt || src.split('/').pop())}"${dims}>`
     }
@@ -383,13 +392,16 @@
     let fitPreview = () => {}
     function drawPreview() {
       const slide = parsed.slides[cur]
-      if (!slide) { previewEl.replaceChildren(); notesEl.textContent = ''; return }
+      if (!slide) { previewEl.replaceChildren(); notesEl.textContent = ''; if (tools) tools.redraw(); return }
+      if (tools) tools.beforeDraw()
       fitPreview = place(previewEl, slide)
       notesEl.textContent = slide.notes ? slide.notes : ''
       notesEl.hidden = !slide.notes
       markThumb()
+      if (tools) tools.redraw()
     }
-    if (root.ResizeObserver) new root.ResizeObserver(() => fitPreview()).observe(previewEl)
+    if (tools) tools.onRedraw(() => drawPreview())
+    if (root.ResizeObserver) new root.ResizeObserver(() => { fitPreview(); if (tools) tools.redraw() }).observe(previewEl)
 
     function drawThumbs() {
       thumbsEl.replaceChildren(...parsed.slides.map((s, k) => {
@@ -585,6 +597,10 @@
       const set = (k, v) => { if (typeof v === 'string' && v) css.setProperty(k, v) }
       set('--deck-fg', t.text); set('--deck-muted', t.muted); set('--deck-accent', t.accent)
       set('--deck-line', t.grid); set('--deck-fill', t.fill)
+      // those a box or a line may name besides (web/slides.js's COLORS)
+      set('--deck-contrast', t.contrast); set('--deck-baseline', t.baseline); set('--deck-neutral', t.neutral); set('--deck-axis', t.axis)
+      const cats = Array.isArray(t.categorical) ? t.categorical : []
+      for (let i = 0; cats.length && i < 6; i++) set(`--deck-c${i + 1}`, cats[i % cats.length])
       if (t.font) css.setProperty('--deck-font', font(t.font))
       if (t.headingFont) css.setProperty('--deck-head-font', font(t.headingFont))
     }).catch(() => {})
@@ -597,7 +613,7 @@
       async show() {
         renderAll()
         await refresh()
-        if (cm) setTimeout(() => { cm.refresh(); fitPreview() }, 0)
+        if (cm) setTimeout(() => { cm.refresh(); fitPreview(); if (tools) tools.redraw() }, 0)
       },
       /** A deck opened in the tab. */
       openDeck: id => openDeck(id),

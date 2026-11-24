@@ -1,4 +1,4 @@
-# Verified notes, snippets, documents and slides
+# Verified notes, snippets and documents
 
 A part of the rft manual (the `rft-manual` skill is its core, with the index of the parts).
 
@@ -81,21 +81,3 @@ this applies.
   copies, its changed values and the traces of the tree in its files.
 - A document of the first design (`% rft-begin` lines, macros in its text) is converted the first
   time you read or change it: tell the user when `rft_manuscript` reports it.
-
-## Slides
-
-Slide decks for meetings and talks are Markdown files in the vault's `decks/` folder (`P01 Weekly
-wrap-up.md`), edited and presented in the tree view's Slides tab. Slides are separated by a line
-`---`; a slide may open with `<!-- slide layout="title|default|section|two-cols|figure" -->`
-(`two-cols` split at a line `::right::`); everything after a line `note:` is the speaker's notes.
-`for:` says where it is presented: `G01 2026-11-24` (a meeting's occurrence, by the day its rule
-gives it), `G04` (a once-only meeting), `M04` (a deadline); one deck may be for several.
-
-- **The decks are the user's to write.** A deck is locked unless its frontmatter says `locked:
-  false`, and a new deck is made in the Slides tab (+ Deck, or + Slides on a meeting in the
-  Calendar). Your Edit, Write and shell writes of a locked deck or of a new deck are refused.
-- **Asked for slides, propose an outline in the chat**: per slide, its heading, what it shows
-  (the claim, the numbers with the notes they come from, the figure: a notebook's figure is
-  `![[<id>_<name>.svg]]`) and its speaker note. The user writes it, or unlocks the deck for you.
-- `rft_validate` names a `for:` that is no meeting or deadline, a day the meeting does not fall
-  on, a skipped occurrence and a recurring meeting named with no day.

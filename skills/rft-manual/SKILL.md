@@ -29,7 +29,8 @@ the parts the work at hand needs:
 | `notebooks.md` | an experiment's results are meant to last, or it has a notebook; a notebook is written, run, or differs from its note; a figure is drawn | `rft_set_notebook`, `rft_run_notebook` |
 | `planning.md` | a priority, a deadline, a meeting, a start date or an estimate comes up | `rft_suggest_priority`, `rft_suggest_dates`, `rft_add_deadline`, `rft_add_meeting`, `rft_suggest_deadline` |
 | `queue.md` | this machine is paired with the experiment queue, or the user asks to pair it; a run is queued, ended or failed; a script is written for the queue | `rft_machine`, `rft_queue`, `rft_jobs`, `rft_job` |
-| `writing.md` | a result is final (suggest verifying it), or a verified note's claim may no longer hold; snippets, documents or slides come up | `rft_manuscript`, `rft_set_snippet`, `rft_set_document` |
+| `writing.md` | a result is final (suggest verifying it), or a verified note's claim may no longer hold; snippets or documents come up | `rft_manuscript`, `rft_set_snippet`, `rft_set_document` |
+| `slides.md` | a slide deck is asked for or written | |
 | `comments.md` | a note is locked; a comment or suggestion of the tree view is to be answered; a note has footnotes or highlights | `rft_comments`, `rft_comment`, `rft_suggest` |
 | `inbox.md` | the user saves something to read later, asks what waits in the inbox or asks to process an item | `rft_inbox` |
 

@@ -20,8 +20,9 @@ nothing ties the deck to the meeting it was made for.
   any editor, diffs as text in git, and costs Claude few tokens to read.
 - **Not a canvas of positioned objects** (PowerPoint's model): that format is costly to build an
   editor for, unreadable in a diff, poorly written by Claude, and closed to Obsidian. The
-  PowerPoint feel (boxes dragged and resized on the slide) comes later as direct manipulation
-  of the preview that writes the box's attributes back into the text (as Slidev's `v-drag` does).
+  PowerPoint feel (boxes dragged and resized on the slide) is direct manipulation of the rendered
+  slide that writes the box's attributes back into the text (as Slidev's `v-drag` does): "Boxes
+  and lines" and "The slide tools" below.
 - **Ids** P01, P02, ... (P for presentation), never reused, like the meetings' G and the
   deadlines' M. The folder is outside the tree: a deck is no note.
 
@@ -67,6 +68,94 @@ note: say why 1k and not 10k
   `vault/figures/`), lists, tables, code.
 - **The canvas** is a fixed 1920×1080 slide, scaled to fit the editor, the screen or the PDF page,
   so a slide is laid out the same everywhere.
+
+## Boxes and lines
+
+Designed and built 2026-11-23 (the format: read from the text and drawn; the tools that write it
+are below). A layout places a slide's content in its **slots** (the heading, a column, the
+figure, the caption). What the user places themselves is a **box** or a **line**, written as
+comment lines in the slide's text, as its options line is:
+
+```markdown
+## Accuracy holds at 1k images
+
+![[E08_loss.svg]]
+
+<!-- box x="1180" y="620" w="520" color="accent" size="40" -->
+gap closes here
+<!-- /box -->
+
+<!-- box shape="ellipse" x="980" y="410" w="160" h="120" outline="contrast" -->
+<!-- /box -->
+
+<!-- line from="1180 660" to="1130 500" arrow="end" outline="contrast" -->
+```
+
+- **A box** has a place and a size (`x y w h`, whole numbers on the 1920×1080 slide), a shape
+  (a rectangle, or `shape="ellipse"`), an optional `fill` and `outline` (its `weight` `thin`,
+  `medium` or `thick`: 2, 4 or 8 units), and Markdown content: text, a figure of the tree (by
+  reference, so it follows its notebook), an image, or nothing. A text box, a labelled rectangle
+  and a placed figure are all boxes. A box may leave `h` out: its height then follows its text,
+  which is never shrunk to fit. Its text takes `color`, `size`, `align` (`left`, `center`,
+  `right`) and, in a box with a height, `valign` (`top`, `middle`, `bottom`). A figure or an image
+  alone in a box fills its width, its proportions kept.
+- **A line** runs between two points (`from`, `to`), with `arrow="start"`, `"end"` or `"both"`,
+  an `outline` and a `weight`. It is not attached to the boxes it points at.
+- **A colour** is the name of one of the project's figure tokens (`text`, `muted`, `accent`,
+  `contrast`, `baseline`, `neutral`, `axis`, `grid`, `fill`, and `c1` to `c6`, the categorical
+  ones) or `#rrggbb`; the tools write the name, so a change of tokens recolours the deck. Colour,
+  size and alignment apply to a whole box, never to a run of words.
+- **Order**: a box belongs to its slide wherever its lines sit in the slide's text; the tools
+  write new ones after the slot content and before `note:`. Later in the text is nearer the front,
+  and all of them are in front of the layout.
+- **By hand**: a box left unclosed runs to the end of its slide (to the next box, or to the
+  speaker's notes, when one comes first); that, a position that is no whole number and an
+  unknown option, value or colour name are listed under the text, by slide and line, and by
+  `rft_validate`, and the slide still draws: such a box at the slide's corner, 480 wide, in the
+  layout's style; a colour there is none of as the text's; a line with no place not at all.
+  Inside a box that is closed, a line `note:` and a line's comment are the box's text.
+- **Checked** by `tests/test_slides.py`: a deck written by hand, each box and line measured in
+  headless Chromium against the numbers in its text, in the slide beside the text, its thumbnail,
+  the presentation and the pages the PDF is printed from.
+- **In Obsidian**, the reading view hides the comment lines and shows a box's text as an
+  ordinary paragraph.
+- **Not** Advanced Slides' `<grid drag="w h" drop="x y">`, the first plan: it renders only with
+  that plugin, plain Obsidian does not read its content as Markdown, and it has no lines or
+  ellipses.
+
+## The slide tools
+
+Designed and built 2026-11-23 (`web/slide-tools.js` on the slide, `web/slide-edit.js` the edits of
+the text); still to come, the user's own rebuild of one of their slides. The editor's slide is an
+editing surface, with a toolbar above it. Every action is an edit of the deck's text and of nothing else, and changes only the
+lines of what it acts on; the text pane stays beside the slide (a toggle hides it), its cursor
+and the slide's selection in step, and undo is one history for both.
+
+- **Boxes and lines**: selected by a click (several by shift-click or a dragged rectangle),
+  moved by a drag, resized by handles (a line by its two ends), snapping to the slide's centre
+  and edges and to other boxes; nudged by the arrow keys; deleted, duplicated, copied and pasted
+  as their text; brought forward and sent back; several aligned and distributed.
+- **Added** from the toolbar: Text, Rectangle, Ellipse, Line, Arrow, Figure (a picker of the
+  tree's figures, by note), Image (also pasted or dropped, saved in `vault/decks/assets/`). A
+  figure or image keeps its proportions.
+- **Text** is edited in place as its Markdown source: a double-click opens it over the box or
+  slot at the slide's size, Esc or a click outside draws it again. Math, wikilinks and macros
+  stay exact, and nothing converts HTML back to Markdown.
+- **Slots**: their content is selected, edited in place and dragged to another slot, but not
+  freely; **Detach** makes it a box in the same place. The columns' divider is dragged
+  (`split="60"` on the slide's options line), the heading's colour and size may be set per slide
+  (`title-color`, `title-size`), and a gallery changes the slide's layout.
+- **Not**: rotation, grouping, lines attached to boxes, freehand drawing, cropping, opacity, a
+  style on a run of words, editing on a phone.
+- The lock is as it was: these are the user's edits. On an unlocked deck Claude writes boxes and
+  lines as text.
+
+Checked by `tests/test_slides.py`, with real clicks, drags and keys in headless Chromium: three
+slides built with the tools (a two-column wrap-up slide; a figure annotated with an ellipse, an
+arrow and a line of text, whose text is then the one written by hand; a diagram of three
+labelled rectangles and two arrows), and each action required to leave the box within 1 px of
+where it was dropped and every other byte of the deck as it was. Not yet checked: the user
+rebuilding one of their own slides and comparing the two PDFs, and a deck opened in Obsidian.
 
 ## What a deck is for
 
@@ -133,11 +222,15 @@ A tab after Manuscript, its page icon a slide on an easel.
    deadlines at risk, the needs of the next one, `rft_next`), `rft_set_deck` (a new deck as an
    outline; an unlocked deck's text or edits), `/rft-slides [G01]`; comments and suggestions on a
    deck as on a snippet.
-4. **The PowerPoint layer**: positioned boxes (`<grid drag="w h" drop="x y">`, in percent, as
-   Advanced Slides writes them) dragged and resized on the preview, the box's attributes written
-   back; thumbnails dragged to reorder; a layout gallery; images dropped or pasted into
-   `vault/decks/assets/`; builds (one list item at a time); a presenter window (notes, the next
-   slide, a timer) kept in step over a BroadcastChannel; themes (`vault/decks/themes/<name>.css`).
+4. **The slide tools** (designed 2026-11-23, ahead of phases 2 and 3; "Boxes and lines" and "The
+   slide tools" above), in six steps: the format (boxes and lines parsed and drawn, usable by
+   typing: built 2026-11-23); move and resize on the slide (built 2026-11-23); the toolbar's Text, Rectangle, Ellipse, Line and Arrow,
+   colours and text edited in place (built 2026-11-23); figures picked from the tree and images dropped or pasted
+   into `vault/decks/assets/` (built 2026-11-23); slots (edit in place, Detach, the columns' divider, a layout
+   gallery: built 2026-11-23); several selected at once (Align, Distribute: built 2026-11-23).
+   **Later**: thumbnails dragged to reorder; builds (one list item at a time); a presenter window
+   (notes, the next slide, a timer) kept in step over a BroadcastChannel; themes
+   (`vault/decks/themes/<name>.css`).
 5. **Interactive slides**: a ```` ```rft-widget ```` block of HTML and JS run in the sandbox the
    concept artifacts use (an opaque origin, no network, only the vendored libraries), given saved
    results only (nothing is computed live during a talk), with a still image for the PDF and the
