@@ -248,7 +248,7 @@ export const TOOLS = {
   },
   rft_manuscript: {
     description:
-      'Snippets and documents. Snippets (vault snippets/: LaTeX building blocks S.., each resting on verified notes), each with its state (stub, written, review, unverified basis) and the documents using it; documents (vault documents/, built from copies of snippets), each copy\'s state (to review when its snippet changed since, adapted); the verified notes still to write. With a snippet id: its notes with what their notebooks saved (as \\rftnum, \\rftfig, \\rfttable). With a document: its outline.',
+      'Snippets and documents. Snippets (vault snippets/: LaTeX building blocks S.., each resting on verified notes), each with its state (stub, written, review, unverified basis) and where it is used; documents (vault documents/, plain LaTeX built from copies of snippets), each copy\'s state (to review, adapted, lost); the verified notes still to write. With a snippet id: its notes with what their notebooks saved (as \\rftnum, \\rftfig, \\rfttable). With a document: its outline, changed values and traces.',
     inputSchema: {
       type: 'object',
       properties: { ref: { type: 'string', description: 'A snippet id (S04), or a document\'s name.' } },

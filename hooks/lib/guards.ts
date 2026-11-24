@@ -4,7 +4,8 @@
 // (artifacts.ts), a locked note and the comments files (comments.ts), a note's priority, its
 // dates and its verification, the user's alone (priority.ts, schedule.ts, verify.ts), what only a
 // notebook's run writes (notebooks.ts), the snippets and documents the plugin generates or the
-// user locked (snippets.ts), a new or a locked deck (decks.ts).
+// user locked, and a trace of the tree written into a document (snippets.ts, scan.ts), a new or a
+// locked deck (decks.ts).
 //
 // A call is taken apart once (`refusal`): for a shell command the files it writes, as far as the
 // command shows them (shell.ts); for an edit its file and, for a note, the text before and after.
@@ -235,7 +236,7 @@ const verified = fields(
   (before, after) => (changesVerified(before, after) ? verifiedText : null),
 )
 
-const MANUSCRIPT_GENERATED = `The plugin writes ${GENERATED.join(', ')} and each document's ${BLOCKS_FILE}: snippets go through rft_set_snippet, placements through rft_set_document, the rest is generated when a document compiles.`
+const MANUSCRIPT_GENERATED = `The plugin writes ${GENERATED.join(', ')}: snippets go through rft_set_snippet, placements through rft_set_document (which records them in a document's tracking file), the rest is generated when a snippet compiles.`
 const snippetLockedText = (id?: string) =>
   `The snippets are locked: ${id ? `${id} is` : 'they are'} the user's to write. Propose a snippet as a stub with rft_set_snippet, and comment or suggest on the user's text with rft_comment / rft_suggest {id: "${id ?? 'S..'}", quote, …}; they accept or reject it.`
 const documentLockedText = (name: string) =>
@@ -266,8 +267,9 @@ async function traceWritten(c: Call, file: string): Promise<string | null> {
 /**
  * Snippets or documents written by hand where they are not Claude's to (an Edit or Write in
  * vault/snippets/ or vault/documents/, a shell command that writes there): the registries, the
- * generated files and the copies' records always, a new snippet's file (rft_set_snippet numbers
- * and stamps it), a locked snippet, and a locked document's text.
+ * generated files and the tracking files always, a new snippet's file (rft_set_snippet numbers
+ * and stamps it), a locked snippet, a locked document's text, and an edit of an unlocked document
+ * that would write a trace of the tree into it.
  */
 const manuscript: Guard = async c => {
   const names = [SNIPPETS_DIR, DOCUMENTS_DIR]
