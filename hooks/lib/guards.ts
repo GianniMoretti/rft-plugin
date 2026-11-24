@@ -240,7 +240,17 @@ const MANUSCRIPT_GENERATED = `The plugin writes ${GENERATED.join(', ')}: snippet
 const snippetLockedText = (id?: string) =>
   `The snippets are locked: ${id ? `${id} is` : 'they are'} the user's to write. Propose a snippet as a stub with rft_set_snippet, and comment or suggest on the user's text with rft_comment / rft_suggest {id: "${id ?? 'S..'}", quote, …}; they accept or reject it.`
 const documentLockedText = (name: string) =>
-  `The document ${name} is locked: its text is the user's. Place, move or remove a copy of a snippet with rft_set_document once the user agrees; comment or suggest on its text with rft_comment / rft_suggest {id: "${name}", quote, …}.`
+  `The document ${name} is locked, and the lock covers all its files: its text is the user's. Place, move or remove a copy of a snippet with rft_set_document once the user agrees; comment or suggest on its text with rft_comment / rft_suggest {id: "${name}", quote, …}.`
+
+/** The files of a document that are text Claude may write once the document is unlocked. */
+const CLAUDES_TO_WRITE = /\.(tex|ltx|bib)$/i
+/**
+ * Why a write to any other file of an unlocked document is refused: its class, style and
+ * bibliography-style files are its template's, and what the user uploaded is the user's.
+ */
+const notTextText = (name: string, file: string) =>
+  `In the document ${name} you write .tex and .bib files only. ${file} is ${/\.(cls|sty|bst|bbx|cbx|lbx|clo|def|cfg)$/i.test(file) ? 'a class or style file of its template: changing it changes how the whole document is set, which a venue\'s kit forbids' : 'a file the user put there (a figure, a PDF, a file of their own)'}. ` +
+  'Say what you would change and why; the user changes it in the page.'
 
 /**
  * Why an edit of a file of an unlocked document is refused: it would write a trace of the tree
@@ -268,8 +278,9 @@ async function traceWritten(c: Call, file: string): Promise<string | null> {
  * Snippets or documents written by hand where they are not Claude's to (an Edit or Write in
  * vault/snippets/ or vault/documents/, a shell command that writes there): the registries, the
  * generated files and the tracking files always, a new snippet's file (rft_set_snippet numbers
- * and stamps it), a locked snippet, a locked document's text, and an edit of an unlocked document
- * that would write a trace of the tree into it.
+ * and stamps it), a locked snippet, any file of a locked document, and in an unlocked document a
+ * file that is not .tex or .bib (a class or style file of its template, a file the user uploaded)
+ * and an edit that would write a trace of the tree into it.
  */
 const manuscript: Guard = async c => {
   const names = [SNIPPETS_DIR, DOCUMENTS_DIR]
@@ -297,6 +308,8 @@ const manuscript: Guard = async c => {
     const d = new RegExp(`^${DOCUMENTS_DIR}/([a-z0-9][a-z0-9-]*)/`).exec(rel)
     if (d) {
       if (isDocumentLocked(docs, d[1]!)) return documentLockedText(d[1]!)
+      // one lock covers all the document's files; unlocked, its text is Claude's to edit too, its template's files and the user's uploads are not
+      if (!CLAUDES_TO_WRITE.test(rel)) return notTextText(d[1]!, rel.slice(d[0].length))
       const trace = c.edit ? await traceWritten(c, rel.slice(d[0].length)) : null
       if (trace) return trace
       continue

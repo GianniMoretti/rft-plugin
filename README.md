@@ -992,13 +992,17 @@ vault/snippets/
   S04.tex                     one snippet
 vault/documents/
   documents.json              the documents' lock (the plugin's)
-  paper/                      a document: a folder of plain LaTeX
-    main.tex                  its own text, and copies of snippets
+  paper/                      a document: a folder of plain LaTeX, made from a template
+    main.tex                  its main file (any name: the file with \begin{document})
     sections/method.tex       any other .tex file it takes in
     refs.bib                  the entries it cites, and your own
-    figures/loss.pdf          the figures its copies include
-  .rft/paper/tracking.json    what ties the document to the tree (the plugin's)
+    figures/loss.pdf          the figures its copies include, and what you upload
+    icml2027.sty              its template's class and style files
+  .rft/paper/tracking.json    what ties the document to the tree, its main file, engine and template (the plugin's)
   .build/, rft.sty, rft-numbers.tex, refs.bib   what compiling leaves; the last three for a snippet compiled alone
+vault/templates/
+  icml2027/                   a template of your own: a folder, copied into a new document as it is
+    template.json             optional: {"engine": "xelatex", "main": "thesis.tex"}; not copied
 ```
 
 ```latex
@@ -1012,13 +1016,38 @@ With 1k images, CutMix reaches 73.2\% \cite{yun2019cutmix}.   that say its kind 
 ```
 
 - **Start** with `/rft-manuscript` (both levels and a first document, `paper`; `/rft-manuscript new
-  thesis-ch3 report` adds a thesis chapter) or **Start** in the tree view's **Manuscript** tab.
+  thesis-ch3 report` adds a thesis chapter, `/rft-manuscript new camera-ready icml2027` a document
+  from a template of yours) or **Start** in the tree view's **Manuscript** tab.
   Until then the tools wait behind ToolSearch and their rule is left out. A vault that used the first
   layout (`vault/manuscript/`) is brought over by `/rft-manuscript`, each `\rftsnippet` line made a
   copy. A document written before documents were plain LaTeX (copies between `% rft-begin` and
   `% rft-end` lines, macros in its text) is converted once, the first time Claude reads or changes
   it, or with **Convert it** in the tab: each copy keeps its state, and the file as it was is kept
   in `vault/documents/.rft/<name>/first-design/`.
+- **A document is made from a template**: a folder of files copied into the new document as it
+  is, sample text included. The document then owns its files and keeps no tie to the template, so
+  changing a template later changes no document. Two are built in, `article` (a paper) and
+  `report` (a thesis chapter). A folder `vault/templates/<name>/` is a template of your own: put a
+  venue's kit there, or **Load a zip…** / **Load a folder…** in the New document form, which keeps
+  it in `vault/templates/` and offers it from then on (50 MB and 2000 files at most; a zip with one
+  top folder is unwrapped; a zip that holds a link, or a path that would leave the folder, is
+  refused and nothing is written; a name that is taken asks for another). A template may name its
+  engine and its main file in `template.json`, which is not copied.
+- **A document is a folder of files.** The Documents view lists every file and folder: **+ File**,
+  **+ Folder**, **Upload** (or drop files on the list, or on a folder), and on each row rename (✎)
+  and delete (×). `.tex`, `.bib`, class and style files (`.sty`, `.cls`, `.bst`, `.bbx`), `.txt`
+  and `.md` open in the editor; an image or a PDF is shown. A file is at most 20 MB. A renamed or
+  moved file keeps its copies and values; deleting a file that holds copies asks first, and the
+  copies are then shown as lost. A name that carries a trace of the tree (`E05_loss.pdf` in a vault
+  with E05) is refused. Renaming does not rewrite the `\input` line that names the file: the
+  list flags a file the main file no longer takes in (∅), and a copy in it does not count as placed.
+- **The main file** is the one with `\begin{document}`, whatever its name (`example_paper.tex`,
+  `master.tex`); nothing is renamed. When several files have it the page asks which, and **Main
+  file** in the document's head changes it later.
+- **The engine** is per document (**Engine**: pdfLaTeX by default, XeLaTeX, LuaLaTeX). latexmk
+  picks bibtex or biber itself, and runs bibtex once per chapter when the document has a
+  bibliography per chapter. A document that needs another engine says so, with the button that
+  sets it; one that asks for shell escape (`minted`) says it is off, and does not compile.
 - **Only verified notes go in.** Claude proposes snippets from verified notes only (see Statuses),
   and where to place them: `/rft-manuscript [document]` asks it for two tables, snippets to write
   and placements; nothing is written until you pick. A picked snippet is a **stub**: its two header
@@ -1033,8 +1062,11 @@ With 1k images, CutMix reaches 73.2\% \cite{yun2019cutmix}.   that say its kind 
   ```` ```bibtex ```` block. Compiled alone, a name that is not there prints **??**.
 - **Placing writes it out.** The copy holds the number itself, `\includegraphics{figures/loss.pdf}`
   with the figure copied into the document under its own name, the tabular, `\cite{yun2019cutmix}`
-  with the entry added to the document's `.bib`, and a label made from the kind and the title
-  (`def:cutmix`). A macro that names nothing saved refuses the placement. A snippet may be placed
+  with the entry added to the `.bib` its file uses (the nearest `\bibliography` or
+  `\addbibresource` that covers it: a thesis with a `.bib` per chapter gets the entry in that
+  chapter's; where nothing says which, the page asks once and remembers), and a label made from the
+  kind and the title (`def:cutmix`). An entry of your own that a document cites is listed under
+  **Cited without a reference note**, in the page only. A macro that names nothing saved refuses the placement. A snippet may be placed
   more than once in a document, in any of its `.tex` files; the second copy is `S04#2`.
 - **What was written out is watched.** When a notebook saves another number, or a figure again,
   every place it was written is listed under **Values to look at**: **Take** the tree's, or **Keep
@@ -1056,16 +1088,19 @@ With 1k images, CutMix reaches 73.2\% \cite{yun2019cutmix}.   that say its kind 
 - **Locked by default**, both levels, as a locked note is: Claude's Edit, Write and shell writes to
   snippets and documents are refused; it proposes stubs and placements, and comments and suggests on
   your text when you ask (on a snippet or a document, as on a note). The padlocks unlock the
-  snippets, or one of them, and the documents, or one of them, for Claude to write too; its edit of
-  an unlocked document is still refused when it would write a trace. The registries, the tracking
+  snippets, or one of them, and the documents, or one of them, for Claude to write too. One lock
+  covers all a document's files. In an unlocked document Claude edits and creates `.tex` and `.bib`
+  files only (a class or style file of the template, and a file you uploaded, are refused with
+  the reason), and its edit is still refused when it would write a trace. The registries, the tracking
   files and the generated files are the plugin's alone.
 - **The Manuscript tab**, two views:
   - **Snippets**: the library by kind, each with its state, how many documents use it and its open
     threads; **+ Snippet**; the open snippet in the editor (CodeMirror, LaTeX mode), its notes as
     chips that open them in the drawer, **Used in** with each document and file (a click goes to
     the copy), **Place in** a document; **Compile snippet** shows it alone, in a minimal article.
-  - **Documents**: the document menu and **+ Document** (a paper or a thesis chapter, its title, and its name, made from the title and checked as you type); its `.tex` and `.bib` files, each opened by a click, the open one with its outline (headings and
-    copies, each copy with its state); **Place** a snippet from the library in the open file, after
+  - **Documents**: the document menu and **+ Document** (its template, its title for a built-in
+    one, and its name, checked as you type); its files and folders, each opened by a click, the
+    open one with its outline (headings and copies, each copy with its state); **Place** a snippet from the library in the open file, after
     a copy or a heading; the copy the cursor is in, with **Move after**, **Remove**, and in review
     the snippet **as it was placed and now** with **Take the new text** and **Keep mine**; **Lost
     copies**, **Values to look at** and **Traces of the tree** below the files; the editor on the

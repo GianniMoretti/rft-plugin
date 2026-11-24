@@ -8,8 +8,10 @@ what ties a document to the tree is kept in a tracking file outside its folder. 
 what is built now; a document of the first design (copies between `% rft-begin` and `% rft-end`
 lines, macros in its text) is converted once, the first time it is read. The user-facing
 description is the README's "Snippets and documents" and "Statuses"; Claude's is the manual's
-"Verified notes" and "Snippets and documents". Later: templates and a file list, a document
-synced with GitHub and through it with Overleaf, clicking in the PDF to jump to the source line.
+"Verified notes" and "Snippets and documents". Revised 2026-11-24 again to **folders and
+templates**: a document is a folder of files made from a template, with a file list, a main file
+of any name and an engine of its own. Later: a document synced with GitHub and through it with
+Overleaf, clicking in the PDF to jump to the source line.
 
 ## The problem
 
@@ -99,16 +101,49 @@ vault/snippets/
 vault/documents/
   documents.json              the documents' lock
   paper/                      a document: a folder of plain LaTeX, shared as it is
-    main.tex                  its main file: its own text, and copies of snippets
+    main.tex                  its main file (any name): its own text, and copies of snippets
     sections/method.tex       any other .tex file it takes in
     refs.bib                  the entries it cites, and the user's own
-    figures/loss.pdf          the figures its copies include, under their own names
-  .rft/paper/tracking.json    what ties the document to the tree (the plugin's)
+    figures/loss.pdf          the figures its copies include, under their own names, and uploads
+    icml2027.sty, icml2027.bst    its template's files, the document's own from then on
+  .rft/paper/tracking.json    what ties the document to the tree, and its main file, engine and
+                              template (the plugin's)
   .rft/paper/first-design/    a converted document's files as they were
   .build/                     what compiling leaves (a document's, and a snippet's alone)
   rft.sty, rft-numbers.tex, refs.bib   generated for a snippet compiled alone
+vault/templates/
+  icml2027/                   a template of the vault's own: a folder (beside the notes' own
+    template.json             templates, which are files); its settings, which are not copied
 ```
 
+- **A document is a folder made from a template** (`hooks/lib/templates.ts`). A template is a
+  folder copied into the new document as it is, sample text included, with no tie afterwards: a
+  template changed later changes no document, and nothing changes a document's template for it
+  (the preamble is rewritten by hand). `article` and `report` are built in (what a document's kind
+  was: a document made before reads as made from the one of its class). A folder of
+  `vault/templates/` is the vault's own; the page loads one from a zip, or from a folder it sends
+  as a zip (`server/rft_documents.py`: every entry checked before anything is written, links and
+  paths leaving the folder refused, 50 MB and 2000 files at most). No network gallery.
+- **Its main file** is the one with `\begin{document}`, whatever its name (`mainOf` in
+  `copies.ts`, `main_of` on the server): the AAU thesis has `\documentclass` in
+  `setup/preamble.tex` and `\begin{document}` in `master.tex`. It is recorded in the tracking
+  file once there is no doubt; with several candidates the page asks, and compiling waits.
+- **What is in the document** is what the main file takes in, through `\input`, `\include`,
+  `\subfile` or a template's own command (`\includepaper`), named from the main file's folder.
+  A `.tex` file nothing takes in is flagged, and a copy in it is not counted as placed (in the
+  outline, in Used in, in `rft_manuscript`).
+- **Its files are the user's to arrange** (the page's file list, `server/rft_documents.py`):
+  create, rename, move, delete, upload (20 MB a file). The server writes the tracking file only
+  to carry a renamed file's paths and the main file and engine the user chose; all that concerns
+  copies and values stays the session's. A name that carries a trace is refused.
+- **Its engine** is its own (pdfLaTeX, XeLaTeX or LuaLaTeX); latexmk picks bibtex or biber, and
+  runs bibtex per chapter for a bibliography per chapter. Shell escape stays off.
+- **Its `.bib` files are ordinary files of the document.** An entry a placed snippet brings goes
+  into the `.bib` the file it is placed in uses (`bibFor` / `bib_for`, held to
+  `tests/fixtures/local-overleaf/bib.json`): the nearest `\bibliography` or `\addbibresource`
+  that covers the file, else what the user chose for it, else the one `.bib` the document names.
+  With several and nothing to tell them apart the page asks, once. The user's own entries are
+  allowed; a citation that rests on one is said in the page, never in the file.
 - **A snippet** opens with two comment lines, valid LaTeX, readable and editable by hand:
   `% rft-snippet S04 · result · CutMix at 1k images` and `% basis: E05, E02`. Kinds: definition,
   theorem, lemma, proposition, corollary, proof, method, result, related-work, motivation,
@@ -195,6 +230,9 @@ many notes; the note's drawer lists them ("Written in"), derived from the snippe
 - **Documents** (`documents.json`, each locked by default): their text is the user's. Claude
   proposes placements (which snippet, where) as a table and places only the ones the user picks,
   with `rft_set_document`; it edits a document's text only once the user unlocks that document.
+  One lock covers all a document's files, and unlocked, Claude writes its `.tex` and `.bib` files
+  only: a class or style file is its template's (a venue's kit forbids changing it to gain
+  space), an uploaded file is the user's.
   A document's discussion works as a snippet's: comments and suggestions the user accepts.
 - The generated files, the registries and the tracking files (`documents/.rft/`) are the
   plugin's: Claude's edits of them are refused, as are its edits of a locked snippet or document,
@@ -212,7 +250,8 @@ Loaded once `vault/snippets/snippets.json` exists (the `manuscript` feature of
   its values to look at and its traces.
 - **`rft_set_snippet`** `{id?, kind, title, basis, outline?, text?, edits?}`: a new snippet resting
   on verified notes (a stub while locked), or an unlocked snippet's text. Snippets only.
-- **`rft_set_document`** `{name, place?, file?, after?, move?, remove?}`: a placement the user
+- **`rft_set_document`** `{name, place?, file?, after?, move?, remove?, template?}`: with a
+  template and a name no document has, the document made from it; else a placement the user
   agreed to: a snippet's copy placed in a `.tex` file of the document, after another copy or a
   section heading (or before the bibliography), moved, or removed. Placing writes the snippet out,
   copies its figures in, adds its entries to the `.bib` and records the copy in the tracking file;
@@ -221,7 +260,7 @@ Loaded once `vault/snippets/snippets.json` exists (the `manuscript` feature of
   document's name.
 - **`/rft-manuscript [document]`**: starts the two levels when there are none (a first document),
   else asks Claude for proposals, snippets to write and placements, as a table; nothing is written
-  until the user picks. `/rft-manuscript new <name> [article|report]` adds a document.
+  until the user picks. `/rft-manuscript new <name> [template]` adds a document.
 - `rft_next` adds the snippets in review, the copies in review and the lost copies by document
   and file, the values the tree changed, the stubs, the verified notes still to write;
   `rft_validate` adds a basis that is no note, a macro naming nothing saved, an unknown citation,
@@ -237,9 +276,10 @@ One tab, two views, **Snippets** and **Documents**.
   LaTeX mode) with its notes as chips, **Reviewed**, its padlock, **Used in** with each document
   and file, how many copies it has there and whether one is adapted; the snippet compiled alone
   (a minimal wrapper, with its macros) beside it.
-- **Documents**: the document menu, **+ Document**, its padlock; the document's `.tex` and `.bib`
-  files, each opened in the editor, the open one with its outline (sections and copies, each copy
-  with its state); **Place** a snippet from the library in the open file, after a copy or a
+- **Documents**: the document menu, **+ Document** (from a template, or one loaded there from a
+  zip or a folder), its padlock, its engine and its main file; the document's files and folders
+  (made, renamed, deleted, uploaded there), a text file opened in the editor, an image or a PDF
+  shown, the open file with its outline (sections and copies, each copy with its state); **Place** a snippet from the library in the open file, after a copy or a
   section; **Selection is a copy** ties a passage to a snippet; a copy in review shows the snippet
   as it was placed and as it is now, with **Take the new text** and **Keep mine**; **Lost
   copies** (the selection is it, or drop it), **Values to look at** (take the tree's, or keep

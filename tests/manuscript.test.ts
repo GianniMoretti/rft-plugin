@@ -460,6 +460,44 @@ describe('in a session', () => {
     expect(r.text).toContain('Placed a copy of S02 in paper after S01, written out as plain LaTeX.')
   })
 
+  test('one lock covers all a document\'s files; unlocked, Claude writes its .tex and .bib files only', async ($, on) => {
+    const { fs, io, l } = await setup()
+    // a document made from a kit, unlocked for Claude, and one that stays locked
+    for (const [f, text] of Object.entries({ 'example_paper.tex': '\\documentclass{article}\n\\usepackage{icml2027}\n\\begin{document}\n\\input{sections/method}\n\\end{document}\n', 'sections/method.tex': '\\section{Method}\nText.\n', 'example_paper.bib': '', 'icml2027.sty': '% the style\n', 'icml2027.bst': '% the bibliography style\n', 'kit.cls': '% a class\n', 'figures/logo.png': 'PNG stand-in\n' })) {
+      fs.write(`vault/templates/icml2027/${f}`, text)
+    }
+    await newDocument(io, l, 'icml', 'icml2027')
+    await newDocument(io, l, 'camera-ready', 'icml2027')
+    await writeDocsRegistry(io, 'vault', { ...(await readDocsRegistry(io, 'vault')), unlocked: ['icml'] })
+    const { ran } = await session($, on, filesOf(fs))
+    const at = (doc: string, f: string) => `${CWD}/vault/documents/${doc}/${f}`
+    const deny = async (call: Record<string, unknown>) => ((await $.tool.call(call as never)) as { deny?: string }).deny
+    // unlocked: its text is Claude's to edit and to add to
+    expect(await deny({ tool: 'Edit', file_path: at('icml', 'sections/method.tex'), old_string: 'Text.', new_string: 'Better text.' })).toBeUndefined()
+    expect(await deny({ tool: 'Write', file_path: at('icml', 'sections/results.tex'), content: '\\section{Results}\n' })).toBeUndefined()
+    expect(await deny({ tool: 'Edit', file_path: at('icml', 'example_paper.bib'), old_string: '', new_string: '@misc{mine,\n  title={Mine}\n}\n' })).toBeUndefined()
+    // its template's files and what the user put there are not, with the reason
+    for (const f of ['icml2027.sty', 'icml2027.bst', 'kit.cls']) {
+      const why = await deny({ tool: 'Edit', file_path: at('icml', f), old_string: '% ', new_string: '%% ' })
+      expect([f, why]).toEqual([f, expect.stringContaining(`In the document icml you write .tex and .bib files only. ${f} is a class or style file of its template`)])
+    }
+    expect(await deny({ tool: 'Write', file_path: at('icml', 'figures/logo.png'), content: 'x' })).toContain('figures/logo.png is a file the user put there')
+    expect(await deny({ tool: 'Write', file_path: at('icml', 'new.sty'), content: '% mine' })).toContain('you write .tex and .bib files only')
+    expect(await deny({ tool: 'Bash', command: `sed -i 's/style/STYLE/' vault/documents/icml/icml2027.sty` })).toContain('icml2027.sty is a class or style file of its template')
+    // locked: any of its files
+    for (const f of ['example_paper.tex', 'sections/method.tex', 'example_paper.bib', 'icml2027.sty', 'figures/logo.png']) {
+      expect([f, await deny({ tool: 'Edit', file_path: at('camera-ready', f), old_string: 'a', new_string: 'b' })]).toEqual([f, expect.stringContaining('The document camera-ready is locked, and the lock covers all its files')])
+    }
+    // only the three writes to its text went on
+    expect(ran).toEqual(['Edit', 'Write', 'Edit'])
+    // rft_manuscript names each document's template, main file and engine, and one document's files
+    const all = await $.tool.call({ tool: 'mcp__rft__rft_manuscript' } as never)
+    expect(all.text).toContain('  icml (icml2027, example_paper.tex, pdfLaTeX): no copies yet')
+    const one = await $.tool.call({ tool: 'mcp__rft__rft_manuscript', ref: 'icml' } as never)
+    expect(one.text).toContain('icml (vault/documents/icml/, template icml2027, main file example_paper.tex, pdfLaTeX): unlocked: you may edit its .tex and .bib files.')
+    expect(one.text).toContain('Its files: example_paper.tex, example_paper.bib, figures/logo.png, icml2027.bst, icml2027.sty, kit.cls, sections/method.tex.')
+  })
+
   test('/rft-manuscript brings the first layout over, starts both levels, adds a document, or asks Claude for proposals', async ($, on) => {
     const { fs } = await setup({ started: false })
     fs.write('vault/manuscript/manuscript.json', JSON.stringify({ locked: true, next: 1, snippets: {} }))

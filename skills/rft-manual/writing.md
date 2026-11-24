@@ -31,9 +31,12 @@ this applies.
   `% rft-snippet S04 · result · CutMix at 1k images` and `% basis: E05, E02`. Kinds: definition,
   theorem, lemma, proposition, corollary, proof, method, result, related-work, motivation,
   discussion, figure, table.
-- **Documents** (`<vault>/documents/<name>/`: `main.tex`, the `.tex` files it takes in, its `.bib`,
-  its figures) are built with them. Their files are **plain LaTeX that names nothing of the
-  tree**: the user shares the folder with co-authors as it is. A snippet enters one as a copy
+- **Documents** (`<vault>/documents/<name>/`, a folder made from a template: its main file, the
+  one with `\begin{document}` whatever its name, the `.tex` files it takes in, its `.bib` files,
+  its figures, its template's class and style files) are built with them. Their files are **plain
+  LaTeX that names nothing of the tree**: the user shares the folder with co-authors as it is.
+  `rft_manuscript` names each document's template, main file and engine; `rft_manuscript <name>`
+  its files. A copy in a file the main file does not take in is not in the document. A snippet enters one as a copy
   **written out**, between two marker lines that say only its kind and title
   (`%%% Result: CutMix at 1k images %%%` … `%%% end %%%`); the user may adapt it, and a document
   has text of its own. A snippet may have several copies in a document: the second is `S04#2`.
@@ -60,7 +63,11 @@ this applies.
     heading, why there), and do only what the user picks: stubs with `rft_set_snippet {kind, title,
     basis, outline}` (the outline says the claim, the numbers and the macros that give them, the
     caveats; the body is left to the user), copies with `rft_set_document {name, place, file,
-    after}` (`file`: the document's `.tex` file it goes in, its main file by default);
+    after}` (`file`: the document's `.tex` file it goes in, its main file by default). What a copy
+    cites goes into the `.bib` its file uses; where a document has several and nothing says which,
+    the placement is refused with the choices, for the user to place it once from the page;
+  - make a document only when the user asks for one: `rft_set_document {name, template}`
+    (`article`, `report`, or a folder of `<vault>/templates/`, a venue's kit copied in as it is);
   - move or remove a copy only when asked (`rft_set_document {name, move | remove, after}`);
   - comment and suggest when asked, with `rft_comment` and `rft_suggest` and the snippet's id or the
     document's name, as on a note; never write their text (Edit, Write and shell writes to them are
@@ -68,8 +75,10 @@ this applies.
 - **Unlocked** (by the user's padlocks: all snippets or one, all documents or one): write a snippet
   with `rft_set_snippet {id, text}` or `{id, edits}` (its basis checked, it is stamped; its copies go
   to review), and edit an unlocked document's own text with Edit, keeping its copies' marker lines.
-  In a document, plain LaTeX only: an edit that would write a macro or a name of the plugin, or a
-  note's or snippet's id, is refused.
+  One lock covers all a document's files. Unlocked, you write its `.tex` and `.bib` files only: a
+  class or style file of its template (`.cls`, `.sty`, `.bst`) and a file the user uploaded are
+  refused; say what you would change. Plain LaTeX only: an edit that would write a macro or a
+  name of the plugin, or a note's or snippet's id, is refused.
 - **Review**: a snippet whose basis note changed since its stamp, went to review, was superseded or
   dropped is in review (`rft_manuscript` says why): point it out and suggest how its text should
   follow; the user marks it **Reviewed**. A copy whose snippet changed is the user's to answer.
