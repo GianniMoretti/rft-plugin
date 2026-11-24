@@ -29,7 +29,7 @@ top. It shows the experiment queue (GET api/queue: the GPUs, the jobs waiting an
 history; rft_queue.py beside it) and takes the user's changes to it (POST api/queue: a job moved,
 cancelled or retried, the queue paused, the GPUs it may use); a job's output (GET api/queue/output)
 goes only to a request carrying the key; all three answer 404 until this machine is paired with
-the queue (rft_queue.py machine add), so the page shows no monitor. A write (PUT api/note, PUT api/scratchpad, POST api/inbox, POST api/node, api/type, api/comment, api/lock, api/verify,
+the queue (rft_queue.py machine add), so the page shows no monitor. A write (PUT api/note, PUT api/scratchpad, PUT api/reading, POST api/inbox, POST api/node, api/type, api/comment, api/lock, api/verify,
 api/priority, api/dates, api/milestone, api/meeting, api/queue, PUT and POST api/deck, api/deck/lock) must also come from the page itself (its
 Origin) and carry the vault's key, which is in the address the server prints, so neither
 another web page nor another user of the machine can change a note. The key is kept in the
@@ -84,6 +84,7 @@ import rft_latex  # the manuscript's LaTeX: its generated files and the compile
 import rft_manuscript  # the manuscript as the page shows it
 import rft_notebook
 import rft_inbox  # the inbox, links saved to read later, as the page shows it
+import rft_reading  # an inbox item's reading note: the user's part, written by the page, and Claude's impression
 import rft_papers  # for an arXiv item's title, asked as the downloader asks it
 import rft_queue  # the experiment queue, beside this file
 import rft_style  # the project's figure tokens, which the artifacts' and the slides' colours follow
@@ -105,6 +106,7 @@ PAGE_FILES = {
     "/markdown.js": ("markdown.js", "text/javascript; charset=utf-8"),
     "/scratchpad.js": ("scratchpad.js", "text/javascript; charset=utf-8"),
     "/inbox.js": ("inbox.js", "text/javascript; charset=utf-8"),
+    "/reading.js": ("reading.js", "text/javascript; charset=utf-8"),
     "/queue.js": ("queue.js", "text/javascript; charset=utf-8"),
     "/artifacts.js": ("artifacts.js", "text/javascript; charset=utf-8"),
     "/phone.js": ("phone.js", "text/javascript; charset=utf-8"),
@@ -670,6 +672,8 @@ class Vault:
         self.ident = hashlib.sha256(str(self.root).encode()).hexdigest()[:16]
         self._lock = threading.Lock()
         self._write_lock = threading.Lock()
+        self._waiting: set[str] = set()  # the read inbox items whose discussion found no chat (by key)
+        self._waiting_lock = threading.Lock()
         self._ask_lock = threading.Lock()
         self._compile_lock = threading.Lock()
         self._sig: str | None = None
@@ -1530,8 +1534,29 @@ class Vault:
         try:
             data = path.read_bytes()
         except FileNotFoundError:
-            return 200, {"name": rft_inbox.INBOX, "items": []}
-        return 200, {"name": rft_inbox.INBOX, "items": rft_inbox.Inbox(data.decode("utf-8", errors="replace")).shown()}
+            return 200, self._inbox_answer([])
+        return 200, self._inbox_answer(rft_inbox.Inbox(data.decode("utf-8", errors="replace")).shown())
+
+    def _inbox_answer(self, items: list[dict]) -> dict:
+        """The inbox as the page shows it: its items, in the file's order; of each item that has a
+        reading note, what the note holds (`notes`, by the item's key: whether the user's part
+        holds something, whether Claude's impression is there); and the read items whose
+        discussion found no chat to start in (`waiting`, by key)."""
+        notes = {}
+        for item in items:
+            if item["key"] in notes:
+                continue
+            try:
+                note = self._reading_at(item["key"])[1]
+            except (rft_reading.ReadingError, OSError):
+                continue
+            if note:
+                notes[item["key"]] = {"mine": bool(note.mine), "impression": bool(note.impression)}
+        read = {i["key"] for i in items if i["read"]}
+        with self._waiting_lock:
+            self._waiting &= read
+            waiting = sorted(self._waiting)
+        return {"name": rft_inbox.INBOX, "items": items, "notes": notes, "waiting": waiting}
 
     def _inbox_edit(self, edit) -> tuple[int, dict]:
         """One change to the inbox: `edit(box)` changes the file as read and answers (status,
@@ -1568,7 +1593,8 @@ class Vault:
                     os.replace(tmp, path)
                 finally:
                     tmp.unlink(missing_ok=True)
-            return 200, {**answer, "name": rft_inbox.INBOX, "items": box.shown()}
+            shown = box.shown()
+        return 200, {**answer, **self._inbox_answer(shown)}
 
     def _reference_of(self, key: str) -> str | None:
         """The reference note whose Source names this link, when one does."""
@@ -1612,26 +1638,72 @@ class Vault:
             threading.Thread(target=self._arxiv_title, args=(key,), daemon=True).start()
         return status, answer
 
-    def change_inbox(self, action: str, key: str, nth: int = 0, value: str = "") -> tuple[int, dict]:
+    def change_inbox(self, action: str, key: str, nth: int = 0, value="", ask=None, confirm: bool = False) -> tuple[int, dict]:
         """One change to an item of the inbox, named by its link's key (and which one, when a link
         was typed twice): its reading priority ("priority": one plain word in the item's line, ""
-        for none), its why ("why": "" for none), or the item removed ("discard": its line goes
-        under Processed with today's date, as discarded). Only that item's line changes; 409 when
-        the item is no longer there."""
+        for none), its why ("why": "" for none), the user's mark that they have read it ("read":
+        True sets it, with today's date, False takes it off), or the item removed ("discard": its
+        line goes under Processed with today's date, as discarded). Only that item's line changes;
+        409 when the item is no longer there.
+
+        Marking an item as read starts its discussion: asked of the session, as a turn of the chat
+        (docs/adr/0001, 0004). With no chat the mark is saved all the same and the item is said to
+        wait (`waiting`); nothing is queued. A discard is refused (409, `holds`) while the user's
+        part of the item's reading note holds something, unless `confirm`; the reading note goes
+        with the last item of its link."""
         today = time.strftime("%Y-%m-%d")
+        if action == "discard" and not confirm:
+            try:
+                note = self._reading_at(key)[1]
+            except (rft_reading.ReadingError, OSError):
+                note = None
+            if note and note.mine:
+                return 409, {"error": "its reading note holds what you wrote: discarding the item removes it", "holds": True}
 
         def edit(box):
             if action == "discard":
                 done = box.close(key, nth, "discarded", today)
                 return (200, {"processed": done}) if done else (409, {"error": "that item is no longer in the inbox"})
-            item = box.change(key, nth, priority=value) if action == "priority" else box.change(key, nth, why=value)
+            if action == "read":
+                item = box.change(key, nth, read=(box.nth(key, nth) or {}).get("read") or today) if value else box.change(key, nth, read="")
+            else:
+                item = box.change(key, nth, priority=value) if action == "priority" else box.change(key, nth, why=value)
             return (200, {"item": item}) if item else (409, {"error": "that item is no longer in the inbox"})
 
-        return self._inbox_edit(edit)
+        status, answer = self._inbox_edit(edit)
+        if status != 200:
+            return status, answer
+        if action == "discard" and not any(i["key"] == key for i in answer["items"]):
+            self._remove_reading(key)
+            answer["notes"].pop(key, None)
+        if action == "read":
+            with self._waiting_lock:
+                self._waiting.discard(key)
+            if value:
+                answer["asked"] = self._ask_discussion(key, nth, ask) is None
+                answer["waiting"] = self._inbox_answer(answer["items"])["waiting"]
+        return status, answer
 
-    def process_inbox(self, key: str, nth: int, ask) -> tuple[int, dict]:
-        """The user asks to process an item: asked of the session, where Claude reads it and
-        discusses it with the user as a turn of the chat (docs/adr/0001). Nothing is written and
+    def _ask_discussion(self, key: str, nth: int, ask) -> str | None:
+        """Asks the session to discuss a read item, as a turn of its chat. None when a chat took
+        it; else why not, and the item waits: its row says so and its Discuss button asks again."""
+        try:
+            if ask is None:
+                raise NoSession(NO_SESSION)
+            ask("RFT_DISCUSS", {"key": key, "nth": nth})
+        except (OSError, ValueError) as err:
+            with self._waiting_lock:
+                self._waiting.add(key)
+            return gone(err)
+        with self._waiting_lock:
+            self._waiting.discard(key)
+        return None
+
+    def process_inbox(self, key: str, nth: int, ask, discuss: bool = False) -> tuple[int, dict]:
+        """The user asks to process an item: asked of the session, where Claude reads it on its own
+        and saves its impression and its brief, as a turn of the chat (docs/adr/0001). `discuss`:
+        the user asks to discuss an item they marked as read, where Claude opens their part of its
+        reading note (docs/adr/0004); 409 when the item is not marked. Nothing is written and
         nothing waits: with no chat to ask, it is refused at once (503), and so is an item that
         is no longer in the inbox (409)."""
         status, got = self.inbox()
@@ -1640,11 +1712,119 @@ class Vault:
         same = [i for i in got["items"] if i["key"] == key]
         if nth >= len(same):
             return 409, {"error": "that item is no longer in the inbox"}
+        if discuss:
+            if not same[nth]["read"]:
+                return 409, {"error": "that item is not marked as read"}
+            why = self._ask_discussion(key, nth, ask)
+            return (503, {"error": why}) if why else (200, {"asked": True, "item": same[nth]})
         try:
             ask("RFT_PROCESS", {"key": key, "nth": nth})
         except (OSError, ValueError) as err:
             return 503, {"error": gone(err)}
         return 200, {"asked": True, "item": same[nth]}
+
+    # ------------------------------------------------------------ reading notes
+
+    def _reading_dir(self) -> Path | None:
+        """The reading notes' folder at the vault's top; None when that name is held by something
+        else than a folder (a file, a link), which is then neither read nor written."""
+        path = self.root / rft_reading.DIR
+        return None if path.is_symlink() or (path.exists() and not path.is_dir()) else path
+
+    def _reading_at(self, key: str) -> tuple[Path, rft_reading.Note | None, bytes | None]:
+        """The file of the reading note of the item with this key, the note in it and its bytes
+        (None twice when the item has none yet). ReadingError when the folder or the file is not
+        a plain one."""
+        folder = self._reading_dir()
+        if folder is None:
+            raise rft_reading.ReadingError(f"{rft_reading.DIR} in the vault is not a folder")
+        held: dict[str, bytes] = {}
+
+        def read(name: str) -> str | None:
+            path = folder / name
+            if path.is_symlink() or (path.exists() and not path.is_file()):
+                raise rft_reading.ReadingError(f"{rft_reading.DIR}/{name} is not a plain file")
+            try:
+                held[name] = path.read_bytes()
+            except FileNotFoundError:
+                return None
+            return held[name].decode("utf-8", errors="replace")
+
+        name, note = rft_reading.find(read, key)
+        return folder / name, note, held.get(name)
+
+    def _remove_reading(self, key: str) -> None:
+        """Removes the reading note of an item that left the inbox, when it has one."""
+        try:
+            path, note, _ = self._reading_at(key)
+            if note:
+                path.unlink(missing_ok=True)
+        except (rft_reading.ReadingError, OSError):
+            pass
+
+    def _inbox_item(self, key: str) -> dict | None:
+        """The first item of the inbox with this key."""
+        status, got = self.inbox()
+        return next((i for i in got["items"] if i["key"] == key), None) if status == 200 else None
+
+    def reading(self, key: str) -> tuple[int, dict]:
+        """The reading note of an inbox item as the page shows it: the user's part (`text`,
+        newlines as \n) and its version, which is of that part alone, so that an impression saved
+        meanwhile is no change to it (None until the item has a note); Claude's impression
+        ({"date", "text"}), or None; and the item. 409 when no item of the inbox has the key: a
+        reading note is an inbox item's."""
+        item = self._inbox_item(key)
+        if not item:
+            return 409, {"error": "that item is no longer in the inbox"}
+        try:
+            path, note, _ = self._reading_at(key)
+        except rft_reading.ReadingError as e:
+            return 422, {"error": str(e)}
+        return 200, {"key": key, "item": item, "name": f"{rft_reading.DIR}/{path.name}", "text": note.mine if note else "",
+                     "version": version_of(note.mine.encode("utf-8", errors="replace")) if note else None,
+                     "impression": note.impression if note else None}
+
+    def write_reading(self, key: str, text: str, version: str | None, force: bool = False) -> tuple[int, dict]:
+        """Writes the user's part of an item's reading note, and nothing else of the file: the
+        head and Claude's impression stay byte for byte. The file is made on the first write that
+        has something in it, never for an empty part. Refused, with the part as it is now, when it
+        changed since `version` (None: the item had no note yet), unless `force`."""
+        item = self._inbox_item(key)
+        if not item:
+            return 409, {"error": "that item is no longer in the inbox"}
+        with self._write_lock:
+            try:
+                path, note, data = self._reading_at(key)
+            except rft_reading.ReadingError as e:
+                return 422, {"error": str(e)}
+            now = version_of(note.mine.encode("utf-8", errors="replace")) if note else None
+            if not force and version != now:
+                return 409, {"error": "the reading note changed since it was read", "version": now, "text": note.mine if note else ""}
+            if data is not None:
+                try:
+                    note = rft_reading.Note(data.decode("utf-8"))
+                except UnicodeDecodeError:
+                    return 422, {"error": f"{rft_reading.DIR}/{path.name} is not UTF-8 text; edit it in an editor"}
+            if note is None:
+                if not rft_reading.lines_of(text):
+                    return 200, {"key": key, "name": f"{rft_reading.DIR}/{path.name}", "version": None}
+                note = rft_reading.Note.new(key, item["url"], item["title"])
+            try:
+                changed = note.set_mine(text)
+            except rft_reading.ReadingError as e:
+                return 400, {"error": str(e)}
+            if changed:
+                path.parent.mkdir(exist_ok=True)
+                tmp = path.with_name(f".{path.name}.rft-tmp")
+                try:
+                    # (a lone surrogate, which JSON can carry and UTF-8 cannot, becomes "?")
+                    tmp.write_bytes(note.text().encode("utf-8", errors="replace"))
+                    if data is not None:
+                        os.chmod(tmp, stat.S_IMODE(path.stat().st_mode))
+                    os.replace(tmp, path)
+                finally:
+                    tmp.unlink(missing_ok=True)
+            return 200, {"key": key, "name": f"{rft_reading.DIR}/{path.name}", "version": version_of(note.mine.encode("utf-8", errors="replace"))}
 
     def _arxiv_title(self, key: str) -> None:
         """Asks arXiv's API for the title of an item just saved and writes it on the item's line.
@@ -2626,6 +2806,8 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 return self._json(*vault.scratchpad(), head_only)
             if route == "/api/inbox":
                 return self._json(*vault.inbox(), head_only)
+            if route == "/api/reading":
+                return self._json(*vault.reading((parse_qs(url.query).get("key") or [""])[0]), head_only)
             if route == "/api/style":
                 return self._json(200, vault.style(), head_only)
             if route == "/api/decks":
@@ -2703,7 +2885,9 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
 
         def do_PUT(self):
             """PUT api/note?id=<id> {"body": "...", "version": "<as read>"} or {"body": "...", "force": true};
-            PUT api/scratchpad {"text": "...", "version": "<as read>" or null} or {"text": "...", "force": true}."""
+            PUT api/scratchpad {"text": "...", "version": "<as read>" or null} or {"text": "...", "force": true};
+            PUT api/reading {"key": an inbox item's key, "text": the user's part of its reading note, "version": "<as
+            read>" or null} or {"key", "text", "force": true}."""
             if self.path.startswith(NOTEBOOK_PREFIX):
                 return self._proxy()
             if urlsplit(self.path).path == "/api/manuscript/file":
@@ -2726,6 +2910,17 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 if not isinstance(req.get("id"), str) or not isinstance(req.get("text"), str) or not (force or isinstance(version, str)):
                     return self._json(400, {"error": "expected {id, text, version} or {id, text, force: true}"})
                 return self._json(*vault.write_deck(req["id"], req["text"], version))
+            if urlsplit(self.path).path == "/api/reading":
+                got = self._write_request("/api/reading", MAX_NOTE_BYTES)
+                if got is None:
+                    return
+                _, req = got
+                force = req.get("force") is True
+                version, key = req.get("version", False), req.get("key")
+                if (not isinstance(key, str) or not key or len(key) > MAX_INBOX_LINK or not isinstance(req.get("text"), str)
+                        or not (force or version is None or isinstance(version, str))):
+                    return self._json(400, {"error": "expected {key, text, version} (null before the note is made) or {key, text, force: true}"})
+                return self._json(*vault.write_reading(key, req["text"], None if force else version, force))
             if urlsplit(self.path).path == "/api/scratchpad":
                 got = self._write_request("/api/scratchpad", MAX_NOTE_BYTES)
                 if got is None:
@@ -2770,8 +2965,13 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             "why" | "discard", "key": the item's key, "nth"?: which of the items with that key,
             "priority" | "why"?: the new value, "" for none}: the item's reading priority or why
             changed ({"item", "items"}), or the item moved under Processed as discarded
-            ({"processed", "items"}); {"action": "process", "key", "nth"?}: the session asked to
-            process the item in its chat ({"asked", "item"}), 503 at once when there is no chat."""
+            ({"processed", "items"}; 409 with "holds" while its reading note holds what the user
+            wrote, unless "confirm": true); {"action": "read", "key", "nth"?, "read": true | false}:
+            the user's mark that they have read the item set or taken off ({"item", "items"}; set,
+            the session is asked to discuss the item: "asked", false when there is no chat, and
+            the item is then among "waiting"); {"action": "process" | "discuss", "key", "nth"?}:
+            the session asked to process the item, or to discuss a read one, in its chat
+            ({"asked", "item"}), 503 at once when there is no chat."""
             if self.path.startswith(NOTEBOOK_PREFIX):
                 return self._proxy()
             route = urlsplit(self.path).path
@@ -2849,18 +3049,23 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 _, req = got
                 action = req.get("action", "add")
                 if action in ("priority", "why", "discard"):
-                    key, nth, value = req.get("key"), req.get("nth", 0), req.get(action, "")
-                    if (not isinstance(key, str) or not key or len(key) > MAX_INBOX_LINK or type(nth) is not int or nth < 0
+                    key, nth, value, confirm = req.get("key"), req.get("nth", 0), req.get(action, ""), req.get("confirm", False)
+                    if (not isinstance(key, str) or not key or len(key) > MAX_INBOX_LINK or type(nth) is not int or nth < 0 or type(confirm) is not bool
                             or not isinstance(value, str) or len(value) > MAX_INBOX_WHY or (action != "discard" and action not in req)):
-                        return self._json(400, {"error": 'expected {"action": "priority" | "why" | "discard", "key": the item\'s key, "nth"?: which of them, "priority" | "why": the new value}'})
-                    return self._json(*vault.change_inbox(action, key, nth, value))
-                if action == "process":
+                        return self._json(400, {"error": 'expected {"action": "priority" | "why" | "discard", "key": the item\'s key, "nth"?: which of them, "priority" | "why": the new value, "confirm"?: true to discard an item whose reading note holds something}'})
+                    return self._json(*vault.change_inbox(action, key, nth, value, confirm=confirm))
+                if action == "read":
+                    key, nth, value = req.get("key"), req.get("nth", 0), req.get("read")
+                    if not isinstance(key, str) or not key or len(key) > MAX_INBOX_LINK or type(nth) is not int or nth < 0 or type(value) is not bool:
+                        return self._json(400, {"error": 'expected {"action": "read", "key": the item\'s key, "nth"?: which of them, "read": true to mark it as read, false to take the mark off}'})
+                    return self._json(*vault.change_inbox(action, key, nth, value, ask=ask))
+                if action in ("process", "discuss"):
                     key, nth = req.get("key"), req.get("nth", 0)
                     if not isinstance(key, str) or not key or len(key) > MAX_INBOX_LINK or type(nth) is not int or nth < 0:
-                        return self._json(400, {"error": 'expected {"action": "process", "key": the item\'s key, "nth"?: which of them}'})
-                    return self._json(*vault.process_inbox(key, nth, ask))
+                        return self._json(400, {"error": 'expected {"action": "process" | "discuss", "key": the item\'s key, "nth"?: which of them}'})
+                    return self._json(*vault.process_inbox(key, nth, ask, discuss=action == "discuss"))
                 if action != "add":
-                    return self._json(400, {"error": 'expected "action": "add", "priority", "why", "discard" or "process"'})
+                    return self._json(400, {"error": 'expected "action": "add", "priority", "why", "read", "discard", "process" or "discuss"'})
                 link, why = req.get("link"), req.get("why", "")
                 if not isinstance(link, str) or not isinstance(why, str) or len(link) > MAX_INBOX_LINK or len(why) > MAX_INBOX_WHY:
                     return self._json(400, {"error": 'expected {"link": a URL, an arXiv id or a DOI, "why"?: one line}'})

@@ -520,14 +520,14 @@ class ServerTest(unittest.TestCase):
         p = self.fresh_inbox(before)
         status, ctype, body = self.get("/api/inbox")
         self.assertEqual((status, ctype.split(";")[0]), (200, "application/json"))
-        self.assertEqual(json.loads(body), {"name": "Inbox.md", "items": want})
+        self.assertEqual(json.loads(body), {"name": "Inbox.md", "items": want, "notes": {}, "waiting": []})
         self.assertEqual(p.read_bytes(), before)  # read, never rewritten
         # not a note: the tree, and its version, stay as they were
         self.assertEqual(json.loads(self.get("/api/tree")[2]), tree)
 
     def test_inbox_empty_without_a_file_and_never_through_a_link(self):
         p = self.fresh_inbox()
-        self.assertEqual(json.loads(self.get("/api/inbox")[2]), {"name": "Inbox.md", "items": []})
+        self.assertEqual(json.loads(self.get("/api/inbox")[2]), {"name": "Inbox.md", "items": [], "notes": {}, "waiting": []})
         self.assertFalse(p.exists())
         os.symlink(self.root / "secret.md", p)
         status, _, body = self.get("/api/inbox")
@@ -566,7 +566,7 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(status, 200, got)
         item = {"key": "https://example.org/blog/post", "url": "https://Example.org/blog/post/#top", "title": "", "why": "for the related work",
                 "priority": "", "added": today, "read": "", "duplicate": False, "brief": None}
-        self.assertEqual(got, {"name": "Inbox.md", "item": item, "items": [item]})
+        self.assertEqual(got, {"name": "Inbox.md", "item": item, "items": [item], "notes": {}, "waiting": []})
         self.assertEqual(p.read_bytes(), f"# Inbox\n\n- https://Example.org/blog/post/#top \u2014 for the related work \u00b7 added {today}\n".encode())
         self.assertEqual(json.loads(self.get("/api/inbox")[2])["items"], [item])
         # into the fixture: one line more, after the open list's last line, the rest byte for byte
@@ -818,6 +818,199 @@ class ServerTest(unittest.TestCase):
         status, got = self.change_inbox("process", "https://a.org/x")
         self.assertEqual((status, got), (503, {"error": "the Claude Code session that ran /rft is gone"}))
         self.assertEqual(p.read_bytes(), text)
+
+    # ------------------------------------------------------------ reading notes
+    IMP = "### Claims\n\nc\n\n### How\n\nh\n\n### Key results\n\nk\n\n### Bearing on\n\nb\n\n### Left open\n\no"
+    MIXUP = "- [Mixup at scale](https://arxiv.org/abs/2406.01234) \u2014 why \u00b7 high \u00b7 added 2026-11-16\n"
+
+    def fresh_reading(self, inbox: str, notes: dict[str, str] | None = None):
+        """The vault's inbox and its reading notes as a test wants them, removed afterwards."""
+        folder = self.vault / "Reading notes"
+        shutil.rmtree(folder, ignore_errors=True)
+        self.addCleanup(shutil.rmtree, folder, True)
+        p = self.fresh_inbox(inbox.encode())
+        for name, text in (notes or {}).items():
+            folder.mkdir(exist_ok=True)
+            (folder / name).write_bytes(text.encode())
+        return p, folder
+
+    def reading(self, key):
+        status, _, body = self.get("/api/reading?key=" + quote(key, safe=""))
+        return status, json.loads(body)
+
+    def write_reading(self, payload, **kw):
+        return self.write("PUT", "/api/reading", payload, **kw)
+
+    def test_reading_note_made_on_the_first_write_with_something_in_it(self):
+        p, folder = self.fresh_reading(self.MIXUP + "- https://b.org/y\n")
+        key, f = "arxiv:2406.01234", folder / "arxiv-2406.01234.md"
+        tree = json.loads(self.get("/api/tree")[2])
+        status, got = self.reading(key)
+        self.assertEqual((status, got["text"], got["version"], got["impression"], got["name"], got["item"]["title"]),
+                         (200, "", None, None, "Reading notes/arxiv-2406.01234.md", "Mixup at scale"))
+        # opened and closed, or saved empty: no file, no folder
+        self.assertEqual(self.write_reading({"key": key, "text": " \n\n", "version": None}), (200, {"key": key, "name": "Reading notes/arxiv-2406.01234.md", "version": None}))
+        self.assertFalse(folder.exists())
+        self.assertEqual(json.loads(self.get("/api/inbox")[2])["notes"], {})
+        # the first quote makes it: the head, then the part
+        status, res = self.write_reading({"key": key, "text": "> a quote\n\nmine", "version": None})
+        self.assertEqual(status, 200)
+        self.assertEqual(f.read_text(), "# Mixup at scale\n<https://arxiv.org/abs/2406.01234>\n\n## My reading\n\n> a quote\n\nmine\n")
+        status, got = self.reading(key)
+        self.assertEqual((got["text"], got["version"]), ("> a quote\n\nmine", res["version"]))
+        self.assertEqual(json.loads(self.get("/api/inbox")[2])["notes"], {key: {"mine": True, "impression": False}})
+        # an item with no title is headed by what the list calls it
+        self.assertEqual(self.write_reading({"key": "https://b.org/y", "text": "x", "version": None})[0], 200)
+        self.assertEqual((folder / "b.org-y.md").read_text(), "# b.org/y\n<https://b.org/y>\n\n## My reading\n\nx\n")
+        # not a note: the tree, and its version, stay as they were; the inbox's file too
+        self.assertEqual(json.loads(self.get("/api/tree")[2]), tree)
+        self.assertEqual(p.read_text(), self.MIXUP + "- https://b.org/y\n")
+        self.assertEqual([x.name for x in folder.iterdir() if x.name.endswith(".rft-tmp")], [])
+        # a reading note is an inbox item's
+        self.assertEqual(self.reading("https://b.org/none"), (409, {"error": "that item is no longer in the inbox"}))
+        self.assertEqual(self.write_reading({"key": "https://b.org/none", "text": "x", "version": None})[0], 409)
+        self.assertFalse((folder / "b.org-none.md").exists())
+
+    def test_reading_note_the_users_part_alone_is_written_and_versioned(self):
+        head = "# Mixup at scale\n<https://arxiv.org/abs/2406.01234>\n"
+        note = f"{head}\n## My reading\n\n> a quote\n\n## Claude's impression (2026-11-24)\n\n{self.IMP}\n"
+        _, folder = self.fresh_reading(self.MIXUP, {"arxiv-2406.01234.md": note})
+        key, f = "arxiv:2406.01234", folder / "arxiv-2406.01234.md"
+        status, got = self.reading(key)
+        self.assertEqual((got["text"], got["impression"]), ("> a quote", {"date": "2026-11-24", "text": self.IMP}))
+        # Claude saves another impression while the user types: no change to the user's part, so no conflict
+        other = self.IMP.replace("c\n", "another reading\n")
+        f.write_text(note.replace(self.IMP, other).replace("2026-11-24", "2026-11-25"))
+        status, res = self.write_reading({"key": key, "text": "> a quote\n> more of it\n", "version": got["version"]})
+        self.assertEqual(status, 200)
+        self.assertEqual(f.read_text(), f"{head}\n## My reading\n\n> a quote\n> more of it\n\n## Claude's impression (2026-11-25)\n\n{other}\n")
+        # the user's part changed elsewhere (Obsidian): refused, with the part as it is now
+        f.write_text(f.read_text().replace("> more of it", "> more of it, from Obsidian"))
+        status, now = self.write_reading({"key": key, "text": "mine", "version": res["version"]})
+        self.assertEqual((status, now["text"]), (409, "> a quote\n> more of it, from Obsidian"))
+        self.assertEqual(self.write_reading({"key": key, "text": "mine", "version": now["version"]})[0], 200)
+        self.assertEqual(self.write_reading({"key": key, "text": "forced", "force": True})[0], 200)
+        self.assertEqual(f.read_text(), f"{head}\n## My reading\n\nforced\n\n## Claude's impression (2026-11-25)\n\n{other}\n")
+        # the same text again: the file is not written
+        before = f.stat().st_mtime_ns
+        self.assertEqual(self.write_reading({"key": key, "text": "forced\n", "force": True})[0], 200)
+        self.assertEqual(f.stat().st_mtime_ns, before)
+        # a line that would read as the heading of Claude's part
+        status, res = self.write_reading({"key": key, "text": "x\n## Claude's impression\ny", "force": True})
+        self.assertEqual((status, "heading of Claude's part" in res["error"]), (400, True))
+        # CRLF is kept
+        f.write_bytes(note.replace("\n", "\r\n").encode())
+        self.assertEqual(self.write_reading({"key": key, "text": "one\r\ntwo", "force": True})[0], 200)
+        self.assertEqual(f.read_bytes(), note.replace("> a quote", "one\ntwo").replace("\n", "\r\n").encode())
+
+    def test_reading_note_is_a_write_of_the_page_and_never_through_a_link(self):
+        _, folder = self.fresh_reading(self.MIXUP)
+        key = "arxiv:2406.01234"
+        for kw in ({"key": None}, {"key": "wrong"}, {"origin": "http://evil.example"}):
+            self.assertEqual(self.write_reading({"key": key, "text": "x", "version": None}, **kw)[0], 403)
+        for payload in ({"text": "x", "version": None}, {"key": "", "text": "x", "version": None}, {"key": key, "version": None}, {"key": key, "text": 3, "version": None},
+                        {"key": key, "text": "x"}, {"key": key, "text": "x", "version": 3}, {"key": "x" * 2001, "text": "x", "version": None}):
+            self.assertEqual(self.write_reading(payload)[0], 400, str(payload)[:60])
+        self.assertFalse(folder.exists())
+        # the file, then the folder, as a link out of the vault: neither read nor written
+        out = self.root / "outside-note.md"
+        out.write_text("# T\n<https://arxiv.org/abs/2406.01234>\n\n## My reading\n\nsecret\n")
+        self.addCleanup(out.unlink)
+        folder.mkdir()
+        os.symlink(out, folder / "arxiv-2406.01234.md")
+        status, got = self.reading(key)
+        self.assertEqual((status, "secret" in json.dumps(got)), (422, False))
+        self.assertEqual(self.write_reading({"key": key, "text": "x", "force": True})[0], 422)
+        self.assertNotIn("secret", self.get("/api/inbox")[2].decode())
+        shutil.rmtree(folder)
+        outside = self.root / "outside-notes"
+        outside.mkdir()
+        self.addCleanup(shutil.rmtree, outside, True)
+        os.symlink(outside, folder)
+        self.addCleanup(lambda: folder.is_symlink() and folder.unlink())
+        self.assertEqual(self.write_reading({"key": key, "text": "x", "force": True})[0], 422)
+        self.assertEqual(list(outside.iterdir()), [])
+        self.assertEqual(out.read_text().count("secret"), 1)
+        folder.unlink()
+
+    def test_inbox_read_mark_is_saved_and_starts_the_discussion(self):
+        today = time.strftime("%Y-%m-%d")
+        p, _ = self.fresh_reading(self.MIXUP + "- https://b.org/y\n")
+        self.session(lambda request: None)
+        key = "arxiv:2406.01234"
+        status, got = self.write("POST", "/api/inbox", {"action": "read", "key": key, "read": True})
+        self.assertEqual((status, got["item"]["read"], got["asked"], got["waiting"]), (200, today, True, []))
+        self.assertEqual(p.read_text(), self.MIXUP.rstrip("\n") + f" \u00b7 read {today}\n- https://b.org/y\n")
+        self.assertEqual(self.asked, [("RFT_DISCUSS", {"key": key, "nth": 0})])
+        # Discuss asks again; an item that is not marked, or gone, is not asked
+        self.assertEqual(self.change_inbox("discuss", key)[0], 200)
+        self.assertEqual(self.change_inbox("discuss", "https://b.org/y"), (409, {"error": "that item is not marked as read"}))
+        self.assertEqual(self.change_inbox("discuss", "https://b.org/gone")[0], 409)
+        self.assertEqual(len(self.asked), 2)
+        # taken off: the line as it was, and nothing asked
+        status, got = self.write("POST", "/api/inbox", {"action": "read", "key": key, "read": False})
+        self.assertEqual((status, got["item"]["read"], "asked" in got), (200, "", False))
+        self.assertEqual(p.read_text(), self.MIXUP + "- https://b.org/y\n")
+        self.assertEqual(len(self.asked), 2)
+        # a mark typed by hand keeps its day when the page sets it again
+        p.write_text(self.MIXUP.rstrip("\n") + " \u00b7 read 2026-11-01\n")
+        self.assertEqual(self.write("POST", "/api/inbox", {"action": "read", "key": key, "read": True})[1]["item"]["read"], "2026-11-01")
+        # a write of the page, with a value that is a yes or a no
+        for kw in ({"key": None}, {"origin": "http://evil.example"}):
+            self.assertEqual(self.write("POST", "/api/inbox", {"action": "read", "key": key, "read": False}, **kw)[0], 403)
+        for payload in ({"action": "read", "key": key}, {"action": "read", "key": key, "read": "yes"}, {"action": "read", "key": key, "read": 1},
+                        {"action": "read", "read": True}, {"action": "discuss"}, {"action": "discuss", "key": key, "nth": -1}, {"action": "discard", "key": key, "confirm": "yes"}):
+            self.assertEqual(self.write("POST", "/api/inbox", payload)[0], 400, str(payload))
+        self.assertIn("read 2026-11-01", p.read_text())
+
+    def test_inbox_read_mark_with_no_chat_is_saved_and_the_item_waits(self):
+        today = time.strftime("%Y-%m-%d")
+        p, _ = self.fresh_reading(self.MIXUP + "- https://b.org/y\n")
+        relay = rft_server.Relay()
+        self.session(lambda request: relay.ask("RFT_DISCUSS", request))
+        key = "arxiv:2406.01234"
+        start = time.monotonic()
+        status, got = self.write("POST", "/api/inbox", {"action": "read", "key": key, "read": True})
+        self.assertLess(time.monotonic() - start, 1)
+        self.assertEqual((status, got["item"]["read"], got["asked"], got["waiting"]), (200, today, False, [key]))
+        self.assertIn(f"read {today}", p.read_text())
+        self.assertEqual(relay._pending, [])  # never queued: no chat that comes later finds it
+        self.assertEqual(json.loads(self.get("/api/inbox")[2])["waiting"], [key])
+        # Discuss with still no chat: refused at once, and it still waits
+        self.assertEqual(self.change_inbox("discuss", key), (503, {"error": rft_server.NO_SESSION}))
+        self.assertEqual(json.loads(self.get("/api/inbox")[2])["waiting"], [key])
+        # a chat is there: asked, and it waits no more
+        self.session(lambda request: None)
+        self.assertEqual(self.change_inbox("discuss", key)[0], 200)
+        self.assertEqual(self.asked, [("RFT_DISCUSS", {"key": key, "nth": 0})])
+        self.assertEqual(json.loads(self.get("/api/inbox")[2])["waiting"], [])
+        # the mark taken off, or the item gone, ends the wait too
+        self.session(lambda request: relay.ask("RFT_DISCUSS", request))
+        self.write("POST", "/api/inbox", {"action": "read", "key": "https://b.org/y", "read": True})
+        self.assertEqual(json.loads(self.get("/api/inbox")[2])["waiting"], ["https://b.org/y"])
+        self.write("POST", "/api/inbox", {"action": "read", "key": "https://b.org/y", "read": False})
+        self.assertEqual(json.loads(self.get("/api/inbox")[2])["waiting"], [])
+
+    def test_inbox_discard_asks_first_while_the_reading_note_holds_the_users_part(self):
+        today = time.strftime("%Y-%m-%d")
+        head = "# Mixup at scale\n<https://arxiv.org/abs/2406.01234>\n"
+        inbox = self.MIXUP + "- https://b.org/y\n- 2406.01234 \u2014 again\n"
+        p, folder = self.fresh_reading(inbox, {
+            "arxiv-2406.01234.md": f"{head}\n## My reading\n\n> a quote\n",
+            "b.org-y.md": f"# b.org/y\n<https://b.org/y>\n\n## My reading\n\n## Claude's impression (2026-11-24)\n\n{self.IMP}\n"})
+        key, f = "arxiv:2406.01234", folder / "arxiv-2406.01234.md"
+        status, got = self.change_inbox("discard", key)
+        self.assertEqual((status, got), (409, {"error": "its reading note holds what you wrote: discarding the item removes it", "holds": True}))
+        self.assertEqual((p.read_text(), f.exists()), (inbox, True))
+        # said yes: the item goes; its reading note stays while the link typed twice is still in the inbox
+        status, got = self.write("POST", "/api/inbox", {"action": "discard", "key": key, "confirm": True})
+        self.assertEqual((status, got["processed"]["outcome"], [i["key"] for i in got["items"]], f.exists()), (200, "discarded", ["https://b.org/y", key], True))
+        status, got = self.write("POST", "/api/inbox", {"action": "discard", "key": key, "confirm": True})
+        self.assertEqual((status, f.exists(), got["notes"]), (200, False, {"https://b.org/y": {"mine": False, "impression": True}}))
+        # a note with Claude's impression alone is not the user's to lose: no question, and it goes with the item
+        self.assertEqual(self.change_inbox("discard", "https://b.org/y")[0], 200)
+        self.assertEqual(list(folder.iterdir()), [])
+        self.assertEqual(p.read_text().count(f"- {today} "), 3)
 
     # ------------------------------------------------------------ comments, suggestions, lock
 
