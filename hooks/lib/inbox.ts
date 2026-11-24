@@ -50,7 +50,7 @@ export type Inbox = { crlf: boolean; lines: string[]; cr: boolean[]; items: (Inb
 
 /** White space, for inside a character class. */
 const WS = String.raw` \t\n\v\f\r   -     　`
-const rx = (pattern: string, nocase = false, all = false) => new RegExp(pattern, `s${nocase ? 'i' : ''}${all ? 'g' : ''}`)
+export const rx = (pattern: string, nocase = false, all = false) => new RegExp(pattern, `s${nocase ? 'i' : ''}${all ? 'g' : ''}`)
 
 const EDGES = rx(`^[${WS}]+|[${WS}]+$`, false, true)
 const SPACES = rx(`[${WS}]+`, false, true)
@@ -86,7 +86,7 @@ const ENDS = rx(String.raw`[.,;]+$`) // what ends a sentence, not an address
 const MARKER = rx(String.raw`^[-*+][ \t]+`)
 
 export const strip = (text: string) => text.replace(EDGES, '')
-const oneLine = (text: string | undefined) => strip((text ?? '').replace(SPACES, ' '))
+export const oneLine = (text: string | undefined) => strip((text ?? '').replace(SPACES, ' '))
 
 /**
  * A link's identity and the address that opens it: `arxiv:<id>` whatever the form the paper was
