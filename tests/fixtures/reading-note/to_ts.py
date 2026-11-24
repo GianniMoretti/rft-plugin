@@ -34,6 +34,7 @@ def page() -> str:
     scenarios = json.loads((HERE / "scenarios.json").read_text(encoding="utf-8"))
     out = ["# Reading notes: the three cases, step by step", "",
            "Written from tests/fixtures/reading-note/scenarios.json by to_ts.py: edit that file, not this one.", "",
+           "Claude proposed these cases; the user tried the feature and read them on 2026-11-24 and asked for no change.", "",
            "Each step says who acts and what happens, the call it is tested with, what the answer must say, and the",
            "files it changes, as they are after it. `{today}` is the day the test runs. A step of the user's is run",
            "against the page's server (tests/test_reading.py), a step of Claude's against the plugin's tool",
