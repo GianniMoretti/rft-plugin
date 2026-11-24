@@ -70,17 +70,28 @@ class InboxFileTest(unittest.TestCase):
         box = rft_inbox.Inbox(self.text)
         item = box.add("arXiv:2511.00042v2", why="from the talk", priority="high", today="2026-11-23")
         self.assertEqual(item, {"key": "arxiv:2511.00042", "url": "https://arxiv.org/abs/2511.00042", "title": "", "why": "from the talk",
-                                "priority": "high", "added": "2026-11-23", "duplicate": False, "brief": None})
+                                "priority": "high", "added": "2026-11-23", "read": "", "duplicate": False, "brief": None})
         before, after = self.text.split("\n"), box.text().split("\n")
         at = before.index("- see also the list in Scratchpad") + 1
         self.assertEqual(after, before[:at] + ["- https://arxiv.org/abs/2511.00042 — from the talk · high · added 2026-11-23"] + before[at:])
         self.assertEqual(box.shown(), self.want["items"] + [item])
         self.assertEqual(box.processed, self.want["processed"])
 
+    def test_the_read_mark_case_by_case(self):
+        # the user's mark, `read <day>`, is one only as a part of its own after the link
+        for text, fields in self.cases["reads"]:
+            items = rft_inbox.Inbox(f"- {text}").shown()
+            self.assertEqual(len(items), 1, text)
+            self.assertEqual({k: items[0][k] for k in fields}, fields, text)
+        for case in self.cases["unmarked"]:
+            with self.assertRaises(rft_inbox.InboxError, msg=case["name"]):
+                rft_inbox.Inbox(case["text"]).add(case["link"], case["why"])
+        self.assertTrue(all(i["read"] == "" for i in self.want["items"]))
+
     def test_change_case_by_case(self):
         for case in self.cases["changes"]:
             box = rft_inbox.Inbox(case["text"])
-            args = (case["key"], case.get("nth", 0), case.get("why"), case.get("priority"))
+            args = (case["key"], case.get("nth", 0), case.get("why"), case.get("priority"), case.get("read"))
             if case.get("error"):
                 with self.assertRaises(rft_inbox.InboxError, msg=case["name"]):
                     box.change(*args)
@@ -89,7 +100,7 @@ class InboxFileTest(unittest.TestCase):
                 self.assertEqual(item is None, bool(case.get("none")), case["name"])
                 if item:
                     self.assertIn(item, box.shown(), case["name"])
-                    for k in ("why", "priority"):
+                    for k in ("why", "priority", "read"):
                         if case.get(k) is not None:
                             self.assertEqual(item[k], rft_inbox.one_line(case[k]).lower() if k == "priority" else rft_inbox.one_line(case[k]), case["name"])
             self.assertEqual(box.text(), case.get("want", case["text"]), case["name"])

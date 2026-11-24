@@ -1,14 +1,14 @@
 {
   "items": [
-    {"key": "arxiv:2406.01234", "url": "https://arxiv.org/abs/2406.01234", "title": "Mixup at scale", "why": "maybe relevant to D04", "priority": "high", "added": "2026-11-16", "duplicate": false,
+    {"key": "arxiv:2406.01234", "url": "https://arxiv.org/abs/2406.01234", "title": "Mixup at scale", "why": "maybe relevant to D04", "priority": "high", "added": "2026-11-16", "read": "", "duplicate": false,
      "brief": {"date": "2026-11-20", "lines": ["claims strong augmentation still helps at ViT-H scale", "touches R07, E12", "recommends: reference under D04"]}},
-    {"key": "https://lilianweng.github.io/posts/2021-05-31-contrastive", "url": "https://lilianweng.github.io/posts/2021-05-31-contrastive/", "title": "", "why": "", "priority": "", "added": "", "duplicate": false, "brief": null},
-    {"key": "arxiv:2311.09876", "url": "https://arxiv.org/abs/2311.09876", "title": "", "why": "", "priority": "", "added": "", "duplicate": false, "brief": null},
-    {"key": "arxiv:2406.01234", "url": "https://arxiv.org/abs/2406.01234", "title": "", "why": "same one from Gianni?", "priority": "", "added": "", "duplicate": true, "brief": null},
-    {"key": "doi:10.1007/s11263-021-01453-z", "url": "https://doi.org/10.1007/s11263-021-01453-z", "title": "", "why": "IJCV survey, low", "priority": "", "added": "", "duplicate": false, "brief": null},
-    {"key": "https://openreview.net/forum?id=abc123", "url": "https://openreview.net/forum?id=abc123#discussion", "title": "Video MAE v3", "why": "", "priority": "urgent", "added": "", "duplicate": false, "brief": null},
-    {"key": "doi:10.1109/cvpr.2022.01553", "url": "https://doi.org/10.1109/CVPR.2022.01553", "title": "", "why": "", "priority": "", "added": "2026-11-02", "duplicate": false, "brief": null},
-    {"key": "arxiv:2501.00001", "url": "https://arxiv.org/abs/2501.00001", "title": "", "why": "Thomas mentioned it", "priority": "medium", "added": "2026-11-22", "duplicate": false, "brief": null}
+    {"key": "https://lilianweng.github.io/posts/2021-05-31-contrastive", "url": "https://lilianweng.github.io/posts/2021-05-31-contrastive/", "title": "", "why": "", "priority": "", "added": "", "read": "", "duplicate": false, "brief": null},
+    {"key": "arxiv:2311.09876", "url": "https://arxiv.org/abs/2311.09876", "title": "", "why": "", "priority": "", "added": "", "read": "", "duplicate": false, "brief": null},
+    {"key": "arxiv:2406.01234", "url": "https://arxiv.org/abs/2406.01234", "title": "", "why": "same one from Gianni?", "priority": "", "added": "", "read": "", "duplicate": true, "brief": null},
+    {"key": "doi:10.1007/s11263-021-01453-z", "url": "https://doi.org/10.1007/s11263-021-01453-z", "title": "", "why": "IJCV survey, low", "priority": "", "added": "", "read": "", "duplicate": false, "brief": null},
+    {"key": "https://openreview.net/forum?id=abc123", "url": "https://openreview.net/forum?id=abc123#discussion", "title": "Video MAE v3", "why": "", "priority": "urgent", "added": "", "read": "", "duplicate": false, "brief": null},
+    {"key": "doi:10.1109/cvpr.2022.01553", "url": "https://doi.org/10.1109/CVPR.2022.01553", "title": "", "why": "", "priority": "", "added": "2026-11-02", "read": "", "duplicate": false, "brief": null},
+    {"key": "arxiv:2501.00001", "url": "https://arxiv.org/abs/2501.00001", "title": "", "why": "Thomas mentioned it", "priority": "medium", "added": "2026-11-22", "read": "", "duplicate": false, "brief": null}
   ],
   "processed": [
     {"date": "2026-11-10", "key": "arxiv:2111.06377", "title": "Masked autoencoders", "outcome": "R03"},

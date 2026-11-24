@@ -132,7 +132,15 @@
     {"name": "not a reading priority", "text": "- https://a.org/x\n", "key": "https://a.org/x", "priority": "soon", "error": true},
     {"name": "no item has the link", "text": "- https://a.org/x\n", "key": "https://b.org/y", "priority": "low", "none": true},
     {"name": "no second item has it", "text": "- https://a.org/x\n", "key": "https://a.org/x", "nth": 1, "priority": "low", "none": true},
-    {"name": "a processed item is not in the inbox", "text": "## Processed\n- https://a.org/x — discarded\n", "key": "https://a.org/x", "priority": "low", "none": true}
+    {"name": "a processed item is not in the inbox", "text": "## Processed\n- https://a.org/x — discarded\n", "key": "https://a.org/x", "priority": "low", "none": true},
+    {"name": "the read mark on a bare link", "text": "- https://a.org/x\n", "key": "https://a.org/x", "read": "2026-11-24", "want": "- https://a.org/x · read 2026-11-24\n"},
+    {"name": "the read mark after what the line has: the why, the reading priority, the day added", "text": "- [T](https://a.org/x) — why · high · added 2026-11-16\n", "key": "https://a.org/x", "read": "2026-11-24", "want": "- [T](https://a.org/x) — why · high · added 2026-11-16 · read 2026-11-24\n"},
+    {"name": "the read mark taken off: the rest of the line as written", "text": "- [T](https://a.org/x) — why · high · added 2026-11-16 · read 2026-11-24\n- https://b.org/y\n", "key": "https://a.org/x", "read": "", "want": "- [T](https://a.org/x) — why · high · added 2026-11-16\n- https://b.org/y\n"},
+    {"name": "a reading priority set on a read item: the mark stays", "text": "- https://a.org/x — why · read 2026-11-24 · added 2026-11-16\n", "key": "https://a.org/x", "priority": "low", "want": "- https://a.org/x — why · low · added 2026-11-16 · read 2026-11-24\n"},
+    {"name": "a why set on a read item: the mark stays", "text": "- https://a.org/x · read 2026-11-24\n", "key": "https://a.org/x", "why": "for D04", "want": "- https://a.org/x — for D04 · read 2026-11-24\n"},
+    {"name": "the mark set again on the day it has: the line as typed", "text": "-   https://a.org/x   read 2026-11-24\n", "key": "https://a.org/x", "read": "2026-11-24", "want": "-   https://a.org/x   read 2026-11-24\n"},
+    {"name": "a mark that is no day is refused", "text": "- https://a.org/x\n", "key": "https://a.org/x", "read": "yesterday", "error": true},
+    {"name": "a why that would read as the mark is refused", "text": "- https://a.org/x\n", "key": "https://a.org/x", "why": "read 2026-11-24", "error": true}
   ],
   "closes": [
     {"name": "under the processed ones, at their end", "text": "# Inbox\n\n- https://a.org/x — why · high · added 2026-11-01\n- https://b.org/y\n\n## Processed\n\n- 2026-11-10 https://c.org/z — discarded\n", "key": "https://a.org/x", "today": "2026-11-23", "want": "# Inbox\n\n- https://b.org/y\n\n## Processed\n\n- 2026-11-10 https://c.org/z — discarded\n- 2026-11-23 https://a.org/x — discarded\n", "processed": {"date": "2026-11-23", "key": "https://a.org/x", "title": "", "outcome": "discarded"}},
@@ -167,5 +175,20 @@
     {"name": "nothing said", "text": "- https://a.org/x\n", "key": "https://a.org/x", "today": "2026-11-23", "brief": " \n - \n", "error": true},
     {"name": "a line too long to read in a minute", "text": "- https://a.org/x\n", "key": "https://a.org/x", "today": "2026-11-23", "brief": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "error": true},
     {"name": "no item has the link", "text": "- https://a.org/x\n", "key": "https://b.org/y", "today": "2026-11-23", "brief": "claims x", "none": true}
+  ],
+  "reads": [
+    ["https://a.org/x · read 2026-11-24", {"read": "2026-11-24", "why": ""}],
+    ["https://a.org/x — why · high · added 2026-11-16 · read 2026-11-24", {"read": "2026-11-24", "why": "why", "priority": "high", "added": "2026-11-16"}],
+    ["https://a.org/x   READ 2026-11-24", {"read": "2026-11-24", "why": ""}],
+    ["https://a.org/x · read 2026-11-24 · read 2026-11-25", {"read": "2026-11-24", "why": "read 2026-11-25"}],
+    ["https://a.org/x — read", {"read": "", "why": "read"}],
+    ["https://a.org/x — read it on the train", {"read": "", "why": "read it on the train"}],
+    ["https://a.org/x — read 2026-11-24, twice", {"read": "", "why": "read 2026-11-24, twice"}],
+    ["https://a.org/x — already read 2026-11-24", {"read": "", "why": "already read 2026-11-24"}],
+    ["https://a.org/x · read 24/11/2026", {"read": "", "why": "read 24/11/2026"}],
+    ["https://a.org/x", {"read": "", "why": ""}]
+  ],
+  "unmarked": [
+    {"name": "an added item is not read", "text": "", "link": "https://b.org/y", "why": "read 2026-11-24", "error": true}
   ]
 }

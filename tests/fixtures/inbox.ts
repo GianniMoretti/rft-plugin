@@ -9,6 +9,7 @@ export const EXPECTED = {
    "why": "maybe relevant to D04",
    "priority": "high",
    "added": "2026-11-16",
+   "read": "",
    "duplicate": false,
    "brief": {
     "date": "2026-11-20",
@@ -26,6 +27,7 @@ export const EXPECTED = {
    "why": "",
    "priority": "",
    "added": "",
+   "read": "",
    "duplicate": false,
    "brief": null
   },
@@ -36,6 +38,7 @@ export const EXPECTED = {
    "why": "",
    "priority": "",
    "added": "",
+   "read": "",
    "duplicate": false,
    "brief": null
   },
@@ -46,6 +49,7 @@ export const EXPECTED = {
    "why": "same one from Gianni?",
    "priority": "",
    "added": "",
+   "read": "",
    "duplicate": true,
    "brief": null
   },
@@ -56,6 +60,7 @@ export const EXPECTED = {
    "why": "IJCV survey, low",
    "priority": "",
    "added": "",
+   "read": "",
    "duplicate": false,
    "brief": null
   },
@@ -66,6 +71,7 @@ export const EXPECTED = {
    "why": "",
    "priority": "urgent",
    "added": "",
+   "read": "",
    "duplicate": false,
    "brief": null
   },
@@ -76,6 +82,7 @@ export const EXPECTED = {
    "why": "",
    "priority": "",
    "added": "2026-11-02",
+   "read": "",
    "duplicate": false,
    "brief": null
   },
@@ -86,6 +93,7 @@ export const EXPECTED = {
    "why": "Thomas mentioned it",
    "priority": "medium",
    "added": "2026-11-22",
+   "read": "",
    "duplicate": false,
    "brief": null
   }
@@ -716,6 +724,62 @@ export const CASES = {
    "key": "https://a.org/x",
    "priority": "low",
    "none": true
+  },
+  {
+   "name": "the read mark on a bare link",
+   "text": "- https://a.org/x\n",
+   "key": "https://a.org/x",
+   "read": "2026-11-24",
+   "want": "- https://a.org/x \u00b7 read 2026-11-24\n"
+  },
+  {
+   "name": "the read mark after what the line has: the why, the reading priority, the day added",
+   "text": "- [T](https://a.org/x) \u2014 why \u00b7 high \u00b7 added 2026-11-16\n",
+   "key": "https://a.org/x",
+   "read": "2026-11-24",
+   "want": "- [T](https://a.org/x) \u2014 why \u00b7 high \u00b7 added 2026-11-16 \u00b7 read 2026-11-24\n"
+  },
+  {
+   "name": "the read mark taken off: the rest of the line as written",
+   "text": "- [T](https://a.org/x) \u2014 why \u00b7 high \u00b7 added 2026-11-16 \u00b7 read 2026-11-24\n- https://b.org/y\n",
+   "key": "https://a.org/x",
+   "read": "",
+   "want": "- [T](https://a.org/x) \u2014 why \u00b7 high \u00b7 added 2026-11-16\n- https://b.org/y\n"
+  },
+  {
+   "name": "a reading priority set on a read item: the mark stays",
+   "text": "- https://a.org/x \u2014 why \u00b7 read 2026-11-24 \u00b7 added 2026-11-16\n",
+   "key": "https://a.org/x",
+   "priority": "low",
+   "want": "- https://a.org/x \u2014 why \u00b7 low \u00b7 added 2026-11-16 \u00b7 read 2026-11-24\n"
+  },
+  {
+   "name": "a why set on a read item: the mark stays",
+   "text": "- https://a.org/x \u00b7 read 2026-11-24\n",
+   "key": "https://a.org/x",
+   "why": "for D04",
+   "want": "- https://a.org/x \u2014 for D04 \u00b7 read 2026-11-24\n"
+  },
+  {
+   "name": "the mark set again on the day it has: the line as typed",
+   "text": "-   https://a.org/x   read 2026-11-24\n",
+   "key": "https://a.org/x",
+   "read": "2026-11-24",
+   "want": "-   https://a.org/x   read 2026-11-24\n"
+  },
+  {
+   "name": "a mark that is no day is refused",
+   "text": "- https://a.org/x\n",
+   "key": "https://a.org/x",
+   "read": "yesterday",
+   "error": true
+  },
+  {
+   "name": "a why that would read as the mark is refused",
+   "text": "- https://a.org/x\n",
+   "key": "https://a.org/x",
+   "why": "read 2026-11-24",
+   "error": true
   }
  ],
  "closes": [
@@ -1038,6 +1102,89 @@ export const CASES = {
    "today": "2026-11-23",
    "brief": "claims x",
    "none": true
+  }
+ ],
+ "reads": [
+  [
+   "https://a.org/x \u00b7 read 2026-11-24",
+   {
+    "read": "2026-11-24",
+    "why": ""
+   }
+  ],
+  [
+   "https://a.org/x \u2014 why \u00b7 high \u00b7 added 2026-11-16 \u00b7 read 2026-11-24",
+   {
+    "read": "2026-11-24",
+    "why": "why",
+    "priority": "high",
+    "added": "2026-11-16"
+   }
+  ],
+  [
+   "https://a.org/x   READ 2026-11-24",
+   {
+    "read": "2026-11-24",
+    "why": ""
+   }
+  ],
+  [
+   "https://a.org/x \u00b7 read 2026-11-24 \u00b7 read 2026-11-25",
+   {
+    "read": "2026-11-24",
+    "why": "read 2026-11-25"
+   }
+  ],
+  [
+   "https://a.org/x \u2014 read",
+   {
+    "read": "",
+    "why": "read"
+   }
+  ],
+  [
+   "https://a.org/x \u2014 read it on the train",
+   {
+    "read": "",
+    "why": "read it on the train"
+   }
+  ],
+  [
+   "https://a.org/x \u2014 read 2026-11-24, twice",
+   {
+    "read": "",
+    "why": "read 2026-11-24, twice"
+   }
+  ],
+  [
+   "https://a.org/x \u2014 already read 2026-11-24",
+   {
+    "read": "",
+    "why": "already read 2026-11-24"
+   }
+  ],
+  [
+   "https://a.org/x \u00b7 read 24/11/2026",
+   {
+    "read": "",
+    "why": "read 24/11/2026"
+   }
+  ],
+  [
+   "https://a.org/x",
+   {
+    "read": "",
+    "why": ""
+   }
+  ]
+ ],
+ "unmarked": [
+  {
+   "name": "an added item is not read",
+   "text": "",
+   "link": "https://b.org/y",
+   "why": "read 2026-11-24",
+   "error": true
   }
  ]
 }

@@ -15,8 +15,9 @@
 //
 // An item is a top-level list line that starts with a link: a markdown link, a URL, an arXiv id or
 // a DOI. After the link, parts set apart by `·`: why it was saved (after a dash), its reading
-// priority as one word, `added <date>`. A brief is the indented list lines under it, the first
-// starting `briefed <date>:`. Any other line is not an item.
+// priority as one word, `added <date>`, and `read <date>` once the user marked it as read. A brief
+// is the indented list lines under it, the first starting `briefed <date>:`. Any other line is not
+// an item.
 //
 // server/rft_inbox.py reads and writes the same file the same way, pattern for pattern, and
 // tests/fixtures/inbox holds both to one file and one list of cases. So that the two cannot differ
@@ -38,7 +39,7 @@ export class InboxError extends Error {}
 
 export type Brief = { date: string; lines: string[] }
 /** An item as the page and the tool show it. `key` is what it is: the same paper has the same key however its link was typed. */
-export type InboxItem = { key: string; url: string; title: string; why: string; priority: string; added: string; duplicate: boolean; brief: Brief | null }
+export type InboxItem = { key: string; url: string; title: string; why: string; priority: string; added: string; read: string; duplicate: boolean; brief: Brief | null }
 export type ProcessedItem = { date: string; key: string; title: string; outcome: string }
 /**
  * The file as read: its lines, as they are, and what they hold, in the file's order. Each line is
@@ -77,6 +78,8 @@ const HEADING = rx(String.raw`^#{1,2}[ \t]`)
 const SOURCE = rx(String.raw`^##[ \t]+Source[ \t]*$`)
 const BRIEFED = rx(String.raw`^briefed[ \t]+([0-9]{4}-[0-9]{2}-[0-9]{2})[ \t]*:?[ \t]*(.*)$`, true)
 const ADDED = rx(String.raw`^added[ \t]+([0-9]{4}-[0-9]{2}-[0-9]{2})$`, true)
+// the user's mark that they have read the item, and the day they set it (docs/adr/0004)
+const READ = rx(String.raw`^read[ \t]+([0-9]{4}-[0-9]{2}-[0-9]{2})$`, true)
 const DATED = rx(String.raw`^([0-9]{4}-[0-9]{2}-[0-9]{2})[ \t]+(.*)$`)
 const DASH = rx(String.raw`^(?:—|–|->|-{1,2}|→)[ \t]*`) // `->` before `-`, or its `>` is left behind
 const ENDS = rx(String.raw`[.,;]+$`) // what ends a sentence, not an address
@@ -121,19 +124,21 @@ export function linkAt(text: string): { key: string; url: string; title: string;
 }
 
 /**
- * What follows an item's link: why it was saved, its reading priority, the day it was added. A
- * priority word counts only as a part of its own (or as all there is): inside a why it is the why's.
+ * What follows an item's link: why it was saved, its reading priority, the day it was added, the
+ * day the user marked it as read. A priority word counts only as a part of its own (or as all there
+ * is): inside a why it is the why's.
  */
-export function tailOf(tail: string): { why: string; priority: string; added: string } {
+export function tailOf(tail: string): { why: string; priority: string; added: string; read: string } {
   const why: string[] = []
-  let priority = '', added = ''
+  let priority = '', added = '', read = ''
   for (const part of strip(tail).replace(DASH, '').split('·').map(strip)) {
-    const a = ADDED.exec(part)
+    const a = ADDED.exec(part), r = READ.exec(part)
     if (a && !added) added = a[1]!
+    else if (r && !read) read = r[1]!
     else if ((READING_PRIORITIES as readonly string[]).includes(part.toLowerCase()) && !priority) priority = part.toLowerCase()
     else if (part) why.push(part)
   }
-  return { why: why.join(' · '), priority, added }
+  return { why: why.join(' · '), priority, added, read }
 }
 
 /** The identities of the links a text names, each once, in its order. */
@@ -210,7 +215,7 @@ export const inboxText = (box: Inbox): string => box.lines.map((line, n) => (box
 
 /** The items as the page and the tool show them (without their place in the file), each field in the page's order. */
 export const shown = (box: Inbox): InboxItem[] =>
-  box.items.map(({ key, url, title, why, priority, added, duplicate, brief }) => ({ key, url, title, why, priority, added, duplicate, brief }))
+  box.items.map(({ key, url, title, why, priority, added, read, duplicate, brief }) => ({ key, url, title, why, priority, added, read, duplicate, brief }))
 
 /** What already holds this link: the first item with it, else the latest processed item with it. */
 export function findIn(box: Inbox, key: string): { item: InboxItem } | { processed: ProcessedItem } | null {
@@ -239,7 +244,7 @@ export function addTo(box: Inbox, input: AddInput): { box: Inbox; item: InboxIte
   for (const t of title ? [title, ''] : ['']) { // a title the line cannot carry is left out
     const back = shown(readInbox(itemLine(got.url, t, why, priority, today)))
     const b = back[0]
-    if (back.length === 1 && b && b.key === got.key && b.title === t && b.why === why && b.priority === priority && b.added === today) {
+    if (back.length === 1 && b && b.key === got.key && b.title === t && b.why === why && b.priority === priority && b.added === today && !b.read) {
       line = itemLine(got.url, t, why, priority, today)
       break
     }

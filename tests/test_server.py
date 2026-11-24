@@ -565,7 +565,7 @@ class ServerTest(unittest.TestCase):
         status, got = self.add_inbox("  https://Example.org/blog/post/#top ", "for the related work")
         self.assertEqual(status, 200, got)
         item = {"key": "https://example.org/blog/post", "url": "https://Example.org/blog/post/#top", "title": "", "why": "for the related work",
-                "priority": "", "added": today, "duplicate": False, "brief": None}
+                "priority": "", "added": today, "read": "", "duplicate": False, "brief": None}
         self.assertEqual(got, {"name": "Inbox.md", "item": item, "items": [item]})
         self.assertEqual(p.read_bytes(), f"# Inbox\n\n- https://Example.org/blog/post/#top \u2014 for the related work \u00b7 added {today}\n".encode())
         self.assertEqual(json.loads(self.get("/api/inbox")[2])["items"], [item])

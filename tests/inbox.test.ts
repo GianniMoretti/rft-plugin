@@ -79,11 +79,25 @@ describe('inbox: the file', () => {
   test('an add changes one line of the fixture and nothing else', () => {
     const before = INBOX_MD.split('\n')
     const { box, item } = addTo(readInbox(INBOX_MD), { link: 'arXiv:2511.00042v2', why: 'from the talk', priority: 'high', today: '2026-11-23' })
-    expect(item).toEqual({ key: 'arxiv:2511.00042', url: 'https://arxiv.org/abs/2511.00042', title: '', why: 'from the talk', priority: 'high', added: '2026-11-23', duplicate: false, brief: null })
+    expect(item).toEqual({ key: 'arxiv:2511.00042', url: 'https://arxiv.org/abs/2511.00042', title: '', why: 'from the talk', priority: 'high', added: '2026-11-23', read: '', duplicate: false, brief: null })
     const at = before.indexOf('- see also the list in Scratchpad') + 1
     expect(inboxText(box).split('\n')).toEqual([...before.slice(0, at), '- https://arxiv.org/abs/2511.00042 — from the talk · high · added 2026-11-23', ...before.slice(at)])
     expect(shown(box)).toEqual([...EXPECTED.items, item])
     expect(box.processed).toEqual(EXPECTED.processed)
+  })
+
+  test('the read mark, case by case: `read <day>` is the user\'s mark only as a part of its own after the link', () => {
+    for (const [text, fields] of CASES.reads as [string, Record<string, string>][]) {
+      const items = shown(readInbox(`- ${text}`))
+      expect({ text, n: items.length }).toEqual({ text, n: 1 })
+      expect({ text, item: items[0] }).toEqual({ text, item: expect.objectContaining(fields) })
+    }
+    // the plugin never sets it: a why that would read as the mark is refused, as one that reads as a reading priority is
+    for (const c of CASES.unmarked as AddCase[]) expect(() => addTo(readInbox(c.text), c)).toThrow(InboxError)
+    // the items the server changes read the same here, the mark among them
+    for (const c of (CASES.changes as { text: string; want?: string; read?: string; key: string; error?: boolean }[]).filter(c => c.read !== undefined && c.want)) {
+      expect({ name: c.want, read: shown(readInbox(c.want!)).find(i => i.key === c.key)!.read }).toEqual({ name: c.want, read: c.read })
+    }
   })
 
   test('close, case by case, as the server closes: the item and its brief go, one line under Processed', () => {
@@ -164,7 +178,7 @@ describe('inbox: the file', () => {
   })
 
   test('the most pressing first, the newest first among equals (of one day, the one added later), those with no day last', () => {
-    const item = (key: string, priority: string, added: string) => ({ key, url: key, title: '', why: '', priority, added, duplicate: false, brief: null })
+    const item = (key: string, priority: string, added: string) => ({ key, url: key, title: '', why: '', priority, added, read: '', duplicate: false, brief: null })
     const items = [item('a', '', '2026-11-20'), item('b', 'low', ''), item('c', 'urgent', '2026-11-01'), item('d', 'high', '2026-11-02'), item('e', 'high', '2026-11-09'), item('f', '', ''), item('g', '', '2026-11-21'), item('h', 'high', '2026-11-09')]
     expect(byPriority(items).map(i => i.key).join('')).toBe('chedbgaf')
     expect(items.map(i => i.key).join('')).toBe('abcdefgh')

@@ -19,8 +19,8 @@ what was decided for it) changes single lines and leaves the rest as it was.
 
 An item is a top-level list line that starts with a link: a markdown link, a URL, an arXiv id or a
 DOI. After the link, parts set apart by `·`: why it was saved (after a dash), its reading priority
-as one word, `added <date>`. A brief is the indented list lines under it, the first starting
-`briefed <date>:`. Any other line (free text, a to-do, a heading of the user's own) is not an item.
+as one word, `added <date>`, and `read <date>` once the user marked it as read. A brief is the
+indented list lines under it, the first starting `briefed <date>:`. Any other line (free text, a to-do, a heading of the user's own) is not an item.
 
 hooks/lib/inbox.ts reads and writes the same file the same way, pattern for pattern, and
 tests/fixtures/inbox holds both to one file and one list of cases. So that the two cannot differ on
@@ -72,6 +72,8 @@ HEADING = rx(r"^#{1,2}[ \t]")
 SOURCE = rx(r"^##[ \t]+Source[ \t]*\Z")
 BRIEFED = rx(r"^briefed[ \t]+([0-9]{4}-[0-9]{2}-[0-9]{2})[ \t]*:?[ \t]*(.*)\Z", True)
 ADDED = rx(r"^added[ \t]+([0-9]{4}-[0-9]{2}-[0-9]{2})\Z", True)
+# the user's mark that they have read the item, and the day they set it (docs/adr/0004)
+READ = rx(r"^read[ \t]+([0-9]{4}-[0-9]{2}-[0-9]{2})\Z", True)
 DATED = rx(r"^([0-9]{4}-[0-9]{2}-[0-9]{2})[ \t]+(.*)\Z")
 DASH = rx(r"^(?:—|–|->|-{1,2}|→)[ \t]*")  # `->` before `-`, or its `>` is left behind
 ENDS = rx(r"[.,;]+\Z")  # what ends a sentence, not an address
@@ -123,20 +125,22 @@ def link_at(text: str) -> tuple[str, str, str, str] | None:
     return (*got, "", text[m.end():]) if got else None
 
 
-def tail_of(tail: str) -> tuple[str, str, str]:
-    """What follows an item's link: why it was saved, its reading priority, the day it was added.
-    A priority word counts only as a part of its own (or as all there is): inside a why it is the
-    why's."""
-    why, priority, added = [], "", ""
+def tail_of(tail: str) -> tuple[str, str, str, str]:
+    """What follows an item's link: why it was saved, its reading priority, the day it was added,
+    the day the user marked it as read. A priority word counts only as a part of its own (or as all
+    there is): inside a why it is the why's."""
+    why, priority, added, read = [], "", "", ""
     for part in (strip(p) for p in DASH.sub("", strip(tail), count=1).split("·")):
-        a = ADDED.match(part)
+        a, r = ADDED.match(part), READ.match(part)
         if a and not added:
             added = a.group(1)
+        elif r and not read:
+            read = r.group(1)
         elif part.lower() in PRIORITIES and not priority:
             priority = part.lower()
         elif part:
             why.append(part)
-    return " · ".join(why), priority, added
+    return " · ".join(why), priority, added, read
 
 
 def links_in(text: str) -> list[str]:
@@ -162,10 +166,15 @@ def source_of(note: str) -> str:
     return "\n".join(out)
 
 
+def tail_text(why: str = "", priority: str = "", added: str = "", read: str = "") -> str:
+    """What follows an item's link, as the plugin writes it."""
+    parts = (priority, f"added {added}" if added else "", f"read {read}" if read else "")
+    return (f" \u2014 {why}" if why else "") + "".join(f" \u00b7 {p}" for p in parts if p)
+
+
 def item_line(url: str, title: str = "", why: str = "", priority: str = "", added: str = "") -> str:
     """An item's line as the plugin writes it."""
-    link = f"[{title}]({url})" if title else url
-    return f"- {link}" + (f" — {why}" if why else "") + "".join(f" · {p}" for p in (priority, f"added {added}" if added else "") if p)
+    return f"- {f'[{title}]({url})' if title else url}{tail_text(why, priority, added)}"
 
 
 class Inbox:
@@ -209,14 +218,14 @@ class Inbox:
             if not got:
                 continue
             key, url, title, tail = got
-            why, priority, added = tail_of(tail)
+            why, priority, added, read = tail_of(tail)
             subs = []
             while i < len(self.lines) and SUB.match(self.lines[i]):
                 subs.append(strip(SUB.match(self.lines[i]).group(1)))
                 i += 1
             b = BRIEFED.match(subs[0]) if subs else None
             brief = {"date": b.group(1), "lines": [s for s in [strip(b.group(2)), *subs[1:]] if s]} if b else None
-            self.items.append({"key": key, "url": url, "title": title, "why": why, "priority": priority, "added": added,
+            self.items.append({"key": key, "url": url, "title": title, "why": why, "priority": priority, "added": added, "read": read,
                                "duplicate": key in seen, "brief": brief, "at": (i - len(subs) - 1, i)})
             seen.add(key)
 
@@ -251,7 +260,7 @@ class Inbox:
         title = one_line(title or own).replace("[", "(").replace("]", ")")
         if priority and priority not in PRIORITIES:
             raise InboxError(f"a reading priority is {', '.join(PRIORITIES[:-1])} or {PRIORITIES[-1]}")
-        want = {"key": key, "why": why, "priority": priority, "added": today}
+        want = {"key": key, "why": why, "priority": priority, "added": today, "read": ""}
         line = None
         for t in ([title, ""] if title else [""]):  # a title the line cannot carry is left out
             back = Inbox(item_line(url, t, why, priority, today)).shown()
@@ -297,25 +306,28 @@ class Inbox:
         start = m.start(1) + m.group(1).index(rest)
         return start, start + len(rest) - len(link_at(rest)[3])
 
-    def change(self, key: str, nth: int = 0, why: str | None = None, priority: str | None = None) -> dict | None:
-        """Sets why an item was saved, or its reading priority (None leaves one as it is, "" takes
-        it away): what follows the link on its line is written again, the link and what is before
-        it stay as typed, and so does the whole line when nothing changes. None when the inbox has
-        no such item. InboxError when the reading priority is not one, or the why would not read
-        back as a why."""
+    def change(self, key: str, nth: int = 0, why: str | None = None, priority: str | None = None, read: str | None = None) -> dict | None:
+        """Sets why an item was saved, its reading priority, or the user's mark that they have read
+        it (`read`: the day it is set) (None leaves one as it is, "" takes it away): what follows
+        the link on its line is written again, the link and what is before it stay as typed, and so
+        does the whole line when nothing changes. None when the inbox has no such item. InboxError
+        when the reading priority is not one, the day is not a day, or the why would not read back
+        as a why."""
         item = self.nth(key, nth)
         if not item:
             return None
         why = item["why"] if why is None else one_line(why)
         priority = item["priority"] if priority is None else one_line(priority).lower()
+        read = item["read"] if read is None else one_line(read)
         if priority and priority not in PRIORITIES:
             raise InboxError(f"a reading priority is {', '.join(PRIORITIES[:-1])} or {PRIORITIES[-1]}")
+        if read and not READ.match(f"read {read}"):
+            raise InboxError("the read mark carries the day it was set, as 2026-11-24")
         n = item["at"][0]
-        if (why, priority) != (item["why"], item["priority"]):
-            tail = (f" \u2014 {why}" if why else "") + "".join(f" \u00b7 {p}" for p in (priority, f"added {item['added']}" if item["added"] else "") if p)
-            new = self.lines[n][:self._link(n)[1]] + tail
+        if (why, priority, read) != (item["why"], item["priority"], item["read"]):
+            new = self.lines[n][:self._link(n)[1]] + tail_text(why, priority, item["added"], read)
             back = Inbox(new).shown()
-            want = {**{k: item[k] for k in ("key", "title", "added")}, "why": why, "priority": priority}
+            want = {**{k: item[k] for k in ("key", "title", "added")}, "why": why, "priority": priority, "read": read}
             if len(back) != 1 or any(back[0][k] != v for k, v in want.items()):
                 raise InboxError("the why would read as a reading priority or a date: say it in other words")
             self.lines[n] = new
@@ -383,7 +395,7 @@ class Inbox:
         start, end = self._link(n)
         new = f"{line[:start]}[{title}]({item['url']}){line[end:]}"
         back = Inbox(new).shown()
-        want = {**{k: item[k] for k in ("key", "why", "priority", "added")}, "title": title}
+        want = {**{k: item[k] for k in ("key", "why", "priority", "added", "read")}, "title": title}
         if len(back) != 1 or any(back[0][k] != v for k, v in want.items()):
             return None
         self.lines[n] = new

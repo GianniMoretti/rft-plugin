@@ -7,7 +7,7 @@ import { byPriority } from '../hooks/lib/inbox.ts'
 import { EXPECTED } from './fixtures/inbox.ts'
 import '../web/inbox.js'
 
-type Item = { key: string; url: string; title: string; why: string; priority: string; added: string; duplicate: boolean; brief: null | { date: string; lines: string[] } }
+type Item = { key: string; url: string; title: string; why: string; priority: string; added: string; read?: string; duplicate: boolean; brief: null | { date: string; lines: string[] } }
 type Row = { item: Item; at: number; nth: number }
 type Api = {
   count: (items: Item[] | null) => number
