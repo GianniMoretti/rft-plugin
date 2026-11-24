@@ -5,8 +5,7 @@ and what every reader of that document must yield (`expected.json`). The tests o
 (`.scratch/local-overleaf`, step 1) rest on it.
 
 Status: written by Claude on 2026-11-23 as a proposal, brought here on 2026-11-24 when the build
-started. The user has not yet read `expected.json` line by line. Until they have, a test that
-passes here shows that the code agrees with Claude's reading of the design, not with the user's.
+started. The user read `expected.json` on 2026-11-24 and confirmed it as it is.
 
 ## What is here
 
