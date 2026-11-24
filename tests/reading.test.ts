@@ -6,7 +6,8 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { IMPRESSION_CHARS, IMPRESSION_PARTS, ReadingError, fileName, findNote, impressionLines, linesOf, nameOf, newNote, noteText, quotesMissing, quotesOf, readNote, withImpression } from '../hooks/lib/reading'
 import type { Io } from '../hooks/lib/vault'
-import { CASES } from './fixtures/reading-note'
+import { today } from '../hooks/lib/ops'
+import { CASES, SCENARIOS } from './fixtures/reading-note'
 import { CWD, D01, demoFiles, note, world } from './fixture'
 
 type Item = { key: string; url: string; title: string }
@@ -236,4 +237,57 @@ describe('reading note: in a session', () => {
     expect(await tool($, { link: 'https://example.org/blog/post', outcome: 'reference', note: 'R02' })).toMatch(/^Closed: https:\/\/example\.org\/blog\/post → R02\..* Its reading note \(Reading notes\/example\.org-blog-post\.md\) is removed\.$/)
     expect(w.fs.exists(blog)).toBe(false)
   })
+})
+
+// Cases A, B and C of tests/fixtures/reading-note (scenarios.json; SCENARIOS.md says them in
+// words): every step of Claude's, run against the files the step before it left, answers what the
+// fixture says and leaves the files it says, and no other. The user's steps are run by
+// tests/test_server.py against the same file.
+describe('reading note: the three cases, step by step (Claude\'s side)', () => {
+  type Step = { who: string; does: string; after?: number; tool?: Record<string, unknown>; says?: string[]; never?: string[]; files?: Record<string, string | null> }
+  const scenarios = SCENARIOS as unknown as Record<string, { title: string; steps: Step[] }>
+
+  test('the fixture has the three cases, each with steps of both', () => {
+    expect(Object.keys(scenarios)).toEqual(['A', 'B', 'C'])
+    for (const s of Object.values(scenarios)) expect(new Set(s.steps.map(x => x.who))).toEqual(new Set(['given', 'user', 'claude']))
+  })
+
+  for (const [name, scenario] of Object.entries(scenarios)) {
+    test(scenario.title, async ($, on) => {
+      mock.clock(on)
+      on('prompt.compose', () => ({ sections: [] }))
+      const w = world(on, demoFiles())
+      await $.session.start({ cwd: CWD, source: 'startup' } as never)
+      const day = today()
+      const dated = (text: string) => text.split('{today}').join(day)
+      const known = [...new Set(scenario.steps.flatMap(s => Object.keys(s.files ?? {})))]
+      const states: Record<string, string>[] = [] // the files after each step
+      let ran = 0
+      for (const [n, step] of scenario.steps.entries()) {
+        const before = step.after !== undefined ? states[step.after]! : states[states.length - 1] ?? {}
+        const after = { ...before }
+        for (const [path, text] of Object.entries(step.files ?? {})) {
+          if (text === null) delete after[path]
+          else after[path] = dated(text)
+        }
+        states.push(after)
+        if (!step.tool) continue
+        // the vault as the step before left it
+        for (const path of known) {
+          if (!(path in before)) {
+            if (w.fs.exists(`vault/${path}`)) w.fs.remove(`vault/${path}`)
+          } else if (!w.fs.exists(`vault/${path}`) || w.fs.read(`vault/${path}`) !== before[path]) w.fs.write(`vault/${path}`, before[path]!)
+        }
+        const said = String((await $.tool.call({ tool: 'mcp__rft__rft_inbox', ...step.tool } as never)).text)
+        const at = `${name}${n}`
+        for (const s of step.says ?? []) expect({ at, said }).toEqual({ at, said: expect.stringContaining(dated(s)) })
+        for (const s of step.never ?? []) expect({ at, never: s, found: said.includes(s) }).toEqual({ at, never: s, found: false })
+        const now = Object.fromEntries(known.filter(path => w.fs.exists(`vault/${path}`)).map(path => [path, w.fs.read(`vault/${path}`)]))
+        expect({ at, files: now }).toEqual({ at, files: after })
+        ran++
+      }
+      expect(ran).toBe(scenario.steps.filter(s => s.tool).length)
+      expect(ran).toBeGreaterThanOrEqual(2)
+    })
+  }
 })

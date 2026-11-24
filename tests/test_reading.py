@@ -32,6 +32,8 @@ class ReadingNoteFileTest(unittest.TestCase):
     def test_the_plugin_tests_read_the_same_fixture(self):
         self.assertEqual(to_ts.OUT.read_text(encoding="utf-8"), to_ts.module(),
                          "tests/fixtures/reading-note.ts is behind the fixture: python3 tests/fixtures/reading-note/to_ts.py")
+        self.assertEqual(to_ts.PAGE.read_text(encoding="utf-8"), to_ts.page(),
+                         "tests/fixtures/reading-note/SCENARIOS.md is behind the fixture: python3 tests/fixtures/reading-note/to_ts.py")
 
     def test_a_file_name_and_a_heading_from_a_key(self):
         for key, title, name, second, head in self.cases["names"]:

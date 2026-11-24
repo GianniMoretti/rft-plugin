@@ -318,7 +318,7 @@ export async function closeWithNote(io: Io, loaded: Loaded, input: CloseInput & 
     const missing = id ? quotesMissing(mine, loaded.texts[id] ?? '') : []
     if (id && missing.length) {
       const n = quotesOf(mine).length
-      throw new ReadingError(`Not closed: ${missing.length} of the user's ${n} ${n === 1 ? 'quote is' : 'quotes are'} not in ${id} word for word, as quote lines (>). The first missing:\n${missing[0]!.map(l => `> ${l}`).join('\n')}\n`
+      throw new ReadingError(`Not closed: ${missing.length} of the user's ${n} ${n === 1 ? 'quote' : 'quotes'} ${missing.length === 1 ? 'is' : 'are'} not in ${id} word for word, as quote lines (>). The first missing:\n${missing[0]!.map(l => `> ${l}`).join('\n')}\n`
         + `Put ${missing.length === 1 ? 'it' : 'them'} in ${id} as the user wrote ${missing.length === 1 ? 'it' : 'them'}, then close the item.`)
     }
     if (id && quotesOf(mine).length) carried = id

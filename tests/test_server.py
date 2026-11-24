@@ -1012,6 +1012,50 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(list(folder.iterdir()), [])
         self.assertEqual(p.read_text().count(f"- {today} "), 3)
 
+    def test_reading_note_cases_step_by_step_the_users_side(self):
+        """Cases A, B and C of tests/fixtures/reading-note (scenarios.json; SCENARIOS.md says them in
+        words): every step of the user's, run against the files the step before it left, answers
+        what the fixture says and leaves the files it says, and no other. Claude's steps are run by
+        tests/reading.test.ts against the same file."""
+        today = time.strftime("%Y-%m-%d")
+        scenarios = json.loads((Path(__file__).resolve().parent / "fixtures" / "reading-note" / "scenarios.json").read_text(encoding="utf-8"))
+        self.assertEqual(list(scenarios), ["A", "B", "C"])
+        ran = 0
+        for name, scenario in scenarios.items():
+            states: list[dict] = []  # the files after each step
+            for n, step in enumerate(scenario["steps"]):
+                before = dict(states[step["after"]] if "after" in step else states[-1] if states else {})
+                after = {**before, **{path: None if text is None else text.replace("{today}", today) for path, text in (step.get("files") or {}).items()}}
+                after = {path: text for path, text in after.items() if text is not None}
+                states.append(after)
+                if "page" not in step:
+                    continue
+                # the page's files alone: the notes of the tree are Claude's to write
+                def vault_of(files):
+                    return {path: text for path, text in files.items() if path == "Inbox.md" or path.startswith("Reading notes/")}
+                p, folder = self.fresh_reading(before["Inbox.md"], {path[len("Reading notes/"):]: text for path, text in vault_of(before).items() if path != "Inbox.md"})
+                if step.get("chat") is False:
+                    relay = rft_server.Relay()
+                    self.session(lambda request, relay=relay: relay.ask("RFT_DISCUSS", request))
+                else:
+                    self.session(lambda request: None)
+                call = step["page"]
+                body = dict(call["body"])
+                if body.get("version") == "@read":  # the version the page read when it opened the note
+                    body["version"] = self.reading(body["key"])[1]["version"]
+                status, got = self.write(call["method"], call["path"], body)
+                self.assertEqual(status, step["status"], f"{name}{n}: {got}")
+                for k, v in (step.get("answer") or {}).items():
+                    self.assertEqual(got[k], v, f"{name}{n}: {k}")
+                if "chat" in step:
+                    self.assertEqual(self.asked, [("RFT_DISCUSS", {"key": body["key"], "nth": 0})], f"{name}{n}")
+                now = {"Inbox.md": p.read_text(encoding="utf-8")}
+                if folder.exists():
+                    now.update({f"Reading notes/{f.name}": f.read_text(encoding="utf-8") for f in folder.iterdir()})
+                self.assertEqual(now, vault_of(after), f"{name}{n}")
+                ran += 1
+        self.assertEqual(ran, 7)
+
     # ------------------------------------------------------------ comments, suggestions, lock
 
     def comment(self, nid, payload, **kw):
