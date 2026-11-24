@@ -1,0 +1,20 @@
+% A small document that needs XeLaTeX (fontspec) and biber (biblatex): what a template with its
+% own fonts and a modern bibliography asks of the engine setting. pdfLaTeX stops at fontspec.
+\documentclass[11pt]{article}
+\usepackage{fontspec}
+\setmainfont{TeX Gyre Pagella}
+\usepackage[backend=biber,style=authoryear]{biblatex}
+\addbibresource{refs.bib}
+
+\title{Søren's note on mixing, in XeLaTeX}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+Mixing two images and their labels regularises a classifier \parencite{zhang2018mixup}; cutting
+and pasting patches does so too \parencite{yun2019cutmix}. Naïve façades aside.
+
+\printbibliography
+\end{document}
