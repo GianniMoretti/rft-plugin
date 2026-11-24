@@ -6,6 +6,7 @@ bibtex or biber; a bibliography per chapter). The vault is the clean-source fixt
 (tests/fixtures/local-overleaf); the kits are the ones tests/fetch_kits.py fetched.
 """
 import hashlib
+import http.client
 import io
 import json
 import os
@@ -81,7 +82,21 @@ class Server(unittest.TestCase):
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
 
-    get = test_server.ServerTest.get
+    def get(self, path, host=None, method="GET", headers=(), data=None, port=None):
+        """A request as test_server.ServerTest.get sends one, with the time a compile, a push or a clone may take on a busy machine."""
+        c = http.client.HTTPConnection("127.0.0.1", port or self.port, timeout=240)
+        c.putrequest(method, path, skip_host=True)
+        c.putheader("Host", host or f"127.0.0.1:{port or self.port}")
+        for k, v in headers:
+            c.putheader(k, v)
+        if data is not None:
+            c.putheader("Content-Length", str(len(data)))
+        c.endheaders(data)
+        r = c.getresponse()
+        body = r.read()
+        c.close()
+        return r.status, r.getheader("Content-Type") or "", body
+
     write = test_server.ServerTest.write
 
     def ms(self, name: str = "paper") -> dict:
