@@ -119,8 +119,10 @@
     ].join('\n')
   }
 
-  /** A table float around a tabular its notebook typeset itself (LATEX, on the table as data-latex): caption and label, its lines as they are. */
+  /** A table float around a tabular its notebook typeset itself (LATEX, on the table as data-latex): caption and label, its lines as they are.
+   *  LaTeX that is a float already (its own caption, label, width) is copied as it is. */
   function floatAround(caption, tabular) {
+    if (/\\begin\{table\*?\}/.test(String(tabular))) return String(tabular).replace(/\r\n?/g, '\n').replace(/^\n+|\s+$/g, '')
     const cap = String(caption || '').replace(/\s+/g, ' ').trim() || 'Table'
     return ['\\begin{table}[t]', '\\centering', `\\caption{${escape(cap)}}`, `\\label{${label(cap)}}`,
       String(tabular).replace(/\r\n?/g, '\n').replace(/^\n+|\s+$/g, ''), '\\end{table}'].join('\n')

@@ -105,4 +105,9 @@ describe('artifact tables as LaTeX', () => {
       '\\end{table}',
     ].join('\n'))
   })
+
+  test('LaTeX that is a float already is copied as it is', () => {
+    const float = '% needs graphicx\n\\providecolor{better1}{HTML}{DDEBF2}\n\\begin{table*}[t]\n\\centering\n\\caption{Its own}\n\\resizebox{\\linewidth}{!}{%\n\\begin{tabular}{lc}\nA & \\cellcolor{better1}+2.1 \\\\\n\\end{tabular}}\n\\end{table*}'
+    expect(X.floatAround('Scores', '\n' + float + '\n')).toBe(float)
+  })
 })

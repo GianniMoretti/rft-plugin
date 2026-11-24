@@ -103,6 +103,17 @@ class ApplyTest(unittest.TestCase):
         # and as the manuscript's \\rfttable, in place of the plain tabular
         self.assertEqual((self.vault / "tables" / "E02_gap_by_size.tex").read_text(), tex)
 
+    def test_a_whole_float_is_kept_for_the_button_and_its_tabular_for_the_manuscript(self):
+        self.write("")
+        head = "% needs graphicx\n\\providecolor{better1}{HTML}{DDEBF2}\n"
+        tabular = "\\begin{tabular}{lc}\nA & \\cellcolor{better1}+2.1 \\\\\n\\end{tabular}"
+        tex = head + "\\begin{table*}[t]\n\\caption{Its own}\n\\resizebox{\\linewidth}{!}{%\n" + tabular + "}\n\\end{table*}\n"
+        rft_results.apply(self.vault, "E02", outcome(latex={"Gap by size": tex}), "2026-11-16")
+        import html as _html
+        table = (self.vault / "tables" / "E02_gap_by_size.html").read_text()
+        self.assertEqual(_html.unescape(table[len('<table data-latex="'):table.index('">\n<caption>')]), tex.strip())
+        self.assertEqual((self.vault / "tables" / "E02_gap_by_size.tex").read_text(), head + tabular + "\n")
+
     def test_an_empty_result_gets_the_table_and_the_run_is_saved_and_stamped(self):
         self.write("")
         got = rft_results.apply(self.vault, "E02", outcome(), "2026-11-16")

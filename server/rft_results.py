@@ -351,6 +351,18 @@ def table_tex(t: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def tabular_of(latex: str) -> str:
+    """What \\rfttable inputs of a table's own LaTeX: the LaTeX as it is, or, when it is a whole float (the snippet
+    gives the float, caption and label), the lines above the float (the packages and colours it needs) and its tabular."""
+    text = latex.strip()
+    m = re.search(r"\\begin\{table\*?\}", text)
+    a, b = text.find("\\begin{tabular"), text.rfind("\\end{tabular")
+    if not m or a < m.start() or b < a:
+        return text + "\n"
+    end = text.index("}", b) + 1
+    return text[:m.start()] + text[a:end] + "\n"
+
+
 def table_html(caption: str, t: dict, latex: str | None = None) -> str:
     """A table of the notebook (columns and rows) as the HTML an artifact takes in; numbers right-aligned by the page's style.
     `latex`, the tabular the notebook typeset for it (its LATEX), rides on the table as data-latex: the view's
@@ -430,7 +442,7 @@ def save(vault: Path, exp: str, outcome: dict, date: str, runs: list[dict]) -> t
         contents[key] = {"caption": str(name), "columns": t["columns"][:12], "rows": [r[:12] for r in (t.get("rows") or [])[:20]],
                          "more_rows": max(0, len(t.get("rows") or []) - 20)}
         write_atomic(vault / TABLES_DIR / f"{key}.html", tables[key] + "\n")
-        write_atomic(vault / TABLES_DIR / f"{key}.tex", own.strip() + "\n" if own else table_tex(t))
+        write_atomic(vault / TABLES_DIR / f"{key}.tex", tabular_of(own) if own else table_tex(t))
     notes.extend(f"{n}" for n in outcome.get("notes") or [])
     record = {"exp": exp, "concepts": concept_chain(vault, exp), "date": date, "results": outcome.get("results"), "commit": outcome.get("commit"),
               "dirty": outcome.get("dirty"), "notebook": outcome.get("file"),
