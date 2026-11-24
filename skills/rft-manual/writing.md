@@ -31,34 +31,28 @@ this applies.
   `% rft-snippet S04 · result · CutMix at 1k images` and `% basis: E05, E02`. Kinds: definition,
   theorem, lemma, proposition, corollary, proof, method, result, related-work, motivation,
   discussion, figure, table.
-- **Documents** (`<vault>/documents/<name>/`, a folder: `main.tex`, the `.tex` files it takes in,
-  its `.bib`, its figures) are built with them. A document's files are **plain LaTeX that names
-  nothing of the tree**, because the user shares the folder with co-authors as it is: no macro or
-  package of the plugin, no note's or snippet's id. A snippet enters a document as a copy
+- **Documents** (`<vault>/documents/<name>/`: `main.tex`, the `.tex` files it takes in, its `.bib`,
+  its figures) are built with them. Their files are **plain LaTeX that names nothing of the
+  tree**: the user shares the folder with co-authors as it is. A snippet enters one as a copy
   **written out**, between two marker lines that say only its kind and title
-  (`%%% Result: CutMix at 1k images %%%` … `%%% end %%%`), which the user may adapt to the
-  narrative; a document has text of its own too. What ties a copy to its snippet is kept by the
-  plugin outside the document's folder. A snippet may have several copies in a document: the
-  second is `S04#2`.
-- **A copy's state**: when its snippet changes, the copy goes to review (the user takes the new
-  text or keeps theirs); one that differs from its snippet as placed is "adapted"; one the plugin
-  can no longer find (its marker lines and its text changed elsewhere) is "lost", for the user to
-  point to again or drop. Never rewrite a copy to follow its snippet yourself, and leave marker
-  lines where they are.
+  (`%%% Result: CutMix at 1k images %%%` … `%%% end %%%`); the user may adapt it, and a document
+  has text of its own. A snippet may have several copies in a document: the second is `S04#2`.
+- **A copy's state**: in review when its snippet changes (the user takes the new text or keeps
+  theirs); "adapted" when it differs from its snippet as placed; "lost" when the plugin cannot
+  find it (the user points to it again or drops it). Never rewrite a copy to follow its snippet
+  yourself, and leave marker lines where they are.
 - **A snippet rests on notes**: its `% basis:` line, and the notes its macros and citations name.
   In a snippet, never type a number, figure or table of the tree: `\rftnum{E05}{acc.1k}` gives a
   number of `results/E05.json` (the notebook's RESULTS, by path), `\rftfig[width=…]{E08}{loss}` its
   figure, `\rfttable{E08}{by_seed}` its table (the snippet gives the `table`, caption and label).
   `\cite{R07}` cites a reference note; a paper of a literature note is cited by its own key, from
   the ```` ```bibtex ```` block of its entry. When you fill a reference's Source, add its BibTeX in
-  such a block. Label a snippet with its own id (`\label{S04}`) and refer to another's with
-  `\ref{S02}`.
-- **The macros are a snippet's alone.** Placing a snippet writes them out: the number itself, an
-  `\includegraphics` of the figure copied into the document, the tabular, the entry's own key with
-  the entry added to the document's `.bib`, a label made from the kind and the title. A snippet
-  whose macro names nothing saved, or whose words or title carry an id, is refused: say it in the
-  snippet without the id. Each value written out is watched: when the tree changes it,
-  `rft_manuscript <document>` and `rft_next` say so, and the user takes the new one or keeps theirs.
+  such a block. A snippet's label is its id (`\label{S04}`, `\ref{S02}`).
+- **Placing writes the macros out**: the number, an `\includegraphics` of the figure copied into
+  the document, the tabular, the entry's key with the entry added to the document's `.bib`, a
+  label from the kind and the title. A snippet whose macro names nothing saved, or whose words or
+  title carry an id, is refused. Each written value is watched: when the tree changes it,
+  `rft_manuscript <document>` and `rft_next` say so, for the user to answer.
 - **Locked by default**, both levels: the user writes. You:
   - propose snippets only from verified notes, and where to place them. When `rft_manuscript` or
     `rft_next` lists verified notes no snippet rests on, offer two tables, snippets (kind, title,
@@ -74,9 +68,8 @@ this applies.
 - **Unlocked** (by the user's padlocks: all snippets or one, all documents or one): write a snippet
   with `rft_set_snippet {id, text}` or `{id, edits}` (its basis checked, it is stamped; its copies go
   to review), and edit an unlocked document's own text with Edit, keeping its copies' marker lines.
-  In a document, write plain LaTeX only: an edit that would write `\rftnum`, another name of the
-  plugin, or the id of a note or a snippet is refused. A number of the tree goes in through a
-  snippet, placed.
+  In a document, plain LaTeX only: an edit that would write a macro or a name of the plugin, or a
+  note's or snippet's id, is refused.
 - **Review**: a snippet whose basis note changed since its stamp, went to review, was superseded or
   dropped is in review (`rft_manuscript` says why): point it out and suggest how its text should
   follow; the user marks it **Reviewed**. A copy whose snippet changed is the user's to answer.
@@ -85,10 +78,9 @@ this applies.
   compiles a document (from its folder alone) or a snippet alone (with its macros) when the user
   asks; `rft_validate` names a basis that is no note, a macro that names nothing saved, an unknown
   citation, a cited reference with no BibTeX, and per document its copies of no snippet, its lost
-  copies, its values the tree changed and the traces of the tree in its files.
-- A document written before documents were plain LaTeX (copies between `% rft-begin` and
-  `% rft-end` lines, macros in its text) is converted the first time you read or change it; say
-  so to the user when `rft_manuscript` reports it.
+  copies, its changed values and the traces of the tree in its files.
+- A document of the first design (`% rft-begin` lines, macros in its text) is converted the first
+  time you read or change it: tell the user when `rft_manuscript` reports it.
 
 ## Slides
 
