@@ -24,8 +24,9 @@ const RULE: Record<Feature, number> = {
 /** The most characters of the core tools' schemas, and of those each feature brings. */
 const EAGER_CORE = 9400
 const EAGER: Record<Feature, number> = {
-  dates: 0, priorities: 0, verify: 0, locks: 1050, comments: 2600, artifacts: 2550, notebooks: 3950, queue: 3100, manuscript: 2950, handoff: 1100,
+  dates: 0, priorities: 0, verify: 0, locks: 1050, comments: 2600, artifacts: 2550, notebooks: 3950, queue: 3100, manuscript: 3080, handoff: 1100,
 }
+// manuscript: raised from 2950 on 2026-11-24 for rft_set_document's `template` (a document made from a template: nothing else says it)
 /** The most characters of one tool, name, description and schema. */
 const ONE_TOOL = 3700
 

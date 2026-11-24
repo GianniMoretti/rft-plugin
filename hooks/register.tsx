@@ -296,7 +296,7 @@ async function registerCommands($: EngineInterface): Promise<void> {
   await attempt('rft-machine', () => $.command.register({ name: 'rft-machine', description: 'Pair this machine with the experiment queue (add: checked at no model turn, then Claude asks you where outputs go and which GPUs to keep, and turns the queue on), or show how it stands', argumentHint: '[add|status]' }))
   await attempt('rft-jobs', () => $.command.register({ name: 'rft-jobs', description: 'The experiment queue: GPUs, jobs running and waiting, the ones that ended (no model turn)', argumentHint: '[job or experiment]' }))
   await attempt('rft-summarize', () => $.command.register({ name: 'rft-summarize', description: 'Ask Claude to write the missing one-line note summaries and concept digests (the project map)', argumentHint: '[concept]' }))
-  await attempt('rft-manuscript', () => $.command.register({ name: 'rft-manuscript', description: 'Start snippets (LaTeX building blocks resting on verified notes) and documents (built from copies of them), add a document, or ask Claude what to write next and where to place it', argumentHint: '[document] | new <name> [article|report]' }))
+  await attempt('rft-manuscript', () => $.command.register({ name: 'rft-manuscript', description: 'Start snippets (LaTeX building blocks resting on verified notes) and documents (built from copies of them), add a document, or ask Claude what to write next and where to place it', argumentHint: '[document] | new <name> [template]' }))
   await attempt('rft-artifact', () => $.command.register({ name: 'rft-artifact', description: "Ask Claude to write a concept's artifact, the page of its experiments' results (no concept: every one missing or out of date)", argumentHint: '[concept]' }))
   await attempt('rft-update', () => $.command.register({ name: 'rft-update', description: 'Bring a vault made by an older version up to this one: shows what it adds; apply writes it. notebooks: run every notebook again in the queue and list what is still to write (--write: ask Claude to write it)', argumentHint: '[apply] [--sections] | notebooks [--write] [concept]' }))
   await attempt('rft-view', () => $.command.register({ name: 'rft-view', description: 'Write a standalone HTML view of the tree to <vault>/tree.html' }))
@@ -529,7 +529,7 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       if (typeof i.name === 'string' && i.action !== 'document') await convertDocuments(io, loaded, i.name)
       // the Manuscript tab's + Snippet, Reviewed and + Document (never a tool of the model's: only FROM_VIEW reaches it)
       if (i.action === 'reviewed') return markReviewed(io, loaded, String(i.id ?? ''), today())
-      if (i.action === 'document') return newDocument(io, loaded, String(i.name ?? ''), i.kind === 'report' ? 'report' : 'article', str(i.title))
+      if (i.action === 'document') return newDocument(io, loaded, String(i.name ?? ''), str(i.template) ?? (i.kind === 'report' ? 'report' : 'article'), str(i.title))
       if (i.action === 'place' || i.action === 'move' || i.action === 'remove') {
         return setDocument(io, loaded, { name: String(i.name ?? ''), [i.action]: String(i.id ?? ''), file: str(i.file), after: str(i.after) })
       }
@@ -664,7 +664,7 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       }, today())
     case 'rft_set_document':
       await convertDocuments(io, loaded, str(i.name))
-      return setDocument(io, loaded, { name: str(i.name), place: str(i.place), file: str(i.file), move: str(i.move), remove: str(i.remove), after: str(i.after) })
+      return setDocument(io, loaded, { name: str(i.name), place: str(i.place), file: str(i.file), move: str(i.move), remove: str(i.remove), after: str(i.after), template: str(i.template) })
     case 'rft_tree':
       return treeReport(loaded, { root: str(i.root), depth: typeof i.depth === 'number' ? i.depth : undefined, vault: shownVault(h, loaded.config) })
     case 'rft_validate': {
@@ -798,7 +798,7 @@ const FROM_VIEW = [
   { line: 'RFT_SET_TYPE ', tool: 'rft_set_type', fields: ['id', 'type'], what: "change a note's type" },
   { line: 'RFT_MOVE_NODE ', tool: 'rft_move_node', fields: ['id', 'parent'], what: 'move a note' },
   { line: 'RFT_VERIFY ', tool: 'rft_verify', fields: ['id', 'action'], what: 'verify a note' },
-  { line: 'RFT_MANUSCRIPT ', tool: 'rft_manuscript_view', fields: ['action', 'id', 'kind', 'title', 'basis', 'name', 'after', 'file', 'index', 'match', 'text', 'environment', 'from', 'to'], what: 'change the snippets or documents' },
+  { line: 'RFT_MANUSCRIPT ', tool: 'rft_manuscript_view', fields: ['action', 'id', 'kind', 'title', 'basis', 'name', 'after', 'file', 'index', 'match', 'text', 'environment', 'from', 'to', 'template', 'bib'], what: 'change the snippets or documents' },
 ] as const
 
 /**
@@ -1574,9 +1574,9 @@ export const register: Register = (on, options) => {
       if (converted.length) { await refresh($, true); return { text: converted.join('\n') } }
       const ms = await readManuscript(io, loaded)
       if (args[0] === 'new' || !ms) {
-        const [name = 'paper', kind = 'article'] = args[0] === 'new' ? args.slice(1) : args
-        if (kind !== 'article' && kind !== 'report') return { text: 'A document is an article (a paper) or a report (a thesis chapter): /rft-manuscript new <name> [article|report].' }
-        const made = await newDocument(io, loaded, name, kind)
+        // a template: article (a paper) or report (a thesis chapter), built in, or a folder of the vault's templates/
+        const [name = 'paper', template = 'article'] = args[0] === 'new' ? args.slice(1) : args
+        const made = await newDocument(io, loaded, name, template)
         await refresh($, true)
         return { text: `${made} The tree view's Manuscript tab shows both levels; /rft-manuscript asks Claude what to write from the verified notes, and where to place it.` }
       }

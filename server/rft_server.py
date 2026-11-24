@@ -2062,6 +2062,7 @@ class Vault:
             if pdf.is_file():
                 d["built"] = int(pdf.stat().st_mtime)
         out["latexmk"] = bool(shutil.which("latexmk"))
+        out["templates"] = rft_documents.templates(self.root)
         return out
 
     def manuscript_path(self, rel: str) -> Path | None:
@@ -2162,6 +2163,12 @@ class Vault:
             status, out = rft_documents.upload(self.root, doc, path, data, self.vault_ids(), replace)
         return status, ({**out, **self.manuscript()} if status < 300 else out)
 
+    def load_template(self, name: str, data: bytes) -> tuple[int, dict]:
+        """A template loaded from a zip into the vault's templates/ (rft_documents.load_template)."""
+        with self._write_lock:
+            status, out = rft_documents.load_template(self.root, name, data)
+        return status, ({**out, **self.manuscript()} if status < 300 else out)
+
     def document_settings(self, req: dict) -> tuple[int, dict]:
         """A document's main file ({doc, main}) or its engine ({doc, engine}), kept in its tracking file."""
         doc = req.get("doc")
@@ -2226,10 +2233,14 @@ class Vault:
             reg, was = sdir / "snippets.json", stamp(sdir / "snippets.json")
             found = lambda: sid if stamp(reg) != was else None  # noqa: E731
         elif action == "document":
-            name, kind, title = req.get("name"), req.get("kind", "article"), req.get("title", "")
-            if not isinstance(name, str) or not rft_manuscript.DOC_RE.match(name) or kind not in ("article", "report") \
+            # `template`: a built-in one or a folder of the vault's templates/ (`kind`, article or report, is what an older page sends)
+            name, template, title = req.get("name"), req.get("template", req.get("kind", "article")), req.get("title", "")
+            if not isinstance(name, str) or not rft_manuscript.DOC_RE.match(name) or not isinstance(template, str) \
                     or not isinstance(title, str) or len(title) > 200 or "\n" in title:
-                return 400, {"error": "expected {action: document, name: lowercase letters, digits and dashes, kind: article or report, title?: one line}"}
+                return 400, {"error": "expected {action: document, name: lowercase letters, digits and dashes, template: one of the templates, title?: one line}"}
+            if template not in [x["name"] for x in rft_documents.templates(self.root)]:
+                return 404, {"error": f"no template {template}"}
+            req = {**{k: v for k, v in req.items() if k != "kind"}, "template": template}
             if (ddir / name).exists():
                 return 409, {"error": f"there is already a document {name}"}
             found = lambda: name if rft_manuscript.is_document(self.root, name) else None  # noqa: E731
@@ -2277,7 +2288,7 @@ class Vault:
             return 400, {"error": "action must be new, reviewed, document, place, move, remove, take, keep, take-value, keep-value, point, markers, allow, declare, convert or insert"}
         with self._ask_lock:
             try:
-                ask("RFT_MANUSCRIPT", {k: v for k, v in req.items() if k in ("action", "id", "kind", "title", "basis", "name", "after", "file", "index", "match", "text", "environment", "from", "to")})
+                ask("RFT_MANUSCRIPT", {k: v for k, v in req.items() if k in ("action", "id", "kind", "title", "basis", "name", "after", "file", "index", "match", "text", "environment", "from", "to", "template", "bib")})
             except (OSError, ValueError) as err:
                 return 503, {"error": gone(err)}
             deadline = time.monotonic() + NODE_WAIT_S
@@ -2979,6 +2990,13 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 url, data = got
                 q = parse_qs(url.query)
                 return self._json(*vault.document_upload((q.get("doc") or [""])[0], (q.get("path") or [""])[0], data, (q.get("replace") or [""])[0] == "1"))
+            if urlsplit(self.path).path == "/api/manuscript/template":
+                # PUT api/manuscript/template?name=<name>, the body a zip of the template's files
+                got = self._bytes_request("/api/manuscript/template", rft_documents.MAX_TEMPLATE)
+                if got is None:
+                    return
+                url, data = got
+                return self._json(*vault.load_template((parse_qs(url.query).get("name") or [""])[0], data))
             if urlsplit(self.path).path == "/api/manuscript/file":
                 got = self._write_request("/api/manuscript/file", MAX_NOTE_BYTES)
                 if got is None:

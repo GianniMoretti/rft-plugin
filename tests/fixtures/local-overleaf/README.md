@@ -43,3 +43,12 @@ started. The user read `expected.json` on 2026-11-24 and confirmed it as it is.
 - A tracked value is found by the text before and after it (`before`, `after`), not by one string.
 - Citations are tracked per `.bib` entry (`bib`), not per occurrence.
 - Each copy records its marker's words, so a copy whose snippet is gone or was retitled is still found.
+
+## Beside the project (step 2: folders and templates)
+
+- `xelatex-biber/`: a small document that needs XeLaTeX and biber, for the engine setting.
+- `built-in/article/`, `built-in/report/`: what a new document made from each built-in template
+  holds, with the title "Small data & more". The plugin's tests hold `newDocument` to these files
+  (through `to_ts.py`), and the server's tests compile them and scan them.
+- The two real kits (ICML 2027, the AAU thesis) are not here: `tests/fetch_kits.py` fetches them
+  into a cache.

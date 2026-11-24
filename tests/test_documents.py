@@ -6,6 +6,7 @@ bibtex or biber; a bibliography per chapter). The vault is the clean-source fixt
 (tests/fixtures/local-overleaf); the kits are the ones tests/fetch_kits.py fetched.
 """
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -14,6 +15,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import zipfile
 import zlib
 from pathlib import Path
 from urllib.parse import quote
@@ -70,7 +72,9 @@ class Documents(unittest.TestCase):
         self.vault = Path(self.tmp.name) / "vault"
         shutil.copytree(FIXTURE / "project" / "vault", self.vault)
         self.doc = self.vault / "documents" / "paper"
-        handler = rft_server.make_handler(rft_server.Vault(self.vault, "demo"), WEB, KEY, lambda verb, request: None)
+        self.asked = []
+        self.answer = None  # what the session does when asked, when a test plays it
+        handler = rft_server.make_handler(rft_server.Vault(self.vault, "demo"), WEB, KEY, lambda verb, request: (self.asked.append((verb, request)), self.answer and self.answer(request)))
         self.server = rft_server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -378,6 +382,144 @@ class Documents(unittest.TestCase):
             status, r = self.write("POST", "/api/manuscript/compile", {"doc": "nested"})
             self.assertEqual((r["ok"], r["errors"]), (True, []))
             self.assertEqual(self.get("/api/manuscript/pdf?doc=nested", headers=[("X-RFT-Token", KEY)])[0], 200)
+
+    # ------------------------------------------------------------ templates (tickets 17 and 18)
+
+    def templates(self) -> list[dict]:
+        return json.loads(self.get("/api/manuscript")[2])["templates"]
+
+    def load(self, name: str, data: bytes, **kw):
+        return self.write("PUT", f"/api/manuscript/template?name={quote(name)}", data, ctype="application/zip", **kw)
+
+    def template_files(self, name: str) -> dict[str, bytes]:
+        folder = self.vault / "templates" / name
+        return {p.relative_to(folder).as_posix(): p.read_bytes() for p in sorted(folder.rglob("*")) if p.is_file()}
+
+    @staticmethod
+    def zipped(files: dict[str, bytes], links: dict[str, str] | None = None) -> bytes:
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for name, data in files.items():
+                z.writestr(name, data)
+            for name, target in (links or {}).items():
+                info = zipfile.ZipInfo(name)
+                info.external_attr = (0o120777 << 16)  # a symbolic link, as zip -y stores one
+                z.writestr(info, target)
+        return buf.getvalue()
+
+    def test_the_templates_there_are_built_in_and_in_the_vault(self):
+        self.assertEqual(self.templates(), [{"name": "article", "builtIn": True}, {"name": "report", "builtIn": True}])
+        kit = self.vault / "templates" / "thesis-xe"
+        (kit / "chapters").mkdir(parents=True)
+        (kit / "thesis.tex").write_text("\\documentclass{book}\n\\begin{document}\n\\end{document}\n")
+        (kit / "chapters" / "one.tex").write_text("One.\n")
+        (kit / "template.json").write_text('{"engine": "xelatex"}')
+        # the notes' own templates are files of the same folder; a folder named as a built-in one does not hide it
+        (self.vault / "templates" / "_experiment.md").write_text("# a note's template\n")
+        (self.vault / "templates" / "article").mkdir()
+        (self.vault / "templates" / ".hidden").mkdir()
+        self.assertEqual(self.templates(), [{"name": "article", "builtIn": True}, {"name": "report", "builtIn": True}, {"name": "thesis-xe", "builtIn": False, "files": 2, "engine": "xelatex"}])
+
+    @unittest.skipUnless(LATEXMK, "latexmk is not installed")
+    def test_a_document_from_each_built_in_template_compiles_and_the_scan_finds_nothing(self):
+        # what the session writes for a new document (tests/manuscript.test.ts holds newDocument to these files)
+        for name in ("article", "report"):
+            with self.subTest(name):
+                folder = FIXTURE / "built-in" / name
+                empty_document(self.vault, f"new-{name}", {p.name: p.read_text() for p in folder.iterdir()}, {"main": "main.tex", "template": name})
+                d = self.ms(f"new-{name}")
+                self.assertEqual((d["template"], d["main"], d["traces"], d["copies"]), (name, "main.tex", [], []))
+                status, r = self.write("POST", "/api/manuscript/compile", {"doc": f"new-{name}"})
+                self.assertEqual((status, r["ok"], r["errors"]), (200, True, []))
+        # a document made before templates reads as made from the built-in one of its class
+        self.assertEqual(self.ms("paper")["template"], "article")
+
+    def test_a_new_document_is_asked_of_the_session_with_its_template(self):
+        (self.vault / "templates" / "icml2027").mkdir(parents=True)
+        (self.vault / "templates" / "icml2027" / "example_paper.tex").write_text("\\begin{document}\n\\end{document}\n")
+
+        def answer(request):  # the session, as hooks/lib/manuscript.ts newDocument does it
+            shutil.copytree(self.vault / "templates" / request["template"], self.vault / "documents" / request["name"])
+            empty_document(self.vault, request["name"], {}, {"template": request["template"]})
+
+        self.answer = answer
+        status, got = self.write("POST", "/api/manuscript/ask", {"action": "document", "name": "camera-ready", "template": "icml2027"})
+        self.assertEqual((status, got["id"]), (200, "camera-ready"))
+        self.assertEqual(self.asked[-1], ("RFT_MANUSCRIPT", {"action": "document", "name": "camera-ready", "template": "icml2027"}))
+        d = self.ms("camera-ready")
+        self.assertEqual((d["template"], d["main"]), ("icml2027", "example_paper.tex"))
+        # what an older page sends still makes an article or a report
+        self.answer = lambda request: empty_document(self.vault, request["name"], {"main.tex": "x"}, {"template": request["template"]})
+        self.assertEqual(self.write("POST", "/api/manuscript/ask", {"action": "document", "name": "old", "kind": "report"})[0], 200)
+        self.assertEqual(self.asked[-1][1], {"action": "document", "name": "old", "template": "report"})
+        self.assertEqual(self.write("POST", "/api/manuscript/ask", {"action": "document", "name": "x", "template": "neurips"})[0], 404)
+        self.assertEqual(self.write("POST", "/api/manuscript/ask", {"action": "document", "name": "paper", "template": "article"})[0], 409)
+        self.assertEqual(self.write("POST", "/api/manuscript/ask", {"action": "document", "name": "x", "template": 3})[0], 400)
+
+    def test_the_icml_zip_becomes_a_template_and_a_document_made_from_it_compiles_unmodified(self):
+        if fetch_kits.kit_zip("icml2027") is None:
+            self.skipTest(fetch_kits.missing("icml2027"))
+        data = fetch_kits.kit_zip("icml2027").read_bytes()
+        status, got = self.load("icml2027", data)
+        self.assertEqual((status, got["name"], got["files"]), (201, "icml2027", 9))
+        self.assertIn({"name": "icml2027", "builtIn": False, "files": 9}, got["templates"])
+        # its one top folder unwrapped, every file as the kit has it
+        kit = fetch_kits.kit("icml2027")
+        self.assertEqual(self.template_files("icml2027"), {p.relative_to(kit).as_posix(): p.read_bytes() for p in sorted(kit.rglob("*")) if p.is_file()})
+        if not LATEXMK:
+            return
+        # a document made from it: its files copied as they are (the session's part, tests/manuscript.test.ts)
+        shutil.copytree(self.vault / "templates" / "icml2027", self.vault / "documents" / "icml")
+        empty_document(self.vault, "icml", {}, {"template": "icml2027"})
+        status, r = self.write("POST", "/api/manuscript/compile", {"doc": "icml"})
+        self.assertEqual((status, r["ok"], r["errors"], r["main"]), (200, True, [], "example_paper.tex"))
+
+    def test_a_zip_that_would_write_outside_or_holds_a_link_is_refused_and_nothing_is_written(self):
+        good = {"kit/main.tex": b"\\begin{document}\\end{document}", "kit/kit.sty": b"% style"}
+        outside = Path(self.tmp.name) / "x"
+        for why, data in (("..", self.zipped({**good, "kit/../../../x": b"evil"})), ("absolute", self.zipped({**good, "/tmp/x-rft-test": b"evil"})),
+                          ("a drive", self.zipped({**good, "C:/x": b"evil"})), ("a backslash", self.zipped({**good, "kit\\..\\x": b"evil"})),
+                          ("a link", self.zipped(good, {"kit/secrets": "/etc/passwd"})), ("a link out", self.zipped(good, {"kit/up": "../../.."}))):
+            with self.subTest(why):
+                status, got = self.load("kit", data)
+                self.assertEqual(status, 422, got)
+                self.assertIn("nothing was written", got["error"])
+                self.assertFalse((self.vault / "templates").exists() and any((self.vault / "templates").iterdir()), "something was written")
+                self.assertFalse(outside.exists())
+        self.assertEqual(self.load("kit", b"not a zip")[0], 400)
+        self.assertEqual(self.load("kit", self.zipped({"__MACOSX/._main.tex": b"junk"}))[0], 400)
+        # the size is counted unpacked, before anything is written
+        status, got = self.load("big", self.zipped({"big/main.tex": b"x", "big/data.bin": b"\x00" * 51_000_000}))
+        self.assertEqual(status, 413)
+        self.assertIn("51.0 MB", got["error"])
+        self.assertFalse((self.vault / "templates" / "big").exists())
+        # the key, as for every write
+        self.assertEqual(self.load("kit", self.zipped(good), key=None)[0], 403)
+        self.assertFalse((self.vault / "templates" / "kit").exists())
+
+    def test_a_name_that_exists_asks_for_another_and_nothing_is_overwritten(self):
+        first = {"main.tex": b"first"}
+        self.assertEqual(self.load("kit", self.zipped(first))[0], 201)
+        status, got = self.load("kit", self.zipped({"main.tex": b"second"}))
+        self.assertEqual((status, got["ask"]), (409, "name"))
+        self.assertIn("another name", got["error"])
+        self.assertEqual(self.template_files("kit"), first)
+        self.assertEqual(self.load("kit-2", self.zipped({"main.tex": b"second"}))[0], 201)
+        self.assertEqual(self.template_files("kit-2"), {"main.tex": b"second"})
+        for bad in ("article", "report"):
+            self.assertEqual(self.load(bad, self.zipped(first))[0], 409)
+        for bad in ("", "my kit", "../kit", ".kit", "a/b"):
+            self.assertEqual(self.load(bad, self.zipped(first))[0], 400, bad)
+        self.assertEqual(sorted(p.name for p in (self.vault / "templates").iterdir()), ["kit", "kit-2"])
+
+    def test_a_zip_as_file_managers_make_them(self):
+        # several things at the top: kept as they are; a file manager's and git's own left out; a dotfile of the kit kept
+        files = {"main.tex": b"m", "sty/kit.sty": b"s", ".latexmkrc": b"rc", "__MACOSX/._main.tex": b"junk", "sty/.DS_Store": b"junk", ".git/config": b"git"}
+        self.assertEqual(self.load("flat", self.zipped(files))[0], 201)
+        self.assertEqual(self.template_files("flat"), {".latexmkrc": b"rc", "main.tex": b"m", "sty/kit.sty": b"s"})
+        self.assertEqual(rft_documents.template_name("C:\\kits\\ICML 2027 (final).zip"), "ICML-2027-final")
+        self.assertEqual(rft_documents.template_name("aauPhdCollectionThesis/"), "aauPhdCollectionThesis")
+        self.assertEqual(rft_documents.template_name(".."), "")
 
 
 if __name__ == "__main__":

@@ -384,6 +384,17 @@ export const TRACES = {
   }
  ]
 }
+// the built-in templates' files, made with the title "Small data & more": what a new document from each holds (the server's tests compile them)
+export const BUILT_IN: Record<string, Record<string, string>> = {
+ "article": {
+  "main.tex": "\\documentclass[11pt]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage[T1]{fontenc}\n\\usepackage{amsmath,amssymb,amsthm}\n\\usepackage{graphicx,booktabs}\n\\usepackage[numbers]{natbib}\n\\usepackage{hyperref}\n\n\\theoremstyle{plain}\n\\newtheorem{theorem}{Theorem}\n\\newtheorem{lemma}[theorem]{Lemma}\n\\newtheorem{proposition}[theorem]{Proposition}\n\\newtheorem{corollary}[theorem]{Corollary}\n\\theoremstyle{definition}\n\\newtheorem{definition}{Definition}\n\n\\title{Small data \\& more}\n\\author{}\n\\date{\\today}\n\n\\begin{document}\n\\maketitle\n\n% Your text. A passage taken from your notes sits between two comment lines, %%% Kind: title %%%\n% and %%% end %%%: change it as you like, and leave the two lines where they are.\n\n\\bibliographystyle{plainnat}\n\\bibliography{refs}\n\\end{document}\n",
+  "refs.bib": ""
+ },
+ "report": {
+  "main.tex": "\\documentclass[11pt]{report}\n\\usepackage[utf8]{inputenc}\n\\usepackage[T1]{fontenc}\n\\usepackage{amsmath,amssymb,amsthm}\n\\usepackage{graphicx,booktabs}\n\\usepackage[numbers]{natbib}\n\\usepackage{hyperref}\n\n\\theoremstyle{plain}\n\\newtheorem{theorem}{Theorem}\n\\newtheorem{lemma}[theorem]{Lemma}\n\\newtheorem{proposition}[theorem]{Proposition}\n\\newtheorem{corollary}[theorem]{Corollary}\n\\theoremstyle{definition}\n\\newtheorem{definition}{Definition}\n\n\\title{Small data \\& more}\n\\author{}\n\\date{\\today}\n\n\\begin{document}\n\\maketitle\n\n\\chapter{Small data \\& more}\n\n% Your text. A passage taken from your notes sits between two comment lines, %%% Kind: title %%%\n% and %%% end %%%: change it as you like, and leave the two lines where they are.\n\n\\bibliographystyle{plainnat}\n\\bibliography{refs}\n\\end{document}\n",
+  "refs.bib": ""
+ }
+}
 // the same document as the first design had it (before), and as its conversion must leave it (after: its folder, and tracking.json)
 export const FIRST_DESIGN: { before: Record<string, string>; after: Record<string, string>; expected: { copies: { snippet: string; state: string }[] } } = {
  "expected": {

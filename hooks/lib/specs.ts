@@ -282,6 +282,7 @@ export const TOOLS = {
         remove: { type: 'string', description: 'A copy to take out.' },
         file: { type: 'string', description: 'Its .tex file to place in; default: the main one.' },
         after: { type: 'string', description: 'Where: after a copy (S03) or a heading\'s title; default: before the bibliography.' },
+        template: { type: 'string', description: 'With a new name: the document made from it (article, report, or a folder of templates/).' },
       },
       required: ['name'],
     },

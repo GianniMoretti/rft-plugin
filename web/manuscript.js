@@ -181,6 +181,52 @@
     return size > MAX_UPLOAD ? `${name} is ${megabytes(size)}: a file of a document is at most ${megabytes(MAX_UPLOAD)}` : ''
   }
 
+  let crcTable = null
+  /** The CRC-32 of bytes, as a zip records it. */
+  function crc32(bytes) {
+    if (!crcTable) {
+      crcTable = new Uint32Array(256)
+      for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; crcTable[n] = c >>> 0 }
+    }
+    let c = 0xffffffff
+    for (let i = 0; i < bytes.length; i++) c = crcTable[(c ^ bytes[i]) & 0xff] ^ (c >>> 8)
+    return (c ^ 0xffffffff) >>> 0
+  }
+
+  /** Files as a zip, stored as they are (no compression): how a folder picked in the page reaches the server, which takes a template as a zip. `files`: [{ path, bytes: Uint8Array }]; the zip's parts, for a Blob. */
+  function zipOf(files) {
+    const enc = new TextEncoder()
+    const parts = [], central = []
+    let offset = 0
+    for (const f of files) {
+      const name = enc.encode(f.path), crc = crc32(f.bytes), size = f.bytes.length
+      const local = new DataView(new ArrayBuffer(30))
+      local.setUint32(0, 0x04034b50, true); local.setUint16(4, 20, true); local.setUint16(6, 0x0800, true); local.setUint16(8, 0, true)
+      local.setUint32(14, crc, true); local.setUint32(18, size, true); local.setUint32(22, size, true); local.setUint16(26, name.length, true)
+      const dir = new DataView(new ArrayBuffer(46))
+      dir.setUint32(0, 0x02014b50, true); dir.setUint16(4, 20, true); dir.setUint16(6, 20, true); dir.setUint16(8, 0x0800, true)
+      dir.setUint32(16, crc, true); dir.setUint32(20, size, true); dir.setUint32(24, size, true); dir.setUint16(28, name.length, true); dir.setUint32(42, offset, true)
+      parts.push(new Uint8Array(local.buffer), name, f.bytes)
+      central.push(new Uint8Array(dir.buffer), name)
+      offset += 30 + name.length + size
+    }
+    const end = new DataView(new ArrayBuffer(22))
+    end.setUint32(0, 0x06054b50, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true)
+    end.setUint32(12, central.reduce((n, x) => n + x.length, 0), true); end.setUint32(16, offset, true)
+    return [...parts, ...central, new Uint8Array(end.buffer)]
+  }
+
+  /** A template's name made from a zip's or a folder's: its extension dropped, what a folder's name may not hold made a dash (template_name in server/rft_documents.py). */
+  function templateName(raw) {
+    const name = String(raw || '').trim().replace(/\\/g, '/').replace(/\/+$/, '').split('/').pop().replace(/\.zip$/i, '')
+    return name.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/-{2,}/g, '-').replace(/^[-.]+|[-.]+$/g, '').slice(0, 60)
+  }
+
+  /** A template as the New document menu says it. */
+  function templateWords(t) {
+    return t.builtIn ? (t.name === 'report' ? 'Thesis chapter (report)' : 'Paper (article)') : `${t.name}${t.files != null ? ` · ${t.files} file${t.files === 1 ? '' : 's'}` : ''}${t.engine ? ` · ${(ENGINES.find(x => x[0] === t.engine) || [])[1] || t.engine}` : ''}`
+  }
+
   /** The snippets resting on a note. */
   function writtenIn(ms, id) {
     return ms && ms.snippets ? ms.snippets.filter(s => (s.basis || []).includes(id)).map(s => s.id) : []
@@ -1320,16 +1366,24 @@
     // ---------------------------------------------------------------- a new document
 
     const docForm = $('ms-doc-form'), docTitle = $('ms-doc-title'), docName = $('ms-doc-name'), docHint = $('ms-doc-hint'), docOk = $('ms-doc-ok')
-    let docKind = 'article'
+    const docTemplate = $('ms-doc-template'), zipInput = $('ms-template-zip'), folderInput = $('ms-template-folder')
+    let template = 'article' // the template the new document is made from
     let nameTouched = false // once the user types a name, the title no longer makes it
+    const templatesNow = () => (ms && ms.templates) || [{ name: 'article', builtIn: true }, { name: 'report', builtIn: true }]
 
     function renderDocForm() {
-      for (const b of docForm.querySelectorAll('[data-doc-kind]')) b.setAttribute('aria-checked', String(b.dataset.docKind === docKind))
+      const all = templatesNow()
+      if (!all.some(t => t.name === template)) template = 'article'
+      docTemplate.replaceChildren(...all.map(t => el('option', { value: t.name, text: templateWords(t), selected: t.name === template })))
+      const builtIn = (all.find(t => t.name === template) || {}).builtIn
+      // a kit's files come as they are: only a built-in template has a title to set in
+      docTitle.disabled = !builtIn
+      docTitle.placeholder = builtIn ? 'Title, e.g. Strong augmentation on small data' : 'The template\'s own files are copied as they are'
       const name = docName.value.trim()
       const problem = docNameProblem(name, ms && ms.exists ? ms.documents.map(d => d.name) : [])
       docName.setAttribute('aria-invalid', String(!!problem && (nameTouched || !!name)))
       docHint.textContent = problem && (nameTouched || name) ? problem
-        : `documents/${name || '<name>'}/main.tex · ${docKind === 'report' ? 'a \\chapter' : '\\section headings'}, the project's template`
+        : `documents/${name || '<name>'}/ · ${builtIn ? (template === 'report' ? 'a report with a \\chapter' : 'an article with \\section headings') : `every file of the template ${template}, copied in`}`
       docHint.classList.toggle('ms-flag-text', !!problem && (nameTouched || !!name))
       docOk.disabled = !!problem
     }
@@ -1337,7 +1391,7 @@
     function openDocForm(prefill) {
       docForm.hidden = false
       $('ms-new-form').hidden = true
-      docKind = 'article'
+      template = 'article'
       docTitle.value = ''
       docName.value = prefill || ''
       nameTouched = !!prefill
@@ -1347,14 +1401,58 @@
 
     const closeDocForm = () => { docForm.hidden = true }
 
-    for (const b of docForm.querySelectorAll('[data-doc-kind]')) {
-      b.addEventListener('click', () => {
-        docKind = b.dataset.docKind
-        // a thesis chapter's default name follows its kind, until the user names it
-        if (!nameTouched && !docTitle.value.trim()) docName.value = docKind === 'report' ? 'thesis-ch1' : ''
-        renderDocForm()
-      })
+    docTemplate.addEventListener('change', () => {
+      template = docTemplate.value
+      // a thesis chapter's default name follows its template, a kit's is the kit's, until the user names the document
+      if (!nameTouched && !docTitle.value.trim()) docName.value = template === 'report' ? 'thesis-ch1' : template === 'article' ? '' : slugOf(template)
+      renderDocForm()
+    })
+
+    /** A template loaded into the vault's templates/ from a zip (a Blob); a name that is taken is asked for again. Its name, or ''. */
+    async function loadTemplate(blob, suggested) {
+      if (!canWrite()) { needKey('load a template'); return '' }
+      let name = templateName(suggested)
+      for (;;) {
+        if (!name) { name = templateName(prompt('A name for the template (letters, digits, dots and dashes):', '') || ''); if (!name) return '' }
+        renderStatus(`Loading the template ${name}…`)
+        let res, data
+        try {
+          res = await fetch(`api/manuscript/template?name=${encodeURIComponent(name)}`, { method: 'PUT', cache: 'no-store', headers: { 'Content-Type': 'application/zip', 'X-RFT-Token': key() }, body: blob })
+          data = await res.json().catch(() => ({}))
+        } catch { renderStatus(''); notify('The server is not answering.'); return '' }
+        renderStatus('')
+        if (res.ok) { ms = data; notify(`The template ${data.name} is in the vault's templates/ (${data.files} file${data.files === 1 ? '' : 's'}): New document offers it from now on.`); return data.name }
+        if (data.ask !== 'name') { notify(data.error || `The template was not loaded (${res.status})`); return '' }
+        const typed = prompt(`${data.error}.\nAnother name for the template:`, `${name}-2`)
+        if (typed == null) return ''
+        name = templateName(typed)
+      }
     }
+
+    async function templateLoaded(name) {
+      if (!name) return
+      template = name
+      if (!nameTouched && !docTitle.value.trim()) docName.value = slugOf(name)
+      renderDocForm()
+    }
+
+    $('ms-doc-load-zip').addEventListener('click', () => { zipInput.value = ''; zipInput.click() })
+    $('ms-doc-load-folder').addEventListener('click', () => { folderInput.value = ''; folderInput.click() })
+    zipInput.addEventListener('change', async () => {
+      const f = zipInput.files[0]
+      if (f) await templateLoaded(await loadTemplate(f, f.name))
+    })
+    folderInput.addEventListener('change', async () => {
+      // a folder picked in the page reaches the server as a zip of its files, stored as they are, under the folder's own name
+      const list = [...folderInput.files]
+      if (!list.length) return
+      const total = list.reduce((n, f) => n + f.size, 0)
+      if (total > 50000000) { notify(`That folder is ${megabytes(total)}: a template is at most 50.0 MB.`); return }
+      const files = []
+      for (const f of list) files.push({ path: f.webkitRelativePath || f.name, bytes: new Uint8Array(await f.arrayBuffer()) })
+      const top = (list[0].webkitRelativePath || '').split('/')[0]
+      await templateLoaded(await loadTemplate(new Blob(zipOf(files), { type: 'application/zip' }), top || 'template'))
+    })
     docTitle.addEventListener('input', () => { if (!nameTouched) docName.value = slugOf(docTitle.value); renderDocForm() })
     docName.addEventListener('input', () => {
       nameTouched = docName.value.trim() !== ''
@@ -1372,7 +1470,7 @@
       if (docNameProblem(name, ms && ms.exists ? ms.documents.map(d => d.name) : [])) { nameTouched = true; renderDocForm(); docName.focus(); return }
       docOk.disabled = true
       const title = docTitle.value.trim()
-      const got = await ask({ action: 'document', name, kind: docKind, ...(title ? { title } : {}) }, ms && ms.exists ? 'create the document' : 'start')
+      const got = await ask({ action: 'document', name, template, ...(title && !docTitle.disabled ? { title } : {}) }, ms && ms.exists ? 'create the document' : 'start')
       docOk.disabled = false
       if (!got) return
       closeDocForm()
@@ -1428,5 +1526,5 @@
     return { show, writtenIn: id => writtenIn(ms, id), openSnippet: id => { void show().then(() => openSnippet(id)) }, get summary() { return ms }, stop: () => clearInterval(timer) }
   }
 
-  root.RftManuscript = { CONTEXT, KINDS, MAX_UPLOAD, anchorOf, contentOf, byKind, stateOf, usedWords, usedCount, parseMarkers, outlineOf, valueWords, traceWords, fileOrder, treeRows, editable, typedPath, uploadProblem, writtenIn, slugOf, docNameProblem, errorText, mount }
+  root.RftManuscript = { CONTEXT, KINDS, MAX_UPLOAD, anchorOf, contentOf, byKind, stateOf, usedWords, usedCount, parseMarkers, outlineOf, valueWords, traceWords, fileOrder, treeRows, editable, typedPath, uploadProblem, crc32, zipOf, templateName, templateWords, writtenIn, slugOf, docNameProblem, errorText, mount }
 })(typeof window !== 'undefined' ? window : globalThis)

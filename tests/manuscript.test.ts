@@ -20,6 +20,7 @@ import { eagerTools, featuresInUse } from '../hooks/lib/tools'
 import { verifyNote } from '../hooks/lib/verify'
 import { load, readConfig } from '../hooks/lib/vault'
 import { CWD, D00, E01, E02, MemoryFs, demoFiles, note, world } from './fixture'
+import { BUILT_IN } from './fixtures/local-overleaf'
 
 const DATE = '2026-11-17'
 const E01_PATH = `vault/experiments/${E01}.md`
@@ -73,7 +74,7 @@ describe('starting', () => {
     expect(doc).toContain('\\newtheorem{definition}{Definition}')
     expect(fs.read('vault/documents/paper/refs.bib')).toBe('')
     expect(doc).not.toContain('\\rftsnippet')
-    expect(await newDocument(io, l, 'thesis-ch3', 'report')).toBe('Added the document thesis-ch3 (vault/documents/thesis-ch3/main.tex).')
+    expect(await newDocument(io, l, 'thesis-ch3', 'report')).toBe('Added the document thesis-ch3 (vault/documents/thesis-ch3/, from the template report: 2 files, main file main.tex).')
     expect(fs.read('vault/documents/thesis-ch3/main.tex')).toContain('\\chapter{demo}')
     // a title typed in the tree view: plain text, its LaTeX special characters escaped
     await newDocument(io, l, 'mix', 'report', '  Mixup & CutMix: 100% of_the {gap}  ')
@@ -172,7 +173,7 @@ describe('documents, built from copies of snippets', () => {
     expect(doc).not.toMatch(/rft|S01|E01/)
     const at = PLACED.indexOf('71.3')
     expect(JSON.parse(fs.read(TRACKING))).toEqual({
-      version: 1, main: 'main.tex',
+      version: 1, main: 'main.tex', template: 'article',
       copies: [{ snippet: 'S01', marker: 'Result: Training length at 1k images', file: 'main.tex', stamp: contentFingerprint(contentOf(fs.read(S01_PATH))), placed: PLACED }],
       values: [{ kind: 'number', from: 'E01', key: 'acc.1k', written: '71.3', file: 'main.tex', before: PLACED.slice(at - 28, at), after: ' points at 1k images.' }],
       bib: {}, allowed: [],
@@ -470,8 +471,97 @@ describe('in a session', () => {
     expect((await run('')).text).toContain('Started snippets (vault/snippets/) and documents (vault/documents/), both locked')
     expect(w.fs.read(PAPER)).toContain('\\documentclass[11pt]{article}')
     expect((await run('new thesis-ch3 report')).text).toContain('Added the document thesis-ch3')
-    expect((await run('new x book')).text).toContain('A document is an article (a paper) or a report')
+    expect((await run('new x book')).text).toBe('"book" is no template: a document is made from article and report (built in)')
     expect((await run('book')).text).toContain('"book" is no document (paper, thesis-ch3)')
     expect((await run('paper')).text).toBe('Asked Claude to propose snippets to write and where to place them in paper: tables to choose from; nothing is written until you pick.')
+  })
+})
+
+describe('a document is made from a template', () => {
+  // a kit as a folder of the vault's templates/: its class and style files, its sample text, a figure, and what it says of its documents
+  const KIT: Record<string, string> = {
+    'vault/templates/icml2027/example_paper.tex': '\\documentclass{article}\n\\usepackage{icml2027}\n\\begin{document}\nSample text.\n\\bibliography{example_paper}\n\\end{document}\n',
+    'vault/templates/icml2027/example_paper.bib': '@article{sample,\n  title={Sample}\n}\n',
+    'vault/templates/icml2027/icml2027.sty': '% the style\n',
+    'vault/templates/icml2027/icml2027.bst': '% the bibliography style\n',
+    'vault/templates/icml2027/figures/icml_numpapers.pdf': '%PDF stand-in\n',
+    'vault/templates/icml2027/.DS_Store': 'junk',
+    'vault/templates/thesis-xe/template.json': '{"engine": "xelatex", "main": "thesis.tex"}\n',
+    'vault/templates/thesis-xe/thesis.tex': '\\documentclass{book}\n\\begin{document}\n\\include{chapters/one}\n\\end{document}\n',
+    'vault/templates/thesis-xe/standalone.tex': '\\documentclass{article}\n\\begin{document}\nOne chapter alone.\n\\end{document}\n',
+    'vault/templates/thesis-xe/chapters/one.tex': '\\chapter{One}\n',
+    'vault/templates/two-mains/a.tex': '\\begin{document}\nA\n\\end{document}\n',
+    'vault/templates/two-mains/b.tex': '\\begin{document}\nB\n\\end{document}\n',
+    // the notes' own templates are files of the same folder: not a document's template
+    'vault/templates/_experiment.md': '# a note\'s template\n',
+  }
+  const kit = async () => {
+    const s = await setup()
+    for (const [path, text] of Object.entries(KIT)) s.fs.write(path, text)
+    return s
+  }
+  const under = (fs: MemoryFs, folder: string) => Object.fromEntries([...fs.files].filter(([k]) => k.startsWith(folder)).map(([k, v]) => [k.slice(folder.length), v.text]))
+
+  test('the built-in templates: an article and a report, as the fixture has them; a document from before templates reads as made from its class', async () => {
+    const { fs, io, l } = await setup({ started: false })
+    await newDocument(io, l, 'paper', 'article', 'Small data & more')
+    await newDocument(io, l, 'chapter', 'report', 'Small data & more')
+    expect(under(fs, 'vault/documents/paper/')).toEqual(BUILT_IN.article!)
+    expect(under(fs, 'vault/documents/chapter/')).toEqual(BUILT_IN.report!)
+    expect(JSON.parse(fs.read('vault/documents/.rft/chapter/tracking.json'))).toEqual({ version: 1, main: 'main.tex', template: 'report', copies: [], values: [], bib: {}, allowed: [] })
+    // made before templates: no tracking file, or one that names none
+    fs.remove('vault/documents/.rft/chapter/tracking.json')
+    fs.write('vault/documents/.rft/paper/tracking.json', JSON.stringify({ version: 1, main: 'main.tex', copies: [], values: [], bib: {}, allowed: [] }))
+    const ms = (await readManuscript(io, l))!
+    expect(ms.documents.map(d => [d.name, d.template, d.main, d.engine])).toEqual([['chapter', 'report', 'main.tex', 'pdflatex'], ['paper', 'article', 'main.tex', 'pdflatex']])
+  })
+
+  test('a template of the vault: every file copied as it is, its engine and main file recorded, its settings file left behind', async () => {
+    const { fs, io, l } = await kit()
+    expect(await newDocument(io, l, 'icml', 'icml2027')).toBe('Added the document icml (vault/documents/icml/, from the template icml2027: 5 files, main file example_paper.tex).')
+    const want = under(fs, 'vault/templates/icml2027/')
+    delete want['.DS_Store']
+    expect(under(fs, 'vault/documents/icml/')).toEqual(want)
+    expect(JSON.parse(fs.read('vault/documents/.rft/icml/tracking.json'))).toEqual({ version: 1, main: 'example_paper.tex', template: 'icml2027', copies: [], values: [], bib: {}, allowed: [] })
+    // a template that names its engine and its main file
+    await newDocument(io, l, 'thesis', 'thesis-xe')
+    expect(Object.keys(under(fs, 'vault/documents/thesis/')).sort()).toEqual(['chapters/one.tex', 'standalone.tex', 'thesis.tex'])
+    expect(JSON.parse(fs.read('vault/documents/.rft/thesis/tracking.json'))).toMatchObject({ main: 'thesis.tex', engine: 'xelatex', template: 'thesis-xe' })
+    const ms = (await readManuscript(io, l))!
+    const d = ms.documents.find(x => x.name === 'thesis')!
+    expect([d.main, d.mainAsked, d.engine, d.template, [...d.included].sort()]).toEqual(['thesis.tex', [], 'xelatex', 'thesis-xe', ['chapters/one.tex', 'thesis.tex']])
+    // several files with \begin{document} and no word from the template: the user is asked in the page
+    expect(await newDocument(io, l, 'two', 'two-mains')).toContain('its main file still to choose in the page')
+    expect((await readManuscript(io, l))!.documents.find(x => x.name === 'two')!.mainAsked).toEqual(['a.tex', 'b.tex'])
+    const report = await manuscriptReport(io, l)
+    expect(report).toContain('  icml (icml2027, example_paper.tex, pdfLaTeX): no copies yet')
+    expect(report).toContain('  thesis (thesis-xe, thesis.tex, XeLaTeX): no copies yet')
+    expect(report).toContain('  two (two-mains, a.tex?, pdfLaTeX): no copies yet')
+    expect(report).toContain('Templates a document is made from (rft_set_document {name, template}, when the user asks for a document): article and report (built in); icml2027, thesis-xe, two-mains (vault/templates/).')
+  })
+
+  test('the document keeps no tie to its template: changing the template afterwards changes no document', async () => {
+    const { fs, io, l } = await kit()
+    await newDocument(io, l, 'icml', 'icml2027')
+    const before = under(fs, 'vault/documents/icml/')
+    fs.write('vault/templates/icml2027/icml2027.sty', '% the style, next year\n')
+    fs.write('vault/templates/icml2027/new.tex', 'New.\n')
+    fs.remove('vault/templates/icml2027/example_paper.bib')
+    expect(under(fs, 'vault/documents/icml/')).toEqual(before)
+    expect((await readManuscript(io, l))!.documents.find(x => x.name === 'icml')!.template).toBe('icml2027')
+  })
+
+  test('rft_set_document makes a document from a template; a name that is taken, a template that is none and a name that is no name are refused', async () => {
+    const { fs, io, l } = await kit()
+    expect(await setDocument(io, l, { name: 'camera-ready', template: 'icml2027' })).toContain('Added the document camera-ready (vault/documents/camera-ready/, from the template icml2027')
+    expect(fs.read('vault/documents/camera-ready/icml2027.sty')).toBe('% the style\n')
+    await expect(setDocument(io, l, { name: 'paper', template: 'icml2027' })).rejects.toThrow('there is already a document paper')
+    await expect(setDocument(io, l, { name: 'x', template: 'neurips' })).rejects.toThrow('"neurips" is no template: a document is made from article and report (built in); icml2027, thesis-xe, two-mains (vault/templates/)')
+    await expect(setDocument(io, l, { name: 'x', template: '../icml2027' })).rejects.toThrow('is no template')
+    await expect(setDocument(io, l, { name: 'x', template: '_experiment.md' })).rejects.toThrow('is no template')
+    await expect(setDocument(io, l, { name: 'My Paper', template: 'article' })).rejects.toThrow('lowercase letters, digits and dashes')
+    await expect(setDocument(io, l, { name: 'y', template: 'article', place: 'S01' })).rejects.toThrow('make the document first')
+    await expect(setDocument(io, l, { name: 'nope', place: 'S01' })).rejects.toThrow('with a template (article and report (built in); icml2027, thesis-xe, two-mains (vault/templates/)) rft_set_document makes it')
+    expect(fs.exists('vault/documents/x')).toBe(false)
   })
 })

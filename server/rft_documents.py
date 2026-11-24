@@ -1,7 +1,9 @@
 """A document as a folder of files (docs/design/manuscript.md): what the user does to it from the
 page's file list. A file or a folder made, renamed, moved or deleted; an image, a PDF or any other
-file uploaded, its bytes as they came; which file is the main one; which engine compiles it.
-Standard library only.
+file uploaded, its bytes as they came; which file is the main one; which engine compiles it. And
+the templates a document is made from: those there are (two built in, and the folders of the
+vault's templates/), and one loaded from a zip (the page sends a folder as a zip too), checked
+entry by entry before anything is written. Standard library only.
 
 Nothing here reads LaTeX or decides what a copy is: the copies, their states and what is written
 out are the session's (hooks/lib/manuscript.ts). The server writes a document's tracking file
@@ -16,10 +18,14 @@ the folder is shared as it is (docs/adr/0003-a-document-holds-no-trace.md).
 """
 from __future__ import annotations
 
+import io
 import json
 import os
+import re
 import shutil
+import stat
 import sys
+import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -31,6 +37,14 @@ MAX_UPLOAD = 20_000_000
 MAX_NAME = 200
 FORBIDDEN = set('\\\x00<>:"|?*')
 TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml", ".pdf": "application/pdf"}
+
+# templates (hooks/lib/templates.ts): two built in, and the folders of the vault's templates/
+TEMPLATES = "templates"
+BUILT_IN = ("article", "report")
+TEMPLATE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+TEMPLATE_SETTINGS = "template.json"
+MAX_TEMPLATE = 50_000_000  # a template's files, unpacked, and the zip that brings them
+MAX_TEMPLATE_FILES = 2000
 
 Answer = tuple[int, dict]
 
@@ -308,3 +322,104 @@ def set_engine(vault: Path, doc: str, engine: object) -> Answer:
         return 400, {"error": f"the engine is one of {', '.join(rft_manuscript.ENGINES)}"}
     write_raw(vault, doc, {**read_raw(vault, doc), "engine": engine})
     return 200, {"engine": engine}
+
+
+# ---------------------------------------------------------------- templates
+
+def templates_dir(vault: Path) -> Path:
+    return Path(vault) / TEMPLATES
+
+
+def templates(vault: Path) -> list[dict]:
+    """The templates a document can be made from: the built-in ones, then the vault's own (each
+    folder of templates/, with how many files it has and the engine it names, if any)."""
+    out = [{"name": name, "builtIn": True} for name in BUILT_IN]
+    d = templates_dir(vault)
+    for p in sorted(d.iterdir(), key=lambda x: x.name) if d.is_dir() else []:
+        if not p.is_dir() or p.is_symlink() or not TEMPLATE_NAME.match(p.name) or p.name in BUILT_IN:
+            continue
+        files = [f for f in p.rglob("*") if f.is_file() and f.name != ".DS_Store" and f.relative_to(p).as_posix() != TEMPLATE_SETTINGS]
+        try:
+            said = json.loads((p / TEMPLATE_SETTINGS).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            said = {}
+        engine = said.get("engine") if isinstance(said, dict) and said.get("engine") in rft_manuscript.ENGINES else None
+        out.append({"name": p.name, "builtIn": False, "files": len(files), **({"engine": engine} if engine else {})})
+    return out
+
+
+def template_name(raw: object) -> str:
+    """A template's name made from a zip's or a folder's: its extension dropped, what a folder's
+    name may not hold made a dash."""
+    name = re.sub(r"\.zip$", "", str(raw or "").strip().replace("\\", "/").rstrip("/").split("/")[-1], flags=re.I)
+    return re.sub(r"-{2,}", "-", re.sub(r"[^A-Za-z0-9._-]+", "-", name)).strip("-.")[:60]
+
+
+def _entry_problem(name: str, info: zipfile.ZipInfo) -> str:
+    """Why an entry of a zip makes the whole zip refused; '' when it does not."""
+    if stat.S_ISLNK(info.external_attr >> 16):
+        return f"{name} is a link, and a template holds files only"
+    parts = name.split("/")
+    if name.startswith("/") or "\\" in name or re.match(r"^[A-Za-z]:", name) or ".." in parts:
+        return f"{name} would be written outside the template's folder"
+    if any(not p or p == "." or p != p.strip() or len(p) > MAX_NAME or any(ord(c) < 32 for c in p) for p in parts):
+        return f"{name} is not a name a file can have here"
+    return ""
+
+
+def load_template(vault: Path, name: object, data: bytes) -> Answer:
+    """A template loaded from a zip: kept as templates/<name>/, and offered from then on. A zip
+    whose files are all in one top folder is unwrapped. Refused, with nothing written: a name
+    that is taken (another is asked for), an entry that is a link or that would be written outside
+    the folder, and a template over MAX_TEMPLATE unpacked or MAX_TEMPLATE_FILES files. What a
+    file manager or git leaves in a zip (__MACOSX, .DS_Store, .git) is left out."""
+    vault = Path(vault)
+    if not isinstance(name, str) or not TEMPLATE_NAME.match(name) or len(name) > 60:
+        return 400, {"error": "a template's name is letters, digits, dots and dashes, e.g. icml2027", "ask": "name"}
+    if name in BUILT_IN:
+        return 409, {"error": f"{name} is a built-in template: give this one another name", "ask": "name"}
+    target = templates_dir(vault) / name
+    if target.exists() or target.is_symlink():
+        return 409, {"error": f"there is already a template {name}: give this one another name (nothing is overwritten)", "ask": "name"}
+    try:
+        z = zipfile.ZipFile(io.BytesIO(data))
+    except (zipfile.BadZipFile, ValueError):
+        return 400, {"error": "that file is not a zip"}
+    with z:
+        entries: list[tuple[zipfile.ZipInfo, list[str]]] = []
+        for info in z.infolist():
+            if info.is_dir():
+                continue
+            parts = info.filename.split("/")
+            if "__MACOSX" in parts or parts[-1] == ".DS_Store" or ".git" in parts[:-1]:
+                continue
+            why = _entry_problem(info.filename, info)
+            if why:
+                return 422, {"error": f"{why}: the zip was refused and nothing was written"}
+            entries.append((info, parts))
+        if not entries:
+            return 400, {"error": "the zip holds no file"}
+        if len({parts[0] for _, parts in entries}) == 1 and all(len(parts) > 1 for _, parts in entries):
+            entries = [(info, parts[1:]) for info, parts in entries]  # one top folder: unwrapped
+        total = sum(info.file_size for info, _ in entries)
+        if total > MAX_TEMPLATE or len(entries) > MAX_TEMPLATE_FILES:
+            return 413, {"error": f"the template is {megabytes(total)} in {len(entries)} files unpacked: a template is at most {megabytes(MAX_TEMPLATE)} and {MAX_TEMPLATE_FILES} files; nothing was written"}
+        staging = templates_dir(vault) / f".loading-{name}-{os.getpid()}"
+        try:
+            if staging.exists():
+                shutil.rmtree(staging)
+            written = 0
+            for info, parts in entries:
+                with z.open(info) as f:
+                    chunk = f.read(MAX_TEMPLATE - written + 1)  # what the entry really holds, whatever its header says
+                written += len(chunk)
+                if written > MAX_TEMPLATE:
+                    raise ValueError(f"the template is over {megabytes(MAX_TEMPLATE)} unpacked")
+                path = staging.joinpath(*parts)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(chunk)
+            os.replace(staging, target)
+        except (OSError, ValueError, zipfile.BadZipFile, RuntimeError) as err:
+            shutil.rmtree(staging, ignore_errors=True)
+            return 422, {"error": f"the zip could not be unpacked ({err}): nothing was written"}
+    return 201, {"name": name, "files": len(entries)}

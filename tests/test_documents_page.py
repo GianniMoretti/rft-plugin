@@ -167,6 +167,55 @@ class DocumentsPage(unittest.TestCase):
         self.shot("chosen")
         self.assertEqual(b.errors, [])
 
+    def test_a_template_loaded_from_a_zip_and_a_document_made_from_it(self):
+        b = self.b
+        self.start()
+        b.js("document.getElementById('ms-new-doc').click()")
+        self.assertTrue(b.wait("!document.getElementById('ms-doc-form').hidden"))
+        options = "[...document.querySelectorAll('#ms-doc-template option')].map(o => o.textContent)"
+        self.assertEqual(b.js(options), ["Paper (article)", "Thesis chapter (report)"])
+        # a zip picked in the page (made here by the page's own zip writer, as a folder picked there is)
+        pick = """(async () => {
+          const enc = new TextEncoder()
+          const zip = new Blob(RftManuscript.zipOf([{ path: 'my kit/paper.tex', bytes: enc.encode(%s) }, { path: 'my kit/kit.sty', bytes: enc.encode('%% the style\\n') },
+                                                    { path: 'my kit/figures/ø.png', bytes: new Uint8Array([137, 80, 78, 71, 0, 255]) }]))
+          const dt = new DataTransfer()
+          dt.items.add(new File([zip], 'my kit.zip', { type: 'application/zip' }))
+          const input = document.getElementById('ms-template-zip')
+          input.files = dt.files
+          input.dispatchEvent(new Event('change', { bubbles: true }))
+        })()""" % json.dumps("\\documentclass{article}\n\\begin{document}\nSample text.\n\\end{document}\n")
+        b.js(pick)
+        self.assertTrue(b.wait(f"{options}.includes('my-kit · 3 files')"), b.js(options))
+        self.assertEqual(b.js("document.getElementById('ms-doc-template').value"), "my-kit")
+        kit = self.vault / "templates" / "my-kit"
+        self.assertEqual({p.relative_to(kit).as_posix(): p.read_bytes() for p in kit.rglob("*") if p.is_file()},
+                         {"paper.tex": b"\\documentclass{article}\n\\begin{document}\nSample text.\n\\end{document}\n", "kit.sty": b"% the style\n", "figures/\xc3\xb8.png".encode("latin-1").decode("utf-8"): bytes([137, 80, 78, 71, 0, 255])})
+        # the document's name follows the template's; a kit's files come as they are, so there is no title to give
+        self.assertEqual(b.js("[document.getElementById('ms-doc-name').value, document.getElementById('ms-doc-title').disabled]"), ["my-kit", True])
+        self.shot("template-loaded")
+        # the same name again: another is asked for, and nothing is overwritten
+        b.js("window.asked = []; window.answers.push('my-kit-b')")
+        b.js(pick)
+        self.assertTrue(b.wait(f"{options}.includes('my-kit-b · 3 files')"), b.js(options))
+        self.assertIn("there is already a template my-kit", b.js("window.asked.join(' | ')"))
+        self.assertTrue((self.vault / "templates" / "my-kit-b" / "paper.tex").is_file())
+        # Create asks the session, which makes the document from the template (played here); the page opens it on its main file
+        b.js("(() => { const s = document.getElementById('ms-doc-template'); s.value = 'my-kit'; s.dispatchEvent(new Event('change', { bubbles: true })) })()")
+        b.js("(() => { const n = document.getElementById('ms-doc-name'); n.value = 'camera-ready'; n.dispatchEvent(new Event('input', { bubbles: true })) })()")
+        b.js("document.getElementById('ms-doc-ok').click()")
+        line = self.server.stdout.readline()
+        self.assertEqual(line.split(" ", 1)[0], "RFT_MANUSCRIPT")
+        self.assertEqual(json.loads(line.split(" ", 1)[1]), {"action": "document", "name": "camera-ready", "template": "my-kit"})
+        shutil.copytree(kit, self.vault / "documents" / "camera-ready")
+        empty_document(self.vault, "camera-ready", {}, {"template": "my-kit", "main": "paper.tex"})
+        self.assertTrue(b.wait("document.getElementById('ms-doc').value === 'camera-ready' && !!document.querySelector('#ms-head .ms-file') && document.querySelector('#ms-head .ms-file').textContent === 'paper.tex'", 12),
+                        b.js("document.getElementById('ms-status').textContent"))
+        self.assertEqual(b.js(ROWS), ["figures/", "ø.png", "kit.sty", "paper.tex [main]"])
+        self.assertIn("Sample text.", b.js("document.querySelector('#ms-cm .CodeMirror').CodeMirror.getValue()"))
+        self.shot("made-from-template")
+        self.assertEqual(b.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()

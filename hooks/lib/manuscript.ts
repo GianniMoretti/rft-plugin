@@ -20,7 +20,8 @@ import {
   listSnippets, readDocsRegistry, readRegistry, snippetRel, uncommented, writeDocsRegistry, writeRegistry,
 } from './snippets'
 import type { Engine, TrackedCopy, TrackedValue, Tracking } from './tracking'
-import { readTracking, writeTracking } from './tracking'
+import { parseTracking, readTracking, writeTracking } from './tracking'
+import { TEMPLATES_DIR, TEMPLATE_NAME, builtInFiles, documentTemplate, isBuiltIn, templateFiles, templateSettings, templatesWords, texText, vaultTemplates } from './templates'
 import { substanceFingerprint } from './verify'
 import type { Held, Written } from './writeout'
 import { figureRel, markedText, savedNumbers, tableRel, writeContext, writeOut, writeText } from './writeout'
@@ -449,6 +450,7 @@ export async function manuscriptReport(io: Io, loaded: Loaded, ref?: string): Pr
   out.push(`Documents (${vault}/${DOCUMENTS_DIR}/; each with its template, main file and engine), built from copies of snippets, ${docLock(ms.docs)}:`)
   for (const d of ms.documents) out.push(`  ${d.name} (${d.template}, ${d.main || 'no main file'}${d.mainAsked.length ? '?' : ''}, ${ENGINE_NAMES[d.engine]}): ${copiesWords(d, byId, id => !!states.get(id)?.review.length)}`)
   if (!ms.documents.length) out.push('  none yet')
+  out.push(`Templates a document is made from (rft_set_document {name, template}, when the user asks for a document): ${await templatesWords(io, vault)}.`)
   const todo = stillToWrite(loaded, ms, cites)
   if (todo.length) {
     out.push('Still to write (verified notes no snippet rests on), by concept:')
@@ -653,58 +655,51 @@ export async function markReviewed(io: Io, loaded: Loaded, ref: string, date: st
 
 // ---------------------------------------------------------------- documents
 
-/** Plain text as LaTeX prints it: its special characters escaped (a title typed in the tree view). */
-export const texText = (s: string) =>
-  s.replace(/[\\&%$#_{}~^]/g, c => ({ '\\': '\\textbackslash{}', '~': '\\textasciitilde{}', '^': '\\textasciicircum{}' } as Record<string, string>)[c] ?? `\\${c}`)
+export { documentTemplate, texText }
 
-/** A new document's main.tex: `article` (a paper) or `report` (a thesis chapter). Plain LaTeX: nothing of the plugin's. */
-export function documentTemplate(title: string, kind: 'article' | 'report'): string {
-  return `\\documentclass[11pt]{${kind}}
-\\usepackage[utf8]{inputenc}
-\\usepackage[T1]{fontenc}
-\\usepackage{amsmath,amssymb,amsthm}
-\\usepackage{graphicx,booktabs}
-\\usepackage[numbers]{natbib}
-\\usepackage{hyperref}
-
-\\theoremstyle{plain}
-\\newtheorem{theorem}{Theorem}
-\\newtheorem{lemma}[theorem]{Lemma}
-\\newtheorem{proposition}[theorem]{Proposition}
-\\newtheorem{corollary}[theorem]{Corollary}
-\\theoremstyle{definition}
-\\newtheorem{definition}{Definition}
-
-\\title{${title}}
-\\author{}
-\\date{\\today}
-
-\\begin{document}
-\\maketitle
-${kind === 'report' ? `\n\\chapter{${title}}\n` : ''}
-% Your text. A passage taken from your notes sits between two comment lines, %%% Kind: title %%%
-% and %%% end %%%: change it as you like, and leave the two lines where they are.
-
-\\bibliographystyle{plainnat}
-\\bibliography{refs}
-\\end{document}
-`
-}
-
-/** Starts the two levels with a first document, or adds a document. The answer says what was made. */
-export async function newDocument(io: Io, loaded: Loaded, name: string, kind: 'article' | 'report' = 'article', title?: string): Promise<string> {
+/**
+ * A new document, made from a template (templates.ts): a built-in one (`article`, `report`: a
+ * main.tex with the title set in, and an empty refs.bib) or a folder of vault/templates/, every
+ * file of which is copied as it is. The document records the template it was made from, its
+ * engine when the template names one, and its main file when there is no doubt which it is. The
+ * first document starts the two levels. The answer says what was made.
+ */
+export async function newDocument(io: Io, loaded: Loaded, name: string, template = 'article', title?: string): Promise<string> {
   const vault = loaded.config.vault
   const doc = name.trim().toLowerCase()
   if (!isDocumentName(doc)) throw new ManuscriptError('a document\'s name is lowercase letters, digits and dashes, e.g. paper or thesis-ch3')
-  const path = documentRel(doc)
-  if (await io.exists(join(vault, path))) throw new ManuscriptError(`there is already a document ${doc} (${vault}/${path})`)
+  const folder = `${DOCUMENTS_DIR}/${doc}`
+  if (await io.exists(join(vault, folder))) throw new ManuscriptError(`there is already a document ${doc} (${vault}/${folder}/)`)
+  const t = template.trim() || 'article'
+  const tracking = parseTracking(null)
+  tracking.template = t
+  let made: string[]
+  if (isBuiltIn(t)) {
+    const files = builtInFiles(t, title?.trim().replace(/\s+/g, ' ') || loaded.config.project)
+    made = Object.keys(files)
+    for (const f of made) await io.write(join(vault, folder, f), files[f]!)
+    tracking.main = 'main.tex'
+  } else {
+    if (!TEMPLATE_NAME.test(t) || !(await vaultTemplates(io, vault)).includes(t)) throw new ManuscriptError(`"${t}" is no template: a document is made from ${await templatesWords(io, vault)}`)
+    made = await templateFiles(io, vault, t)
+    if (!made.length) throw new ManuscriptError(`the template ${t} (${vault}/${TEMPLATES_DIR}/${t}/) has no file`)
+    const texts: Record<string, string> = {}
+    for (const f of made) {
+      await copyIn(io, join(vault, TEMPLATES_DIR, t, f), join(vault, folder, f))
+      if (TEX_FILE.test(f)) { try { texts[f] = await io.read(join(vault, TEMPLATES_DIR, t, f)) } catch { /* not text: not a main file */ } }
+    }
+    const settings = await templateSettings(io, vault, t)
+    if (settings.engine) tracking.engine = settings.engine
+    const { main, asked } = mainOf(texts, settings.main ?? '')
+    if (main && !asked.length) tracking.main = main
+  }
   const started = !(await io.exists(join(vault, SNIPPETS_REGISTRY)))
   await ensureRegistries(io, loaded)
-  await io.write(join(vault, path), documentTemplate(texText(title?.trim().replace(/\s+/g, ' ') || loaded.config.project), kind))
-  await io.write(join(vault, DOCUMENTS_DIR, doc, 'refs.bib'), '')
+  await writeTracking(io, vault, doc, tracking)
+  const what = `the document ${doc} (${vault}/${folder}/, from the template ${t}: ${made.length} file${made.length === 1 ? '' : 's'}${tracking.main ? `, main file ${tracking.main}` : ', its main file still to choose in the page'})`
   return started
-    ? `Started snippets (${vault}/${SNIPPETS_DIR}/) and documents (${vault}/${DOCUMENTS_DIR}/), both locked (you write them; Claude proposes snippets from verified notes and where to place them, comments and suggests), with the document ${doc} (${vault}/${path}).`
-    : `Added the document ${doc} (${vault}/${path}).`
+    ? `Started snippets (${vault}/${SNIPPETS_DIR}/) and documents (${vault}/${DOCUMENTS_DIR}/), both locked (you write them; Claude proposes snippets from verified notes and where to place them, comments and suggests), with ${what}.`
+    : `Added ${what}.`
 }
 
 const COPY_REF = /^(S\d+)(?:#(\d+))?$/
@@ -900,7 +895,7 @@ const broughtWords = (out: Written) => [
   out.bib.length ? `${out.bib.map(b => b.key).join(', ')} in its .bib` : '',
 ].filter(Boolean).join('; ')
 
-export type DocumentInput = { name?: string; place?: string; file?: string; after?: string; move?: string; remove?: string }
+export type DocumentInput = { name?: string; place?: string; file?: string; after?: string; move?: string; remove?: string; template?: string }
 
 /**
  * rft_set_document: a change to a document's structure the user agreed to. `place`: the snippet
@@ -908,13 +903,20 @@ export type DocumentInput = { name?: string; place?: string; file?: string; afte
  * `after` (a copy or a heading) or before the bibliography; its figures copied into the document,
  * its entries added to the document's .bib, the copy and its values recorded in the tracking file.
  * `move`: a copy moved there, its text as it is. `remove`: a copy taken out, with what only it used.
+ * `template`, with a name no document has: the document made from that template (newDocument).
  */
 export async function setDocument(io: Io, loaded: Loaded, i: DocumentInput): Promise<string> {
   const ms = await readManuscript(io, loaded)
   if (!ms) throw new ManuscriptError('This vault has no snippets or documents yet: the user starts them with /rft-manuscript')
   const vault = loaded.config.vault
   const d = ms.documents.find(x => x.name === (i.name ?? '').trim())
-  if (!d) throw new ManuscriptError(`"${i.name ?? ''}" is no document (${ms.documents.map(x => x.name).join(', ') || 'none yet'})`)
+  // a template makes the document, when the user asked for one
+  if (i.template?.trim()) {
+    if (d) throw new ManuscriptError(`there is already a document ${d.name}: a template makes a new one (to add a template's files to it, the user uses the page)`)
+    if (i.place || i.move || i.remove) throw new ManuscriptError('make the document first (name, template), then place copies in it')
+    return newDocument(io, loaded, i.name ?? '', i.template)
+  }
+  if (!d) throw new ManuscriptError(`"${i.name ?? ''}" is no document (${ms.documents.map(x => x.name).join(', ') || 'none yet'}); with a template (${await templatesWords(io, vault)}) rft_set_document makes it, when the user asked for one`)
   const w = workOn(d)
   const where = (at: { file: string }) => `${at.file !== d.main ? ` (${at.file})` : ''}${i.after ? ` after ${i.after}` : ''}`
   if (i.place) {

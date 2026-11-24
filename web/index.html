@@ -271,7 +271,7 @@
       </span>
       <button id="ms-new" class="ms-ib ms-snippets-only" type="button" aria-label="New snippet" title="A new snippet, resting on notes of the tree"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span class="lbl">Snippet</span></button>
       <label class="ms-docs-only">Document <select id="ms-doc" aria-label="Document"></select></label>
-      <button id="ms-new-doc" class="ms-ib ms-docs-only" type="button" aria-label="New document" title="A new document: a paper (article) or a thesis chapter (report)"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span class="lbl">Document</span></button>
+      <button id="ms-new-doc" class="ms-ib ms-docs-only" type="button" aria-label="New document" title="A new document, made from a template: a paper, a thesis chapter, or a kit you load"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span class="lbl">Document</span></button>
       <button id="ms-lock" class="icon-btn cycle ms-needs" type="button" aria-pressed="true" aria-label="Lock">
         <svg class="ico lock-open" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.6-1.7"/></svg>
         <svg class="ico lock-closed on" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
@@ -289,9 +289,11 @@
     </form>
     <form id="ms-doc-form" class="ms-doc-form" hidden aria-label="A new document">
       <div class="ms-doc-row">
-        <span class="seg ms-doc-kinds" role="radiogroup" aria-label="Kind">
-          <button type="button" data-doc-kind="article" role="radio" aria-checked="true" title="An article: \section headings, a title, a bibliography">Paper</button><button type="button" data-doc-kind="report" role="radio" aria-checked="false" title="A report with a \chapter: a chapter of a thesis, compiled on its own">Thesis chapter</button>
-        </span>
+        <label class="ms-doc-name">Template <select id="ms-doc-template" aria-label="Template" title="What the document starts from: its files are copied in as they are, and the document keeps no tie to the template"></select></label>
+        <button id="ms-doc-load-zip" type="button" title="Load a template from a zip on this machine (a conference's kit, a thesis class): it is kept in the vault's templates/ and offered from then on">Load a zip…</button>
+        <button id="ms-doc-load-folder" type="button" title="Load a template from a folder on this machine: it is kept in the vault's templates/ and offered from then on">Load a folder…</button>
+        <input id="ms-template-zip" type="file" accept=".zip,application/zip" hidden aria-label="A template's zip">
+        <input id="ms-template-folder" type="file" webkitdirectory hidden aria-label="A template's folder">
         <input id="ms-doc-title" type="text" autocomplete="off" placeholder="Title, e.g. Strong augmentation on small data" aria-label="Title">
       </div>
       <div class="ms-doc-row">
