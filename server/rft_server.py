@@ -2223,6 +2223,26 @@ class Vault:
         tracking = rft_manuscript.read_tracking(self.root, doc)
         return 200, rft_manuscript.bib_for(files, rft_manuscript.main_of(files, tracking["main"])[0], file, tracking["bibOf"])
 
+    def document_reuse(self, req: dict) -> tuple[int, dict]:
+        """A document reused (rft_documents): `duplicate` {doc, name} a second document with the
+        same files and tracking; `bring-in` {doc, source, into} the document `source` copied into a
+        new folder of `doc`, its tracking carried, what clashes and what remains said;
+        `add-template` {doc, template} a template's files added, nothing overwritten. The answer
+        carries the manuscript as it is then."""
+        doc, action = req.get("doc"), req.get("action")
+        if not isinstance(doc, str):
+            return 400, {"error": "expected {action: duplicate, bring-in or add-template, doc, …}"}
+        with self._write_lock:
+            if action == "duplicate":
+                status, out = rft_documents.duplicate(self.root, doc, req.get("name"))
+            elif action == "bring-in":
+                status, out = rft_documents.bring_in(self.root, doc, req.get("source"), req.get("into"))
+            elif action == "add-template":
+                status, out = rft_documents.add_template(self.root, doc, req.get("template"))
+            else:
+                return 400, {"error": "action must be duplicate, bring-in or add-template"}
+        return status, ({**out, **self.manuscript()} if status < 300 else out)
+
     def load_template(self, name: str, data: bytes) -> tuple[int, dict]:
         """A template loaded from a zip into the vault's templates/ (rft_documents.load_template)."""
         with self._write_lock:
@@ -3306,6 +3326,11 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 if not (isinstance(req.get("doc"), str) or isinstance(req.get("snippet"), str)):
                     return self._json(400, {"error": "expected {doc} or {snippet}"})
                 return self._json(*vault.compile_manuscript(req.get("doc"), req.get("snippet")))
+            if route == "/api/manuscript/reuse":
+                got = self._write_request("/api/manuscript/reuse", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                return self._json(*vault.document_reuse(got[1]))
             if route == "/api/manuscript/git":
                 got = self._write_request("/api/manuscript/git", MAX_NODE_BYTES)
                 if got is None:

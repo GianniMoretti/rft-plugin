@@ -259,7 +259,9 @@ export function locateValues(files: Record<string, string>, tracking: Pick<Track
       if (v.found || text === undefined) continue
       if (found === 'changed' && (v.kind === 'table' || squeeze(v.before.slice(-n)).length + squeeze(v.after.slice(0, n)).length < 6)) continue
       const before = flexible(v.before.slice(-n)), after = flexible(v.after.slice(0, n))
-      const re = found === 'written' ? new RegExp(`(${before})(${flexible(v.written)})(?=${after})`, 'g') : new RegExp(`(${before})([^\\n]{0,80}?)(?=${after})`, 'g')
+      // a figure brought in with its document stands as written, or with the folder it was brought into before its path
+      const written = v.base ? `(?:${flexible(`${v.base}/`)})?${flexible(v.written)}` : flexible(v.written)
+      const re = found === 'written' ? new RegExp(`(${before})(${written})(?=${after})`, 'g') : new RegExp(`(${before})([^\\n]{0,80}?)(?=${after})`, 'g')
       for (const m of text.matchAll(re)) {
         const offset = m.index! + m[1]!.length, inDocument = m[2]!
         if (!free(v.file, offset, offset + inDocument.length)) continue

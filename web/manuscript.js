@@ -243,6 +243,27 @@
     ].join(' · ')
   }
 
+  /** What bringing a document into a folder of another did and left to do, line by line (a line with a `file` opens it there). */
+  function bringInLines(r) {
+    const out = [{ text: `Brought ${r.from} into ${r.into}/ of ${r.doc}: ${r.files} file${r.files === 1 ? '' : 's'}, ${r.copies} cop${r.copies === 1 ? 'y' : 'ies'} of snippets tracked under their new paths. ${r.from} itself is unchanged, and the two are not tied.` }]
+    if (r.main) out.push({ text: `Its main file, ${r.main}, is left as it is and ${r.doc} does not take it in. What remains is yours: take its body in from a file of ${r.doc} (\\input{…}), without its preamble, \\begin{document} and \\end{document}.`, file: r.main, line: 1 })
+    else out.push({ text: `Its files are left as they are and ${r.doc} takes none of them in yet. What remains is yours: take in what you want of them from a file of ${r.doc} (\\input{…}).` })
+    for (const x of r.paths || []) out.push({ text: `${x.file}:${x.line}: \\${x.command}{${x.path}} is read from the top of ${r.doc} now: it needs ${x.to}`, file: x.file, line: x.line })
+    for (const x of r.labels || []) out.push({ text: `The label ${x.label} is in both: ${x.here.join(', ')} and ${x.brought.join(', ')}. Rename one of them.` })
+    for (const x of r.keys || []) out.push({ text: `The .bib key ${x.key} is in both: ${x.here} and ${x.brought}. Keep one entry if both files are read together.` })
+    return out
+  }
+
+  /** What adding a template's files to a document did, line by line. */
+  function addTemplateLines(r) {
+    const n = (r.added || []).length
+    return [
+      { text: n ? `Added ${n} file${n === 1 ? '' : 's'} of ${r.template} to ${r.doc}: ${r.added.join(', ')}.` : `Nothing of ${r.template} was added to ${r.doc}.` },
+      ...((r.skipped || []).length ? [{ text: `Skipped, because ${r.doc} already has a file of that path (nothing is overwritten): ${r.skipped.join(', ')}.` }] : []),
+      { text: `Nothing in ${r.doc} was changed: its preamble is yours to rewrite for the template's class or style.` },
+    ]
+  }
+
   /** The snippets resting on a note. */
   function writtenIn(ms, id) {
     return ms && ms.snippets ? ms.snippets.filter(s => (s.basis || []).includes(id)).map(s => s.id) : []
@@ -508,7 +529,10 @@
       const bar = el('div', { class: 'ms-files-bar' },
         el('button', { type: 'button', text: '+ File', title: 'A new file of this document (a path makes its folders: chapters/intro.tex)', onclick: () => void newEntry('file', '') }),
         el('button', { type: 'button', text: '+ Folder', title: 'A new folder of this document', onclick: () => void newEntry('folder', '') }),
-        el('button', { type: 'button', text: 'Upload', title: 'Upload images, PDFs or any other file into this document (20 MB a file at most); or drop them on the list', onclick: () => pickFiles('') }))
+        el('button', { type: 'button', text: 'Upload', title: 'Upload images, PDFs or any other file into this document (20 MB a file at most); or drop them on the list', onclick: () => pickFiles('') }),
+        el('select', { class: 'ms-more', 'aria-label': 'More for this document', title: 'Duplicate this document, bring another document into a folder of it, or add a template\'s files to it', onchange: ev => { const what = ev.target.value; ev.target.value = ''; void reuse(what) } },
+          el('option', { value: '', text: 'More…' }), el('option', { value: 'duplicate', text: 'Duplicate this document…' }),
+          el('option', { value: 'bring-in', text: 'Bring another document in…' }), el('option', { value: 'add-template', text: 'Add a template\'s files…' })))
       // several files have \begin{document} and none was chosen: the page asks
       const asked = (d.mainAsked || []).length ? el('div', { class: 'ms-pad ms-ask' },
         el('p', { class: 'ms-flag-text', text: 'Several files of this document have \\begin{document}. Which one is its main file, the one that is compiled?' }),
@@ -1012,6 +1036,65 @@
       if (viewing && (viewing.rel === e.path || viewing.rel.startsWith(`${e.path}/`))) closeView()
       render()
       if (was === e.path || was.startsWith(`${e.path}/`)) { docFile = ''; file = null; if (pathOf() && editable(theDoc()).length) await openFile(pathOf()); else if (cm) { loading = true; cm.setValue(''); loading = false; renderHead() } }
+    }
+
+    /** What was done to the open document, and what remains, shown where a compile's errors are (until the next compile). */
+    function report(lines) {
+      errorsEl.replaceChildren(...lines.map(x => (x.file
+        ? el('button', { type: 'button', class: 'ms-warn ms-report', text: x.text, title: 'Go to it', onclick: () => void goTo(x.file, x.line || 1) })
+        : el('div', { class: 'ms-warn ms-report', text: x.text }))))
+      errorsEl.hidden = !lines.length
+    }
+
+    /** Duplicate the open document, bring another document into a folder of it, or add a template's files to it. */
+    async function reuse(what) {
+      const d = theDoc()
+      if (!what || !d) return
+      if (!canWrite()) { needKey('do that'); return }
+      if (!(await settle())) return
+      const names = ms.documents.map(x => x.name)
+      let body
+      if (what === 'duplicate') {
+        const name = (prompt(`A name for the duplicate of ${d.name} (its files, its copies and values with their tracking; connected to no repository):`, `${d.name}-copy`) || '').trim()
+        if (!name) return
+        const problem = docNameProblem(name, names)
+        if (problem) { notify(problem); return }
+        body = { action: 'duplicate', name }
+      } else if (what === 'bring-in') {
+        const others = names.filter(n => n !== d.name)
+        if (!others.length) { notify('There is no other document to bring in.'); return }
+        const source = (prompt(`Which document comes into a folder of ${d.name}? (${others.join(', ')})\nIts files are copied once, with its copies and their tracking; it stays as it is.`, others[0]) || '').trim()
+        if (!source) return
+        if (!others.includes(source)) { notify(`"${source}" is no other document (${others.join(', ')}).`); return }
+        const typed = prompt(`The folder of ${d.name} it goes in (a new one):`, `papers/${source}`)
+        if (typed == null) return
+        const { path, problem } = typedPath(typed, '')
+        if (problem) { notify(problem); return }
+        body = { action: 'bring-in', source, into: path }
+      } else {
+        const own = templatesNow().filter(t => !t.builtIn).map(t => t.name)
+        if (!own.length) { notify('The vault has no template of its own yet: load one in New document (Load a zip…), or put its folder in the vault\'s templates/.'); return }
+        const template = (prompt(`Which template's files are added to ${d.name}? (${own.join(', ')})\nA file whose path ${d.name} already has is skipped: nothing is overwritten.`, own[0]) || '').trim()
+        if (!template) return
+        body = { action: 'add-template', template }
+      }
+      renderStatus('Working…')
+      const r = await api('api/manuscript/reuse', { method: 'POST', body: { doc: d.name, ...body } })
+      renderStatus('')
+      if (!r.ok) { notify(r.data.error || `Not done (${r.status})`); return }
+      ms = r.data
+      if (what === 'duplicate') {
+        doc = r.data.name
+        docFile = ''
+        store.set('msDoc', doc)
+        await setLevel('documents', true)
+        notify(`${r.data.name} is a duplicate of ${r.data.from}: the same files, copies and values, tied to nothing of it, connected to no repository.`)
+        return
+      }
+      render()
+      report(what === 'bring-in' ? bringInLines(r.data) : addTemplateLines(r.data))
+      const pane = section.querySelector('.phone-panes[data-for=ms-body] [data-pane=pdf]')
+      if (pane && getComputedStyle(pane.parentElement).display !== 'none') pane.click() // on a phone: the pane where the report is
     }
 
     /** A document's main file or engine, kept by the server. */
@@ -1685,5 +1768,5 @@
     return { show, writtenIn: id => writtenIn(ms, id), openSnippet: id => { void show().then(() => openSnippet(id)) }, get summary() { return ms }, stop: () => clearInterval(timer) }
   }
 
-  root.RftManuscript = { CONTEXT, KINDS, MAX_UPLOAD, anchorOf, contentOf, byKind, stateOf, usedWords, usedCount, parseMarkers, outlineOf, valueWords, traceWords, fileOrder, treeRows, editable, typedPath, uploadProblem, crc32, zipOf, templateName, templateWords, remoteWords, gitWords, writtenIn, slugOf, docNameProblem, errorText, mount }
+  root.RftManuscript = { CONTEXT, KINDS, MAX_UPLOAD, anchorOf, contentOf, byKind, stateOf, usedWords, usedCount, parseMarkers, outlineOf, valueWords, traceWords, fileOrder, treeRows, editable, typedPath, uploadProblem, crc32, zipOf, templateName, templateWords, remoteWords, gitWords, bringInLines, addTemplateLines, writtenIn, slugOf, docNameProblem, errorText, mount }
 })(typeof window !== 'undefined' ? window : globalThis)

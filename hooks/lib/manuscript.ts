@@ -20,7 +20,7 @@ import {
   listSnippets, readDocsRegistry, readRegistry, snippetRel, uncommented, writeDocsRegistry, writeRegistry,
 } from './snippets'
 import type { Engine, TrackedCopy, TrackedValue, Tracking } from './tracking'
-import { parseTracking, readTracking, writeTracking } from './tracking'
+import { figureFile, parseTracking, readTracking, writeTracking } from './tracking'
 import { TEMPLATES_DIR, TEMPLATE_NAME, builtInFiles, documentTemplate, isBuiltIn, templateFiles, templateSettings, templatesWords, texText, vaultTemplates } from './templates'
 import { substanceFingerprint } from './verify'
 import type { Held, Written } from './writeout'
@@ -303,7 +303,7 @@ export async function valuesOf(io: Io, loaded: Loaded, d: Doc): Promise<Value[]>
     let same = now === v.written
     // a figure is the tree's while the file the document has of it is the vault's
     if (v.kind === 'figure' && now !== null && v.found === 'written') {
-      try { same = (await io.read(join(vault, DOCUMENTS_DIR, d.name, v.written))) === (await io.read(join(vault, figureRel(v.from, v.key)))) } catch { same = false }
+      try { same = (await io.read(join(vault, DOCUMENTS_DIR, d.name, figureFile(v)))) === (await io.read(join(vault, figureRel(v.from, v.key)))) } catch { same = false }
     }
     const state: ValueState = !v.found ? 'lost' : v.found === 'changed' ? 'changed' : now !== null && (same || now === v.kept) ? 'current' : 'review'
     out.push({ ...v, state, now, inCopyOf: v.line === null ? null : copyAt(d.copies, v.file, v.line)?.snippet ?? null })
@@ -819,9 +819,9 @@ const valuesInside = (d: Doc, c: Located): number[] =>
 function heldOf(d: Doc, except?: Located): Held {
   const files: Record<string, string> = Object.fromEntries(d.others.map(f => [f, '']))
   const own = new Set(except ? valuesInside(d, except) : [])
-  d.tracking.values.forEach((v, k) => { if (v.kind === 'figure' && !own.has(k)) files[v.written] = `${v.from} ${v.key}` })
+  d.tracking.values.forEach((v, k) => { if (v.kind === 'figure' && !own.has(k)) files[figureFile(v)] = `${v.from} ${v.key}` })
   // a figure only this copy uses is written again in its place
-  d.tracking.values.forEach((v, k) => { if (v.kind === 'figure' && own.has(k) && files[v.written] === '') delete files[v.written] })
+  d.tracking.values.forEach((v, k) => { if (v.kind === 'figure' && own.has(k) && files[figureFile(v)] === '') delete files[figureFile(v)] })
   return { labels: labelsIn(d, except), files }
 }
 
@@ -890,10 +890,11 @@ function dropUnused(w: Work, d: Doc): void {
     }
     delete w.tracking.bib[key]
   }
-  const still = new Set(w.tracking.values.filter(v => v.kind === 'figure').map(v => v.written))
+  const still = new Set(w.tracking.values.filter(v => v.kind === 'figure').map(figureFile))
   for (const v of d.tracking.values) {
-    if (v.kind !== 'figure' || still.has(v.written) || w.removed.includes(v.written) || !d.others.includes(v.written)) continue
-    if (!tex.some(text => uncommented(text).includes(v.written))) w.removed.push(v.written)
+    const f = figureFile(v)
+    if (v.kind !== 'figure' || still.has(f) || w.removed.includes(f) || !d.others.includes(f)) continue
+    if (!tex.some(text => uncommented(text).includes(v.written))) w.removed.push(f)
   }
 }
 
@@ -1059,7 +1060,7 @@ export async function reviewValue(io: Io, loaded: Loaded, name: string, index: n
   const entry = { ...w.tracking.values[index]! }
   delete entry.kept
   if (v.kind === 'figure') {
-    await copyIn(io, join(vault, figureRel(v.from, v.key)), join(vault, DOCUMENTS_DIR, d.name, v.written))
+    await copyIn(io, join(vault, figureRel(v.from, v.key)), join(vault, DOCUMENTS_DIR, d.name, figureFile(v)))
   } else {
     const text = w.files[v.file]!
     w.files[v.file] = text.slice(0, v.offset!) + v.now + text.slice(v.offset! + v.inDocument!.length)

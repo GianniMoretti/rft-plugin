@@ -999,6 +999,7 @@ vault/documents/
     figures/loss.pdf          the figures its copies include, and what you upload
     icml2027.sty              its template's class and style files
   .rft/paper/tracking.json    what ties the document to the tree, its main file, engine and template (the plugin's)
+  .rft/paper/git/             the document's own git data, once it is connected to a repository (the plugin's)
   .build/, rft.sty, rft-numbers.tex, refs.bib   what compiling leaves; the last three for a snippet compiled alone
 vault/templates/
   icml2027/                   a template of your own: a folder, copied into a new document as it is
@@ -1048,6 +1049,46 @@ With 1k images, CutMix reaches 73.2\% \cite{yun2019cutmix}.   that say its kind 
   picks bibtex or biber itself, and runs bibtex once per chapter when the document has a
   bibliography per chapter. A document that needs another engine says so, with the button that
   sets it; one that asks for shell escape (`minted`) says it is off, and does not compile.
+- **A document is shared through git, by you alone.** **Connect to a repository…** in the
+  document's head takes the address of a repository you made (an empty one on GitHub, reached with
+  your own SSH keys; the plugin creates none and stores no secret). The document becomes a
+  repository of its own, with its git data kept in `vault/documents/.rft/<name>/git/`: the folder
+  holds no `.git`, and the vault's own history keeps the document's files as ordinary files. Opening
+  the document asks the remote, and the head says how far **behind** and **ahead** it is and how
+  many files changed (**Check** asks again). Open the same repository in Overleaf through its
+  GitHub sync to write there with co-authors.
+  - **Push…** records every change with the message you type, and sends it. It is refused, with
+    the file and line, when the scan finds a trace of your tree (so that no commit ever holds
+    one; **Allow** a false alarm and it goes through), when the document is behind (it offers
+    Pull), and while a conflict is unresolved.
+  - **Pull** merges what was pushed to the remote. Changes you had not pushed are recorded first,
+    under a message that says so, and not sent. After a pull the copies are found again by their
+    marker lines, else by their text, else they are **lost**; a co-author's rewording inside a copy
+    reads as **adapted**, and a number of the tree they changed is listed as no longer the tree's.
+  - **A conflict** is left in the file as git's own lines (`<<<<<<<` … `>>>>>>>`), the files that
+    have one are listed under **Conflicts**, and Compile, Pull and Push wait: keep what is right,
+    delete those lines, save, then Push records the merge.
+  - **From a repository…**, in the New document form, makes a document from a repository that
+    already exists (a paper started in Overleaf): its files as they came, nothing tied to your
+    tree yet. Select a passage and **Selection is a copy** ties it to a snippet; in such a
+    document the file is left as it is (no marker lines are written around a co-author's text;
+    the copy is found by its text, and offered its marker lines). Traces found in what came are
+    listed, not removed.
+  - Claude never pulls or pushes: there is no tool for it, and its git commands against a
+    document's repository are refused.
+- **A document is reused** from **More…** in the file list:
+  - **Duplicate this document…** makes a second document with the same files, copies, values,
+    allowed occurrences, main file and engine, tied to nothing of the first and connected to no
+    repository: the submitted version stays as it was while you prepare the resubmission.
+  - **Bring another document in…** copies a document's files into a new folder of this one, once,
+    with its copies and values tracked under their new paths: a paper becomes a chapter of a
+    thesis by papers. Nothing is rewritten. The page says what remains for you (take the paper's
+    body in with `\input`, without its preamble; the lines that name a file of the paper, which
+    is now read from the thesis's top) and what clashes (labels and `.bib` keys both define, with
+    both places). The source document is unchanged, and the two are not tied afterwards.
+  - **Add a template's files…** copies a template of the vault into this document without
+    overwriting anything: a file whose path exists is skipped and named. The preamble is yours to
+    rewrite for the new class or style.
 - **Only verified notes go in.** Claude proposes snippets from verified notes only (see Statuses),
   and where to place them: `/rft-manuscript [document]` asks it for two tables, snippets to write
   and placements; nothing is written until you pick. A picked snippet is a **stub**: its two header

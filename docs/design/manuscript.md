@@ -10,8 +10,10 @@ lines, macros in its text) is converted once, the first time it is read. The use
 description is the README's "Snippets and documents" and "Statuses"; Claude's is the manual's
 "Verified notes" and "Snippets and documents". Revised 2026-11-24 again to **folders and
 templates**: a document is a folder of files made from a template, with a file list, a main file
-of any name and an engine of its own. Later: a document synced with GitHub and through it with
-Overleaf, clicking in the PDF to jump to the source line.
+of any name and an engine of its own; to **git**: a document is a repository of its own, pushed
+and pulled by the user from the page, and through GitHub opened in Overleaf; and to **reuse**:
+Duplicate, Bring in, a template's files added. Later: clicking in the PDF to jump to the source
+line.
 
 ## The problem
 
@@ -108,6 +110,7 @@ vault/documents/
     icml2027.sty, icml2027.bst    its template's files, the document's own from then on
   .rft/paper/tracking.json    what ties the document to the tree, and its main file, engine and
                               template (the plugin's)
+  .rft/paper/git/             the document's own git data, once it is connected to a repository
   .rft/paper/first-design/    a converted document's files as they were
   .build/                     what compiling leaves (a document's, and a snippet's alone)
   rft.sty, rft-numbers.tex, refs.bib   generated for a snippet compiled alone
@@ -144,6 +147,28 @@ vault/templates/
   that covers the file, else what the user chose for it, else the one `.bib` the document names.
   With several and nothing to tell them apart the page asks, once. The user's own entries are
   allowed; a citation that rests on one is said in the page, never in the file.
+- **A document is a git repository of its own** (`server/rft_git.py`), once the user connects it
+  to a remote by its address. Its folder is the work tree and its git data is among the plugin's
+  files (`documents/.rft/<name>/git/`, named on every call), so the folder holds no `.git` and
+  the vault's own history keeps the document's files as ordinary files. Git is run by the server
+  on the page's request, never through the session, and never prompts; the plugin creates no
+  repository and stores no secret. **Push** records all with the user's message and sends; it
+  fetches first, and is refused on a trace of the tree, when behind, and while a conflict is
+  unresolved, so that nothing is recorded that cannot be sent and no commit ever holds a trace.
+  **Pull** fetches and merges; what was not recorded yet is recorded first (refused on a trace,
+  as a push is). A conflict stays in the files as git's own lines, and compiling, pulling and
+  pushing wait until they are gone. After a pull nothing is rewritten: the copies and values are
+  read again from the files (by markers, else by text, else lost; a number a co-author changed
+  is no longer the tree's). A document is also made from a repository (cloned; in it a passage
+  declared a copy is tracked by its text, and the file is left as it is). Talking to Overleaf
+  directly is out of scope: its GitHub sync is the bridge.
+- **A thesis is one document**; there is no document inside a document. **Duplicate** makes a
+  second document with the same files and tracking, tied to nothing of the first. **Bring in**
+  copies a document's files into a new folder of another, once, its tracking carried under the
+  new paths (a figure's file is then found in that folder, whether its path in the text has the
+  folder before it or not); it rewrites nothing, and says what remains (the body to take in, the
+  lines that name a file of the brought document) and what clashes (labels, `.bib` keys).
+  **Add a template's files** copies a template into a document without overwriting anything.
 - **A snippet** opens with two comment lines, valid LaTeX, readable and editable by hand:
   `% rft-snippet S04 · result · CutMix at 1k images` and `% basis: E05, E02`. Kinds: definition,
   theorem, lemma, proposition, corollary, proof, method, result, related-work, motivation,
@@ -279,7 +304,9 @@ One tab, two views, **Snippets** and **Documents**.
 - **Documents**: the document menu, **+ Document** (from a template, or one loaded there from a
   zip or a folder), its padlock, its engine and its main file; the document's files and folders
   (made, renamed, deleted, uploaded there), a text file opened in the editor, an image or a PDF
-  shown, the open file with its outline (sections and copies, each copy with its state); **Place** a snippet from the library in the open file, after a copy or a
+  shown, the open file with its outline (sections and copies, each copy with its state); its
+  repository in its head (Connect, how far behind and ahead, Check, Pull, Push) and the files
+  holding a conflict; **More…** (Duplicate, Bring in, Add a template's files); **Place** a snippet from the library in the open file, after a copy or a
   section; **Selection is a copy** ties a passage to a snippet; a copy in review shows the snippet
   as it was placed and as it is now, with **Take the new text** and **Keep mine**; **Lost
   copies** (the selection is it, or drop it), **Values to look at** (take the tree's, or keep

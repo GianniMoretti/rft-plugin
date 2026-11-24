@@ -3,7 +3,12 @@ page's file list. A file or a folder made, renamed, moved or deleted; an image, 
 file uploaded, its bytes as they came; which file is the main one; which engine compiles it. And
 the templates a document is made from: those there are (two built in, and the folders of the
 vault's templates/), and one loaded from a zip (the page sends a folder as a zip too), checked
-entry by entry before anything is written. Standard library only.
+entry by entry before anything is written. And what reuses a document: a duplicate (a second
+document with the same files and the same tracking, tied to nothing of the first), a document
+brought into a folder of another (a paper becomes a chapter of a thesis by papers: its files
+copied once, its tracking carried under their new paths, what clashes and what remains for the
+user said, nothing rewritten), and a template's files added to a document (nothing overwritten).
+Standard library only.
 
 Nothing here reads LaTeX or decides what a copy is: the copies, their states and what is written
 out are the session's (hooks/lib/manuscript.ts). The server writes a document's tracking file
@@ -143,7 +148,9 @@ def carry(d: dict, old: str, new: str) -> dict:
     for v in d.get("values") or []:
         if isinstance(v, dict):
             v["file"] = moved(v.get("file"), old, new)
-            if v.get("kind") == "figure":
+            if v.get("kind") == "figure" and v.get("base"):
+                v["base"] = moved(v["base"], old, new)  # its path in the text is read from that folder: the folder follows
+            elif v.get("kind") == "figure":
                 v["written"] = moved(v.get("written"), old, new)
     for e in (d.get("bib") or {}).values() if isinstance(d.get("bib"), dict) else []:
         if isinstance(e, dict):
@@ -425,3 +432,188 @@ def load_template(vault: Path, name: object, data: bytes) -> Answer:
             shutil.rmtree(staging, ignore_errors=True)
             return 422, {"error": f"the zip could not be unpacked ({err}): nothing was written"}
     return 201, {"name": name, "files": len(entries)}
+
+
+# ---------------------------------------------------------------- a document reused: duplicate, bring in, a template's files added
+
+def _files(folder: Path) -> list[Path]:
+    """Every file under a folder, in the order of their paths; a link, and what a linked folder holds, left out."""
+    out: list[Path] = []
+
+    def visit(d: Path) -> None:
+        for p in sorted(d.iterdir(), key=lambda x: x.name):
+            if p.is_symlink():
+                continue
+            if p.is_dir():
+                visit(p)
+            elif p.is_file():
+                out.append(p)
+
+    if folder.is_dir() and not folder.is_symlink():
+        visit(folder)
+    return out
+
+
+def _copy_tree(source: Path, target: Path) -> int:
+    """A folder's files copied as they are (links left out); how many."""
+    n = 0
+    for p in _files(source):
+        rel = p.relative_to(source)
+        (target / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(p, target / rel)
+        n += 1
+    return n
+
+
+def duplicate(vault: Path, doc: str, name: object) -> Answer:
+    """A second document made from a document: its files, and its tracking file as it is (its
+    copies and values, its allowed occurrences, its main file, engine and template). Tied to
+    nothing of the first from then on, connected to no remote and with no history; locked, as a
+    new document is."""
+    source = folder_of(vault, doc)
+    if source is None:
+        return 404, {"error": "no such document"}
+    if not isinstance(name, str) or not rft_manuscript.DOC_RE.match(name):
+        return 400, {"error": "a document's name is lowercase letters, digits and dashes, e.g. paper-resubmission"}
+    target = rft_manuscript.documents_dir(vault) / name
+    if target.exists() or tracking_path(vault, name).parent.exists():
+        return 409, {"error": f"there is already a document {name}"}
+    files, _ = rft_manuscript.document_texts(vault, doc)
+    main, asked = rft_manuscript.main_of(files, rft_manuscript.read_tracking(vault, doc)["main"])
+    try:
+        n = _copy_tree(source, target)
+        target.mkdir(parents=True, exist_ok=True)
+        d = read_raw(vault, doc)
+        if main and not asked:
+            d["main"] = main  # a document from before its main file was recorded keeps reading the same file
+        d.setdefault("copies", [])
+        write_raw(vault, name, d)
+    except OSError as err:
+        shutil.rmtree(target, ignore_errors=True)
+        shutil.rmtree(tracking_path(vault, name).parent, ignore_errors=True)
+        return 400, {"error": f"{doc} could not be duplicated ({err.strerror or err})"}
+    return 201, {"name": name, "from": doc, "files": n}
+
+
+TAKES_A_FILE = re.compile(r"\\(includegraphics|input|include|subfile|bibliography|addbibresource|lstinputlisting|includepdf|includesvg)\*?\s*(?:\[[^\]]*\]\s*)*\{([^}]+)\}")
+LABEL = re.compile(r"\\label\{([^}]*)\}")
+ENDINGS = ("", ".tex", ".bib", ".pdf", ".png", ".jpg", ".jpeg", ".eps", ".svg")
+
+
+def _lines(text: str):
+    """A text's lines, comments left out, with their numbers from 1."""
+    return ((i, rft_manuscript.uncommented(line)) for i, line in enumerate(text.split("\n"), 1))
+
+
+def bring_in(vault: Path, doc: str, source: object, into: object) -> Answer:
+    """A document's files copied into a new folder of another document, once: a paper becomes a
+    chapter of a thesis by papers. Its tracking is carried under the new paths (its copies and
+    values keep their states; a figure's file is found in that folder). Nothing is rewritten: the
+    answer says what remains for the user (`main`: the brought-in main file, whose body the
+    receiving document is to take in; `paths`: the lines of the brought files that name a file of
+    theirs, which is now read from the receiving document's top) and what clashes (`labels` and
+    `keys` that both documents define, each with both places). The two documents are not tied
+    afterwards, and the source is unchanged."""
+    here = folder_of(vault, doc)
+    if here is None or not isinstance(source, str) or folder_of(vault, source) is None:
+        return 404, {"error": "no such document"}
+    if source == doc:
+        return 400, {"error": "a document is not brought into itself: duplicate it, then bring the duplicate in"}
+    got = _target(vault, doc, into)
+    if not isinstance(got[0], Path):
+        return got
+    _, folder, target = got
+    if target.exists() or target.is_symlink():
+        return 409, {"error": f"{doc} already has {folder}: bring {source} into a folder that is not there yet"}
+    there = folder_of(vault, source)
+    theirs, _ = rft_manuscript.document_texts(vault, source)
+    mine, _ = rft_manuscript.document_texts(vault, doc)
+    tracked = rft_manuscript.read_tracking(vault, source)
+    main, asked = rft_manuscript.main_of(theirs, tracked["main"])
+    # what clashes, said before anything is merged: labels and .bib keys both documents define
+    tex = lambda files: sorted(f for f in files if rft_manuscript.TEX_FILE.search(f))  # noqa: E731
+    places = lambda files, prefix="": {  # noqa: E731
+        label: [f"{prefix}{f}:{i}" for f in tex(files) for i, line in _lines(files[f]) if label in LABEL.findall(line)]
+        for label in dict.fromkeys(m for f in tex(files) for _, line in _lines(files[f]) for m in LABEL.findall(line))}
+    here_labels, their_labels = places(mine), places(theirs, f"{folder}/")
+    labels = [{"label": k, "here": here_labels[k], "brought": their_labels[k]} for k in their_labels if k in here_labels]
+    bibs = lambda files, prefix="": {k: f"{prefix}{f}" for f in sorted(files) if f.lower().endswith(".bib") for k in rft_manuscript.bib_keys(files[f])}  # noqa: E731
+    here_keys, their_keys = bibs(mine), bibs(theirs, f"{folder}/")
+    keys = [{"key": k, "here": here_keys[k], "brought": their_keys[k]} for k in their_keys if k in here_keys]
+    # the lines that name a file of the brought document: read from the receiving document's top from now on
+    names = {p.relative_to(there).as_posix() for p in _files(there)}
+    base = main.rsplit("/", 1)[0] + "/" if "/" in main else ""
+    paths = []
+    for f in tex(theirs):
+        for i, line in _lines(theirs[f]):
+            for m in TAKES_A_FILE.finditer(line):
+                for name in (x.strip() for x in m.group(2).split(",")):
+                    if any(base + name + e in names for e in ENDINGS):
+                        paths.append({"file": f"{folder}/{f}", "line": i, "command": m.group(1), "path": name, "to": f"{folder}/{base}{name}"})
+    try:
+        n = _copy_tree(there, target)
+    except OSError as err:
+        shutil.rmtree(target, ignore_errors=True)
+        return 400, {"error": f"{source} could not be brought in ({err.strerror or err})"}
+    # the receiving document keeps its main file: the brought one has a \\begin{document} too, and is not to be asked about
+    my_main, my_asked = rft_manuscript.main_of(mine, rft_manuscript.read_tracking(vault, doc)["main"])
+    # the tracking carried: every path under the new folder; an entry both track keeps the receiving document's, with the brought .bib too
+    raw, d = read_raw(vault, source), read_raw(vault, doc)
+    under = lambda path: f"{folder}/{path}" if isinstance(path, str) and path else path  # noqa: E731
+    d.setdefault("copies", []).extend({**c, "file": under(c.get("file"))} for c in raw.get("copies") or [] if isinstance(c, dict))
+    for v in raw.get("values") or []:
+        if isinstance(v, dict):
+            v = {**v, "file": under(v.get("file"))}
+            if v.get("kind") == "figure":
+                v["base"] = f"{folder}/{v['base']}" if v.get("base") else folder
+            d.setdefault("values", []).append(v)
+    for key, e in (raw.get("bib") or {}).items() if isinstance(raw.get("bib"), dict) else []:
+        if not isinstance(e, dict):
+            continue
+        files = [under(e.get("file")), *(under(x) for x in e.get("also") or [])]
+        had = d.setdefault("bib", {}).get(key)
+        if isinstance(had, dict):
+            had["also"] = list(dict.fromkeys([*(had.get("also") or []), *files]))
+        else:
+            d["bib"][key] = {"from": e.get("from"), "file": files[0], **({"also": files[1:]} if files[1:] else {})}
+    d.setdefault("allowed", []).extend({**a, "file": under(a.get("file"))} for a in raw.get("allowed") or [] if isinstance(a, dict))
+    if isinstance(raw.get("bibOf"), dict):
+        d["bibOf"] = {**(d.get("bibOf") if isinstance(d.get("bibOf"), dict) else {}), **{under(k): under(v) for k, v in raw["bibOf"].items()}}
+    if my_main and not my_asked:
+        d["main"] = my_main
+    write_raw(vault, doc, d)
+    return 201, {"doc": doc, "from": source, "into": folder, "files": n, "copies": len(raw.get("copies") or []),
+                 "main": f"{folder}/{main}" if main and not asked else None, "paths": paths, "labels": labels, "keys": keys}
+
+
+def add_template(vault: Path, doc: str, template: object) -> Answer:
+    """A template's files added to a document that has its own: every file whose path the
+    document does not have is copied in (`added`); one whose path exists is skipped and named
+    (`skipped`), never overwritten. The settings file is not copied, and nothing in the document
+    is changed: its preamble is the user's to rewrite for the new class or style."""
+    folder = folder_of(vault, doc)
+    if folder is None:
+        return 404, {"error": "no such document"}
+    if template in BUILT_IN:
+        return 400, {"error": f"the built-in template {template} is a main file and an empty .bib, which {doc} has: there is nothing to add"}
+    if not isinstance(template, str) or not TEMPLATE_NAME.match(template):
+        return 404, {"error": "no such template"}
+    source = templates_dir(vault) / template
+    if not source.is_dir() or source.is_symlink():
+        return 404, {"error": f"no template {template}"}
+    added, skipped = [], []
+    for p in _files(source):
+        rel = p.relative_to(source).as_posix()
+        if rel == TEMPLATE_SETTINGS or p.name == ".DS_Store":
+            continue
+        target = inside(folder, rel)
+        if target is None:
+            skipped.append(rel)
+            continue
+        if target.exists() or target.is_symlink():
+            skipped.append(rel)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(p, target)
+        added.append(rel)
+    return 200, {"doc": doc, "template": template, "added": added, "skipped": skipped}

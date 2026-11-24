@@ -40,6 +40,8 @@ type Api = {
   templateWords: (t: { name: string; builtIn: boolean; files?: number; engine?: string }) => string
   remoteWords: (url: string) => string
   gitWords: (st: Record<string, unknown> | null) => string
+  bringInLines: (r: Record<string, unknown>) => { text: string; file?: string; line?: number }[]
+  addTemplateLines: (r: Record<string, unknown>) => { text: string }[]
 }
 const M = (globalThis as unknown as { RftManuscript: Api }).RftManuscript
 
@@ -205,5 +207,27 @@ describe('the manuscript tab', () => {
     expect(M.gitWords({ repository: true, remote: 'x', behind: 0, ahead: 2, changed: 0 })).toBe('0 behind · 2 commits ahead · nothing changed')
     expect(M.gitWords({ repository: true, remote: null })).toBe('')
     expect(M.gitWords(null)).toBe('')
+  })
+
+  test('what bringing a document in, or adding a template\'s files, did and left to do', () => {
+    const lines = M.bringInLines({
+      doc: 'thesis', from: 'icml', into: 'papers/paperA', files: 10, copies: 1, main: 'papers/paperA/example_paper.tex',
+      paths: [{ file: 'papers/paperA/example_paper.tex', line: 634, command: 'input', path: 'sections/method', to: 'papers/paperA/sections/method' }],
+      labels: [{ label: 'def:cutmix', here: ['thesis.tex:7'], brought: ['papers/paperA/main.tex:32'] }], keys: [{ key: 'yun2019cutmix', here: 'thesis.bib', brought: 'papers/paperA/refs.bib' }],
+    })
+    expect(lines.map(x => x.text)).toEqual([
+      'Brought icml into papers/paperA/ of thesis: 10 files, 1 copy of snippets tracked under their new paths. icml itself is unchanged, and the two are not tied.',
+      'Its main file, papers/paperA/example_paper.tex, is left as it is and thesis does not take it in. What remains is yours: take its body in from a file of thesis (\\input{…}), without its preamble, \\begin{document} and \\end{document}.',
+      'papers/paperA/example_paper.tex:634: \\input{sections/method} is read from the top of thesis now: it needs papers/paperA/sections/method',
+      'The label def:cutmix is in both: thesis.tex:7 and papers/paperA/main.tex:32. Rename one of them.',
+      'The .bib key yun2019cutmix is in both: thesis.bib and papers/paperA/refs.bib. Keep one entry if both files are read together.',
+    ])
+    expect(lines.map(x => [x.file, x.line])).toEqual([[undefined, undefined], ['papers/paperA/example_paper.tex', 1], ['papers/paperA/example_paper.tex', 634], [undefined, undefined], [undefined, undefined]])
+    expect(M.addTemplateLines({ doc: 'paper', template: 'venue', added: ['venue.cls'], skipped: ['main.tex', 'refs.bib'] }).map(x => x.text)).toEqual([
+      'Added 1 file of venue to paper: venue.cls.',
+      'Skipped, because paper already has a file of that path (nothing is overwritten): main.tex, refs.bib.',
+      'Nothing in paper was changed: its preamble is yours to rewrite for the template\'s class or style.',
+    ])
+    expect(M.addTemplateLines({ doc: 'paper', template: 'venue', added: [], skipped: [] })[0]!.text).toBe('Nothing of venue was added to paper.')
   })
 })

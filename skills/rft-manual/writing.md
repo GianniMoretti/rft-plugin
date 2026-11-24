@@ -35,7 +35,7 @@ this applies.
   one with `\begin{document}` whatever its name, the `.tex` files it takes in, its `.bib` files,
   its figures, its template's class and style files) are built with them. Their files are **plain
   LaTeX that names nothing of the tree**: the user shares the folder with co-authors as it is.
-  `rft_manuscript` names each document's template, main file and engine; `rft_manuscript <name>`
+  `rft_manuscript` names each document's template, main file and engine, `rft_manuscript <name>`
   its files. A copy in a file the main file does not take in is not in the document. A snippet enters one as a copy
   **written out**, between two marker lines that say only its kind and title
   (`%%% Result: CutMix at 1k images %%%` … `%%% end %%%`); the user may adapt it, and a document
@@ -90,3 +90,8 @@ this applies.
   copies, its changed values and the traces of the tree in its files.
 - A document of the first design (`% rft-begin` lines, macros in its text) is converted the first
   time you read or change it: tell the user when `rft_manuscript` reports it.
+- **Sharing is the user's.** A document may be a git repository of its own, which the user
+  connects, pulls and pushes in the page (and from there Overleaf): never run git against it
+  (refused). After a pull, `rft_manuscript <name>` says what a co-author changed: copies adapted
+  or lost, values no longer the tree's. Duplicate, Bring in and Add a template's files are the
+  user's too, in the page.

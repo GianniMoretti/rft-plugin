@@ -50,7 +50,16 @@ export type TrackedValue = {
   after: string
   /** What the tree said when the user chose to keep theirs: not flagged again until the tree says something else. */
   kept?: string
+  /**
+   * A figure of a document brought into a folder of another (server/rft_documents.py bring_in):
+   * that folder, where its file is. Its path stands in the text as it was written, from the
+   * brought document's own top, or with this folder before it once the user has put it there.
+   */
+  base?: string
 }
+
+/** A figure's file inside its document: its path as written, under its base folder when it has one. */
+export const figureFile = (v: Pick<TrackedValue, 'written' | 'base'>) => (v.base ? `${v.base}/${v.written}` : v.written)
 export type Allowed = { file: string; match: string; text: string }
 export const ENGINES = ['pdflatex', 'xelatex', 'lualatex'] as const
 export type Engine = (typeof ENGINES)[number]
@@ -92,7 +101,7 @@ export function parseTracking(raw: unknown): Tracking {
     copies: list(d.copies).filter(c => str(c.snippet) && str(c.file))
       .map(c => ({ snippet: str(c.snippet), marker: str(c.marker), file: str(c.file), stamp: str(c.stamp), placed: str(c.placed), ...(str(c.seen) ? { seen: str(c.seen) } : {}) })),
     values: list(d.values).filter(v => ['number', 'figure', 'table'].includes(str(v.kind)) && str(v.from) && str(v.file))
-      .map(v => ({ kind: str(v.kind) as ValueKind, from: str(v.from), key: str(v.key), written: str(v.written), file: str(v.file), before: str(v.before), after: str(v.after), ...(str(v.kept) ? { kept: str(v.kept) } : {}) })),
+      .map(v => ({ kind: str(v.kind) as ValueKind, from: str(v.from), key: str(v.key), written: str(v.written), file: str(v.file), before: str(v.before), after: str(v.after), ...(str(v.kept) ? { kept: str(v.kept) } : {}), ...(str(v.base) ? { base: str(v.base) } : {}) })),
     bib,
     allowed: list(d.allowed).filter(a => str(a.file) && str(a.match)).map(a => ({ file: str(a.file), match: str(a.match), text: str(a.text) })),
   }

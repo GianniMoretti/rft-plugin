@@ -216,6 +216,44 @@ class DocumentsPage(unittest.TestCase):
         self.shot("made-from-template")
         self.assertEqual(b.errors, [])
 
+    def test_duplicate_bring_in_and_a_templates_files_from_the_more_menu(self):
+        b = self.b
+        kit = self.vault / "templates" / "venue"
+        kit.mkdir(parents=True)
+        (kit / "venue.cls").write_text("% the class\n")
+        (kit / "main.tex").write_text("\\documentclass{venue}\n\\begin{document}\nSample.\n\\end{document}\n")
+        self.start()
+        more = "(what => { const s = document.querySelector('#ms-list .ms-more'); s.value = what; s.dispatchEvent(new Event('change', { bubbles: true })) })"
+        report = "[...document.querySelectorAll('#ms-errors .ms-report')].map(x => x.textContent)"
+        # a template's files added: what is there is skipped and named, nothing overwritten
+        mine = (self.doc / "main.tex").read_bytes()
+        b.js("window.answers.push('venue')")
+        b.js(f"{more}('add-template')")
+        self.assertTrue(b.wait(f"{report}.length === 3"), b.js(report))
+        self.assertEqual(b.js(report)[:2], ["Added 1 file of venue to paper: venue.cls.", "Skipped, because paper already has a file of that path (nothing is overwritten): main.tex."])
+        self.assertEqual((self.doc / "main.tex").read_bytes(), mine)
+        self.assertTrue(b.wait(f"{ROWS}.includes('venue.cls')"))
+        self.shot("template-files-added")
+        # a duplicate: the page moves to it, with the same files and copies
+        copies = "[...document.querySelectorAll('#ms-list .ms-tree > .ms-copy .ms-id')].map(x => x.textContent)"
+        before = b.js(copies)
+        b.js("window.answers.push('paper-v2')")
+        b.js(f"{more}('duplicate')")
+        self.assertTrue(b.wait("document.getElementById('ms-doc').value === 'paper-v2'"), "the duplicate is not open")
+        self.assertTrue(b.wait(f"{ROWS}.includes('venue.cls') && {copies}.length === {len(before)}"))
+        self.assertEqual(b.js(copies), before)
+        self.assertEqual((self.vault / "documents" / "paper-v2" / "main.tex").read_bytes(), mine)
+        # the document `two` brought into a folder of the duplicate: what was done and what remains is said, each place a click away
+        b.js("window.answers.push('two', 'papers/two')")
+        b.js(f"{more}('bring-in')")
+        self.assertTrue(b.wait(f"{report}.length >= 2 && {report}[0].startsWith('Brought two into papers/two/ of paper-v2: 2 files')"), b.js(report))
+        self.assertIn("paper-v2 takes none of them in yet", b.js(report)[1])
+        self.assertTrue((self.vault / "documents" / "paper-v2" / "papers" / "two" / "paper.tex").is_file())
+        self.assertTrue(b.wait(f"{ROWS}.includes('papers/')"))
+        self.assertEqual(b.js("document.querySelectorAll('#ms-list .ms-ask').length"), 0, "the duplicate keeps its own main file")
+        self.shot("brought-in")
+        self.assertEqual(b.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()

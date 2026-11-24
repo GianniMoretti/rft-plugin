@@ -257,7 +257,8 @@ def read_tracking(vault: Path, name: str) -> dict:
                "placed": text(c.get("placed")), **({"seen": c["seen"]} if text(c.get("seen")) else {})}
               for c in rows(d.get("copies")) if text(c.get("snippet")) and text(c.get("file"))]
     values = [{"kind": v["kind"], "from": text(v.get("from")), "key": text(v.get("key")), "written": text(v.get("written")), "file": text(v.get("file")),
-               "before": text(v.get("before")), "after": text(v.get("after")), **({"kept": v["kept"]} if text(v.get("kept")) else {})}
+               "before": text(v.get("before")), "after": text(v.get("after")), **({"kept": v["kept"]} if text(v.get("kept")) else {}),
+               **({"base": v["base"]} if text(v.get("base")) else {})}
               for v in rows(d.get("values")) if v.get("kind") in ("number", "figure", "table") and text(v.get("from")) and text(v.get("file"))]
     bib = {k: {"from": text(e.get("from")), "file": text(e.get("file"))} for k, e in (d.get("bib") if isinstance(d.get("bib"), dict) else {}).items()
            if isinstance(e, dict) and text(e.get("from"))}
@@ -547,7 +548,9 @@ def locate_values(files: dict[str, str], tracking: dict) -> list[dict]:
             if found == "changed" and (v["kind"] == "table" or len(_squeeze(v["before"][-n:])) + len(_squeeze(v["after"][:n])) < 6):
                 continue
             before, after = _flexible(v["before"][-n:]), _flexible(v["after"][:n])
-            pattern = "({})({})(?={})".format(before, _flexible(v["written"]), after) if found == "written" else "({})([^\\n]{{0,80}}?)(?={})".format(before, after)
+            # a figure brought in with its document stands as written, or with the folder it was brought into before its path
+            written = "(?:{})?{}".format(_flexible(v["base"] + "/"), _flexible(v["written"])) if v.get("base") else _flexible(v["written"])
+            pattern = "({})({})(?={})".format(before, written, after) if found == "written" else "({})([^\\n]{{0,80}}?)(?={})".format(before, after)
             for m in re.finditer(pattern, text):
                 offset, there = m.end(1), m.group(2)
                 if any(offset < b and offset + len(there) > a for a, b in taken.get(v["file"], [])):
@@ -643,7 +646,8 @@ def values_of(vault: Path, name: str, files: dict[str, str], tracking: dict, cop
             theirs = vault / "figures" / f"{v['from']}_{v['key']}.pdf"
             now = figure_token(theirs)
             try:
-                same = now is not None and v["found"] == "written" and theirs.read_bytes() == (documents_dir(vault) / name / v["written"]).read_bytes()
+                mine = documents_dir(vault) / name / (f"{v['base']}/{v['written']}" if v.get("base") else v["written"])
+                same = now is not None and v["found"] == "written" and theirs.read_bytes() == mine.read_bytes()
             except OSError:
                 same = False
         state = "lost" if not v["found"] else "changed" if v["found"] == "changed" else "current" if now is not None and (same or now == v.get("kept")) else "review"
