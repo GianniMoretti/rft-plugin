@@ -227,6 +227,22 @@
     return t.builtIn ? (t.name === 'report' ? 'Thesis chapter (report)' : 'Paper (article)') : `${t.name}${t.files != null ? ` · ${t.files} file${t.files === 1 ? '' : 's'}` : ''}${t.engine ? ` · ${(ENGINES.find(x => x[0] === t.engine) || [])[1] || t.engine}` : ''}`
   }
 
+  /** A remote's address as the head shows it: its host and path, without the scheme, the user and .git. */
+  function remoteWords(url) {
+    const u = String(url || '').trim().replace(/^[a-z+]+:\/\//i, '').replace(/^[^@/]+@/, '').replace(/\.git\/?$/i, '').replace(/\/+$/, '')
+    return u.length > 48 ? `…${u.slice(-47)}` : u
+  }
+
+  /** A document's repository in a few words: how far behind and ahead of its remote it is, and what is not recorded yet. */
+  function gitWords(st) {
+    if (!st || !st.repository || !st.remote) return ''
+    const n = (k, one, many) => `${k} ${k === 1 ? one : many}`
+    return [
+      st.behind ? `${n(st.behind, 'commit', 'commits')} behind` : '0 behind', st.ahead ? `${n(st.ahead, 'commit', 'commits')} ahead` : '0 ahead',
+      st.changed ? `${n(st.changed, 'file', 'files')} changed since the last push or pull` : 'nothing changed',
+    ].join(' · ')
+  }
+
   /** The snippets resting on a note. */
   function writtenIn(ms, id) {
     return ms && ms.snippets ? ms.snippets.filter(s => (s.basis || []).includes(id)).map(s => s.id) : []
@@ -260,6 +276,8 @@
     const docSel = $('ms-doc'), lockBtn = $('ms-lock'), compileBtn = $('ms-compile')
     const viewEl = $('ms-view'), cmEl = $('ms-cm'), uploadInput = $('ms-upload')
     let viewing = null // an image or a PDF of the document shown where the editor is: { rel, kind, url }
+    let git = null // the open document's repository: { doc, state } (api/manuscript/git), asked with the key
+    let gitBusy = '' // what is being asked of it
     let uploadTo = '' // the folder the picker's files go in
     let ms = null // api/manuscript
     let level = store.get('msLevel', 'snippets') === 'documents' ? 'documents' : 'snippets'
@@ -370,6 +388,7 @@
       if (JSON.stringify(ms) !== was) changed() // the drawer's Written in follows
       if (!visible()) return
       render()
+      if (level === 'documents' && !gitBusy) void loadGit()
       if (file && !dirty) {
         try {
           const f = await api(`api/manuscript/file?path=${encodeURIComponent(file.path)}`)
@@ -502,6 +521,8 @@
         el('p', { class: 'ms-flag-text', text: 'This document was written before documents became plain LaTeX: it holds markers and macros of the plugin, so it cannot be shared and its copies are not shown.' }),
         el('button', { type: 'button', class: 'primary', text: 'Convert it', title: 'Its copies get marker lines that say only their kind and title, its numbers, figures and citations are written out, and the file as it is now is kept beside its tracking file', onclick: () => void ask({ action: 'convert', name: d.name }, 'convert the document') })) : null
       listEl.replaceChildren(...(old ? [old] : []), bar, ...(asked ? [asked] : []), el('ul', { class: 'ms-tree' }, rows),
+        ...group('Conflicts', 'A pull left both versions in these files, between the lines git wrote (<<<<<<< to >>>>>>>): keep what is right, delete those lines and save. Compile and Push wait until then', ((gitState() || {}).conflicts || []).map(f => el('li', { class: 'ms-item ms-wrap', title: 'Open it', onclick: () => void goTo(f, 1) },
+          el('span', { class: 'ms-title', text: f })))),
         ...group('Lost copies', 'Copies the plugin cannot find in the document any more: their marker lines and their text were changed elsewhere', lost.map(c => el('li', { class: 'ms-item ms-copy ms-wrap' },
           el('span', { class: 'ms-id', text: c.name }), el('span', { class: 'ms-title', text: `${c.marker} (was in ${c.file})` }),
           el('button', { type: 'button', text: 'It is the selection', title: 'Select the passage in the editor first: it becomes this copy again, between its marker lines', onclick: () => void pointAt(c.name) }),
@@ -577,6 +598,8 @@
               (d.mainAsked || []).length ? el('option', { value: '', text: 'choose…', selected: true, disabled: true }) : null,
               (d.mainCandidates || []).map(f => el('option', { value: f, text: f, selected: !(d.mainAsked || []).length && f === d.main })))) : null,
           el('span', { class: 'ms-spacer' }), el('span', { class: 'ms-acts' }, selButton('comment'), selButton('suggestion'), saveBtn)))
+        const repo = d ? gitRow(d) : null
+        if (repo) headEl.append(repo)
         const extra = focusCopy ? copyPanel(focusCopy) : placeRow()
         if (extra) headEl.append(extra)
         const insert = focusCopy ? null : insertRow()
@@ -835,6 +858,95 @@
       renderHead()
     }
 
+    // ---------------------------------------------------------------- the document's repository
+
+    /** The open document's repository, asked of the server; `fetching`: its remote asked first (once, when the document is opened). */
+    async function loadGit(fetching = false) {
+      if (level !== 'documents' || !doc || !canWrite()) { git = null; return }
+      const name = doc
+      let r
+      try { r = await api(`api/manuscript/git?doc=${encodeURIComponent(name)}${fetching ? '&fetch=1' : ''}`) } catch { return }
+      if (name !== doc || !r.ok) return
+      const was = JSON.stringify(git)
+      git = { doc: name, state: r.data }
+      if (JSON.stringify(git) !== was) { renderList(); renderHead() }
+    }
+
+    const gitState = () => (git && git.doc === doc ? git.state : null)
+
+    /** The repository row of a document's head: connect it, or how far behind and ahead it is, with Pull and Push. */
+    function gitRow(d) {
+      const st = gitState()
+      if (!st) return null
+      if (!st.repository || !st.remote) {
+        if (st.error && !st.repository && /git is not on PATH/.test(st.error)) return el('div', { class: 'ms-head-row ms-git' }, el('span', { class: 'muted', text: st.error }))
+        return el('div', { class: 'ms-head-row ms-git' },
+          el('span', { class: 'muted', text: 'Not shared' }),
+          el('button', { type: 'button', text: 'Connect to a repository…', disabled: !!gitBusy, title: 'Connect this document to a repository by its address (an empty one you made on GitHub, reached with your own SSH keys): it can then be pushed there, opened in Overleaf, and pulled back. Nothing is sent until you push', onclick: () => void connectGit() }))
+      }
+      const bad = st.conflicts || []
+      return el('div', { class: 'ms-head-row ms-git' },
+        el('button', { type: 'button', class: 'ms-git-remote', text: remoteWords(st.remote), title: `${st.remote}${st.branch ? ` (branch ${st.branch})` : ''} (click: change the address)`, onclick: () => void connectGit(st.remote) }),
+        el('span', { class: st.behind ? 'ms-flag-text' : 'muted', text: gitWords(st) }),
+        bad.length ? el('span', { class: 'ms-flag-text', text: `conflict in ${bad.join(', ')}` }) : st.merging ? el('span', { class: 'ms-flag-text', text: 'a pull to finish: Push records it' }) : null,
+        el('button', { type: 'button', text: gitBusy === 'check' ? 'Checking…' : 'Check', disabled: !!gitBusy, title: 'Ask the remote whether a co-author pushed something', onclick: async () => { gitBusy = 'check'; renderHead(); await loadGit(true); gitBusy = ''; renderHead() } }),
+        el('button', { type: 'button', text: gitBusy === 'pull' ? 'Pulling…' : 'Pull', disabled: !!gitBusy || bad.length > 0, title: bad.length ? 'Resolve the conflict first' : 'Take in what was pushed to the remote (from Overleaf, by a co-author): merged into your files; your own changes are recorded first, not sent', onclick: () => void pullGit() }),
+        el('button', { type: 'button', class: 'primary', text: gitBusy === 'push' ? 'Pushing…' : 'Push…', disabled: !!gitBusy || bad.length > 0, title: bad.length ? 'Resolve the conflict first' : 'Record every change of this document with a message, and send it. Refused when the scan finds a trace of your tree, or when the document is behind', onclick: () => void pushGit() }),
+        st.error ? el('span', { class: 'ms-flag-text', text: st.error }) : null)
+    }
+
+    async function gitAsk(body, busy) {
+      gitBusy = busy
+      renderHead()
+      let r
+      try { r = await api('api/manuscript/git', { method: 'POST', body: { doc, ...body } }) } catch { r = { ok: false, status: 0, data: { error: 'The server is not answering.' } } }
+      gitBusy = ''
+      if (r.ok) git = { doc, state: r.data }
+      renderHead()
+      return r
+    }
+
+    async function connectGit(current) {
+      if (!canWrite()) { needKey('connect the document'); return }
+      const url = prompt(`The address of the repository ${doc} is shared through (make an empty one on GitHub first; it is reached with your own SSH keys):`, current || 'git@github.com:')
+      if (url == null || !url.trim() || url.trim() === 'git@github.com:') return
+      const r = await gitAsk({ action: 'connect', url: url.trim() }, 'connect')
+      if (!r.ok) notify(r.data.error || `Not connected (${r.status})`)
+      else if (r.data.error) notify(`Connected, but ${r.data.error}`)
+      await refresh()
+    }
+
+    async function pullGit() {
+      if (!(await settle())) return
+      const r = await gitAsk({ action: 'pull' }, 'pull')
+      if (!r.ok) {
+        notify(r.data.error || `Not pulled (${r.status})`)
+        if (r.data.traces && r.data.traces[0]) await goTo(r.data.traces[0].file, r.data.traces[0].line)
+        return
+      }
+      if (r.data.manuscript) ms = r.data.manuscript
+      if (file) await openFile(file.path, true)
+      render()
+      const bad = r.data.conflicts || []
+      notify(bad.length ? `Pulled, with a conflict in ${bad.join(', ')}: git wrote both versions there, between <<<<<<< and >>>>>>>. Keep what is right, delete those lines, save, then Push.`
+        : r.data.pulled ? `Pulled ${r.data.pulled} commit${r.data.pulled === 1 ? '' : 's'}: your copies and values read as they are now.` : r.data.note ? `Nothing to pull: ${r.data.note}.` : 'Nothing to pull: the document is up to date.')
+      if (bad.length) await goTo(bad[0], 1)
+    }
+
+    async function pushGit() {
+      if (!(await settle())) return
+      const message = prompt(`What changed in ${doc}? (the message this push is recorded with)`, '')
+      if (message == null) return
+      if (!message.trim()) { notify('Say what changed: the push is recorded with it.'); return }
+      const r = await gitAsk({ action: 'push', message: message.trim() }, 'push')
+      if (r.ok) { notify(`Pushed to ${remoteWords(r.data.remote)}.`); return }
+      if (r.data.pull && confirm(`${r.data.error}. Pull now?`)) { await pullGit(); return }
+      notify(r.data.error || `Not pushed (${r.status})`)
+      if (r.data.traces && r.data.traces[0]) await goTo(r.data.traces[0].file, r.data.traces[0].line)
+      else if (r.data.conflicts && r.data.conflicts[0]) await goTo(r.data.conflicts[0], 1)
+      await loadGit()
+    }
+
     // ---------------------------------------------------------------- the document's files
 
     /** A change to the open document's file list, asked of the server; a deletion that would lose copies is asked about first. The manuscript as it is then, or null. */
@@ -982,6 +1094,8 @@
       if (path) await openFile(path)
       else if (cm) { loading = true; cm.setValue(''); loading = false; markCopies(); threadsEl.hidden = true }
       await loadPdf()
+      git = null
+      void loadGit(true) // opening a document asks its remote how far behind and ahead it is
       return true
     }
 
@@ -1024,6 +1138,7 @@
         const r = await api('api/manuscript/compile', { method: 'POST', body: w })
         const c = r.data || {}
         renderErrors(c)
+        if (c.conflicts && c.conflicts[0]) await goTo(c.conflicts[0], 1)
         renderStatus(c.ok ? `Compiled in ${c.seconds} s` : c.error ? 'Not compiled' : `Errors (${(c.errors || []).length}): the last good PDF stays`)
         // a failed compile leaves the last good PDF on screen
         if (c.ok || pdfView.hidden) await loadPdf()
@@ -1460,6 +1575,26 @@
       renderDocForm()
     }
 
+    $('ms-doc-clone').addEventListener('click', async () => {
+      if (!canWrite()) { needKey('make a document from a repository'); return }
+      const url = prompt('The address of the repository to make a document from (a paper that already lives on GitHub, or in Overleaf through it):', 'git@github.com:')
+      if (url == null || !url.trim() || url.trim() === 'git@github.com:') return
+      const name = docName.value.trim() || slugOf(remoteWords(url).split(/[/:]/).pop())
+      const problem = docNameProblem(name, ms && ms.exists ? ms.documents.map(d => d.name) : [])
+      if (problem) { docName.value = name; nameTouched = true; renderDocForm(); notify(`${problem}: name the document, then From a repository… again.`); docName.focus(); return }
+      renderStatus(`Cloning into ${name}…`)
+      const r = await api('api/manuscript/clone', { method: 'POST', body: { name, url: url.trim() } })
+      renderStatus('')
+      if (!r.ok) { notify(r.data.error || `Not cloned (${r.status})`); return }
+      ms = r.data
+      closeDocForm()
+      doc = name
+      docFile = ''
+      store.set('msDoc', doc)
+      await setLevel('documents', true)
+      const d = theDoc()
+      notify(`${name} is the repository's files as they came: nothing in it is tied to your tree yet (select a passage and Selection is a copy)${d && (d.traces || []).length ? `; ${d.traces.length} trace${d.traces.length === 1 ? '' : 's'} of your tree found in it, listed, not removed` : ''}.`)
+    })
     $('ms-doc-load-zip').addEventListener('click', () => { zipInput.value = ''; zipInput.click() })
     $('ms-doc-load-folder').addEventListener('click', () => { folderInput.value = ''; folderInput.click() })
     zipInput.addEventListener('change', async () => {
@@ -1550,5 +1685,5 @@
     return { show, writtenIn: id => writtenIn(ms, id), openSnippet: id => { void show().then(() => openSnippet(id)) }, get summary() { return ms }, stop: () => clearInterval(timer) }
   }
 
-  root.RftManuscript = { CONTEXT, KINDS, MAX_UPLOAD, anchorOf, contentOf, byKind, stateOf, usedWords, usedCount, parseMarkers, outlineOf, valueWords, traceWords, fileOrder, treeRows, editable, typedPath, uploadProblem, crc32, zipOf, templateName, templateWords, writtenIn, slugOf, docNameProblem, errorText, mount }
+  root.RftManuscript = { CONTEXT, KINDS, MAX_UPLOAD, anchorOf, contentOf, byKind, stateOf, usedWords, usedCount, parseMarkers, outlineOf, valueWords, traceWords, fileOrder, treeRows, editable, typedPath, uploadProblem, crc32, zipOf, templateName, templateWords, remoteWords, gitWords, writtenIn, slugOf, docNameProblem, errorText, mount }
 })(typeof window !== 'undefined' ? window : globalThis)

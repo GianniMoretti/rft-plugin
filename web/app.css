@@ -1073,6 +1073,12 @@ main:has(#drawer:not([hidden])) #manuscript { right: min(var(--drawer-w), 92vw);
 .ms-row-act:hover { border-color: var(--line); color: var(--fg); background: var(--bg); }
 .ms-list.ms-drop { outline: 2px dashed var(--accent); outline-offset: -4px; }
 .ms-set { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+/* a document's repository: its remote, how far behind and ahead it is, Pull and Push */
+.ms-git { font-size: 12px; }
+.ms-git button { font: inherit; font-size: 11.5px; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer; }
+.ms-git button.primary { border-color: var(--accent); color: var(--accent); }
+.ms-git button:disabled { opacity: 0.55; cursor: default; }
+.ms-git .ms-git-remote { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; max-width: 30em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ms-view { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--panel); }
 .ms-view[hidden], .ms-cm[hidden] { display: none; }
 .ms-view-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 12px; }
@@ -1508,7 +1514,7 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
   .ms-list, .ms-editor { border-right: 0; }
   .ms-item, .sl-item { min-height: 44px; align-items: center; padding: 6px 14px; }
   .ms-item.ms-wrap button, .ms-fix { min-height: 44px; min-width: 44px; font-size: 14px; padding: 0 12px; }
-  .ms-files-bar button, .ms-ask button, .ms-view-head button, .ms-row-act { min-height: 44px; min-width: 44px; font-size: 14px; }
+  .ms-files-bar button, .ms-ask button, .ms-view-head button, .ms-row-act, .ms-git button { min-height: 44px; min-width: 44px; font-size: 14px; }
   .ms-row-acts { visibility: visible; }
   .ms-bar, .sl-bar { gap: 6px 8px; }
   .ms-ib .lbl { display: none; }

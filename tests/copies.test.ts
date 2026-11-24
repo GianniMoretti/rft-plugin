@@ -287,6 +287,14 @@ describe('markers and places', () => {
     expect(got.map(x => [x.found, x.inDocument, x.line])).toEqual([['written', '73.2', 1], ['written', '73.2', 1], ['changed', '81', 1], [null, null, null], ['written', '9', 1]])
   })
 
+  test('a number changed where it stands is not mistaken for the same number standing elsewhere', () => {
+    // a co-author rounds the abstract's 73.2 up; the results still say 73.2, between words that end alike
+    const v = (before: string, after: string) => ({ kind: 'number' as const, from: 'E05', key: 'acc.1k', written: '73.2', file: 'a.tex', before, after })
+    const files = { 'a.tex': 'are available. It reaches 74.0\\% top-1\naccuracy.\n\nWith 1k labelled images, CutMix reaches 73.2\\% top-1 accuracy.\n' }
+    const got = locateValues(files, { values: [v('images are available. It reaches ', '\\% top-1\naccuracy.'), v('labelled images, CutMix reaches ', '\\% top-1 accuracy.')] })
+    expect(got.map(x => [x.found, x.inDocument, x.line])).toEqual([['changed', '74.0', 0], ['written', '73.2', 3]])
+  })
+
   test('a word changed near a value does not lose it: less of the text around it is asked to match', () => {
     const v = (written: string, before: string, after: string) => ({ kind: 'number' as const, from: 'E05', key: 'k', written, file: 'a.tex', before, after })
     const files = { 'a.tex': 'In our words, the gap closes by 0.3 points overall; the rest, 12 of them, stays.\n' }
@@ -433,6 +441,28 @@ describe('the .bib of a document with several', () => {
     await setDocument(io, l, { name: 'thesis', remove: 'S01' })
     expect([fs.read(SHARED).includes('yun2019cutmix'), fs.read(A).includes('yun2019cutmix'), fs.read(A).includes('own2020')]).toEqual([false, false, true])
     expect(tracking(fs).bib).toEqual({})
+  })
+
+  test('in a document that came from a repository, a passage declared a copy is tracked and its file does not change', async () => {
+    const { fs, io, l, ms } = await setup(THESIS)
+    // as a clone leaves it: nothing tied to the tree, and the template it records
+    fs.write('vault/documents/.rft/thesis/tracking.json', JSON.stringify({ version: 1, template: 'repository', copies: [], values: [], bib: {}, allowed: [] }))
+    const chapter = 'vault/documents/thesis/papers/paperA/sections/introduction.tex'
+    fs.write(chapter, '\\section{Introduction}\nCutMix cuts a box from one image and pastes it on another, mixing the labels by area.\nMore text.\n')
+    const before = JSON.stringify([...fs.files].filter(([k]) => k.startsWith('vault/documents/thesis/')))
+    const said = await pointCopy(io, l, 'thesis', 'S01', { file: 'papers/paperA/sections/introduction.tex', from: 2, to: 2 })
+    expect(said).toContain('are now a copy of S01: tracked by its text, the file left as it is')
+    expect(JSON.stringify([...fs.files].filter(([k]) => k.startsWith('vault/documents/thesis/')))).toBe(before)
+    const d = (await ms()).documents.find(x => x.name === 'thesis')!
+    const c = d.copies[0]!
+    expect([c.snippet, c.found, c.file, c.begin, c.end, copyState(c, (await ms()).snippets.find(x => x.id === 'S01')).state]).toEqual(['S01', 'text', 'papers/paperA/sections/introduction.tex', 1, 1, 'adapted'])
+    expect(usedIn(await ms(), 'S01').filter(u => u.doc === 'thesis')).toEqual([{ doc: 'thesis', file: 'papers/paperA/sections/introduction.tex', count: 1, states: ['adapted'] }])
+    // its two marker lines, when the user asks for them
+    await restoreMarkers(io, l, 'thesis', 'S01')
+    expect(fs.read(chapter)).toBe('\\section{Introduction}\n%%% Definition: CutMix %%%\nCutMix cuts a box from one image and pastes it on another, mixing the labels by area.\n%%% end %%%\nMore text.\n')
+    // in a document of the user's own making the passage gets its marker lines at once, as before
+    await pointCopy(io, l, 'paper', 'S06', { file: 'main.tex', from: 20, to: 20 })
+    expect(fs.read(`${DOC}/main.tex`).split('\n')[19]).toBe('%%% Discussion: Limitations %%%')
   })
 
   test('a citation of the user\'s own entry is said to rest on no reference note; the document\'s files are unchanged', async () => {

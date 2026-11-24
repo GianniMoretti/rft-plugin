@@ -282,7 +282,12 @@ async function traceWritten(c: Call, file: string): Promise<string | null> {
  * file that is not .tex or .bib (a class or style file of its template, a file the user uploaded)
  * and an edit that would write a trace of the tree into it.
  */
+/** git run against a document's own repository, whose git data is among the plugin's files (server/rft_git.py). */
+const DOCUMENT_GIT = /(?:^|[/\s'"=])\.rft\/[^/\s'"]+\/git(?:[/\s'"]|$)/ // documents/.rft/<name>/git, however the command reaches it
+const DOCUMENT_GIT_TEXT = 'A document\'s repository is the user\'s to pull and push, from the tree view\'s Manuscript tab: what leaves the machine is always their act. Do not run git against it; say what you would do, and they do it.'
+
 const manuscript: Guard = async c => {
+  if (c.shell && /(?:^|[\s;&|(`$])git(?:\s|$)/.test(c.shell.cmd) && DOCUMENT_GIT.test(c.shell.cmd)) return DOCUMENT_GIT_TEXT
   const names = [SNIPPETS_DIR, DOCUMENTS_DIR]
   const dirs = names.map(d => `${c.vault}/${d}/`)
   let files: string[]

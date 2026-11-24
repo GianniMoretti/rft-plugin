@@ -533,35 +533,34 @@ NEAR = (1000, 12, 6)  # how much of the text on each side of a value is asked to
 def locate_values(files: dict[str, str], tracking: dict) -> list[dict]:
     """Each tracked value found in its file by the text before and after it (locateValues in
     copies.ts): `written` when it stands as it was written, `changed` when something else stands
-    between its before and after, None when its place is not found."""
+    between its before and after, None when its place is not found. Each way of looking is tried
+    on every value still not found, the surest first, so that a number a co-author changed is not
+    mistaken for the same number standing elsewhere."""
     taken: dict[str, list[tuple[int, int]]] = {}
-    out = []
-    for index, v in enumerate(tracking["values"]):
-        text = files.get(v["file"])
-        got = {**v, "index": index, "found": None, "offset": None, "line": None, "inDocument": None}
-        out.append(got)
-        if text is None:
-            continue
+    out = [{**v, "index": index, "found": None, "offset": None, "line": None, "inDocument": None} for index, v in enumerate(tracking["values"])]
 
-        def take(found: str, pattern: str) -> bool:
+    def look(found: str, n: int) -> None:
+        for v in out:
+            text = files.get(v["file"])
+            if v["found"] or text is None:
+                continue
+            if found == "changed" and (v["kind"] == "table" or len(_squeeze(v["before"][-n:])) + len(_squeeze(v["after"][:n])) < 6):
+                continue
+            before, after = _flexible(v["before"][-n:]), _flexible(v["after"][:n])
+            pattern = "({})({})(?={})".format(before, _flexible(v["written"]), after) if found == "written" else "({})([^\\n]{{0,80}}?)(?={})".format(before, after)
             for m in re.finditer(pattern, text):
                 offset, there = m.end(1), m.group(2)
                 if any(offset < b and offset + len(there) > a for a, b in taken.get(v["file"], [])):
                     continue
                 taken.setdefault(v["file"], []).append((offset, offset + max(1, len(there))))
-                got.update(found=found, offset=offset, line=_line_of(text, offset), inDocument=there)
-                return True
-            return False
-
-        # by all the text kept on each side; then by less of it, so that a word changed nearby does not lose the value
-        around = lambda n: (_flexible(v["before"][-n:]), _flexible(v["after"][:n]))  # noqa: E731
-        if any(take("written", "({})({})(?={})".format(around(n)[0], _flexible(v["written"]), around(n)[1])) for n in NEAR):
-            continue
-        if v["kind"] == "table":
-            continue
-        for n in NEAR[:2]:
-            if len(_squeeze(v["before"][-n:])) + len(_squeeze(v["after"][:n])) >= 6 and take("changed", "({})([^\\n]{{0,80}}?)(?={})".format(*around(n))):
+                v.update(found=found, offset=offset, line=_line_of(text, offset), inDocument=there)
                 break
+
+    look("written", NEAR[0])
+    look("changed", NEAR[0])
+    look("written", NEAR[1])
+    look("changed", NEAR[1])
+    look("written", NEAR[2])
     return out
 
 
@@ -753,6 +752,8 @@ def summary(vault: Path, tree: dict, read) -> dict:
                      "locked": document_locked(dreg, name), "copies": copies, "values": values_of(vault, name, files, tracking, located),
                      "bib": [{"key": k, "file": f, "from": (tracking["bib"].get(k) or {}).get("from")} for f in sorted(files) if f.lower().endswith(".bib") for k in bib_keys(files[f])],
                      "ownCited": own_cited(files, tracking),
+                     # whether it is a repository of its own (its git data is beside its tracking file; rft_git says the rest)
+                     "repository": (documents_dir(vault) / TRACKING / name / "git" / "HEAD").is_file(),
                      "traces": scan["traces"], "allowedTraces": scan["allowed"],
                      "firstDesign": any(is_first_design(text) for f, text in files.items() if TEX_FILE.search(f))})
     return {"exists": True, "locked": reg["locked"], "unlocked": reg["unlocked"], "docsLocked": dreg["locked"], "docsUnlocked": dreg["unlocked"],

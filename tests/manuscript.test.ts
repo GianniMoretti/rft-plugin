@@ -488,8 +488,18 @@ describe('in a session', () => {
     for (const f of ['example_paper.tex', 'sections/method.tex', 'example_paper.bib', 'icml2027.sty', 'figures/logo.png']) {
       expect([f, await deny({ tool: 'Edit', file_path: at('camera-ready', f), old_string: 'a', new_string: 'b' })]).toEqual([f, expect.stringContaining('The document camera-ready is locked, and the lock covers all its files')])
     }
-    // only the three writes to its text went on
-    expect(ran).toEqual(['Edit', 'Write', 'Edit'])
+    // only the user pulls and pushes: git against a document's own repository is refused, however it is named
+    for (const command of [
+      'git --git-dir=vault/documents/.rft/icml/git --work-tree=vault/documents/icml push',
+      `git --git-dir ${CWD}/vault/documents/.rft/icml/git --work-tree ${CWD}/vault/documents/icml pull`,
+      'cd vault/documents/icml && GIT_DIR=../.rft/icml/git git push origin main',
+      'GIT_DIR="vault/documents/.rft/icml/git" GIT_WORK_TREE=vault/documents/icml git commit -am x && git push',
+      'git -C vault/documents/.rft/icml/git log',
+    ]) expect([command, await deny({ tool: 'Bash', command })]).toEqual([command, expect.stringContaining('A document\'s repository is the user\'s to pull and push')])
+    // git elsewhere is not the plugin's business
+    expect(await deny({ tool: 'Bash', command: 'git status' })).toBeUndefined()
+    // only the three writes to its text, and that one command, went on
+    expect(ran).toEqual(['Edit', 'Write', 'Edit', 'Bash'])
     // rft_manuscript names each document's template, main file and engine, and one document's files
     const all = await $.tool.call({ tool: 'mcp__rft__rft_manuscript' } as never)
     expect(all.text).toContain('  icml (icml2027, example_paper.tex, pdfLaTeX): no copies yet')

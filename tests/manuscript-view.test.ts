@@ -34,6 +34,12 @@ type Api = {
   editable: (d: { tree?: Record<string, unknown>[]; files?: string[] } | null) => string[]
   typedPath: (typed: string | null, folder: string) => { path: string; problem: string }
   uploadProblem: (name: string, size: number) => string
+  crc32: (bytes: Uint8Array) => number
+  zipOf: (files: { path: string; bytes: Uint8Array }[]) => Uint8Array[]
+  templateName: (raw: string) => string
+  templateWords: (t: { name: string; builtIn: boolean; files?: number; engine?: string }) => string
+  remoteWords: (url: string) => string
+  gitWords: (st: Record<string, unknown> | null) => string
 }
 const M = (globalThis as unknown as { RftManuscript: Api }).RftManuscript
 
@@ -167,5 +173,37 @@ describe('the manuscript tab', () => {
     expect(M.typedPath(null, '').problem).toBe('Give it a name')
     expect(M.uploadProblem('big.pdf', 21_000_000)).toBe('big.pdf is 21.0 MB: a file of a document is at most 20.0 MB')
     expect(M.uploadProblem('ok.pdf', M.MAX_UPLOAD)).toBe('')
+  })
+
+  test('a template in the New document menu, its name made from a zip\'s or a folder\'s, and a folder sent as a zip', () => {
+    expect(M.templateWords({ name: 'article', builtIn: true })).toBe('Paper (article)')
+    expect(M.templateWords({ name: 'report', builtIn: true })).toBe('Thesis chapter (report)')
+    expect(M.templateWords({ name: 'icml2027', builtIn: false, files: 9 })).toBe('icml2027 · 9 files')
+    expect(M.templateWords({ name: 'thesis-xe', builtIn: false, files: 1, engine: 'xelatex' })).toBe('thesis-xe · 1 file · XeLaTeX')
+    // as template_name in server/rft_documents.py makes them (tests/test_documents.py)
+    expect(M.templateName('C:\\kits\\ICML 2027 (final).zip')).toBe('ICML-2027-final')
+    expect(M.templateName('aauPhdCollectionThesis/')).toBe('aauPhdCollectionThesis')
+    expect(M.templateName('..')).toBe('')
+    // the zip the page makes of a picked folder: stored, each file with its CRC-32 (the server's tests read one)
+    const enc = new TextEncoder()
+    expect(M.crc32(enc.encode('123456789')).toString(16)).toBe('cbf43926')
+    const parts = M.zipOf([{ path: 'kit/main.tex', bytes: enc.encode('Hello.') }, { path: 'kit/figures/a.png', bytes: new Uint8Array([1, 2, 3]) }])
+    const zip = new Uint8Array(parts.reduce((n, x) => n + x.length, 0))
+    parts.reduce((at, x) => (zip.set(x, at), at + x.length), 0)
+    const view = new DataView(zip.buffer)
+    expect(view.getUint32(0, true)).toBe(0x04034b50)
+    expect(view.getUint32(zip.length - 22, true)).toBe(0x06054b50)
+    expect(view.getUint16(zip.length - 22 + 10, true)).toBe(2)
+    expect(view.getUint32(14, true)).toBe(M.crc32(enc.encode('Hello.')))
+  })
+
+  test('a document\'s repository in the head: its remote in short, and how far behind and ahead it is', () => {
+    expect(M.remoteWords('git@github.com:you/paper.git')).toBe('github.com:you/paper')
+    expect(M.remoteWords('https://github.com/you/paper.git/')).toBe('github.com/you/paper')
+    expect(M.remoteWords('/srv/git/paper.git')).toBe('/srv/git/paper')
+    expect(M.gitWords({ repository: true, remote: 'x', behind: 1, ahead: 0, changed: 3 })).toBe('1 commit behind · 0 ahead · 3 files changed since the last push or pull')
+    expect(M.gitWords({ repository: true, remote: 'x', behind: 0, ahead: 2, changed: 0 })).toBe('0 behind · 2 commits ahead · nothing changed')
+    expect(M.gitWords({ repository: true, remote: null })).toBe('')
+    expect(M.gitWords(null)).toBe('')
   })
 })

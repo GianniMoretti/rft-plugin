@@ -81,6 +81,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 
 import rft_decks  # the slide decks as the page reads them
 import rft_documents  # a document as a folder of files: its file list, uploads, main file and engine
+import rft_git  # a document as a repository of its own: connect, pull, push, clone
 import rft_latex  # the manuscript's LaTeX: its generated files and the compile
 import rft_manuscript  # the manuscript as the page shows it
 import rft_notebook
@@ -677,6 +678,7 @@ class Vault:
         self._waiting_lock = threading.Lock()
         self._ask_lock = threading.Lock()
         self._compile_lock = threading.Lock()
+        self._git_lock = threading.Lock()
         self._sig: str | None = None
         self._tree: dict | None = None
         # the folders an image is searched in by name: the vault, then the Obsidian vault around it
@@ -2163,6 +2165,52 @@ class Vault:
             status, out = rft_documents.upload(self.root, doc, path, data, self.vault_ids(), replace)
         return status, ({**out, **self.manuscript()} if status < 300 else out)
 
+    # ---------------------------------------------------------------- a document's repository
+
+    def document_traces(self, doc: str) -> list[dict]:
+        """The traces of the tree the scan finds in a document now (those the user allowed left out)."""
+        ms = self.manuscript()
+        d = next((x for x in ms.get("documents", []) if x["name"] == doc), None)
+        return list(d["traces"]) if d else []
+
+    def document_git(self, doc: str, fetching: bool = False) -> tuple[int, dict]:
+        """A document's repository as the page shows it (rft_git.state); `fetching` asks its remote first."""
+        if not rft_manuscript.is_document(self.root, doc):
+            return 404, {"error": "no such document"}
+        with self._git_lock:
+            return 200, rft_git.state(self.root, doc, fetching)
+
+    def document_git_do(self, req: dict) -> tuple[int, dict]:
+        """What the user does to a document's repository from the page: `connect` {doc, url};
+        `push` {doc, message}, which records every change and sends it, refused on a trace, when
+        behind, or while a conflict is unresolved; `pull` {doc}, which merges the remote's changes.
+        One at a time. The answer carries the repository's state, and after a pull the manuscript."""
+        doc, action = req.get("doc"), req.get("action")
+        if not isinstance(doc, str) or not rft_manuscript.is_document(self.root, doc):
+            return 404, {"error": "no such document"}
+        with self._git_lock:
+            if action == "connect":
+                return rft_git.connect(self.root, doc, req.get("url"))
+            if action == "push":
+                return rft_git.push(self.root, doc, req.get("message"), self.document_traces(doc))
+            if action == "pull":
+                status, out = rft_git.pull(self.root, doc, self.document_traces(doc))
+                return status, ({**out, "manuscript": self.manuscript()} if status < 300 else out)
+        return 400, {"error": "action must be connect, push or pull"}
+
+    def document_clone(self, req: dict) -> tuple[int, dict]:
+        """A new document from a repository's address {name, url}: cloned, its git data kept apart,
+        nothing in it tied to the tree yet. The traces in what came are listed in the page, not removed."""
+        name = req.get("name")
+        if not (rft_manuscript.documents_dir(self.root) / "documents.json").is_file():
+            return 409, {"error": "start the documents first, with a first document (Start, or /rft-manuscript)"}
+        with self._git_lock:
+            status, out = rft_git.clone(self.root, name, req.get("url"))
+            if status < 300:
+                rft_documents.write_raw(self.root, name, {"version": 1, "template": "repository", "copies": [], "values": [], "bib": {}, "allowed": []})
+                out = {**out, "git": rft_git.state(self.root, name), **self.manuscript()}
+        return status, out
+
     def document_bib(self, doc: str, file: str) -> tuple[int, dict]:
         """The .bib a file of a document uses, for what a placement there cites (rft_manuscript.bib_for):
         `{bib}`, or `{ask: [...]}` when the document has several and nothing says which, so the
@@ -2192,6 +2240,10 @@ class Vault:
 
     def compile_manuscript(self, doc: str | None = None, snippet: str | None = None) -> tuple[int, dict]:
         """Compiles a document (rft_latex.compile_doc), or a snippet alone (compile_snippet), one compile at a time."""
+        # a pull left a conflict in the document: nothing compiles until git's lines are gone
+        bad = rft_git.conflicts(self.root, doc) if snippet is None and rft_manuscript.is_document(self.root, doc or "") and rft_git.available() else []
+        if bad:
+            return 200, {"ok": False, "conflicts": bad, "error": f"{', '.join(bad)} still {'holds' if len(bad) == 1 else 'hold'} a conflict from the last pull (the lines git wrote, <<<<<<< to >>>>>>>): resolve {'it' if len(bad) == 1 else 'them'} in the editor, then compile"}
         with self._compile_lock:
             r = rft_latex.compile_snippet(self.root, snippet) if snippet is not None else rft_latex.compile_doc(self.root, doc or "")
         r.pop("pdf", None)  # a path on disk: the page asks api/manuscript/pdf
@@ -2901,6 +2953,13 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 if pdf is None:
                     return self._json(404, {"error": "not compiled yet"}, head_only)
                 return self._send(200, pdf.read_bytes(), "application/pdf", head_only)
+            if route == "/api/manuscript/git":
+                # a document's repository: its remote is the user's own, so only for the page carrying the key
+                given = self.headers.get("X-RFT-Token") or ""
+                if not token or not secrets.compare_digest(given, token):
+                    return self._json(403, {"error": "the key is missing or out of date: open the address /rft printed"}, head_only)
+                q = parse_qs(url.query)
+                return self._json(*vault.document_git((q.get("doc") or [""])[0], (q.get("fetch") or [""])[0] == "1"), head_only)
             if route == "/api/manuscript/bib":
                 q = parse_qs(url.query)
                 return self._json(*vault.document_bib((q.get("doc") or [""])[0], (q.get("file") or [""])[0]), head_only)
@@ -3247,6 +3306,16 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 if not (isinstance(req.get("doc"), str) or isinstance(req.get("snippet"), str)):
                     return self._json(400, {"error": "expected {doc} or {snippet}"})
                 return self._json(*vault.compile_manuscript(req.get("doc"), req.get("snippet")))
+            if route == "/api/manuscript/git":
+                got = self._write_request("/api/manuscript/git", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                return self._json(*vault.document_git_do(got[1]))
+            if route == "/api/manuscript/clone":
+                got = self._write_request("/api/manuscript/clone", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                return self._json(*vault.document_clone(got[1]))
             if route == "/api/manuscript/files":
                 got = self._write_request("/api/manuscript/files", MAX_NODE_BYTES)
                 if got is None:

@@ -251,36 +251,33 @@ export type LocatedValue = TrackedValue & {
 export function locateValues(files: Record<string, string>, tracking: Pick<Tracking, 'values'>): LocatedValue[] {
   const taken: Record<string, [number, number][]> = {}
   const free = (file: string, from: number, to: number) => !(taken[file] ?? []).some(([a, b]) => from < b && to > a)
-  return tracking.values.map((v, index) => {
-    const text = files[v.file]
-    const lost: LocatedValue = { ...v, index, found: null, offset: null, line: null, inDocument: null }
-    if (text === undefined) return lost
-    const take = (found: 'written' | 'changed', re: RegExp): LocatedValue | null => {
+  const out: LocatedValue[] = tracking.values.map((v, index) => ({ ...v, index, found: null, offset: null, line: null, inDocument: null }))
+  /** One way of looking, tried on every value still not found, in their order: a value found a surer way keeps its place. */
+  const pass = (found: 'written' | 'changed', n: number) => {
+    for (const v of out) {
+      const text = files[v.file]
+      if (v.found || text === undefined) continue
+      if (found === 'changed' && (v.kind === 'table' || squeeze(v.before.slice(-n)).length + squeeze(v.after.slice(0, n)).length < 6)) continue
+      const before = flexible(v.before.slice(-n)), after = flexible(v.after.slice(0, n))
+      const re = found === 'written' ? new RegExp(`(${before})(${flexible(v.written)})(?=${after})`, 'g') : new RegExp(`(${before})([^\\n]{0,80}?)(?=${after})`, 'g')
       for (const m of text.matchAll(re)) {
         const offset = m.index! + m[1]!.length, inDocument = m[2]!
         if (!free(v.file, offset, offset + inDocument.length)) continue
         ;(taken[v.file] ??= []).push([offset, offset + Math.max(1, inDocument.length)])
-        return { ...v, index, found, offset, line: lineOf(text, offset), inDocument }
+        Object.assign(v, { found, offset, line: lineOf(text, offset), inDocument })
+        break
       }
-      return null
     }
-    // by all the text kept on each side; then by less of it, so that a word changed nearby does not lose the value
-    const around = (n: number) => [flexible(v.before.slice(-n)), flexible(v.after.slice(0, n))] as const
-    for (const n of NEAR) {
-      const [before, after] = around(n)
-      const exact = take('written', new RegExp(`(${before})(${flexible(v.written)})(?=${after})`, 'g'))
-      if (exact) return exact
-    }
-    // what stands between the same before and after now: the user's or a co-author's own value
-    if (v.kind === 'table') return lost
-    for (const n of NEAR.slice(0, 2)) {
-      if (squeeze(v.before.slice(-n)).length + squeeze(v.after.slice(0, n)).length < 6) continue
-      const [before, after] = around(n)
-      const changed = take('changed', new RegExp(`(${before})([^\\n]{0,80}?)(?=${after})`, 'g'))
-      if (changed) return changed
-    }
-    return lost
-  })
+  }
+  // as it was written, between all the text kept on each side; else what stands between that same text now (the user's or a
+  // co-author's own value); then by less of the text, so that a word changed nearby does not lose the value. In that order for
+  // all the values: a number a co-author changed is not mistaken for the same number standing elsewhere.
+  pass('written', NEAR[0]!)
+  pass('changed', NEAR[0]!)
+  pass('written', NEAR[1]!)
+  pass('changed', NEAR[1]!)
+  pass('written', NEAR[2]!)
+  return out
 }
 
 /** The copy a place of a file lies in, if any. */
