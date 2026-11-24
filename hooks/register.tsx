@@ -49,7 +49,8 @@ import { runNotebook, setNotebook } from './lib/notebooks'
 import { MACHINE_FILE, machinePrompt, probeText, readMachine, statusText } from './lib/machine'
 import { manualDir } from './lib/manual'
 import { artifactPrompt, candidatesPrompt, literaturePrompt, manuscriptPrompt, notebooksPrompt, rebalancePrompt, suggestConceptsPrompt, summarizePrompt } from './lib/prompts'
-import { InboxError, addItem, closeItem, commandInput, inboxLine, inboxReport, loadInbox, nthItem, processPrompt, saveBrief, shown } from './lib/inbox'
+import { closeWithNote, readingOf, saveImpression } from './lib/reading'
+import { InboxError, addItem, commandInput, discussPrompt, inboxLine, inboxReport, loadInbox, nthItem, processPrompt, saveBrief, shown } from './lib/inbox'
 import { clearHandoff, handoffPrompt, handoffRules, hasHandoffs, leaveHandoff, showHandoff, sizeToast, toTell, uncommittedIn } from './lib/handoff'
 import type { MachineStatus, Probe } from './lib/machine'
 import { QUEUE_CLI, QUEUE_FILE, addedText, cancelledText, jobEvents, jobsNext, jobsReport, movedText, queueLine, readQueue, retriedText, toStart } from './lib/queue'
@@ -497,13 +498,17 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       return tagsReport(loaded)
     case 'rft_inbox': {
       // no reading priority here: it is the user's (/rft-inbox, the page, the file)
+      // nor the read mark: the user's too (the page, the file)
       const link = str(i.link)?.trim(), brief = str(i.brief)?.trim(), outcome = str(i.outcome)?.trim()
-      if (!link && (brief || outcome)) throw new InboxError('Name the item by its link (link), as rft_inbox with no field lists it.')
+      const impression = str(i.impression)?.trim(), reading = i.reading === true
+      if (!link && (brief || outcome || impression || reading)) throw new InboxError('Name the item by its link (link), as rft_inbox with no field lists it.')
       if (!link) return inboxReport(await loadInbox(io, loaded.config.vault))
-      if (!brief && !outcome) return addItem(io, loaded, { link, why: str(i.why), title: str(i.title), today: today() })
-      // a brief and an outcome in one call: the brief first, as when processing
-      const said = brief ? [await saveBrief(io, loaded, link, brief, today())] : []
-      if (outcome) said.push(await closeItem(io, loaded, { link, outcome, note: str(i.note), cites: str(i.cites), reason: str(i.reason), today: today() }))
+      if (!brief && !outcome && !impression && !reading) return addItem(io, loaded, { link, why: str(i.why), title: str(i.title), today: today() })
+      // several in one call, in the order of the work: the impression before the user's part is asked for, the brief, the outcome last
+      const said = impression ? [await saveImpression(io, loaded, link, impression, today())] : []
+      if (brief) said.push(await saveBrief(io, loaded, link, brief, today()))
+      if (reading) said.push(await readingOf(io, loaded, link))
+      if (outcome) said.push(await closeWithNote(io, loaded, { link, outcome, note: str(i.note), cites: str(i.cites), reason: str(i.reason), confirmed: i.confirmed === true, today: today() }))
       return said.join('\n')
     }
     case 'rft_handoff': {
@@ -757,6 +762,7 @@ async function spawnServer($: EngineInterface, argv: string[]): Promise<string> 
             if (m) found(m[1]!)
             else if (l.startsWith(ASK)) void askFromView($, l.slice(ASK.length))
             else if (l.startsWith(PROCESS)) void processFromView($, l.slice(PROCESS.length))
+            else if (l.startsWith(DISCUSS)) void processFromView($, l.slice(DISCUSS.length), true)
             else {
               const asked = FROM_VIEW.find(a => l.startsWith(a.line))
               if (asked) void fromView($, asked, l.slice(asked.line.length))
@@ -810,13 +816,17 @@ async function fromView($: EngineInterface, asked: (typeof FROM_VIEW)[number], r
 }
 
 const PROCESS = 'RFT_PROCESS '
+const DISCUSS = 'RFT_DISCUSS '
 
 /**
- * An inbox item the user asks to process from the tree view (its Process button, relayed by the
- * server): a prompt naming the item, submitted by the poller as a turn of this chat, where Claude
- * reads it, discusses it and writes to the tree what the user decides (docs/adr/0001).
+ * An inbox item the user asks of the chat from the tree view, relayed by the server: a prompt
+ * naming the item, submitted by the poller as a turn of this chat (docs/adr/0001). Process: Claude
+ * reads the item on its own and saves its impression and its brief. `discuss` (the user marked the
+ * item as read, or pressed Discuss): Claude opens the user's part of the reading note, says where
+ * the two readings differ, and writes to the tree what the user decides (docs/adr/0004). An item
+ * the user has marked as read is discussed, whichever was asked.
  */
-async function processFromView($: EngineInterface, request: string): Promise<void> {
+async function processFromView($: EngineInterface, request: string, discuss = false): Promise<void> {
   try {
     const r = JSON.parse(request) as Record<string, unknown>
     const h = await mustHere($)
@@ -824,9 +834,11 @@ async function processFromView($: EngineInterface, request: string): Promise<voi
     const box = await loadInbox(h.io, loaded.config.vault)
     const item = nthItem(box, String(r.key ?? ''), typeof r.nth === 'number' ? r.nth : 0)
     if (!item) throw new Error('that item is no longer in the inbox')
-    pendingPrompts.push(processPrompt(manualDir($.plugin.root), shown(box)[box.items.indexOf(item)]!))
+    const it = shown(box)[box.items.indexOf(item)]!
+    if (discuss && !it.read) throw new Error('that item is not marked as read')
+    pendingPrompts.push((it.read ? discussPrompt : processPrompt)(manualDir($.plugin.root), it))
   } catch (err) {
-    $.ui.toast(`rft: the tree view could not process the inbox item (${message(err)})`)
+    $.ui.toast(`rft: the tree view could not ${discuss ? 'discuss' : 'process'} the inbox item (${message(err)})`)
   }
 }
 

@@ -28,9 +28,10 @@
 // tests/fixtures/reading-note holds both to one list of cases. A change to a pattern here is a
 // change to the same pattern there.
 
-import { linkAt, oneLine, rx, strip } from './inbox'
-import type { Io } from './vault'
-import { join } from './vault'
+import type { CloseInput } from './inbox'
+import { InboxError, OUTCOMES, closeItem, itemAt, itemName, linkAt, oneLine, outcomeOf, rx, strip } from './inbox'
+import type { Io, Loaded } from './vault'
+import { join, resolveId } from './vault'
 
 export const READING_DIR = 'Reading notes'
 export const MINE_HEAD = '## My reading'
@@ -45,7 +46,7 @@ const NAME_CHARS = 100
 const TRIES = 50 // how many files of one name's family are looked at for an item's own
 
 /** What cannot be written in a reading note, in words for Claude. */
-export class ReadingError extends Error {}
+export class ReadingError extends InboxError {}
 
 export type Impression = { date: string; text: string }
 /**
@@ -230,4 +231,100 @@ export async function findNote(io: Io, vault: string, key: string): Promise<{ pa
     if (note.key === key || note.key === null) return { path, note }
   }
   throw new ReadingError("too many reading notes share this item's file name")
+}
+
+// ---------------------------------------------------------------- in a session
+
+const fileOf = (path: string) => `${READING_DIR}/${path.slice(path.lastIndexOf('/') + 1)}`
+
+/**
+ * Saves Claude's impression of an item (rft_inbox {link, impression}) in its reading note, made
+ * when the item had none. Before the user's read mark an impression replaces the one it had; after
+ * it the impression is frozen, and only an item that has none yet gets one.
+ */
+export async function saveImpression(io: Io, loaded: Loaded, link: string, impression: string, today: string): Promise<string> {
+  const vault = loaded.config.vault
+  const { item } = await itemAt(io, vault, link)
+  const { path, note } = await findNote(io, vault, item.key)
+  const had = note?.impression ?? null
+  if (item.read && had) {
+    throw new ReadingError(`Impression not saved: the user marked ${itemName(item)} as read on ${item.read}, and its impression${had.date ? ` of ${had.date}` : ''} is frozen from then on. It was written before you saw the user's part, and it is what their reading is compared with.`)
+  }
+  let lines: string[]
+  try {
+    lines = impressionLines(impression)
+  } catch (err) {
+    if (err instanceof ReadingError) throw new ReadingError(`Impression not saved: ${err.message}.`)
+    throw err
+  }
+  await io.write(path, noteText(withImpression(note ?? newNote(item.key, item.url, item.title), lines, today)))
+  return `Impression saved on ${itemName(item)}, in its reading note (${fileOf(path)})${had ? `, in place of the one${had.date ? ` of ${had.date}` : ' it had'}` : ''}. `
+    + (item.read ? 'The user has marked the item as read: rft_inbox {link, reading: true} gives their part now.' : "The user's part of the reading note stays closed until they mark the item as read.")
+}
+
+/**
+ * An item's reading note for Claude (rft_inbox {link, reading: true}): its own impression, and the
+ * user's part only once the user marked the item as read and an impression is saved (ADR 0004).
+ * Before the mark the user's part is not given, whatever it holds; after it, with no impression
+ * yet, it is refused until one is saved, so that no impression is written after the user's part
+ * was seen.
+ */
+export async function readingOf(io: Io, loaded: Loaded, link: string): Promise<string> {
+  const vault = loaded.config.vault
+  const { item } = await itemAt(io, vault, link)
+  const { note } = await findNote(io, vault, item.key)
+  const imp = note?.impression ?? null
+  const yours = imp ? `Your impression of ${itemName(item)}${imp.date ? `, saved ${imp.date}` : ''}:\n\n${imp.text}` : `No impression of ${itemName(item)} is saved yet.`
+  if (!item.read) {
+    return `${yours}\n\nThe user's part of its reading note is closed to you: the user has not marked the item as read. Only they set that mark, on the item's row in the tree view; `
+      + 'until then your reading is written from the item alone, and a second one replaces the impression (rft_inbox {link, impression}).'
+  }
+  if (!imp) {
+    throw new ReadingError(`The user's part stays closed until your impression is saved: the user marked ${itemName(item)} as read (${item.read}) and it has no impression yet. `
+      + 'Read the item itself, from the item alone, save the impression (rft_inbox {link, impression}), then ask again.')
+  }
+  const mine = note?.mine ?? ''
+  return `${yours}\n\n${mine
+    ? `The user's part, marked as read ${item.read} (theirs: never edit it; a line that starts with > is a quote from the item, any other is their own):\n\n${mine}`
+    : `The user marked the item as read (${item.read}) and wrote nothing in their part.`}`
+}
+
+/**
+ * Closes an item with the outcome the user picked, its reading note with it. While the user's part
+ * holds something: a discard is refused until the user said yes to losing it (`confirmed`); an
+ * outcome that writes to the tree is refused until the user marked the item as read, and until
+ * every quote of theirs stands word for word, as a quote, in the note the outcome names (the
+ * reference, the literature note, the reference a direction cites). Once the item is closed the
+ * reading note's file is removed. `later` closes nothing and removes nothing.
+ */
+export async function closeWithNote(io: Io, loaded: Loaded, input: CloseInput & { confirmed?: boolean }): Promise<string> {
+  const vault = loaded.config.vault
+  const outcome = outcomeOf(input.outcome)
+  if (outcome === 'later' || !(OUTCOMES as readonly string[]).includes(outcome)) return closeItem(io, loaded, input)
+  const { item } = await itemAt(io, vault, input.link)
+  const { path, note } = await findNote(io, vault, item.key)
+  const mine = note?.mine ?? ''
+  let carried = ''
+  if (mine && outcome === 'discard') {
+    if (!input.confirmed) {
+      throw new ReadingError(`Not closed: the user's part of the reading note of ${itemName(item)} holds something, and a discard removes the reading note with it. Ask the user first; once they say yes, close with confirmed: true.`)
+    }
+  } else if (mine) {
+    if (!item.read) {
+      throw new ReadingError(`Not closed: the user's part of the reading note of ${itemName(item)} holds something you have not seen, and the outcome ${outcome} carries their quotes into the tree. `
+        + 'Ask the user to mark the item as read (on its row in the tree view): the discussion starts from there.')
+    }
+    const id = resolveId(loaded.tree, (outcome === 'direction' ? input.cites : input.note)?.trim())
+    const missing = id ? quotesMissing(mine, loaded.texts[id] ?? '') : []
+    if (id && missing.length) {
+      const n = quotesOf(mine).length
+      throw new ReadingError(`Not closed: ${missing.length} of the user's ${n} ${n === 1 ? 'quote is' : 'quotes are'} not in ${id} word for word, as quote lines (>). The first missing:\n${missing[0]!.map(l => `> ${l}`).join('\n')}\n`
+        + `Put ${missing.length === 1 ? 'it' : 'them'} in ${id} as the user wrote ${missing.length === 1 ? 'it' : 'them'}, then close the item.`)
+    }
+    if (id && quotesOf(mine).length) carried = id
+  }
+  const said = await closeItem(io, loaded, input)
+  if (!note) return said
+  await io.remove(path)
+  return `${said} Its reading note (${fileOf(path)}) is removed${carried ? `: the user's quotes are in ${carried}` : mine && outcome === 'discard' ? ', with what the user had written in it' : ''}.`
 }

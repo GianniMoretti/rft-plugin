@@ -91,8 +91,20 @@ class Manual(unittest.TestCase):
         self.assertEqual(list(rows), outcomes)
         for outcome in ('discard', 'later'):
             self.assertTrue(rows[outcome].startswith('nothing'), outcome)
-        for said in ('Save the brief before anything else', 'at most three lines', 'never brief from', 'Write nothing to the tree until the user picks', 'only the user picks', 'gets **no priority**'):
+        self.assertIn('Discussing an item', headings('inbox'))
+        # processing is Claude's own reading and ends at the brief; the outcome is the discussion's (docs/adr/0004)
+        for said in ('Read the item itself, from the item alone', 'Save your impression', '`### Claims`', '`### How`', '`### Key results`', '`### Bearing on`', '`### Left open`',
+                     'Save the brief', 'at most three lines', 'never write from the title', 'Give the brief in the chat and stop', 'the impression is **frozen**',
+                     'never open, search or edit its file by other means', 'never edit the user\'s part', 'Your reading is always written before you see the user\'s',
+                     'Say where the two readings differ', 'only the user picks', 'Write nothing to the tree until they do', 'word for word, as quote lines (`>`)',
+                     'propose the wording in the chat first and write it only once they accept', 'its reading note is removed', '`confirmed: true`', 'gets **no priority**'):
             self.assertIn(said, ' '.join(body.split()), said)
+        # the parts of an impression as the plugin checks them
+        parts = re.findall(r"'([A-Za-z ]+)'", re.search(r'export const IMPRESSION_PARTS = \[([^\]]+)\]', text(ROOT / 'hooks/lib/reading.ts')).group(1))
+        self.assertEqual(parts, ['Claims', 'How', 'Key results', 'Bearing on', 'Left open'])
+        for part in parts:
+            self.assertIn(f'### {part}', spec)
+        self.assertIn('every paper', ' '.join(text(MANUAL / 'literature.md').split()).lower())
 
     def test_a_part_opens_by_saying_what_it_is_part_of(self):
         for part in parts_in_code():

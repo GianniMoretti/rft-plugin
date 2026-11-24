@@ -374,7 +374,7 @@ export function closeIn(box: Inbox, key: string, nth = 0, outcome = 'discarded',
 
 // ---------------------------------------------------------------- in a session
 
-const itemName = (item: { key: string; url: string; title: string }) => (item.title ? `${item.title} (${item.url})` : item.url)
+export const itemName = (item: { key: string; url: string; title: string }) => (item.title ? `${item.title} (${item.url})` : item.url)
 
 const RANK = (p: string) => {
   const at = (READING_PRIORITIES as readonly string[]).indexOf(p)
@@ -408,7 +408,7 @@ export function inboxReport(box: Inbox): string {
   const items = shown(box)
   if (!items.length) return `The inbox is empty (${INBOX} in the vault holds what the user saved to read later). ${HOW_TO_ADD}.`
   const lines = byPriority(items).map((item, n) => {
-    const parts = [item.priority, itemName(item), item.why, item.added ? `added ${item.added}` : '', item.brief ? `briefed ${item.brief.date}` : '', item.duplicate ? 'in the inbox twice' : '']
+    const parts = [item.priority, itemName(item), item.why, item.added ? `added ${item.added}` : '', item.brief ? `briefed ${item.brief.date}` : '', item.read ? `marked as read by the user ${item.read}` : '', item.duplicate ? 'in the inbox twice' : '']
     return `${n + 1}. ${parts.filter(Boolean).join(' · ')}`
   })
   return [`${countsOf(items)}, saved to read later and not decided about (${INBOX} in the vault).`, ...lines].join('\n')
@@ -462,7 +462,7 @@ export async function addItem(io: Io, loaded: Loaded, input: AddInput): Promise<
 const briefText = (item: InboxItem) => (item.brief ? `\nIts brief, saved ${item.brief.date}:\n${item.brief.lines.map(l => `- ${l}`).join('\n')}` : '')
 
 /** The item a tool call names by its link, and the inbox; InboxError when the link is none or no item has it. */
-async function itemAt(io: Io, vault: string, link: string): Promise<{ box: Inbox; item: Inbox['items'][number] }> {
+export async function itemAt(io: Io, vault: string, link: string): Promise<{ box: Inbox; item: Inbox['items'][number] }> {
   const got = linkAt(oneLine(link))
   if (!got || strip(got.tail)) throw new InboxError(`"${oneLine(link)}" is not a link: name the item by its link (a URL, an arXiv id or a DOI), as rft_inbox lists it.`)
   const box = await loadInbox(io, vault)
@@ -494,6 +494,12 @@ export const OUTCOMES = ['reference', 'literature entry', 'direction', 'discard'
 export type Outcome = (typeof OUTCOMES)[number]
 export type CloseInput = { link: string; outcome: string; note?: string; cites?: string; reason?: string; today: string }
 
+/** An outcome as it was said: `discarded` is discard, `literature` a literature entry; any other word is itself. */
+export function outcomeOf(given: string): string {
+  const said = oneLine(given).toLowerCase().replace(/[-_]/g, ' ')
+  return said === 'discarded' ? 'discard' : said === 'literature' ? 'literature entry' : said
+}
+
 const A = (type: string) => `${/^[aeiou]/.test(type) ? 'an' : 'a'} ${type}`
 
 /**
@@ -504,8 +510,7 @@ const A = (type: string) => `${/^[aeiou]/.test(type) ? 'an' : 'a'} ${type}`
  */
 export async function closeItem(io: Io, loaded: Loaded, input: CloseInput): Promise<string> {
   const vault = loaded.config.vault
-  const said = oneLine(input.outcome).toLowerCase().replace(/[-_]/g, ' ')
-  const outcome = (said === 'discarded' ? 'discard' : said === 'literature' ? 'literature entry' : said) as Outcome
+  const outcome = outcomeOf(input.outcome) as Outcome
   if (!(OUTCOMES as readonly string[]).includes(outcome)) throw new InboxError(`Not closed: an outcome is ${OUTCOMES.slice(0, -1).join(', ')} or ${OUTCOMES[OUTCOMES.length - 1]}, and "${oneLine(input.outcome)}" is none of them.`)
   const { box, item } = await itemAt(io, vault, input.link)
   const name = itemName(item)
@@ -568,23 +573,39 @@ export async function closeItem(io: Io, loaded: Loaded, input: CloseInput): Prom
     + `${left.length ? countsOf(left) : 'The inbox is empty'}.${advice}`
 }
 
+const aboutOf = (item: InboxItem) => [item.why ? `saved because: ${item.why}` : '', item.added ? `added ${item.added}` : ''].filter(Boolean).join('; ')
+
 /**
- * What Process asks of Claude, as a turn of the chat (ADR 0001): read the item, save its brief,
- * recommend one outcome and wait. The detail is in the manual's part on the inbox.
+ * What Process asks of Claude, as a turn of the chat (ADR 0001): its own reading of the item, from
+ * the item alone, saved as its impression and its brief; it says the brief and stops (ADR 0004).
+ * No outcome is picked here: that is the discussion's, which the user starts by marking the item
+ * as read. The detail is in the manual's part on the inbox.
  */
 export function processPrompt(m: string, item: InboxItem): string {
-  const about = [item.why ? `saved because: ${item.why}` : '', item.added ? `added ${item.added}` : ''].filter(Boolean).join('; ')
-  const head = `Process this inbox item with me (read ${cite(m, 'inbox', 'Processing an item')} first): ${itemName(item)}${about ? ` (${about})` : ''}.`
+  const about = aboutOf(item)
   const tool = `rft_inbox {link: ${JSON.stringify(item.url)}, `
-  const wait = `Then wait: write nothing to the tree until I pick an outcome (reference, literature entry, direction, discard or later). When I pick, write what that outcome needs and close the item with ${tool}outcome, ...}.`
-  if (item.brief) {
-    return `${head}\n\nIt has a brief, saved ${item.brief.date}:\n${item.brief.lines.map(l => `- ${l}`).join('\n')}\n\n`
-      + `Start from this brief: do not read the item again unless I ask, or the brief leaves open what I need to decide. Give me the brief and the outcome it recommends; if you read the item again and the brief changes, save the new one with ${tool}brief} first. ${wait}`
-  }
-  return `${head}\n\n`
-    + 'Read the item itself before you say anything about it: the page or the paper at its link, with the tools you have (for an arXiv paper, the abstract page and as much of the paper as the brief needs). '
-    + `Then, before anything else, save its brief with ${tool}brief}: at most three lines, what it claims, which notes of the tree it touches (by id: rft_search and rft_map find them), and the one outcome you recommend, with where it would go. Give me the brief in the chat too. ${wait}\n\n`
-    + 'If you cannot read it (a paywall, a dead link, a page that needs a login), say so and save no brief: never brief from the title or from what you remember of the paper. Offer me to discard it, to leave it for later, or to give you the path of its PDF in the vault.'
+  return `Process this inbox item (read ${cite(m, 'inbox', 'Processing an item')} first): ${itemName(item)}${about ? ` (${about})` : ''}.\n\n`
+    + 'This is your own reading, written before you see mine. Read the item itself, the page or the paper at its link, with the tools you have (for an arXiv paper, the abstract page and as much of the paper as the impression needs). '
+    + `Read it from the item alone${item.brief ? `, and again: its brief of ${item.brief.date} is replaced by this reading's` : ''}, also when it is already an entry of a literature note, and do not open its reading note's file: my part of it is closed to you until I mark the item as read.\n\n`
+    + `Then save your impression with ${tool}impression}: five parts under their headings, about one screen. ### Claims; ### How; ### Key results, with their numbers and where they are in the item (table, figure, section); ### Bearing on, the notes of the tree it bears on, by id (rft_search and rft_map find them); ### Left open. `
+    + `Then save its brief with ${tool}brief}: at most three lines, what it claims, which notes of the tree it touches, and the one outcome you recommend, with where it would go. Give me the brief in the chat and stop there: no outcome is picked now and nothing is written to the tree. I read the item myself and mark it as read; the discussion starts then.\n\n`
+    + 'If you cannot read it (a paywall, a dead link, a page that needs a login), say so and save no impression and no brief: never write one from the title or from what you remember of the paper. Offer me to discard it, to leave it for later, or to give you the path of its PDF in the vault.'
+}
+
+/**
+ * What the read mark (or the Discuss button) asks of Claude, as a turn of the chat: open the user's
+ * part of the reading note for the first time, say where the two readings differ, and stay until
+ * the user picks an outcome. An item with no impression yet gets one first, from the item alone:
+ * the tool gives the user's part only after it.
+ */
+export function discussPrompt(m: string, item: InboxItem): string {
+  const about = aboutOf(item)
+  const tool = `rft_inbox {link: ${JSON.stringify(item.url)}, `
+  return `Discuss this inbox item with me (read ${cite(m, 'inbox', 'Discussing an item')} first): ${itemName(item)}${about ? ` (${about})` : ''}. I have read it and marked it as read${item.read ? ` (${item.read})` : ''}.\n\n`
+    + `First call ${tool}reading: true}: it gives your impression and, now that the item is marked as read, my part of its reading note, my quotes and my own lines, which you see for the first time. `
+    + `If it answers that there is no impression yet, read the item itself, from the item alone, save your impression with ${tool}impression} (and its brief with ${tool}brief}), then ask again: your reading is written before you see mine.\n\n`
+    + 'Then tell me where the two readings differ: what I kept that you passed over, what you found that I did not note, and what we read differently. Recommend one outcome (reference, literature entry, direction, discard or later) and wait: write nothing to the tree until I pick. '
+    + `When I pick, my quotes go into the tree word for word, as quote lines (>), never paraphrased; my own lines you may rephrase, but propose the wording here first and write it only once I accept. Never edit my part of the reading note. Then close the item with ${tool}outcome, ...}.`
 }
 
 /** What `/rft-inbox <link> [reading priority] [why]` was given: a first word that is a reading priority is one, the rest is the why. */

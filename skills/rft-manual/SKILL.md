@@ -32,7 +32,7 @@ the parts the work at hand needs:
 | `writing.md` | a result is final (suggest verifying it), or a verified note's claim may no longer hold; snippets or documents come up | `rft_manuscript`, `rft_set_snippet`, `rft_set_document` |
 | `slides.md` | a slide deck is asked for or written | |
 | `comments.md` | a note is locked; a comment or suggestion of the tree view is to be answered; a note has footnotes or highlights | `rft_comments`, `rft_comment`, `rft_suggest` |
-| `inbox.md` | the user saves something to read later, asks what waits in the inbox or asks to process an item | `rft_inbox` |
+| `inbox.md` | the user saves something to read later, asks what waits there, or to process or discuss an item | `rft_inbox` |
 
 This file's own tools: `rft_add_node`, `rft_set_status`, `rft_set_tags`, `rft_tags`, `rft_set_refs`,
 `rft_set_type`, `rft_tree`, `rft_sync`, `rft_validate`, `rft_handoff`. A tool that is not in the

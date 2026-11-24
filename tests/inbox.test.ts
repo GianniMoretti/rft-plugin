@@ -11,7 +11,7 @@
 
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { INBOX, InboxError, addTo, briefOn, byPriority, closeIn, commandInput, findIn, inboxLine, inboxReport, inboxText, linksIn, processPrompt, readInbox, shown, sourceOf, strip } from '../hooks/lib/inbox'
+import { INBOX, InboxError, addTo, briefOn, byPriority, closeIn, commandInput, discussPrompt, findIn, inboxLine, inboxReport, inboxText, linksIn, processPrompt, readInbox, shown, sourceOf, strip } from '../hooks/lib/inbox'
 import { CASES, EXPECTED, INBOX_MD } from './fixtures/inbox'
 import { CWD, D00, demoFiles, note, world } from './fixture'
 
@@ -153,28 +153,47 @@ describe('inbox: the file', () => {
     expect(closed.box.processed).toEqual([...EXPECTED.processed, { date: '2026-11-23', key: 'arxiv:2311.09876', title: '', outcome: 'R15' }])
   })
 
-  test('the Process prompt names the item and its manual file, asks for the brief first and for nothing written until the user picks', () => {
+  test('the Process prompt names the item and its manual file, asks for Claude\'s own reading (the impression, then the brief) and stops there', () => {
     const item = EXPECTED.items.find(i => i.key === 'arxiv:2501.00001')!
     const p = processPrompt('/plugin/skills/rft-manual', item)
-    expect(p.split('\n')[0]).toBe('Process this inbox item with me (read the manual\'s "Processing an item" (/plugin/skills/rft-manual/inbox.md) first): https://arxiv.org/abs/2501.00001 (saved because: Thomas mentioned it; added 2026-11-22).')
-    expect(p).toContain('Read the item itself before you say anything about it')
-    expect(p).toContain('before anything else, save its brief with rft_inbox {link: "https://arxiv.org/abs/2501.00001", brief}')
+    expect(p.split('\n')[0]).toBe('Process this inbox item (read the manual\'s "Processing an item" (/plugin/skills/rft-manual/inbox.md) first): https://arxiv.org/abs/2501.00001 (saved because: Thomas mentioned it; added 2026-11-22).')
+    expect(p).toContain('This is your own reading, written before you see mine. Read the item itself')
+    // from the item alone, whatever the tree holds of it, and never through the reading note's file
+    expect(p).toContain('Read it from the item alone, also when it is already an entry of a literature note, and do not open its reading note\'s file: my part of it is closed to you until I mark the item as read.')
+    // the impression first, with its five parts, then the brief; and no outcome
+    const imp = p.indexOf('save your impression with rft_inbox {link: "https://arxiv.org/abs/2501.00001", impression}')
+    const brief = p.indexOf('save its brief with rft_inbox {link: "https://arxiv.org/abs/2501.00001", brief}')
+    expect(imp).toBeGreaterThan(0)
+    expect(brief).toBeGreaterThan(imp)
+    for (const part of ['### Claims', '### How', '### Key results', '### Bearing on', '### Left open']) expect(p).toContain(part)
     expect(p).toContain('the one outcome you recommend')
-    expect(p).toContain('write nothing to the tree until I pick an outcome (reference, literature entry, direction, discard or later)')
-    // the item that cannot be read (scenario C)
-    expect(p).toContain('If you cannot read it (a paywall, a dead link, a page that needs a login), say so and save no brief: never brief from the title')
+    expect(p).toContain('Give me the brief in the chat and stop there: no outcome is picked now and nothing is written to the tree.')
+    expect(p).not.toMatch(/until I pick|close the item|outcome, \.\.\.}/)
+    // the item that cannot be read (scenario C of the inbox)
+    expect(p).toContain('If you cannot read it (a paywall, a dead link, a page that needs a login), say so and save no impression and no brief: never write one from the title')
     expect(p).toContain('Offer me to discard it, to leave it for later, or to give you the path of its PDF in the vault.')
     expect(p).not.toMatch(/urgent|high|medium|reading priority/)
-    // a briefed item starts from its brief
+    // a briefed item is read again: its brief is not what this reading starts from
     const briefed = EXPECTED.items.find(i => i.brief)!
     const again = processPrompt('/m', briefed)
-    expect(again).toContain(`It has a brief, saved ${briefed.brief!.date}:\n${briefed.brief!.lines.map(l => `- ${l}`).join('\n')}\n`)
-    expect(again).toContain('Start from this brief: do not read the item again unless I ask')
-    expect(again).not.toContain('Read the item itself before')
-    expect(again).toContain('write nothing to the tree until I pick an outcome')
+    expect(again).toContain(`Read it from the item alone, and again: its brief of ${briefed.brief!.date} is replaced by this reading's, also when it is already an entry`)
+    expect(again).not.toContain(briefed.brief!.lines[0])
     // its reading priority is the user's and says nothing to Claude
     expect(briefed.priority).toBe('high')
     expect(again).not.toMatch(/\bhigh\b/)
+  })
+
+  test('the Discuss prompt asks for the reading note first, an impression before the user\'s part, the differences, and nothing written until the user picks', () => {
+    const item = { ...EXPECTED.items.find(i => i.key === 'arxiv:2501.00001')!, read: '2026-11-24' }
+    const p = discussPrompt('/plugin/skills/rft-manual', item)
+    expect(p.split('\n')[0]).toBe('Discuss this inbox item with me (read the manual\'s "Discussing an item" (/plugin/skills/rft-manual/inbox.md) first): https://arxiv.org/abs/2501.00001 (saved because: Thomas mentioned it; added 2026-11-22). I have read it and marked it as read (2026-11-24).')
+    expect(p).toContain('First call rft_inbox {link: "https://arxiv.org/abs/2501.00001", reading: true}')
+    expect(p).toContain('If it answers that there is no impression yet, read the item itself, from the item alone, save your impression')
+    expect(p).toContain('your reading is written before you see mine')
+    expect(p).toContain('tell me where the two readings differ')
+    expect(p).toContain('write nothing to the tree until I pick')
+    expect(p).toContain('my quotes go into the tree word for word, as quote lines (>), never paraphrased; my own lines you may rephrase, but propose the wording here first and write it only once I accept. Never edit my part of the reading note.')
+    expect(p).not.toMatch(/urgent|high|medium|reading priority/)
   })
 
   test('the most pressing first, the newest first among equals (of one day, the one added later), those with no day last', () => {
@@ -237,7 +256,7 @@ describe('inbox: in a session', () => {
     const w = await session($, on, INBOX_MD)
     // behind ToolSearch, and with no way to give a reading priority
     expect(w.deferred).toContain('rft_inbox')
-    expect(Object.keys((w.specs.rft_inbox!.inputSchema as { properties: object }).properties)).toEqual(['link', 'why', 'title', 'brief', 'outcome', 'note', 'cites', 'reason'])
+    expect(Object.keys((w.specs.rft_inbox!.inputSchema as { properties: object }).properties)).toEqual(['link', 'why', 'title', 'impression', 'brief', 'reading', 'outcome', 'note', 'cites', 'reason', 'confirmed'])
     expect(await tool($)).toBe(inboxReport(readInbox(INBOX_MD)))
     expect(w.fs.read(FILE)).toBe(INBOX_MD)
 
@@ -395,7 +414,8 @@ describe('inbox: in a session', () => {
     expect(w.toasts.join()).toContain('the tree view could not process the inbox item (that item is no longer in the inbox)')
     await clock.advance(5000)
     expect(prompts).toHaveLength(1)
-    expect(prompts[0]!.split('\n')[0]).toMatch(/^Process this inbox item with me \(read the manual's "Processing an item" \(.*skills\/rft-manual\/inbox\.md\) first\): https:\/\/arxiv\.org\/abs\/2406\.01234 \(saved because: same one from Gianni\?\)\.$/)
+    expect(prompts[0]!.split('\n')[0]).toMatch(/^Process this inbox item \(read the manual's "Processing an item" \(.*skills\/rft-manual\/inbox\.md\) first\): https:\/\/arxiv\.org\/abs\/2406\.01234 \(saved because: same one from Gianni\?\)\.$/)
+    expect(prompts[0]).toContain('save your impression with rft_inbox {link: "https://arxiv.org/abs/2406.01234", impression}')
     expect(prompts[0]).toContain('save its brief with rft_inbox {link: "https://arxiv.org/abs/2406.01234", brief}')
     // nothing was written by asking
     expect(w.fs.read(FILE)).toBe(INBOX_MD)

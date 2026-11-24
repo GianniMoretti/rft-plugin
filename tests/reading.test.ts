@@ -2,11 +2,12 @@
 // the server's side is held to as well (tests/fixtures/reading-note, read here through their copy,
 // tests/fixtures/reading-note.ts, which tests/test_reading.py keeps equal to them).
 
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { IMPRESSION_CHARS, IMPRESSION_PARTS, ReadingError, fileName, findNote, impressionLines, linesOf, nameOf, newNote, noteText, quotesMissing, quotesOf, readNote, withImpression } from '../hooks/lib/reading'
 import type { Io } from '../hooks/lib/vault'
 import { CASES } from './fixtures/reading-note'
+import { CWD, D01, demoFiles, note, world } from './fixture'
 
 type Item = { key: string; url: string; title: string }
 const noteOf = (c: { text: string | null; item: Item }) => (c.text === null ? newNote(c.item.key, c.item.url, c.item.title) : readNote(c.text))
@@ -83,5 +84,156 @@ describe('reading note: the file', () => {
     // a file that names no item is the item's by its name
     files.set('vault/Reading notes/a.org-z.md', '## My reading\n\nheadless\n')
     expect((await findNote(io, 'vault', 'https://a.org/z')).note!.mine).toBe('headless')
+  })
+})
+
+// In a session: rft_inbox's side of a reading note (docs/adr/0004). The refusals are what the
+// design rests on: the user's part before the read mark, a second impression after it, the user's
+// part of a read item before any impression, and a close that would lose or paraphrase what the
+// user wrote.
+describe('reading note: in a session', () => {
+  type Engine = Parameters<Extract<Parameters<typeof test>[1], (...args: never[]) => unknown>>[0]
+  type On = Parameters<Extract<Parameters<typeof test>[1], (...args: never[]) => unknown>>[1]
+  const INBOX = 'vault/Inbox.md'
+  const NOTE = 'vault/Reading notes/arxiv-2406.01234.md'
+  const LINE = '- [Mixup at scale](https://arxiv.org/abs/2406.01234) — maybe relevant to D01 · high · added 2026-11-16'
+  const OTHER = '- https://example.org/blog/post — from Bea'
+  const QUOTE = '> The gain vanishes below 1k images (Sec. 4.2)'
+  const MINE = `${QUOTE}\n\nSame subset sizes as E02?`
+  const HEAD = '# Mixup at scale\n<https://arxiv.org/abs/2406.01234>\n'
+  const imp = (claim: string) => IMPRESSION_PARTS.map((p, n) => `### ${p}\n\n${n === 0 ? claim : `${p} of it.`}`).join('\n\n')
+  const link = '2406.01234'
+
+  async function session($: Engine, on: On, files: Record<string, string>) {
+    mock.clock(on)
+    on('prompt.compose', () => ({ sections: [] }))
+    const w = world(on, { ...demoFiles(), ...files })
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    return w
+  }
+  const tool = async ($: Engine, input: Record<string, unknown> = {}) => String((await $.tool.call({ tool: 'mcp__rft__rft_inbox', ...input } as never)).text)
+  const reference = (quotes: string) => note('R02', 'reference', 'done', D01, 'Mixup at scale').replace('## Idea\nText of R02.', `## Source\nDoe et al. 2024. https://arxiv.org/abs/2406.01234\n\n## Quotes\n\n${quotes}`)
+  const R02 = 'vault/references/R02 Mixup at scale.md'
+
+  test('before the read mark the user\'s part is never given; an impression is saved beside it and a second one replaces it', async ($, on) => {
+    const w = await session($, on, { [INBOX]: `# Inbox\n\n${LINE}\n`, [NOTE]: `${HEAD}\n## My reading\n\n${MINE}\n` })
+    const closed = await tool($, { link, reading: true })
+    expect(closed).toMatch(/^No impression of Mixup at scale \(https:\/\/arxiv\.org\/abs\/2406\.01234\) is saved yet\.\n\nThe user's part of its reading note is closed to you: the user has not marked the item as read\./)
+    expect(closed).not.toMatch(/gain vanishes|subset sizes/)
+    // the impression: its own lines, and not a byte of the user's part
+    const saved = await tool($, { link, impression: imp('First reading.') })
+    expect(saved).toBe("Impression saved on Mixup at scale (https://arxiv.org/abs/2406.01234), in its reading note (Reading notes/arxiv-2406.01234.md). The user's part of the reading note stays closed until they mark the item as read.")
+    const day = /impression \((\d{4}-\d{2}-\d{2})\)/.exec(w.fs.read(NOTE))![1]!
+    expect(w.fs.read(NOTE)).toBe(`${HEAD}\n## My reading\n\n${MINE}\n\n## Claude's impression (${day})\n\n${imp('First reading.')}\n`)
+    const again = await tool($, { link, reading: true })
+    expect(again).toContain(`Your impression of Mixup at scale (https://arxiv.org/abs/2406.01234), saved ${day}:\n\n### Claims\n\nFirst reading.`)
+    expect(again).toContain("The user's part of its reading note is closed to you")
+    expect(again).not.toMatch(/gain vanishes|subset sizes/)
+    // a second Process rewrites it
+    expect(await tool($, { link, impression: imp('Second reading.') })).toContain(`in place of the one of ${day}. The user's part of the reading note stays closed`)
+    expect(w.fs.read(NOTE)).toBe(`${HEAD}\n## My reading\n\n${MINE}\n\n## Claude's impression (${day})\n\n${imp('Second reading.')}\n`)
+    // one that is not an impression changes nothing
+    const kept = w.fs.read(NOTE)
+    expect(await tool($, { link, impression: 'A good paper on mixup.' })).toMatch(/^Impression not saved: the impression starts with text under no heading\. An impression has five parts/)
+    expect(await tool($, { impression: imp('x') })).toBe('Name the item by its link (link), as rft_inbox with no field lists it.')
+    expect(w.fs.read(NOTE)).toBe(kept)
+    // the list says nothing of what the note holds, and the inbox's file was never written
+    expect(await tool($)).not.toMatch(/gain vanishes|subset sizes/)
+    expect(w.fs.read(INBOX)).toBe(`# Inbox\n\n${LINE}\n`)
+  })
+
+  test('Process with no reading note makes one: the head, the user\'s part empty, the impression', async ($, on) => {
+    const w = await session($, on, { [INBOX]: `${LINE}\n${OTHER}\n` })
+    expect(w.fs.exists(NOTE)).toBe(false)
+    expect(await tool($, { link, reading: true })).toContain('No impression of Mixup at scale')
+    expect(w.fs.exists(NOTE)).toBe(false)
+    // the impression and the brief in one call, in that order
+    const said = await tool($, { link, impression: imp('First reading.'), brief: 'claims x\ntouches D01\nrecommends: reference under D01' })
+    expect(said.split('\n').map(l => l.slice(0, 16))).toEqual(['Impression saved', 'Brief saved on M'])
+    const day = /impression \((\d{4}-\d{2}-\d{2})\)/.exec(w.fs.read(NOTE))![1]!
+    expect(w.fs.read(NOTE)).toBe(`${HEAD}\n## My reading\n\n## Claude's impression (${day})\n\n${imp('First reading.')}\n`)
+    // an item with no title is headed by what the list calls it
+    await tool($, { link: 'https://example.org/blog/post', impression: imp('A post.') })
+    expect(w.fs.read('vault/Reading notes/example.org-blog-post.md').split('\n').slice(0, 2)).toEqual(['# example.org/blog/post', '<https://example.org/blog/post>'])
+    // later: the item, its brief and its reading note stay
+    expect(await tool($, { link, outcome: 'later' })).toMatch(/^Left in the inbox for later: Mixup at scale .*with its brief/)
+    expect(w.fs.exists(NOTE)).toBe(true)
+  })
+
+  test('after the read mark: the user\'s part only once an impression is saved, and the impression frozen from then on', async ($, on) => {
+    const w = await session($, on, { [INBOX]: `${LINE} · read 2026-11-24\n`, [NOTE]: `${HEAD}\n## My reading\n\n${MINE}\n` })
+    // the user read first: no impression yet, so their part stays closed
+    const refused = await tool($, { link, reading: true })
+    expect(refused).toBe("The user's part stays closed until your impression is saved: the user marked Mixup at scale (https://arxiv.org/abs/2406.01234) as read (2026-11-24) and it has no impression yet. Read the item itself, from the item alone, save the impression (rft_inbox {link, impression}), then ask again.")
+    expect(await tool($, { link, impression: imp('First reading.') })).toContain('The user has marked the item as read: rft_inbox {link, reading: true} gives their part now.')
+    const frozen = w.fs.read(NOTE)
+    const day = /impression \((\d{4}-\d{2}-\d{2})\)/.exec(frozen)![1]!
+    // now both, the user's part as they wrote it
+    const both = await tool($, { link, reading: true })
+    expect(both).toBe(`Your impression of Mixup at scale (https://arxiv.org/abs/2406.01234), saved ${day}:\n\n${imp('First reading.')}\n\nThe user's part, marked as read 2026-11-24 (theirs: never edit it; a line that starts with > is a quote from the item, any other is their own):\n\n${MINE}`)
+    // no impression after the user's part was given
+    expect(await tool($, { link, impression: imp('Second reading.') })).toBe(`Impression not saved: the user marked Mixup at scale (https://arxiv.org/abs/2406.01234) as read on 2026-11-24, and its impression of ${day} is frozen from then on. It was written before you saw the user's part, and it is what their reading is compared with.`)
+    expect(w.fs.read(NOTE)).toBe(frozen)
+    // the mark itself is the user's: nothing the tool takes sets or clears it
+    await tool($, { link, read: false, brief: 'claims x' })
+    expect(w.fs.read(INBOX)).toContain(' · read 2026-11-24\n')
+  })
+
+  test('a read item with an empty part: said so; the tool lists the mark', async ($, on) => {
+    await session($, on, { [INBOX]: `${LINE} · read 2026-11-24\n`, [NOTE]: `${HEAD}\n## My reading\n\n## Claude's impression (2026-11-20)\n\n${imp('First reading.')}\n` })
+    expect(await tool($, { link, reading: true })).toMatch(/\n\nThe user marked the item as read \(2026-11-24\) and wrote nothing in their part\.$/)
+    expect(await tool($)).toContain('marked as read by the user 2026-11-24')
+  })
+
+  test('closing: an outcome that writes to the tree waits for the read mark and for the quotes word for word; the reading note goes with the item', async ($, on) => {
+    const w = await session($, on, { [INBOX]: `${LINE}\n${OTHER}\n`, [NOTE]: `${HEAD}\n## My reading\n\n${MINE}\n`, [R02]: reference('> the gain vanishes under 1k images') })
+    const before = w.fs.read(INBOX)
+    // not marked as read: Claude has not seen what the part holds
+    expect(await tool($, { link, outcome: 'reference', note: 'R02' })).toBe("Not closed: the user's part of the reading note of Mixup at scale (https://arxiv.org/abs/2406.01234) holds something you have not seen, and the outcome reference carries their quotes into the tree. Ask the user to mark the item as read (on its row in the tree view): the discussion starts from there.")
+    expect(w.fs.read(INBOX)).toBe(before)
+    // marked as read (by the user: the file is theirs), and the note paraphrases the quote
+    w.fs.write(INBOX, `${LINE} · read 2026-11-24\n${OTHER}\n`)
+    expect(await tool($, { link, outcome: 'reference', note: 'R02' })).toBe(`Not closed: 1 of the user's 1 quote is not in R02 word for word, as quote lines (>). The first missing:\n${QUOTE}\nPut it in R02 as the user wrote it, then close the item.`)
+    expect(w.fs.exists(NOTE)).toBe(true)
+    // a missing note is still said first, as before
+    expect(await tool($, { link, outcome: 'reference', note: 'R09' })).toContain('Not closed: there is no note R09.')
+    // word for word: closed, and the reading note is removed
+    w.fs.write(R02, reference(QUOTE))
+    const closed = await tool($, { link, outcome: 'reference', note: 'R02' })
+    expect(closed).toMatch(/^Closed: Mixup at scale \(https:\/\/arxiv\.org\/abs\/2406\.01234\) → R02\. It is under Processed in Inbox\.md, dated \S+\. Inbox: 1 item\. Its reading note \(Reading notes\/arxiv-2406\.01234\.md\) is removed: the user's quotes are in R02\.$/)
+    expect(w.fs.exists(NOTE)).toBe(false)
+    expect(w.fs.read(R02)).toBe(reference(QUOTE))
+  })
+
+  test('a direction is checked against the reference it cites, a literature entry against the literature note', async ($, on) => {
+    const lit = 'vault/references/R03 Literature on mixup.md'
+    const literature = (quotes: string) => note('R03', 'reference', 'done', D01, 'Literature on mixup').replace('tags: [demo, reference, done]', 'tags: [demo, reference, literature, done]')
+      .replace('## Idea\nText of R03.', `## Papers\n### 2024 Doe — Mixup at scale\nhttps://arxiv.org/abs/2406.01234\n\n${quotes}`)
+    const w = await session($, on, { [INBOX]: `${LINE} · read 2026-11-24\n`, [NOTE]: `${HEAD}\n## My reading\n\n${MINE}\n`, [R02]: reference('none'), [lit]: literature('') })
+    expect(await tool($, { link, outcome: 'direction', note: 'D01', cites: 'R02' })).toContain("Not closed: 1 of the user's 1 quote is not in R02 word for word")
+    expect(await tool($, { link, outcome: 'literature entry', note: 'R03' })).toContain("Not closed: 1 of the user's 1 quote is not in R03 word for word")
+    w.fs.write(lit, literature(`  ${QUOTE}`))
+    expect(await tool($, { link, outcome: 'literature entry', note: 'R03' })).toMatch(/→ R03 \(literature entry\)\..*Its reading note \(Reading notes\/arxiv-2406\.01234\.md\) is removed: the user's quotes are in R03\.$/)
+    expect(w.fs.exists(NOTE)).toBe(false)
+  })
+
+  test('a discard asks first while the user\'s part holds something; an empty part needs neither the mark nor the question', async ($, on) => {
+    const blog = 'vault/Reading notes/example.org-blog-post.md'
+    const w = await session($, on, {
+      [INBOX]: `${LINE}\n${OTHER}\n`, [NOTE]: `${HEAD}\n## My reading\n\n${MINE}\n`,
+      [blog]: `# example.org/blog/post\n<https://example.org/blog/post>\n\n## My reading\n\n## Claude's impression (2026-11-20)\n\n${imp('A post.')}\n`,
+      [R02]: reference('none'),
+    })
+    const before = w.fs.read(INBOX)
+    expect(await tool($, { link, outcome: 'discard', reason: 'not for us' })).toBe("Not closed: the user's part of the reading note of Mixup at scale (https://arxiv.org/abs/2406.01234) holds something, and a discard removes the reading note with it. Ask the user first; once they say yes, close with confirmed: true.")
+    expect([w.fs.read(INBOX), w.fs.exists(NOTE)]).toEqual([before, true])
+    // later closes nothing and removes nothing
+    expect(await tool($, { link, outcome: 'later' })).toContain('Left in the inbox for later')
+    expect(w.fs.exists(NOTE)).toBe(true)
+    expect(await tool($, { link, outcome: 'discard', reason: 'not for us', confirmed: true })).toMatch(/— discarded: not for us\..*Its reading note \(Reading notes\/arxiv-2406\.01234\.md\) is removed, with what the user had written in it\.$/)
+    expect(w.fs.exists(NOTE)).toBe(false)
+    // a note with Claude's impression alone: the inbox's short path still closes, unread and unasked
+    expect(await tool($, { link: 'https://example.org/blog/post', outcome: 'reference', note: 'R02' })).toMatch(/^Closed: https:\/\/example\.org\/blog\/post → R02\..* Its reading note \(Reading notes\/example\.org-blog-post\.md\) is removed\.$/)
+    expect(w.fs.exists(blog)).toBe(false)
   })
 })

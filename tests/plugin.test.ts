@@ -191,7 +191,9 @@ describe('concepts', () => {
     expect(prompts[0]).toContain('tags ["literature"]')
     expect(prompts[0]).toContain('never invent a citation')
     // what it found and did not read goes to the inbox, with a why naming the search
-    expect(prompts[0]).toContain('that you did not read are neither written about nor dropped: save each in the inbox with rft_inbox')
+    // every paper of the search reaches the inbox: the entries of the note, and those found but not read
+    expect(prompts[0]).toContain('Then save every paper the note lists as an entry in the inbox with rft_inbox (its link, its title, and a why that names this search and its note')
+    expect(prompts[0]).toContain('that you did not read are neither written about nor dropped: save each in the inbox too')
     expect(prompts[0]).toContain('a why that names this search')
     await run('label smoothing')
     await clock.advance(5000)
