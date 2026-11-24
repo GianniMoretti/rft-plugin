@@ -603,6 +603,25 @@ describe('web view', () => {
     expect(JSON.parse(w.fs.read('vault/snippets/snippets.json')).snippets.S01.reviewed).toMatch(/^\d{4}-\d{2}-\d{2}$/)
   })
 
+  test('the Manuscript tab\'s New document reaches the session with its template: a kit of the vault copied in as it is', async ($, on) => {
+    mock.clock(on)
+    const kit = { 'paper.tex': '\\documentclass{article}\n\\usepackage{kit}\n\\begin{document}\nSample.\n\\end{document}\n', 'kit.sty': '% the style\n', 'template.json': '{"engine": "xelatex"}' }
+    const w = world(on, { ...demoFiles(), ...Object.fromEntries(Object.entries(kit).map(([f, text]) => [`vault/templates/kit/${f}`, text])) })
+    const srv = fakeServer(on)
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    await $.command.run(RUN(''))
+    srv.print(`RFT_MANUSCRIPT ${JSON.stringify({ action: 'document', name: 'camera-ready', template: 'kit' })}\n`)
+    await until(() => w.fs.exists('vault/documents/.rft/camera-ready/tracking.json'))
+    expect(w.fs.read('vault/documents/camera-ready/paper.tex')).toBe(kit['paper.tex'])
+    expect(w.fs.read('vault/documents/camera-ready/kit.sty')).toBe(kit['kit.sty'])
+    expect(w.fs.exists('vault/documents/camera-ready/template.json')).toBe(false)
+    expect(JSON.parse(w.fs.read('vault/documents/.rft/camera-ready/tracking.json'))).toMatchObject({ main: 'paper.tex', template: 'kit', engine: 'xelatex' })
+    // what an older page sends still makes a report
+    srv.print(`RFT_MANUSCRIPT ${JSON.stringify({ action: 'document', name: 'chapter', kind: 'report' })}\n`)
+    await until(() => w.fs.exists('vault/documents/.rft/chapter/tracking.json'))
+    expect(w.fs.read('vault/documents/chapter/main.tex')).toContain('\\documentclass[11pt]{report}')
+  })
+
   test('/rft outside an RFT project starts nothing', async ($, on) => {
     mock.clock(on)
     world(on, {})
