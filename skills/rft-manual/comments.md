@@ -27,6 +27,9 @@ A part of the rft manual (the `rft-manual` skill is its core, with the index of 
   - a suggestion on a note that is not locked: make the change in the note yourself, then close the
     thread with `rft_comment {id, thread, applied: true, text: what you changed}`;
   - unclear or wrong: reply with `rft_comment` and change nothing.
+- **A message another agent wrote**: the user may have other agents answer a thread (a local
+  model, another harness); `rft_comments` names the agent on its message. It is not yours:
+  weigh it as you would a colleague's reply, and say so when you disagree.
 - **Quotes** are exact text of the note below its frontmatter, markdown included, occurring once
   in it: quote more of the text around it when a phrase repeats.
 - **Footnotes** are part of the note, as Obsidian writes them: a mark `[^1]` and its text on a line

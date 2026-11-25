@@ -16,7 +16,8 @@
     const chat = { name: CHAT, label: 'Claude Code chat', where: state.chat ? 'the chat that is connected' : 'no chat is connected', off: !state.chat, why: state.chat ? '' : 'no Claude Code chat is connected: run /rft in one' }
     return [chat, ...state.agents.map(a => {
       const off = !(a.tasks || []).includes(task)
-      return { name: a.name, label: a.name, where: a.where, off, why: off ? (a.problem || (a.why_not || {})[task] || 'its grant does not allow this') : '', grant: a.grant_words, kind: a.kind }
+      // a ready-made entry nobody ran on a real install yet says so
+      return { name: a.name, label: a.name, where: a.unverified ? `${a.where}; its ready-made commands were never tried` : a.where, off, why: off ? (a.problem || (a.why_not || {})[task] || 'its grant does not allow this') : '', grant: a.grant_words, kind: a.kind }
     })]
   }
 

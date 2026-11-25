@@ -33,7 +33,7 @@ could be done, and when it is done. A package builds only on the ones before it.
 | 1.3.1 | Inbox and reading notes (built, not released) | 1.1.0 |
 | 1.3.2 | Phone layout (built, not released) | 1.1.0 |
 | 1.3.3 | Figure style (first step built, not released) | 1.1.0 |
-| 2.0.0 | Agents | 1.2.0–1.3.3 |
+| 2.0.0 | Agents (step one built, not released) | 1.2.0–1.3.3 |
 
 ---
 
@@ -431,8 +431,8 @@ a local Qwen through Ollama, or DeepSeek, GLM, ChatGPT over the same endpoint fo
 harnesses (Claude Code, Codex), and picks which one does a task. The plugin keeps working as it
 does today for someone who sets nothing up.
 
-- **Step one: the app launches agents.** The server started from a terminal stays up on its
-  own. Asking on a comment thread (a reply, or a replacement to accept or reject) and Process
+- **Step one: the app launches agents (built).** The server started from a terminal stays up
+  on its own. Asking on a comment thread (a reply, or a replacement to accept or reject) and Process
   on an inbox item run the picked agent headless instead of answering that no chat is
   connected. The agent returns text and the app writes it, signed with the agent's name.
 - **Grants.** Each agent has a grant the user gives it: text only (the default), read the
@@ -447,6 +447,12 @@ does today for someone who sets nothing up.
   (Codex) can be given the rules and the guards against direct edits that Claude Code's hooks
   give; if so, the tree's operations are also served as a standalone tool server that the app
   starts, and the page's own actions work with no chat connected.
+- **Built in step one**: `server/rft_agents.py` (the setup, the model call, the harness run,
+  the tasks), the answer written by the server case for case as the plugin writes it
+  (`tests/fixtures/agents/`), the picker (`web/agents.js`), ready-made entries for Claude Code
+  (its locked run tried for real: it reads, it cannot write) and for Codex (from its
+  documentation, never run). Not yet done: a thread answered by a real local model, and a paper
+  processed through a real headless harness, by the user.
 - **Later, not in 2.0.0 unless decided**: chats and chat history in the page.
 - Done when: tests with a fake model and a fake harness show the vault's exact change for a
   good answer, a malformed one, an unreachable agent and a cancelled task, and that a text only

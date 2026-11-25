@@ -15,16 +15,16 @@ A part of the rft manual (the `rft-manual` skill is its core, with the index of 
   save it. When a source turns up in the work that there is no time to read now, offer to save
   it: a reference note is for a source that was read (the core's rule 4).
 - **The reading priority** (urgent, high, medium or low) is the user's alone, and is not a note's
-  priority: `rft_inbox` does not take one, and it is never set, changed or removed by editing the
-  file either. It ends with the item; it is never carried to a note.
+  priority: `rft_inbox` takes none, and it is never set by editing the file either. It ends
+  with the item; it is never carried to a note.
 - **The read mark** (`read 2026-11-24` on the item's line) is the user's alone too: they set it
   once they have read the item, and may take it off. Never set, change or remove it, through the
   tool (it cannot) or by editing the file.
 - **A reading note** belongs to one item, in two parts: the user's (quotes from the item, as
-  lines that start with `>`, and lines of their own) and your **impression**, your own reading.
-  One file per item in `Reading notes/` at the vault's top, outside the tree. Reach it through
-  `rft_inbox` alone: **never open, search or edit its file by other means**, and never edit the
-  user's part. Until the user marks the item as read their part is closed to you, so that the
+  lines that start with `>`, and lines of their own) and an **impression**: yours, or one the
+  tool says another agent of the user's wrote (yours replaces it). One file per item in
+  `Reading notes/`. Reach it through `rft_inbox` alone:
+  **never open, search or edit its file by other means**, and never edit the user's part. Until the user marks the item as read their part is closed to you, so that the
   two readings are two points of view.
 - **Never process an item unasked.** The items wait for the user: do not open their links,
   summarise them or turn them into notes because they are there, and say no more of the inbox
