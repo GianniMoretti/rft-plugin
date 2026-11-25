@@ -4,16 +4,16 @@ type: reference
 status: done
 date: 2026-03-04
 summary: "TrivialAugment applies a single augmentation per image with no parameter to tune, and is reported to outperform earlier methods"
-parent: "[[E01 Literature check on augmentation and training length]]"
+parent: "[[D02 Strong augmentation closes the gap]]"
 children: []
-up: "[[E01 Literature check on augmentation and training length]]"
+up: "[[D02 Strong augmentation closes the gap]]"
 down: []
 tags: [small-data-regularisation, reference, augmentation, trivialaugment, done]
 ---
 
 # R02 · TrivialAugment, one augmentation per image and nothing to tune
 
-**Parent:** [[E01 Literature check on augmentation and training length]]  
+**Parent:** [[D02 Strong augmentation closes the gap]]  
 **Status:** done · **Date:** 2026-03-04
 
 ## Source

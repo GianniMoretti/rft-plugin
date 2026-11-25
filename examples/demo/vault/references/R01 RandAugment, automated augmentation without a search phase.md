@@ -4,16 +4,16 @@ type: reference
 status: done
 date: 2026-03-04
 summary: "RandAugment drops the separate search phase of learned augmentation; its strength can be set to the model and dataset size"
-parent: "[[E01 Literature check on augmentation and training length]]"
+parent: "[[D02 Strong augmentation closes the gap]]"
 children: []
-up: "[[E01 Literature check on augmentation and training length]]"
+up: "[[D02 Strong augmentation closes the gap]]"
 down: []
 tags: [small-data-regularisation, reference, augmentation, randaugment, done]
 ---
 
 # R01 · RandAugment, automated augmentation without a search phase
 
-**Parent:** [[E01 Literature check on augmentation and training length]]  
+**Parent:** [[D02 Strong augmentation closes the gap]]  
 **Status:** done · **Date:** 2026-03-04
 
 ## Source
