@@ -2931,7 +2931,37 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
     def agents_now() -> dict:
         """The agents the page may pick from, and whether a chat is there to be one of them."""
         setup = agents.get() if agents is not None else rft_agents.Setup(Path(""))
-        return {**setup.describe(), "chat": relay.alive() if relay else True}
+        # a server with a setup to write says where it is and what the page's form may add
+        more = {"path": str(agents.path), "kinds": list(rft_agents.FORM_KINDS)} if agents is not None else {}
+        return {**setup.describe(), "chat": relay.alive() if relay else True, **more}
+
+    def change_agents(req: dict) -> tuple[int, dict]:
+        """The user's setup changed from the page, one agent at a time (rft_agents.Setups.change):
+        save {name, kind, url?, model?, key?, grant?}, remove {name}; entry {name}: an agent as the
+        form shows it for a change; models {url, key?}: the models an endpoint says it has. The
+        file is the user's own, outside the vault; a key is never taken, only its variable's name."""
+        action, name = req.get("action"), req.get("name")
+        try:
+            if action == "models":
+                if not isinstance(req.get("url"), str) or not isinstance(req.get("key", ""), str):
+                    return 400, {"error": "expected {action: models, url, key?}"}
+                return 200, {"models": rft_agents.list_models(req["url"], req.get("key", ""), agents.env)}
+            if not isinstance(name, str):
+                return 400, {"error": "expected {action: save | remove | entry | models, name, ...}"}
+            if action == "entry":
+                got = agents.entry(name)
+                return (200, got) if got else (404, {"error": f"{name} is no agent of the setup"})
+            if action == "save":
+                agents.change(name, {k: req.get(k, "") for k in ("kind", "url", "model", "key", "grant")})
+            elif action == "remove":
+                agents.change(name, None)
+            else:
+                return 400, {"error": "action must be save, remove, entry or models"}
+        except rft_agents.SetupError as err:
+            return 422, {"error": str(err), **agents_now()}
+        except rft_agents.AgentError as err:
+            return 502, {"error": str(err)}
+        return 200, agents_now()
     editors = editors if editors is not None else rft_notebook.Editors()
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -3498,6 +3528,13 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 if not isinstance(req["id"], str) or not isinstance(req.get("delete", False), bool) or any(k not in (*MEETING_FIELDS, "id", "delete") for k in req):
                     return self._json(400, {"error": "expected {id, when?, duration?, every?, until?, skip?, moved?, needs?} or {id, delete: true}"})
                 return self._json(*vault.update_meeting(req["id"], req))
+            if route == "/api/agents":
+                got = self._write_request("/api/agents", MAX_NODE_BYTES)
+                if got is None:
+                    return
+                if agents is None:
+                    return self._json(404, {"error": "this server has no setup of agents to change"})
+                return self._json(*change_agents(got[1]))
             if route == "/api/comment":
                 got = self._write_request("/api/comment", MAX_COMMENT_BYTES)
                 if got is None:

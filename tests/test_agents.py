@@ -1124,5 +1124,187 @@ class ProcessTest(Served):
 # scripts/check_agents.py (the test that stood here, moved with the text).
 
 
+BY_HAND = """# my agents, kept by hand
+[defaults]
+thread = "qwen"   # the small one
+process = "reader"
+
+# a local model
+[agents.qwen]
+kind = "model"
+url = "http://localhost:11434/v1"
+model = "qwen3:14b"
+thread_seconds = 30   # it is fast
+
+# a harness of mine
+[agents.reader]
+kind = "harness"
+run = ["tool", "{prompt}"]
+locked = ["tool", "--read-only", "{prompt}"]
+web = true
+grant = "read"
+"""
+
+
+class EditSetupTest(unittest.TestCase):
+    """The setup file changed from the page: one agent at a time, every other line kept."""
+
+    def edit(self, text, name, fields, env=None):
+        return rft_agents.edited(text, name, None if fields is None else rft_agents.checked_fields(fields), {} if env is None else env)
+
+    def test_the_first_agent_makes_the_file(self):
+        out = self.edit("", "qwen", {"kind": "model", "url": " http://localhost:11434/v1/ ", "model": "qwen3:14b"})
+        self.assertTrue(out.startswith("# The agents you set up for rft"))
+        self.assertTrue(out.endswith('\n[agents.qwen]\nkind = "model"\nurl = "http://localhost:11434/v1"\nmodel = "qwen3:14b"\n'))
+        s = setup_of(out)
+        self.assertEqual((s.errors, list(s.agents), s.agents["qwen"].tasks()), ([], ["qwen"], ["thread"]))
+
+    def test_an_agent_added_leaves_every_line_there_was(self):
+        out = self.edit(BY_HAND, "deep seek", {"kind": "model", "url": "https://api.deepseek.com/v1", "model": "deepseek-chat", "key": "DEEPSEEK_API_KEY"})
+        self.assertTrue(out.startswith(BY_HAND))
+        self.assertEqual(out[len(BY_HAND):], '\n[agents."deep seek"]\nkind = "model"\nurl = "https://api.deepseek.com/v1"\nmodel = "deepseek-chat"\nkey = "DEEPSEEK_API_KEY"\n')
+        s = setup_of(out, env={"DEEPSEEK_API_KEY": "x"})
+        self.assertEqual((s.errors, list(s.agents)), ([], ["qwen", "reader", "deep seek"]))
+        # a ready-made harness, with its grant
+        out = self.edit(out, "claude", {"kind": "claude-code", "grant": "read", "url": "ignored", "key": "IGNORED"})
+        self.assertTrue(out.endswith('\n[agents.claude]\nkind = "claude-code"\ngrant = "read"\n'))
+        self.assertEqual(setup_of(out).agents["claude"].tasks(), ["thread", "process"])
+
+    def test_an_agent_changed_keeps_its_other_lines_and_everyone_elses(self):
+        out = self.edit(BY_HAND, "qwen", {"kind": "model", "url": "http://localhost:11434/v1", "model": "qwen3:4b"})
+        self.assertEqual(out, BY_HAND.replace('model = "qwen3:14b"', 'model = "qwen3:4b"'))  # the one word, and the comment and the limit stay
+        self.assertEqual(setup_of(out).agents["qwen"].limits["thread"], 30)
+        # saved again as it is, the file is the same
+        self.assertEqual(self.edit(out, "qwen", {"kind": "model", "url": "http://localhost:11434/v1", "model": "qwen3:4b"}), out)
+
+    def test_an_agent_removed_takes_its_lines_and_its_default(self):
+        out = self.edit(BY_HAND, "qwen", None)
+        self.assertEqual(out, """# my agents, kept by hand
+[defaults]
+process = "reader"
+
+# a harness of mine
+[agents.reader]
+kind = "harness"
+run = ["tool", "{prompt}"]
+locked = ["tool", "--read-only", "{prompt}"]
+web = true
+grant = "read"
+""")
+        s = setup_of(out)
+        self.assertEqual((s.errors, list(s.agents), s.defaults), ([], ["reader"], {"process": "reader"}))
+        with self.assertRaises(rft_agents.SetupError):
+            self.edit(out, "qwen", None)
+
+    def test_what_the_page_does_not_write(self):
+        refused = {
+            "a harness by its commands": ("mine", {"kind": "harness", "grant": "read"}, "written by hand"),
+            "the chat's name": ("chat", {"kind": "model", "url": "http://localhost:1/v1", "model": "m"}, "is not \"chat\""),
+            "a name of other characters": ("a/b", {"kind": "model", "url": "http://localhost:1/v1", "model": "m"}, "a name is"),
+            "a key itself": ("x", {"kind": "model", "url": "https://a.example/v1", "model": "m", "key": "sk-abc.123"}, "NAME of the environment variable"),
+            "no address": ("x", {"kind": "model", "model": "m"}, "needs url"),
+            "no model": ("x", {"kind": "model", "url": "http://localhost:1/v1"}, "needs model"),
+            "a grant that is none": ("x", {"kind": "codex", "grant": "all"}, "grant is one of"),
+            "a name another agent has in other case": ("Qwen", {"kind": "model", "url": "http://localhost:1/v1", "model": "m"}, 'another agent is named "qwen"'),
+        }
+        for what, (name, fields, says) in refused.items():
+            with self.assertRaises(rft_agents.SetupError, msg=what) as got:
+                self.edit(BY_HAND, name, fields)
+            self.assertIn(says, str(got.exception), what)
+
+    def test_a_file_the_page_cannot_change_safely_is_left_alone(self):
+        for what, text in {
+            "agents as an inline table": 'agents = { qwen = { kind = "model", url = "http://localhost:1/v1", model = "m" } }\n',
+            "an agent by dotted keys": '[agents]\nqwen.kind = "model"\nqwen.url = "http://localhost:1/v1"\nqwen.model = "m"\n',
+            "not TOML": "[agents.qwen\nkind =\n",
+        }.items():
+            with self.assertRaises(rft_agents.SetupError, msg=what) as got:
+                self.edit(text, "qwen", {"kind": "model", "url": "http://localhost:2/v1", "model": "n"})
+            self.assertIn("edit it by hand", str(got.exception), what)
+        # an entry that is wrong as written can be put right from the page, or taken out
+        wrong = BY_HAND + '\n[agents.bad]\nkind = "model"\n'
+        self.assertEqual(setup_of(wrong).errors[0]["name"], "bad")
+        self.assertEqual(setup_of(self.edit(wrong, "bad", {"kind": "model", "url": "http://localhost:1/v1", "model": "m"})).errors, [])
+        self.assertEqual(self.edit(wrong, "bad", None), BY_HAND)
+
+
+class SetupRouteTest(Served):
+    """POST api/agents: the form of the page."""
+
+    AGENTS = None  # no setup file at all
+
+    def write_setup(self, text):
+        if text is not None:
+            super().write_setup(text)
+
+    def agents(self, **payload):
+        return self.call("POST", "/api/agents", payload)
+
+    def test_from_no_file_to_a_model_that_answers_a_thread(self):
+        self.assertFalse(self.setup_file.exists())
+        got = self.call("GET", "/api/agents")[1]
+        self.assertEqual((got["found"], got["agents"], got["path"], got["kinds"]), (False, [], str(self.setup_file), ["model", "claude-code", "codex"]))
+        vault_before = self.files()
+        status, got = self.agents(action="models", url=self.model.url)
+        self.assertEqual((status, got), (200, {"models": ["qwen3:14b", "qwen3:4b"]}))
+        self.assertEqual(self.model.requests[-1]["path"], "/v1/models")
+        status, got = self.agents(action="save", name="qwen", kind="model", url=self.model.url, model="qwen3:4b")
+        self.assertEqual(status, 200, got)
+        self.assertEqual(([a["name"] for a in got["agents"]], got["found"]), (["qwen"], True))
+        self.assertEqual(oct(self.setup_file.stat().st_mode & 0o777), "0o600")  # the user's alone
+        self.assertIn('model = "qwen3:4b"', self.setup_file.read_text())
+        self.assertEqual(self.files(), vault_before)  # nothing of it is in the vault
+        # and it answers a thread at once, with no restart
+        status, got = self.comment(action="new", kind="comment", quote="Text of E02.", prefix="", suffix="", text="Is this right?")
+        self.assertEqual(self.comment(action="ask", thread=got["threads"][-1]["id"], agent="qwen")[0], 200)
+        self.assertEqual(self.wait().state, "done")
+        self.assertEqual(self.model.requests[-1]["body"]["model"], "qwen3:4b")
+
+    def test_the_form_reads_an_entry_changes_it_and_removes_it(self):
+        self.agents(action="save", name="far", kind="model", url="https://api.example.com/v1", model="big", key="TEST_KEY")
+        self.assertEqual(self.agents(action="entry", name="far"), (200, {"name": "far", "kind": "model", "url": "https://api.example.com/v1", "model": "big", "key": "TEST_KEY", "grant": "text", "by_hand": False}))
+        self.assertNotIn("sk-secret", self.setup_file.read_text())
+        told = json.dumps(self.call("GET", "/api/agents")[1])
+        self.assertNotIn("TEST_KEY", told)   # the list never names the variable; the form's own read does
+        self.agents(action="save", name="cc", kind="claude-code", grant="read", model="opus")
+        self.assertEqual(self.agents(action="entry", name="cc")[1], {"name": "cc", "kind": "claude-code", "url": "", "model": "opus", "key": "", "grant": "read", "by_hand": False})
+        status, got = self.agents(action="save", name="far", kind="model", url="https://api.example.com/v1", model="bigger", key="TEST_KEY")
+        self.assertEqual((status, [a["model"] for a in got["agents"]]), (200, ["bigger", ""]))
+        status, got = self.agents(action="remove", name="far")
+        self.assertEqual((status, [a["name"] for a in got["agents"]]), (200, ["cc"]))
+        self.assertEqual(self.agents(action="entry", name="far")[0], 404)
+        self.assertEqual(self.agents(action="remove", name="far")[0], 422)
+
+    def test_what_is_refused_leaves_the_file_as_it_was(self):
+        self.agents(action="save", name="qwen", kind="model", url=self.model.url, model="qwen3:4b")
+        before = self.setup_file.read_bytes()
+        for payload, status, says in (
+            (dict(action="save", name="x", kind="model", url=self.model.url, model="m", key="sk-abc.123"), 422, "NAME of the environment variable"),
+            (dict(action="save", name="x", kind="harness", grant="change"), 422, "written by hand"),
+            (dict(action="save", name="chat", kind="model", url=self.model.url, model="m"), 422, "chat"),
+            (dict(action="save", name=3), 400, "expected"),
+            (dict(action="burn", name="qwen"), 400, "action must be"),
+            (dict(action="models", url="ftp://x"), 502, "address"),
+            (dict(action="models", url="http://127.0.0.1:1/v1"), 502, "nothing answers at 127.0.0.1:1"),
+            (dict(action="models", url=self.model.url, key="NOT_SET_ANYWHERE"), 502, "NOT_SET_ANYWHERE is not set"),
+        ):
+            got = self.agents(**payload)
+            self.assertEqual(got[0], status, payload)
+            self.assertIn(says, got[1]["error"], payload)
+            self.assertEqual(self.setup_file.read_bytes(), before, payload)
+
+    def test_only_the_page_with_the_key_changes_the_setup(self):
+        body = json.dumps({"action": "save", "name": "qwen", "kind": "model", "url": self.model.url, "model": "m"}).encode()
+        for headers in ({"Content-Type": "application/json", "Origin": f"http://127.0.0.1:{self.port}"},                       # no key
+                        {"Content-Type": "application/json", "Origin": "http://evil.example", "X-RFT-Token": KEY},            # another page
+                        {"Content-Type": "application/json", "X-RFT-Token": "wrong", "Origin": f"http://127.0.0.1:{self.port}"}):
+            req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/agents", data=body, headers=headers, method="POST")
+            with self.assertRaises(urllib.error.HTTPError) as got:
+                urllib.request.urlopen(req, timeout=5)
+            self.assertEqual(got.exception.code, 403)
+        self.assertFalse(self.setup_file.exists())
+        self.assertEqual(self.model.requests, [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -126,6 +126,7 @@ class Agent:
         self.locked: list[str] | None = more.get("locked")
         self.web: bool = more.get("web", False)
         self.preset: str = more.get("preset", "")
+        self.given_model: str = more.get("given_model", "")  # the model a harness was told to run
         self.limits: dict[str, int] = {**LIMITS, **more.get("limits", {})}
         self.problem: str = more.get("problem", "")
 
@@ -223,7 +224,7 @@ def agent_of(name: str, entry, env) -> Agent:
     if grant != "change" and locked is None:
         problem = (f'it has no locked command, so it can only be run with grant = "change": '
                    f"give it locked, the command that runs it with its own writing and shell tools switched off")
-    return Agent(name, "harness", grant, run=run, locked=locked, web=web, preset=kind if preset else "", limits=limits, problem=problem)
+    return Agent(name, "harness", grant, run=run, locked=locked, web=web, preset=kind if preset else "", limits=limits, problem=problem, given_model=model)
 
 
 class Setup:
@@ -295,7 +296,33 @@ def why_not(agent: Agent, task: str) -> str:
 
 
 class Setups:
-    """The user's setup, read again whenever its file changed."""
+    """The user's setup, read again whenever its file changed, and changed from the page: one
+    agent added, changed or removed at a time (`edited`), every other line kept."""
+
+    def change(self, name: str, fields: dict | None) -> Setup:
+        """Adds or changes an agent (`fields`, as the page's form gives them), or removes it
+        (None), and writes the file. SetupError, and nothing written, when it cannot."""
+        try:
+            text = self.path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            text = ""
+        except (OSError, UnicodeDecodeError) as err:
+            raise SetupError(f"{self.path} cannot be read ({err}): {BY_HAND}") from None
+        new = edited(text, name, None if fields is None else checked_fields(fields), self.env)
+        try:
+            write_setup(self.path, new)
+        except OSError as err:
+            raise SetupError(f"{self.path} cannot be written: {err.strerror or err}") from None
+        return self.get()
+
+    def entry(self, name: str) -> dict | None:
+        """An agent's entry as the page's form shows it for a change: what `describe` leaves out
+        (its address, the NAME of its key's variable), never a key."""
+        a = self.get().agents.get(name)
+        if a is None:
+            return None
+        return {"name": a.name, "kind": "model" if a.kind == "model" else (a.preset or "harness"), "url": a.url, "model": a.model if a.kind == "model" else a.given_model,
+                "key": a.key, "grant": a.grant, "by_hand": a.kind != "model" and not a.preset}
 
     def __init__(self, path: Path | None = None, env=None):
         self.path = path or setup_path(env)
@@ -807,3 +834,199 @@ class Runner:
         if agent.kind == "model":
             return call_model(agent, prompt, run, self.env)
         return run_harness(agent, prompt, run, cwd, agent.limits[task], self.harness_env)
+
+
+# ------------------------------------------------------------------ changing the setup from the page
+
+#: the kinds an entry may be given from the page: a model, or a harness with a ready-made entry.
+#: Any other harness is written by hand: a wrong command there is what breaks the lock.
+FORM_KINDS = ("model", *PRESETS)
+MANAGED = ("kind", "url", "model", "key", "grant")
+TABLE = re.compile(r"^[ \t]*\[")
+AGENT_TABLE = re.compile(r"""^[ \t]*\[[ \t]*agents[ \t]*\.[ \t]*(?:"((?:[^"\\]|\\.)*)"|'([^']*)'|([A-Za-z0-9_-]+))[ \t]*\][ \t]*(?:#.*)?$""")
+DEFAULTS_TABLE = re.compile(r"^[ \t]*\[[ \t]*defaults[ \t]*\][ \t]*(?:#.*)?$")
+KEY_LINE = re.compile(r"^[ \t]*([A-Za-z0-9_-]+)[ \t]*=")
+BARE = re.compile(r"[A-Za-z0-9_-]+\Z")
+NEW_FILE = ("# The agents you set up for rft: models (text in, text out) and harnesses, each with a grant.\n"
+            "# The page writes this file when you add an agent there; you may edit it by hand too.\n"
+            "# It holds no key: a model's key is NAMED by the environment variable that has it.\n")
+BY_HAND = "the file was not changed: edit it by hand"
+
+
+def _name_in(header: re.Match) -> str:
+    if header.group(1) is not None:
+        return json.loads(f'"{header.group(1)}"')
+    return header.group(2) if header.group(2) is not None else header.group(3)
+
+
+def _blocks(lines: list[str]) -> list[tuple[int, int]]:
+    """The tables of the file as (first line, one past the last): each runs to the next table's
+    header, less the blank lines and comments that stand just above that header (they are the
+    next table's)."""
+    starts = [n for n, line in enumerate(lines) if TABLE.match(line)]
+    out = []
+    for i, a in enumerate(starts):
+        b = starts[i + 1] if i + 1 < len(starts) else len(lines)
+        if i + 1 < len(starts):
+            while b > a + 1 and (not lines[b - 1].strip() or lines[b - 1].lstrip().startswith("#")):
+                b -= 1
+        else:
+            while b > a + 1 and not lines[b - 1].strip():
+                b -= 1
+        out.append((a, b))
+    return out
+
+
+def _entry_lines(name: str, fields: dict) -> list[str]:
+    head = name if BARE.match(name) else json.dumps(name, ensure_ascii=False)
+    return [f"[agents.{head}]", *(f"{k} = {json.dumps(fields[k], ensure_ascii=False)}" for k in MANAGED if fields.get(k) not in (None, ""))]
+
+
+def checked_fields(fields: dict) -> dict:
+    """What the page's form gave for an entry, as the lines the file gets. SetupError in words for
+    the user. A harness that has no ready-made entry is not written from the page."""
+    kind = fields.get("kind")
+    if kind not in FORM_KINDS:
+        raise SetupError(f"from the page an agent is a model, or one of the ready-made harnesses ({', '.join(PRESETS)}): any other harness is written by hand, with its commands")
+    out = {"kind": kind}
+    for k in ("url", "model", "key", "grant"):
+        v = fields.get(k, "")
+        if not isinstance(v, str):
+            raise SetupError(f"{k} is text")
+        out[k] = v.strip()
+    out["url"] = out["url"].rstrip("/")
+    if kind == "model":
+        out["grant"] = ""  # a model is text only: there is nothing to grant it
+    else:
+        out["url"] = out["key"] = ""
+        out["grant"] = out["grant"] or "text"
+    return out
+
+
+def edited(text: str, name: str, fields: dict | None, env=None) -> str:
+    """The setup file's text with one agent added or changed (`fields`, as checked_fields gives
+    them) or removed (None). Every other line stays as it is: the comments, the other agents, and
+    in a changed entry what the page does not manage (its time limits, its own commands). A
+    removed agent is no longer anyone's default. SetupError, and nothing to write, when the entry
+    is wrong, when the file is one the page cannot change safely (agents written another way than
+    as [agents.<name>] tables), or when the change would not read back as meant."""
+    env = os.environ if env is None else env
+    before = read_setup(text, Path("agents.toml"), env)
+    if any(e["name"] == "" and "TOML" in e["error"] for e in before.errors):
+        raise SetupError(f"the setup file cannot be read as it is ({before.errors[0]['error']}): {BY_HAND}")
+    if not NAME.match(name) or name.lower() == CHAT:
+        raise SetupError("a name is 1 to 40 letters, digits, spaces, dots, dashes or underscores, starts with a letter or a digit, and is not \"chat\"")
+    lines = text.split("\n") if text else []
+    if lines and lines[-1] == "":
+        lines.pop()
+    blocks = _blocks(lines)
+    mine = [(a, b) for a, b in blocks if (h := AGENT_TABLE.match(lines[a])) and _name_in(h) == name]
+    known = {n for n in list(before.agents) + [e["name"] for e in before.errors] if n}
+    if len(mine) > 1 or (name in known and not mine):
+        raise SetupError(f"{name} is not written as one [agents.{name}] table: {BY_HAND}")
+    clash = next((n for n in known if n.lower() == name.lower() and n != name), None)
+    if clash and fields is not None:
+        raise SetupError(f'another agent is named "{clash}": pick another name')
+    if fields is None:
+        if not mine:
+            raise SetupError(f"{name} is no agent of the setup")
+        a, b = mine[0]
+        while a > 0 and lines[a - 1].lstrip().startswith("#") and (a < 2 or not TABLE.match(lines[a - 2])):
+            a -= 1  # the comment that stands on it goes with it (not a file's first lines, which head the file)
+            if a == 0:
+                a = mine[0][0]
+                break
+        while b < len(lines) and not lines[b].strip():
+            b += 1  # and the blank lines after it
+        del lines[a:b]
+        while lines and not lines[-1].strip():
+            lines.pop()
+        for a, b in _blocks(lines):
+            if DEFAULTS_TABLE.match(lines[a]):
+                gone = [n for n in range(a + 1, b) if re.match(r'^[ \t]*(?:thread|process)[ \t]*=[ \t]*(["\'])' + re.escape(name) + r"\1[ \t]*(?:#.*)?$", lines[n])]
+                for n in reversed(gone):
+                    del lines[n]
+    else:
+        new = _entry_lines(name, fields)
+        if mine:
+            a, b = mine[0]
+            kept = [line for line in lines[a + 1:b] if not ((k := KEY_LINE.match(line)) and k.group(1) in MANAGED)]
+            lines[a:b] = [lines[a].rstrip() if AGENT_TABLE.match(lines[a]) else new[0], *new[1:], *kept]
+        else:
+            if not lines:
+                lines = NEW_FILE.rstrip("\n").split("\n")
+            while lines and not lines[-1].strip():
+                lines.pop()
+            lines += ["", *new]
+    out = "\n".join(lines) + "\n"
+    after = read_setup(out, Path("agents.toml"), env)
+    same = lambda s, skip: {n: a.describe() for n, a in s.agents.items() if n != skip}  # noqa: E731
+    if same(after, name) != same(before, name) or [e for e in after.errors if e not in before.errors and e["name"] != name and not (fields is None and name in e["error"])]:
+        raise SetupError(f"the change would touch more than {name}: {BY_HAND}")
+    if fields is None:
+        if name in after.agents or any(e["name"] == name for e in after.errors):
+            raise SetupError(f"{name} could not be taken out: {BY_HAND}")
+        return out
+    wrong = next((e["error"] for e in after.errors if e["name"] == name), None)
+    if wrong:
+        raise SetupError(wrong)
+    got = after.agents.get(name)
+    if got is None or got.kind != ("model" if fields["kind"] == "model" else "harness"):
+        raise SetupError(f"{name} would not read back as written: {BY_HAND}")
+    return out
+
+
+def write_setup(path: Path, text: str) -> None:
+    """Writes the setup file, the user's alone, as a new file renamed over the old one."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.rft-tmp")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
+
+def list_models(url: str, key: str = "", env=None, seconds: int = 10) -> list[str]:
+    """The models an endpoint says it has (GET <url>/models, as OpenAI-compatible endpoints
+    answer it), by name. AgentError in words for the user. `key`: the NAME of the variable that
+    holds the key, when the endpoint needs one."""
+    env = os.environ if env is None else env
+    parts = urllib.parse.urlsplit(url.strip().rstrip("/") + "/models")
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise AgentError('the address is that of the endpoint, as in "http://localhost:11434/v1"')
+    if key and not ENV_NAME.match(key):
+        raise AgentError("key is the NAME of the environment variable that holds the key, never the key itself")
+    headers = {"Accept": "application/json"}
+    if key:
+        if not env.get(key):
+            raise AgentError(f"the environment variable {key} is not set where the server runs")
+        headers["Authorization"] = f"Bearer {env[key]}"
+    at = f"{parts.hostname}:{parts.port or (443 if parts.scheme == 'https' else 80)}"
+    conn = (http.client.HTTPSConnection if parts.scheme == "https" else http.client.HTTPConnection)(parts.hostname, parts.port, timeout=seconds)
+    try:
+        conn.request("GET", parts.path + (f"?{parts.query}" if parts.query else ""), headers=headers)
+        resp = conn.getresponse()
+        data = resp.read(MAX_ANSWER_BYTES + 1)
+    except ConnectionRefusedError:
+        raise AgentError(f"nothing answers at {at} (is it running?)") from None
+    except socket.gaierror:
+        raise AgentError(f"the host {parts.hostname} is not found") from None
+    except (OSError, http.client.HTTPException) as err:
+        raise AgentError(f"{at} cannot be reached: {err or type(err).__name__}") from None
+    finally:
+        conn.close()
+    if resp.status != 200:
+        raise AgentError(f"{at} answered {resp.status} when asked for its models: check the address{' and the key' if resp.status in (401, 403) else ''}")
+    try:
+        got = json.loads(data)
+        rows = got["data"] if isinstance(got, dict) and "data" in got else got["models"]
+        names = sorted({str(r["id"] if "id" in r else r["name"]) for r in rows})
+    except (ValueError, KeyError, TypeError):
+        raise AgentError(f"{at} answered, but not with a list of models: check the address (it usually ends in /v1)") from None
+    return names

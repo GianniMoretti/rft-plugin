@@ -453,6 +453,9 @@ does today for someone who sets nothing up.
   (its locked run tried for real: it reads, it cannot write) and for Codex (from its
   documentation, never run). Not yet done: a thread answered by a real local model, and a paper
   processed through a real headless harness, by the user.
+- **The setup from the page (built)**: a dialog adds, changes and removes a model or a
+  ready-made harness, lists the models an endpoint has, and writes the user's setup file,
+  keeping every other line of it.
 - **Later, not in 2.0.0 unless decided**: chats and chat history in the page.
 - Done when: tests with a fake model and a fake harness show the vault's exact change for a
   good answer, a malformed one, an unreachable agent and a cancelled task, and that a text only

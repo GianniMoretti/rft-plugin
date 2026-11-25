@@ -24,11 +24,22 @@ class FakeModel:
     def __init__(self, answer: str = "ok", status: int = 200, delay: float = 0, raw: bytes | None = None):
         self.answer, self.status, self.delay, self.raw = answer, status, delay, raw
         self.requests: list[dict] = []
+        self.models = ["qwen3:14b", "qwen3:4b"]  # what GET /v1/models lists
         fake = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def log_message(self, *args):
                 pass
+
+            def do_GET(self):
+                fake.requests.append({"path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}, "body": None})
+                listed = self.path.rstrip("/").endswith("/models") and fake.status == 200
+                out = json.dumps({"object": "list", "data": [{"id": m, "object": "model"} for m in fake.models]}).encode("utf-8") if listed else b"not found"
+                self.send_response(200 if listed else (fake.status if fake.status != 200 else 404))
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
 
             def do_POST(self):
                 size = int(self.headers.get("Content-Length") or 0)

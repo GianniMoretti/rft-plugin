@@ -564,8 +564,9 @@
       list.replaceChildren(...ordered(items, order).map(row))
       // who processes an item, when the user set agents up: picked above the list
       const had = panel.querySelector('.agent-pick')
-      const pick = key() && n ? AG.picker('process', () => { shown = null; draw(last) }) : null
+      const pick = key() && n ? AG.picker('process', () => { shown = null; draw(last) }) || (AG.setupLink && AG.setupLink()) : null
       if (had) had.remove()
+      for (const old of panel.querySelectorAll(':scope > .agent-open')) old.remove()
       if (pick) list.before(pick)
       const now = at && rowOf(at.key, at.nth)
       if (now && now.querySelector(`.${at.cls}`)) now.querySelector(`.${at.cls}`).focus()

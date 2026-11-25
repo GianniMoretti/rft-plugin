@@ -120,6 +120,8 @@ class AgentsPage(unittest.TestCase):
         b = self.b
         self.open_note()
         self.assertEqual(b.js("document.querySelectorAll('.agent-pick').length"), 0)
+        # one small way into the setup, and nothing else of agents
+        self.assertEqual(b.js("[...document.querySelectorAll('#threads .agent-open')].map(e => e.textContent)"), ["Set up an agent"])
         self.assertEqual(b.js("document.querySelector('#threads [data-act=ask]').getAttribute('aria-label')"), "Ask Claude")
         b.js("document.querySelector('#threads [data-act=ask]').click()")
         self.assertTrue(b.wait("window.sent.some(r => r.url.includes('api/comment'))"))
@@ -141,6 +143,94 @@ class AgentsPage(unittest.TestCase):
         self.assertEqual([json.loads(line.split(" ", 1)[1]) for line in self.lines], [{"id": "D00", "thread": "c1"}, {"key": "arxiv:2406.01234", "nth": 0}])
         self.assertEqual((self.model.requests, self.harness.runs, b.errors), ([], [], []))
         self.shot("no-setup")
+
+    def type(self, selector, text):
+        self.b.js("(() => { const e = document.querySelector(%s); e.focus(); e.value = %s; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })) })()" % (json.dumps(selector), json.dumps(text)))
+
+    FIELD = "dialog.agent-setup .agent-field:nth-of-type(%d) %s"
+
+    def test_from_no_setup_a_model_is_added_in_the_page_and_answers(self):
+        self.serve()
+        b = self.b
+        self.assertFalse(self.setup_file.exists())
+        self.open_note()
+        b.js("document.querySelector('#threads .agent-open').click()")
+        self.assertTrue(b.wait("!!document.querySelector('dialog.agent-setup[open]')"), "no dialog")
+        # nothing is prefilled: where the model is, is the user's to say
+        self.assertEqual(b.js("[...document.querySelectorAll('dialog.agent-setup input')].map(i => i.value)"), ["", "", "", ""])
+        self.assertEqual(b.js("[...document.querySelectorAll('dialog.agent-setup .agent-form select')][0].value"), "model")
+        self.shot("dialog-empty")
+        # a list asked before the address is said
+        b.js("[...document.querySelectorAll('dialog.agent-setup button')].find(x => x.textContent === 'List its models').click()")
+        self.assertTrue(b.wait("document.querySelector('dialog.agent-setup .agent-msg').textContent.includes('Say where the model is first')"))
+        self.type(self.FIELD % (1, "input"), "qwen")
+        self.type(self.FIELD % (3, "input"), self.model.url)
+        b.js("[...document.querySelectorAll('dialog.agent-setup button')].find(x => x.textContent === 'List its models').click()")
+        self.assertTrue(b.wait("document.querySelectorAll('#agent-models option').length === 2"), b.js("document.querySelector('dialog.agent-setup .agent-msg').textContent"))
+        self.assertIn("It has 2: qwen3:14b, qwen3:4b", b.js("document.querySelector('dialog.agent-setup .agent-msg').textContent"))
+        self.type(self.FIELD % (5, "input"), "qwen3:4b")
+        self.shot("dialog-filled")
+        b.js("document.querySelector('dialog.agent-setup button[type=submit]').click()")
+        self.assertTrue(b.wait("document.querySelectorAll('dialog.agent-setup .agent-list li').length === 1"), b.js("document.querySelector('dialog.agent-setup .agent-msg').textContent"))
+        self.assertIn("qwen is saved in", b.js("document.querySelector('dialog.agent-setup .agent-msg').textContent"))
+        self.assertIn("model qwen3:4b · text only · runs on this machine", b.js("document.querySelector('dialog.agent-setup .agent-list li').textContent"))
+        written = self.setup_file.read_text()
+        self.assertTrue(written.endswith(f'[agents.qwen]\nkind = "model"\nurl = "{self.model.url}"\nmodel = "qwen3:4b"\n'), written)
+        self.shot("dialog-saved")
+        # a key itself is refused, in the form's own words, and the file stays
+        self.type(self.FIELD % (1, "input"), "far")
+        self.type(self.FIELD % (3, "input"), "https://api.example.com/v1")
+        self.type(self.FIELD % (4, "input"), "sk-abc.123")
+        self.type(self.FIELD % (5, "input"), "big")
+        b.js("document.querySelector('dialog.agent-setup button[type=submit]').click()")
+        self.assertTrue(b.wait("document.querySelector('dialog.agent-setup .agent-msg').textContent.includes('NAME of the environment variable')"))
+        self.assertEqual(self.setup_file.read_text(), written)
+        # its variable's name is taken; not set, the agent is saved and out of reach, saying why
+        self.type(self.FIELD % (4, "input"), "RFT_TEST_NO_SUCH_KEY")
+        b.js("document.querySelector('dialog.agent-setup button[type=submit]').click()")
+        self.assertTrue(b.wait("document.querySelectorAll('dialog.agent-setup .agent-list li').length === 2"))
+        self.assertIn("the environment variable RFT_TEST_NO_SUCH_KEY is not set", b.js("document.querySelectorAll('dialog.agent-setup .agent-list li')[1].textContent"))
+        # changed: another model of the same endpoint
+        b.js("[...document.querySelectorAll('dialog.agent-setup .agent-list li')][0].querySelector('button').click()")
+        self.assertTrue(b.wait("document.querySelector(%s).value === 'qwen3:4b'" % json.dumps(self.FIELD % (5, "input"))))
+        self.assertEqual(b.js("document.querySelector(%s).value" % json.dumps(self.FIELD % (3, "input"))), self.model.url)
+        self.type(self.FIELD % (5, "input"), "qwen3:14b")
+        b.js("document.querySelector('dialog.agent-setup button[type=submit]').click()")
+        self.assertTrue(b.wait("document.querySelector('dialog.agent-setup .agent-list li').textContent.includes('model qwen3:14b')"))
+        self.assertIn('model = "qwen3:14b"', self.setup_file.read_text())
+        # removed, by two presses
+        b.js("[...document.querySelectorAll('dialog.agent-setup .agent-list li')][1].querySelectorAll('button')[1].click()")
+        self.assertEqual(b.js("document.querySelectorAll('dialog.agent-setup .agent-list li').length"), 2)
+        b.js("[...document.querySelectorAll('dialog.agent-setup .agent-list li')][1].querySelectorAll('button')[1].click()")
+        self.assertTrue(b.wait("document.querySelectorAll('dialog.agent-setup .agent-list li').length === 1"))
+        self.assertNotIn("far", self.setup_file.read_text())
+        b.js("document.querySelector('dialog.agent-setup .agent-head button').click()")
+        # the picker is there now, and the model answers
+        self.assertTrue(b.wait("!!document.querySelector('#threads .agent-pick select')"), "no picker after the setup")
+        b.js("(() => { const s = document.querySelector('#threads .agent-pick select'); s.value = 'qwen'; s.dispatchEvent(new Event('change', { bubbles: true })) })()")
+        b.js("document.querySelector('#threads [data-act=ask]').click()")
+        self.assertTrue(b.wait("[...document.querySelectorAll('#threads .thread[data-thread=c1] .t-who')].some(w => w.textContent.startsWith('qwen'))", 15), "qwen's reply did not show")
+        self.assertEqual(self.model.requests[-1]["body"]["model"], "qwen3:14b")
+        self.assertEqual(b.errors, [])
+        self.shot("after-setup")
+
+    def test_the_setup_on_a_phone(self):
+        self.serve()
+        b = self.b
+        b.size(360, 740)
+        b.js("location.reload()")
+        b.wait(test_phone.READY)
+        b.js(test_phone.page("tree"))
+        b.js(test_phone.tap_node("D00"))
+        self.assertTrue(b.wait("!!document.querySelector('#threads .agent-open')"), "no way into the setup on the phone")
+        b.js("document.querySelector('#threads .agent-open').click()")
+        self.assertTrue(b.wait("!!document.querySelector('dialog.agent-setup[open]')"))
+        box = b.js("(() => { const d = document.querySelector('dialog.agent-setup').getBoundingClientRect(); const small = [...document.querySelectorAll('dialog.agent-setup input, dialog.agent-setup select, dialog.agent-setup button')].filter(e => e.offsetParent && e.getBoundingClientRect().height < 44).map(e => e.textContent || e.placeholder); return [d.left, d.right, small, document.documentElement.scrollWidth] })()")
+        self.assertGreaterEqual(box[0], 0)
+        self.assertLessEqual(box[1], 360)
+        self.assertEqual(box[2], [])
+        self.assertLessEqual(box[3], 360)
+        self.shot("phone-dialog")
 
     def test_a_model_answers_a_thread_picked_beside_the_buttons(self):
         self.serve(SETUP)

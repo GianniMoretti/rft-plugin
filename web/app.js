@@ -3854,8 +3854,9 @@
   const noteOf = r => ({ id: r.id, body: r.body, version: r.version || null, locked: Boolean(r.locked), threads: Array.isArray(r.threads) ? r.threads : [] })
   const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s)
   // the agents the user set up (agents.js): who answers a thread, and who wrote a message of one
-  const AG = window.RftAgents || { extra: () => ({}), name: () => 'Claude', who: m => (m && m.by === 'you' ? 'You' : 'Claude'), asking: () => 'Claude', picker: () => null, onChange: () => {} }
+  const AG = window.RftAgents || { extra: () => ({}), name: () => 'Claude', who: m => (m && m.by === 'you' ? 'You' : 'Claude'), asking: () => 'Claude', picker: () => null, setupLink: () => null, onChange: () => {} }
   const who = m => AG.who(m)
+  if (AG.setKey) AG.setKey(() => editKey())
   // the agents came in, or changed: the picker and the Ask buttons are drawn again
   AG.onChange(() => { if (shown && editing == null) { renderThreads(); layoutSidenotes() } })
   const STATE = { resolved: 'Resolved', accepted: 'Accepted', rejected: 'Rejected', applied: 'Applied by Claude' }
@@ -4494,7 +4495,7 @@
       box.value = drafts.get(draftKey(box.closest('.thread').dataset.thread)) || ''
     }
     // who answers a thread, when the user set agents up: picked here, for every Ask of the note
-    const pick = !EMBED && open.length ? AG.picker('thread', () => { renderThreads(); layoutSidenotes() }) : null
+    const pick = !EMBED && open.length ? AG.picker('thread', () => { renderThreads(); layoutSidenotes() }) || (AG.setupLink && AG.setupLink()) : null
     if (pick) threadsBox.querySelector('.threads-head').append(pick)
     if (focused) {
       const box = threadsBox.querySelector(`.thread[data-thread="${CSS.escape(focused.tid)}"] textarea`)
