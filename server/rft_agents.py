@@ -76,11 +76,12 @@ PRESETS: dict[str, dict] = {
                    "--allowedTools", "Read,Grep,Glob,WebFetch,WebSearch", "--disable-slash-commands", "--no-session-persistence"],
         "web": True, "model_flag": "--model",
     },
-    # Codex. The prompt is given on its input (`-`). Locked: its read-only sandbox.
+    # Codex. The prompt is given on its input (`-`). Locked: its read-only sandbox. `--search`
+    # (live web search) and `--model` are flags of `codex` itself, so they stand before `exec`.
     "codex": {
-        "run": ["codex", "exec", "--sandbox", "workspace-write", "--skip-git-repo-check", "-"],
-        "locked": ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check", "-"],
-        "web": False, "model_flag": "--model",
+        "run": ["codex", "--search", "exec", "--sandbox", "workspace-write", "--skip-git-repo-check", "--ephemeral", "-"],
+        "locked": ["codex", "--search", "exec", "--sandbox", "read-only", "--skip-git-repo-check", "--ephemeral", "-"],
+        "web": True, "model_flag": "--model",
     },
 }
 #: the ready-made entries nobody has run on a real install yet: the page says so
@@ -90,11 +91,11 @@ PRESET_NOTES: dict[str, str] = {
                    "folder, listed its tools as Glob, Grep, Read, WebFetch and WebSearch, and could not create a file when asked to by any means; "
                    "launched by the server on a demo vault it answered a suggestion thread and processed arXiv 1710.09412 (without --allowedTools "
                    "its web tools were refused, there being no one to ask).",
-    "codex": "NOT TRIED: Codex was not installed where this was written. From its documentation as read on 2026-11-25 "
-             "(learn.chatgpt.com/docs/non-interactive-mode, /docs/developer-commands, /docs/sandboxing): `codex exec` takes the prompt on its "
-             "input with `-`, prints only its final message on stdout, and `--sandbox read-only` lets it inspect files but not edit them. "
-             "Live web search is the flag `--search`, whose place on an exec command line the documentation read did not settle, so the entry "
-             "says web = false: Process is not offered to it until the user sets web = true and the commands themselves.",
+    "codex": "NEVER RUN: the flags are those of `codex --help` and `codex exec --help` of codex-cli 0.172.0 (2026-11-25): the prompt on its "
+             "input with `-`, `--sandbox read-only | workspace-write | danger-full-access`, `--skip-git-repo-check`, `--ephemeral` (no session "
+             "kept), and `--search` and `--model` before `exec`. Its documentation says exec prints only its final message on stdout and that "
+             "the read-only sandbox lets it inspect files but not edit them. No task was run with it (it was not logged in), so that the "
+             "locked command truly cannot write, and that web search works under it, are not checked.",
 }
 
 

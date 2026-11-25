@@ -464,9 +464,9 @@ process_seconds = 900
 
 `kind = "claude-code"` and `kind = "codex"` are ready-made harness entries (`model = "..."`
 picks the model). The Claude Code one was tried: locked, it has its reading tools and the web,
-and cannot write a file. **The Codex one was written from Codex's documentation and never run**;
-the page marks it so, and it is not offered Process until you set `web = true` and check its
-commands yourself.
+and cannot write a file. **The Codex one has never run a task**: its flags are those Codex's
+own help lists (its read-only sandbox, live web search), but that it truly cannot write when
+locked was not checked, and the page marks it so.
 
 In the page, a picker stands beside the buttons that ask: above a note's threads and the
 Manuscript's (**Answers by**), and above the inbox's list (**Process with**). It lists the

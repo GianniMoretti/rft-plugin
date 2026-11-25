@@ -855,11 +855,12 @@ class PresetTest(unittest.TestCase):
         self.assertNotIn("--restricted", opus.command())
         self.assertEqual((claude.describe()["unverified"], codex.describe()["unverified"]), (False, True))
         self.assertIn("read-only", codex.command())
-        self.assertEqual(codex.tasks(), ["thread"])  # no web until the user says so
+        self.assertEqual(codex.command()[:3], ["codex", "--search", "exec"])  # --search is a flag of codex itself, not of exec
+        self.assertNotIn("read-only", setup_of('[agents.c]\nkind = "codex"\ngrant = "change"\n').agents["c"].command())
         self.assertEqual(set(rft_agents.PRESET_NOTES), set(rft_agents.PRESETS))
         # an entry's own commands win over the ready-made ones
-        mine = setup_of('[agents.c]\nkind = "codex"\ngrant = "read"\nweb = true\nlocked = ["codex", "--search", "exec", "--sandbox", "read-only", "-"]\n').agents["c"]
-        self.assertEqual((mine.command()[1], mine.tasks()), ("--search", ["thread", "process"]))
+        mine = setup_of('[agents.c]\nkind = "codex"\ngrant = "read"\nweb = false\nlocked = ["codex", "exec", "--sandbox", "read-only", "-"]\n').agents["c"]
+        self.assertEqual((mine.command()[1], mine.tasks()), ("exec", ["thread"]))
 
 
 import rft_inbox  # noqa: E402
