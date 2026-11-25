@@ -1574,6 +1574,16 @@ class Vault:
         with self._waiting_lock:
             self._waiting &= read
             waiting = sorted(self._waiting)
+        if self.runner:
+            # the task an agent of the user's has on an item: running, or why it saved nothing
+            seen: dict[str, int] = {}
+            shown = []
+            for item in items:
+                n = seen.get(item["key"], 0)
+                seen[item["key"]] = n + 1
+                task = self.runner.tasks.get(item_key(item["key"], n))
+                shown.append({**item, "task": task.describe()} if task else item)
+            items = shown
         return {"name": rft_inbox.INBOX, "items": items, "notes": notes, "waiting": waiting}
 
     def _inbox_edit(self, edit) -> tuple[int, dict]:
@@ -1717,7 +1727,7 @@ class Vault:
             self._waiting.discard(key)
         return None
 
-    def process_inbox(self, key: str, nth: int, ask, discuss: bool = False) -> tuple[int, dict]:
+    def process_inbox(self, key: str, nth: int, ask, discuss: bool = False, agent=None) -> tuple[int, dict]:
         """The user asks to process an item: asked of the session, where Claude reads it on its own
         and saves its impression and its brief, as a turn of the chat (docs/adr/0001). `discuss`:
         the user asks to discuss an item they marked as read, where Claude opens their part of its
@@ -1736,10 +1746,105 @@ class Vault:
             why = self._ask_discussion(key, nth, ask)
             return (503, {"error": why}) if why else (200, {"asked": True, "item": same[nth]})
         try:
+            who = self.runner.pick("process", agent) if self.runner else None
+        except rft_agents.NoAgent as err:
+            return 409, {"error": str(err)}
+        if who is not None:
+            return self._launch_process(who, key, nth, same[nth])
+        try:
             ask("RFT_PROCESS", {"key": key, "nth": nth})
         except (OSError, ValueError) as err:
             return 503, {"error": gone(err)}
         return 200, {"asked": True, "item": same[nth]}
+
+    def _frozen(self, item: dict) -> str | None:
+        """Why an item's impression may not be written again: the user marked it as read and it
+        has one, which is what their reading is compared with (docs/adr/0004)."""
+        if not item["read"]:
+            return None
+        try:
+            note = self._reading_at(item["key"])[1]
+        except (rft_reading.ReadingError, OSError) as err:
+            return str(err)
+        if note and note.impression:
+            return f"you marked this item as read on {item['read']}, and its impression is frozen from then on: it is what your reading is compared with"
+        return None
+
+    def _launch_process(self, agent, key: str, nth: int, item: dict) -> tuple[int, dict]:
+        """Starts a harness of the user's on an inbox item (docs/adr/0001, since agents): it reads
+        the item and the notes, locked, and answers with its impression and its brief, which this
+        server saves (save_process). It is never handed the user's part of the reading note."""
+        frozen = self._frozen(item)
+        if frozen:
+            return 409, {"error": frozen}
+        prompt = rft_agents.process_prompt(item, rft_reading.PARTS, rft_reading.IMPRESSION_CHARS, rft_reading.DIR, rft_inbox.INBOX)
+        runner = self.runner
+
+        def work(run):
+            answer = runner.answer(agent, prompt, run, "process", self.root)
+            status, got = self.save_process(key, nth, answer, agent.name, run=run)
+            if status != 200:
+                raise rft_agents.AgentError(got["error"])
+
+        try:
+            task = runner.tasks.start(item_key(key, nth), agent.name, item["title"] or item["url"], agent.limits["process"], work)
+        except rft_agents.Busy as err:
+            return 409, {"error": str(err)}
+        return 200, {"asked": True, "agent": agent.name, "item": {**item, "task": task.describe()}}
+
+    def save_process(self, key: str, nth: int, answer: str, agent: str, today: str | None = None, run=None) -> tuple[int, dict]:
+        """Saves what an agent answered to Process: its impression in the item's reading note,
+        headed with the agent's name, and its brief under the item in the inbox. Both or neither:
+        an answer that lacks either, a brief that is not three lines, an impression without its
+        five parts or longer than a screen, an item that left the inbox or was marked as read
+        meanwhile, each saves nothing and says why. The user's part of the reading note and every
+        other line of the inbox stay as they were. `run`: the task's, asked before the write
+        whether it was stopped meanwhile."""
+        try:
+            impression, brief = rft_agents.split_process(answer, agent)
+            lines = rft_reading.impression_lines(impression)
+        except (rft_agents.AgentError, rft_reading.ReadingError) as err:
+            return 422, {"error": str(err) if isinstance(err, rft_agents.AgentError) else f"{agent}'s impression was not saved: {err}"}
+        today = today or datetime.date.today().isoformat()
+
+        def edit(box):
+            item = box.nth(key, nth)
+            if not item:
+                return 409, {"error": "that item is no longer in the inbox: nothing was saved"}
+            frozen = self._frozen(item)
+            if frozen:
+                return 409, {"error": frozen}
+            try:
+                path, note, data = self._reading_at(key)
+                if note is None:
+                    note = rft_reading.Note.new(key, item["url"], item["title"])
+            except rft_reading.ReadingError as err:
+                return 422, {"error": str(err)}
+            try:
+                box.brief(key, nth, "\n".join(brief), today)
+            except rft_inbox.InboxError as err:
+                return 422, {"error": f"{agent}'s brief was not saved: {err}"}
+            note.set_impression(lines, today, agent)
+            if run is not None:
+                run.commit()  # rft_agents.Cancelled when the task was stopped meanwhile: nothing is written
+            path.parent.mkdir(exist_ok=True)
+            tmp = path.with_name(f".{path.name}.rft-tmp")
+            try:
+                tmp.write_bytes(note.text().encode("utf-8", errors="replace"))
+                if data is not None:
+                    os.chmod(tmp, stat.S_IMODE(path.stat().st_mode))
+                os.replace(tmp, path)
+            finally:
+                tmp.unlink(missing_ok=True)
+            return 200, {"saved": True}
+
+        return self._inbox_edit(edit)
+
+    def cancel_process(self, key: str, nth: int) -> tuple[int, dict]:
+        """The user stops the agent of theirs that is at an item: nothing is saved."""
+        if not self.runner or not self.runner.tasks.cancel(item_key(key, nth)):
+            return 409, {"error": "no agent of yours is processing this item"}
+        return self.inbox()
 
     # ------------------------------------------------------------ reading notes
 
@@ -2713,6 +2818,11 @@ def style_css(t: dict) -> str:
     return "\n/* the project's figure tokens (.rft/config.json \"style\") */\n:root { " + "; ".join(vars_) + "; }\n"
 
 
+def item_key(key: str, nth: int = 0) -> str:
+    """What a task on an inbox item is known by."""
+    return f"item:{nth}:{key}"
+
+
 def thread_key(nid: str, tid: str) -> str:
     """What a task on a thread is known by."""
     return f"thread:{nid}:{tid}"
@@ -3406,9 +3516,14 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                     key, nth = req.get("key"), req.get("nth", 0)
                     if not isinstance(key, str) or not key or len(key) > MAX_INBOX_LINK or type(nth) is not int or nth < 0:
                         return self._json(400, {"error": 'expected {"action": "process" | "discuss", "key": the item\'s key, "nth"?: which of them}'})
-                    return self._json(*vault.process_inbox(key, nth, ask, discuss=action == "discuss"))
+                    return self._json(*vault.process_inbox(key, nth, ask, discuss=action == "discuss", agent=req.get("agent")))
+                if action == "cancel":
+                    key, nth = req.get("key"), req.get("nth", 0)
+                    if not isinstance(key, str) or not key or len(key) > MAX_INBOX_LINK or type(nth) is not int or nth < 0:
+                        return self._json(400, {"error": 'expected {"action": "cancel", "key": the item\'s key, "nth"?: which of them}'})
+                    return self._json(*vault.cancel_process(key, nth))
                 if action != "add":
-                    return self._json(400, {"error": 'expected "action": "add", "priority", "why", "read", "discard", "process" or "discuss"'})
+                    return self._json(400, {"error": 'expected "action": "add", "priority", "why", "read", "discard", "process", "discuss" or "cancel"'})
                 link, why = req.get("link"), req.get("why", "")
                 if not isinstance(link, str) or not isinstance(why, str) or len(link) > MAX_INBOX_LINK or len(why) > MAX_INBOX_WHY:
                     return self._json(400, {"error": 'expected {"link": a URL, an arXiv id or a DOI, "why"?: one line}'})

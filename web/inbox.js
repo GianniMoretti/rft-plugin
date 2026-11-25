@@ -6,6 +6,9 @@
 (function (root) {
   'use strict'
 
+  // the agents the user set up (agents.js): who processes an item; with none, the connected chat alone
+  const AG = (typeof window !== 'undefined' && window.RftAgents) || { CHAT: 'chat', extra: () => ({}), name: () => 'Claude', chosen: () => 'chat', picker: () => null, onChange: () => {} }
+
   /** How many items wait: every one, a link typed twice counted twice. */
   const count = items => (items || []).length
 
@@ -125,6 +128,8 @@
     const open = new Set() // the items whose brief is shown, by link and which of them
     const asked = new Map() // the items asked of the chat a moment ago, and until when: their Process waits, against a second tap
     const ASKED_MS = 10000
+    // the agents came in, or changed: the picker and the buttons are drawn again
+    AG.onChange(() => { shown = null; if (!panel.hidden) draw(last) })
 
     const el = (tag, cls, text) => {
       const e = document.createElement(tag)
@@ -441,6 +446,22 @@
           : 'Process: Claude reads it on its own in the chat and saves its impression and its brief. You read it yourself and mark it as read to discuss it'
       b.setAttribute('aria-label', `${discuss ? 'Discuss' : 'Process'} ${label(item)} in the chat`)
       b.disabled = (asked.get(id) || 0) > Date.now()
+      // an agent of the user's that the server launched: named on the button's tip, and stopped from here while it reads
+      const mine = !discuss && AG.chosen('process') !== AG.CHAT ? AG.chosen('process') : ''
+      const running = item.task && item.task.state === 'running'
+      if (running) {
+        b.textContent = 'Cancel'
+        b.dataset.action = 'cancel'
+        b.disabled = false
+        b.title = `Stop ${item.task.agent}: nothing is saved`
+        b.setAttribute('aria-label', `Stop ${item.task.agent} processing ${label(item)}`)
+        b.addEventListener('click', async () => { b.disabled = true; await change(r, 'cancel', true, b) })
+        return b
+      }
+      if (mine) {
+        b.title = `Process: ${mine} reads it on its own and saves its impression and its brief. You read it yourself and mark it as read to discuss it`
+        b.setAttribute('aria-label', `Process ${label(item)} with ${mine}`)
+      }
       // the button as the list has it now: a redraw may have replaced this one
       const free = () => {
         asked.delete(id)
@@ -456,7 +477,7 @@
           const res = await fetch('api/inbox', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-RFT-Token': key() },
-            body: JSON.stringify({ action: discuss ? 'discuss' : 'process', key: item.key, nth: r.nth }),
+            body: JSON.stringify({ action: discuss ? 'discuss' : 'process', key: item.key, nth: r.nth, ...(discuss ? {} : AG.extra('process')) }),
           })
           const got = await res.json().catch(() => ({}))
           if (!res.ok || !got.asked) {
@@ -464,9 +485,11 @@
             setMsg(refusal(res.status === 400 ? 404 : res.status, got, what), true)
             return free()
           }
-          setMsg(discuss ? 'Asked in the chat: Claude opens your part of the reading note there.' : 'Asked in the chat: Claude reads it on its own and gives its brief there.', false, ASKED_MS)
+          setMsg(discuss ? 'Asked in the chat: Claude opens your part of the reading note there.'
+            : got.agent ? `Asked of ${got.agent}: it reads the item on its own and saves its impression and its brief.`
+              : 'Asked in the chat: Claude reads it on its own and gives its brief there.', false, ASKED_MS)
           setTimeout(free, ASKED_MS)
-          if (discuss) load()
+          if (discuss || got.agent) { asked.delete(id); load() }
         } catch (e) {
           setMsg(`${what}: the server did not answer.`, true)
           free()
@@ -500,6 +523,8 @@
       if (brief) about.append(brief.mark)
       if (mark) about.append(mark)
       if (reading(item, notes, waiting).waiting) about.append(el('span', 'inbox-waiting', 'waiting for chat connection'))
+      if (item.task && item.task.state === 'running') about.append(el('span', 'inbox-running', `${item.task.agent} is reading it…`))
+      if (item.task && item.task.state === 'failed') about.append(el('span', 'inbox-failed', `Not processed: ${item.task.error}`))
       if (about.firstChild || key()) under.append(about)
       if (key()) under.append(processOf(r))
       if (under.firstChild) li.append(under)
@@ -528,7 +553,7 @@
       btn.title = name
       btn.setAttribute('aria-label', name)
       panel.querySelectorAll('[data-inbox-order]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.inboxOrder === order)))
-      const json = `${order}${key() ? ' w ' : ' r '}${JSON.stringify([items, notes, waiting])}`
+      const json = `${order}${key() ? ' w ' : ' r '}${AG.chosen('process')} ${JSON.stringify([items, notes, waiting])}`
       // drawn once they leave it (the list's focusout), or at the next read
       if (json === shown || engaged(from)) return
       shown = json
@@ -537,6 +562,11 @@
       const cls = a && list.contains(a) && ['inbox-prio', 'inbox-briefed', 'inbox-process', 'inbox-note', 'inbox-read'].find(c => a.classList.contains(c))
       const at = cls ? { ...a.closest('li').dataset, cls } : null
       list.replaceChildren(...ordered(items, order).map(row))
+      // who processes an item, when the user set agents up: picked above the list
+      const had = panel.querySelector('.agent-pick')
+      const pick = key() && n ? AG.picker('process', () => { shown = null; draw(last) }) : null
+      if (had) had.remove()
+      if (pick) list.before(pick)
       const now = at && rowOf(at.key, at.nth)
       if (now && now.querySelector(`.${at.cls}`)) now.querySelector(`.${at.cls}`).focus()
       $('inbox-empty').hidden = n > 0

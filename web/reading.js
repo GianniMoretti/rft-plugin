@@ -133,7 +133,7 @@
     function showImpression(got) {
       imp.hidden = !got
       if (!got) return
-      impHead.textContent = `Claude's impression${got.date ? ` · ${got.date}` : ''}`
+      impHead.textContent = `${got.by || 'Claude'}'s impression${got.date ? ` · ${got.date}` : ''}`
       impText.textContent = got.text
     }
 

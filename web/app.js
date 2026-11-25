@@ -3856,6 +3856,8 @@
   // the agents the user set up (agents.js): who answers a thread, and who wrote a message of one
   const AG = window.RftAgents || { extra: () => ({}), name: () => 'Claude', who: m => (m && m.by === 'you' ? 'You' : 'Claude'), asking: () => 'Claude', picker: () => null, onChange: () => {} }
   const who = m => AG.who(m)
+  // the agents came in, or changed: the picker and the Ask buttons are drawn again
+  AG.onChange(() => { if (shown && editing == null) { renderThreads(); layoutSidenotes() } })
   const STATE = { resolved: 'Resolved', accepted: 'Accepted', rejected: 'Rejected', applied: 'Applied by Claude' }
   const TIP = {
     ask: 'Ask Claude to answer this thread (with your reply, if you wrote one), in the background: the answer comes into the thread',

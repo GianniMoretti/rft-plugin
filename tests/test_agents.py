@@ -8,11 +8,13 @@ them through their copy, tests/fixtures/agents.ts), with a fake model and a fake
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -849,6 +851,261 @@ class PresetTest(unittest.TestCase):
         # an entry's own commands win over the ready-made ones
         mine = setup_of('[agents.c]\nkind = "codex"\ngrant = "read"\nweb = true\nlocked = ["codex", "--search", "exec", "--sandbox", "read-only", "-"]\n').agents["c"]
         self.assertEqual((mine.command()[1], mine.tasks()), ("--search", ["thread", "process"]))
+
+
+import rft_inbox  # noqa: E402
+import rft_reading  # noqa: E402
+
+LINK = "https://arxiv.org/abs/2406.01234"
+ITEM_KEY = "arxiv:2406.01234"
+INBOX = f"# Inbox\n\n- [Mixup at scale]({LINK}) — maybe relevant to D01 · high · added 2026-11-20\n- https://b.org/y\n"
+MINE = "> The gain vanishes below 1k images (Sec. 4.2)\n\nSame subset sizes as E02? SECRET-OF-THE-USER"
+GOOD = next(c for c in CASES["process"] if "error" not in c["want"])
+
+PROCESSORS = HARNESSES + """
+[agents.web]
+kind = "harness"
+run = [PY, HARNESS, "--full"]
+locked = [PY, HARNESS, "--locked"]
+web = true
+grant = "read"
+process_seconds = 2
+
+[agents.blind]
+kind = "harness"
+run = [PY, HARNESS, "--full"]
+locked = [PY, HARNESS, "--locked"]
+web = true
+
+[agents.qwen]
+kind = "model"
+url = "MODEL_URL"
+model = "qwen3:14b"
+"""
+
+
+class ProcessTest(Served):
+    """Process on an inbox item, by a harness the server launches, with no chat connected."""
+
+    AGENTS = PROCESSORS.replace("PY", json.dumps(sys.executable)).replace("HARNESS", json.dumps(str(HERE / "fake_harness.py")))
+    TASK = f"item:0:{ITEM_KEY}"
+
+    def setUp(self):
+        super().setUp()
+        self.v.runner.harness_env = self.harness.env
+        (self.vault / "Inbox.md").write_text(INBOX, encoding="utf-8")
+        self.today = rft_server.datetime.date.today().isoformat()
+
+    def set(self, *a, **k):
+        self.harness.set(*a, **k)
+        self.v.runner.harness_env = self.harness.env
+
+    def inbox(self, **payload):
+        return self.call("POST", "/api/inbox", payload)
+
+    def process(self, agent="web", **more):
+        return self.inbox(action="process", key=ITEM_KEY, agent=agent, **more)
+
+    def reading(self):
+        path = self.vault / "Reading notes" / "arxiv-2406.01234.md"
+        return rft_reading.Note(path.read_text(encoding="utf-8")) if path.exists() else None
+
+    def item(self):
+        return rft_inbox.Inbox((self.vault / "Inbox.md").read_text(encoding="utf-8")).shown()[0]
+
+    def write_mine(self):
+        status, got = self.call("PUT", "/api/reading", {"key": ITEM_KEY, "text": MINE, "version": None})
+        self.assertEqual(status, 200, got)
+
+    def test_case_by_case_the_impression_and_the_brief_or_nothing(self):
+        for case in CASES["process"]:
+            (self.vault / "Inbox.md").write_text(INBOX, encoding="utf-8")
+            shutil.rmtree(self.vault / "Reading notes", ignore_errors=True)
+            before = self.files()
+            status, got = self.v.save_process(ITEM_KEY, 0, case["answer"], "web", "2026-11-25")
+            want = case["want"]
+            if "error" in want:
+                self.assertNotEqual(status, 200, case["name"])
+                self.assertIn(want["error"], got["error"], case["name"])
+                self.assertEqual(self.files(), before, case["name"])  # nothing is saved, not the half of it either
+                continue
+            self.assertEqual(status, 200, (case["name"], got))
+            note = self.reading()
+            self.assertEqual(note.impression, {"date": "2026-11-25", "text": "\n".join(want["impression"]), "by": "web"}, case["name"])
+            self.assertEqual(self.item()["brief"], {"date": "2026-11-25", "lines": want["brief"]}, case["name"])
+            after = self.files()
+            self.assertEqual(sorted(k for k in after if after[k] != before.get(k)), ["Inbox.md", "Reading notes/arxiv-2406.01234.md"], case["name"])
+            # every other line of the inbox is as it was
+            self.assertEqual([l for l in after["Inbox.md"].decode().split("\n") if not l.startswith("  - ")], INBOX.split("\n"), case["name"])
+        self.assertGreater(len([c for c in CASES["process"] if "error" in c["want"]]), 8)
+
+    def test_a_harness_processes_an_item_with_no_chat_connected(self):
+        self.set(GOOD["answer"])
+        before = self.files()
+        status, got = self.process()
+        self.assertEqual(status, 200, got)
+        self.assertEqual((got["asked"], got["agent"], got["item"]["task"]["state"]), (True, "web", "running"))
+        task = self.wait(self.TASK)
+        self.assertEqual((task.state, task.error), ("done", ""))
+        (run,) = self.harness.runs
+        self.assertEqual((run["argv"], run["cwd"]), (["--locked"], os.path.realpath(self.vault)))
+        note = self.reading()
+        self.assertEqual(note.impression, {"date": self.today, "text": "\n".join(GOOD["want"]["impression"]), "by": "web"})
+        self.assertIn(f"## web's impression ({self.today})", note.text())
+        self.assertEqual(self.item()["brief"], {"date": self.today, "lines": GOOD["want"]["brief"]})
+        after = self.files()
+        self.assertEqual(sorted(k for k in after if after[k] != before.get(k)), ["Inbox.md", "Reading notes/arxiv-2406.01234.md"])
+        # the page reads the brief, that the note has an impression, and the task
+        status, shown = self.call("GET", "/api/inbox")
+        self.assertEqual((shown["items"][0]["brief"]["lines"], shown["notes"][ITEM_KEY]["impression"], shown["items"][0]["task"]["state"]), (GOOD["want"]["brief"], True, "done"))
+        self.assertEqual(self.call("GET", f"/api/reading?key={urllib.parse.quote(ITEM_KEY)}")[1]["impression"]["by"], "web")
+
+    def test_the_prompt_is_self_contained_and_never_holds_the_users_part(self):
+        self.write_mine()
+        self.set(GOOD["answer"])
+        self.process()
+        self.assertEqual(self.wait(self.TASK).state, "done")
+        run = self.harness.runs[0]
+        given = json.dumps(run)
+        for secret in ("SECRET-OF-THE-USER", "The gain vanishes", "Same subset sizes"):
+            self.assertNotIn(secret, given)
+        prompt = run["stdin"]
+        for part in ("Mixup at scale (https://arxiv.org/abs/2406.01234)", "maybe relevant to D01", "<impression>", "### Left open", "<brief>", "<unreadable>",
+                     "Do not open the folder `Reading notes/` or the file `Inbox.md`", "Change no file", "at most 3000 characters"):
+            self.assertIn(part, prompt)
+        for word in ("rft_", "ToolSearch", "AskUserQuestion", "skill", "manual", self.tmp.name):
+            self.assertNotIn(word, prompt)
+        # and the user's part is as they wrote it, beside the agent's impression
+        note = self.reading()
+        self.assertEqual(note.mine, MINE)
+        self.assertEqual(note.impression["by"], "web")
+
+    def test_a_second_process_before_the_mark_rewrites_the_impression(self):
+        self.set(GOOD["answer"])
+        self.process()
+        self.wait(self.TASK)
+        self.set(GOOD["answer"].replace("Mixup still helps at ViT-H scale.", "Mixup helps, again."))
+        self.assertEqual(self.process()[0], 200)
+        self.assertEqual(self.wait(self.TASK).state, "done")
+        note = self.reading()
+        self.assertIn("Mixup helps, again.", note.impression["text"])
+        self.assertEqual(note.text().count("impression ("), 1)
+        self.assertEqual(len(self.item()["brief"]["lines"]), 3)
+
+    def test_an_item_marked_as_read_keeps_its_impression(self):
+        self.set(GOOD["answer"])
+        self.process()
+        self.wait(self.TASK)
+        self.assertEqual(self.inbox(action="read", key=ITEM_KEY, read=True)[0], 200)
+        before = self.files()
+        status, got = self.process()
+        self.assertEqual(status, 409)
+        self.assertIn("frozen", got["error"])
+        self.assertEqual(len(self.harness.runs), 1)
+        self.assertEqual(self.files(), before)
+
+    def test_marked_as_read_while_the_agent_was_reading_nothing_is_saved(self):
+        self.set(GOOD["answer"])
+        self.process()
+        self.wait(self.TASK)
+        first = self.files()
+        self.set(GOOD["answer"].replace("Mixup still helps", "CHANGED"), sleep=0.7)
+        self.process()
+        self.assertEqual(self.inbox(action="read", key=ITEM_KEY, read=True)[0], 200)
+        marked = self.files()
+        task = self.wait(self.TASK)
+        self.assertEqual(task.state, "failed")
+        self.assertIn("frozen", task.error)
+        self.assertEqual(self.files(), marked)
+        self.assertNotIn(b"CHANGED", marked["Reading notes/arxiv-2406.01234.md"])
+
+    def nothing_saved(self, says, state="failed"):
+        before = self.files()
+        status, got = self.process()
+        self.assertEqual(status, 200, got)
+        task = self.wait(self.TASK)
+        self.assertEqual(task.state, state, task.error)
+        self.assertIn(says, task.error)
+        self.assertEqual(self.files(), before)
+        shown = self.call("GET", "/api/inbox")[1]["items"][0]
+        self.assertEqual(shown["task"]["state"], state)
+        self.assertIn(says, shown["task"]["error"])
+        self.assertIsNone(shown["brief"])
+
+    def test_an_answer_missing_a_brief_line_saves_nothing_and_shows_why(self):
+        self.set(next(c for c in CASES["process"] if c["name"].startswith("a brief of two lines"))["answer"])
+        self.nothing_saved("a brief is three lines")
+
+    def test_an_item_the_agent_could_not_read(self):
+        self.set("<unreadable>The page asks for a login.</unreadable>")
+        self.nothing_saved("web could not read the item: The page asks for a login.")
+
+    def test_a_harness_that_fails_or_runs_out_of_time(self):
+        self.set("boom", exit=1)
+        self.nothing_saved("ended with an error (code 1): boom")
+        self.set(GOOD["answer"], sleep=30)
+        self.nothing_saved("web did not answer within 2 seconds")
+
+    def test_cancelled_nothing_is_saved_and_one_task_per_item(self):
+        self.set(GOOD["answer"], sleep=30)
+        before = self.files()
+        self.assertEqual(self.process()[0], 200)
+        status, got = self.process()
+        self.assertEqual(status, 409)
+        self.assertIn("web is already answering", got["error"])
+        status, got = self.inbox(action="cancel", key=ITEM_KEY)
+        self.assertEqual(status, 200, got)
+        self.assertEqual(self.wait(self.TASK).state, "cancelled")
+        self.assertEqual(self.files(), before)
+        self.assertEqual(self.inbox(action="cancel", key=ITEM_KEY)[0], 409)
+        self.assertEqual(self.inbox(action="cancel", key="https://b.org/y")[0], 409)
+
+    def test_only_a_harness_that_may_read_the_project_and_the_web_is_offered_process(self):
+        agents = {a["name"]: a for a in self.call("GET", "/api/agents")[1]["agents"]}
+        self.assertEqual([n for n, a in agents.items() if "process" in a["tasks"]], ["web"])
+        self.assertIn("a model cannot fetch the item", agents["qwen"]["why_not"]["process"])
+        self.assertIn('grant = "read"', agents["blind"]["why_not"]["process"])
+        self.assertIn("web = true", agents["reader"]["why_not"]["process"])
+        before = self.files()
+        for name, says in (("qwen", "Process needs a harness"), ("blind", "may read the project"), ("reader", "read the web"), ("loose", "no locked command"), ("nobody", "is no agent")):
+            status, got = self.process(name)
+            self.assertEqual(status, 409, name)
+            self.assertIn(says, got["error"], name)
+        self.assertEqual((self.harness.runs, self.model.requests, self.files()), ([], [], before))
+
+    def test_with_no_agent_named_and_no_default_it_is_the_chats_as_before(self):
+        before = self.files()
+        status, got = self.inbox(action="process", key=ITEM_KEY)
+        self.assertEqual(status, 503)
+        self.assertEqual(self.inbox(action="process", key=ITEM_KEY, agent="chat")[0], 503)
+        self.assertEqual((self.harness.runs, self.files()), ([], before))
+
+    def test_the_setups_default_processes_when_the_page_names_no_one(self):
+        self.write_setup('[defaults]\nprocess = "web"\n' + self.AGENTS)
+        self.set(GOOD["answer"])
+        self.assertEqual(self.inbox(action="process", key=ITEM_KEY)[0], 200)
+        self.assertEqual(self.wait(self.TASK).agent, "web")
+
+    def test_discuss_still_needs_a_chat(self):
+        self.set(GOOD["answer"])
+        self.process()
+        self.wait(self.TASK)
+        status, got = self.inbox(action="read", key=ITEM_KEY, read=True)
+        self.assertEqual(status, 200)
+        self.assertEqual(got["waiting"], [ITEM_KEY])  # the mark is saved and the discussion waits for a chat
+        status, got = self.inbox(action="discuss", key=ITEM_KEY, agent="web")
+        self.assertEqual(status, 503)
+        self.assertEqual(len(self.harness.runs), 1)
+
+    def test_an_item_that_left_the_inbox_while_the_agent_was_reading(self):
+        self.set(GOOD["answer"], sleep=0.6)
+        self.process()
+        self.assertEqual(self.inbox(action="discard", key=ITEM_KEY)[0], 200)
+        left = self.files()
+        task = self.wait(self.TASK)
+        self.assertEqual(task.state, "failed")
+        self.assertIn("no longer in the inbox", task.error)
+        self.assertEqual(self.files(), left)
 
 
 if __name__ == "__main__":

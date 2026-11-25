@@ -589,6 +589,76 @@ def thread_prompt(what: str, name: str, body: str, thread: dict, at: tuple[int, 
     ])
 
 
+# ------------------------------------------------------------------ Process
+
+IMPRESSION_BLOCK = re.compile(r"<impression>\n?([\s\S]*?)\n?</impression>")
+BRIEF_BLOCK = re.compile(r"<brief>\n?([\s\S]*?)\n?</brief>")
+UNREADABLE = re.compile(r"<unreadable>([\s\S]*?)</unreadable>")
+LIST_MARK = re.compile(r"^(?:[-*+]|[0-9]+[.)])[ \t]+")
+BRIEF_LINES = 3
+
+
+def split_process(answer: str, agent: str) -> tuple[str, list[str]]:
+    """An answer to Process as (the impression's text, the brief's three lines). AgentError, in
+    words for the user, when the agent says it could not read the item, when either block is
+    missing, or when the brief is not three lines: nothing is then saved. Whether the impression
+    has its five parts is for whoever writes it to say (rft_reading.impression_lines)."""
+    cannot = UNREADABLE.search(answer)
+    if cannot:
+        raise AgentError(f"{agent} could not read the item: {one_line(cannot.group(1)) or 'it gave no reason'}")
+    imp, brief = IMPRESSION_BLOCK.search(answer), BRIEF_BLOCK.search(answer)
+    if not imp or not imp.group(1).strip():
+        raise AgentError(f"{agent}'s answer has no impression (nothing between <impression> and </impression>): nothing was saved")
+    if not brief:
+        raise AgentError(f"{agent}'s answer has no brief (nothing between <brief> and </brief>): nothing was saved")
+    lines = [LIST_MARK.sub("", " ".join(line.split()), count=1) for line in brief.group(1).split("\n")]
+    lines = [line for line in lines if line]
+    if len(lines) != BRIEF_LINES:
+        raise AgentError(f"{agent}'s brief has {len(lines)} line{'' if len(lines) == 1 else 's'}, and a brief is three lines "
+                         "(what the item claims, which notes it touches, the outcome it recommends): nothing was saved")
+    return imp.group(1), lines
+
+
+def process_prompt(item: dict, parts, chars: int, reading_dir: str, inbox: str) -> str:
+    """What a harness is asked to process one inbox item: self-contained, naming no tool of any
+    harness, and never holding the user's part of the item's reading note (docs/adr/0004). It
+    runs in the vault, locked. `parts`: the impression's headings, in order."""
+    name = f"{item['title']} ({item['url']})" if item.get("title") else item["url"]
+    why = f' The user saved it with this line on why: "{item["why"]}".' if item.get("why") else ""
+    heads = "\n".join(f"### {p}\n..." for p in parts)
+    return "\n".join([
+        "You read one item a researcher saved to read later and write your own reading of it, for the researcher to compare with theirs.",
+        "",
+        f"The item: {name}.{why}",
+        "",
+        "Read the item itself, the page or the paper at its link (for an arXiv paper, its abstract page and as much of the paper as your reading needs). "
+        "Write from the item alone: not from its title, not from what you remember of it.",
+        "",
+        "You run in the folder of the researcher's project: a tree of notes in markdown, in the folders directions/ (D..), experiments/ (E..), "
+        "references/ (R..) and theory/ (T..), each file named by its id and title. Search and read them to find the notes this item bears on, and name those by id. "
+        f"Do not open the folder `{reading_dir}/` or the file `{inbox}`: the researcher's own reading is there, and yours must be written without it. "
+        "Change no file: your answer is saved for you.",
+        "",
+        "Answer in exactly this form and nothing else.",
+        "",
+        "<impression>",
+        heads,
+        "</impression>",
+        "<brief>",
+        "one line: what the item claims",
+        "one line: which notes of the tree it touches, by id",
+        "one line: the one outcome you recommend (reference, literature entry, direction, discard or later), with where it would go",
+        "</brief>",
+        "",
+        f"The impression has these {len(parts)} parts, each under its heading, in this order, none empty, and is about one screen: at most {chars} characters in all. "
+        f"{parts[0]}: what the item claims. {parts[1]}: how it gets there. {parts[2]}: its key results, with their numbers and where they are in the item (table, figure, section). "
+        f"{parts[3]}: the notes of the tree it bears on, by id, and how. {parts[4]}: what it leaves open. The brief is exactly three lines.",
+        "",
+        "If you cannot read the item (a paywall, a dead link, a page that asks for a login), write neither: answer only "
+        "<unreadable>why, in one line</unreadable>.",
+    ])
+
+
 # ------------------------------------------------------------------ tasks
 
 class Busy(Exception):

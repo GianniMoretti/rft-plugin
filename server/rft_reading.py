@@ -165,7 +165,7 @@ class Note:
         says this. ReadingError when a line of it would read as the heading of the impression."""
         new = lines_of(text)
         if any(IMPRESSION.match(line) for line in new):
-            raise ReadingError(f'a line of your part reads as the heading of an agent\'s impression (as "{IMPRESSION_HEAD}"): write it another way')
+            raise ReadingError(f'a line of your part reads as the heading of Claude\'s part, or of another agent\'s (as "{IMPRESSION_HEAD}"): write it another way')
         mine, imp = self._at
         if "\n".join(new) == self.mine and (mine is not None or not new):
             return False

@@ -1540,3 +1540,6 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
 .agent-pick .agent-error { flex-basis: 100%; color: var(--warn, #b45309); }
 .ms-threads > .agent-pick { margin: 0 0 6px; }
 @media (pointer: coarse) { .agent-pick select { min-height: 44px; font-size: 16px; } }
+.inbox-running { color: var(--accent); }
+.inbox-failed { color: var(--warn, #b45309); }
+#inbox > .agent-pick { margin: 4px 0 6px; }
