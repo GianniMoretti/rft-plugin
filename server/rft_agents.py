@@ -37,8 +37,13 @@ An entry that is wrong is reported with its reason and left out; the others stil
 """
 from __future__ import annotations
 
+import http.client
+import json
 import os
 import re
+import socket
+import threading
+import time
 import tomllib
 import urllib.parse
 from pathlib import Path
@@ -116,7 +121,8 @@ class Agent:
         """What the page is told of it: never a key, a variable's name or a command."""
         return {"name": self.name, "kind": self.kind, "grant": self.grant, "grant_words": GRANT_WORDS[self.grant],
                 "where": self.where(), "tasks": self.tasks(), "problem": self.problem,
-                "model": self.model if self.kind == "model" else "", "preset": self.preset}
+                "model": self.model if self.kind == "model" else "", "preset": self.preset,
+                "why_not": {t: why_not(self, t) for t in TASKS if t not in self.tasks()}}
 
 
 def _strings(value, what: str) -> list[str]:
@@ -284,3 +290,348 @@ class Setups:
                     self._setup = Setup(self.path, errors=[{"name": "", "error": f"{self.path.name} cannot be read: {err}"}], found=True)
             self._seen = seen
         return self._setup
+
+
+# ------------------------------------------------------------------ running an agent
+
+MAX_ANSWER_BYTES = 2_000_000
+THINK = re.compile(r"\A\s*<think>.*?</think>", re.S)
+
+
+class AgentError(Exception):
+    """Why an agent gave no answer, in words for the user."""
+
+
+class Cancelled(AgentError):
+    """The task was cancelled, or ran out of time, before its answer was written."""
+
+
+class Run:
+    """One run of an agent, as the task that started it holds it: what stops it, and whether its
+    answer may still be written. An answer is written only by a run that `commit()`s first; a run
+    that was stopped never does, even when its agent answers afterwards."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._stoppers: list = []
+        self.stopped: str = ""  # why it was stopped: "cancelled", or the words of its time limit
+        self.committed = False
+
+    def on_stop(self, stop) -> None:
+        """`stop()` is called when the run is stopped, at once when it already was."""
+        with self._lock:
+            if not self.stopped:
+                self._stoppers.append(stop)
+                return
+        stop()
+
+    def stop(self, why: str) -> bool:
+        """Stops the run; False when its answer is already being written."""
+        with self._lock:
+            if self.committed:
+                return False
+            if self.stopped:
+                return True
+            self.stopped = why
+            stoppers, self._stoppers = self._stoppers, []
+        for stop in stoppers:
+            try:
+                stop()
+            except Exception:  # noqa: BLE001 - a stopper that fails leaves the others to run
+                pass
+        return True
+
+    def commit(self) -> None:
+        """Called before the answer is written; Cancelled when the run was stopped meanwhile."""
+        with self._lock:
+            if self.stopped:
+                raise Cancelled(self.stopped)
+            self.committed = True
+
+    def check(self) -> None:
+        if self.stopped:
+            raise Cancelled(self.stopped)
+
+
+def call_model(agent: Agent, prompt: str, run: Run, env=None) -> str:
+    """The model's answer to one prompt, over the OpenAI-compatible chat call. Nothing but the
+    prompt is sent, and the key, read from the variable the entry names, in the header."""
+    env = os.environ if env is None else env
+    url = urllib.parse.urlsplit(agent.url + "/chat/completions")
+    host = url.hostname or ""
+    port = url.port or (443 if url.scheme == "https" else 80)
+    seconds = agent.limits["thread"]
+    conn = (http.client.HTTPSConnection if url.scheme == "https" else http.client.HTTPConnection)(host, port, timeout=seconds)
+
+    def hang_up():
+        sock = conn.sock
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        conn.close()
+
+    run.on_stop(hang_up)
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if agent.key:
+        key = env.get(agent.key)
+        if not key:
+            raise AgentError(f"the environment variable {agent.key} is not set")
+        headers["Authorization"] = f"Bearer {key}"
+    body = json.dumps({"model": agent.model, "messages": [{"role": "user", "content": prompt}], "stream": False}).encode("utf-8")
+    at = f"{host}:{port}"
+    try:
+        run.check()
+        conn.request("POST", url.path + (f"?{url.query}" if url.query else ""), body=body, headers=headers)
+        resp = conn.getresponse()
+        data = resp.read(MAX_ANSWER_BYTES + 1)
+    except (OSError, http.client.HTTPException) as err:
+        run.check()
+        if isinstance(err, (TimeoutError, socket.timeout)):
+            raise AgentError(f"{agent.name} did not answer within {seconds} seconds") from None
+        if isinstance(err, ConnectionRefusedError):
+            raise AgentError(f"{agent.name} cannot be reached at {at}: nothing answers there (is it running?)") from None
+        if isinstance(err, socket.gaierror):
+            raise AgentError(f"{agent.name} cannot be reached: the host {host} is not found") from None
+        raise AgentError(f"{agent.name} cannot be reached at {at}: {err or type(err).__name__}") from None
+    finally:
+        conn.close()
+    run.check()
+    if resp.status != 200:
+        said = one_line(data[:400].decode("utf-8", errors="replace"))
+        try:
+            # the endpoint's own words for it, when it gives them as such endpoints do
+            err = json.loads(data).get("error")
+            said = one_line(err if isinstance(err, str) else err["message"])
+        except (ValueError, AttributeError, KeyError, TypeError):
+            pass
+        raise AgentError(f"{agent.name} answered {resp.status}{f': {said}' if said else ''}")
+    if len(data) > MAX_ANSWER_BYTES:
+        raise AgentError(f"{agent.name}'s answer is too long to keep")
+    try:
+        text = json.loads(data)["choices"][0]["message"]["content"]
+        if not isinstance(text, str):
+            raise TypeError
+    except (ValueError, KeyError, IndexError, TypeError):
+        raise AgentError(f"{agent.name} answered, but not as a chat endpoint does: check its url") from None
+    # a model that thinks aloud first: its thinking is not its answer
+    text = THINK.sub("", text, count=1)
+    if not text.strip():
+        raise AgentError(f"{agent.name} answered with nothing")
+    return text
+
+
+def one_line(text: str, most: int = 300) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= most else text[:most - 1] + "…"
+
+
+# ------------------------------------------------------------------ a thread
+
+REPLACEMENT = re.compile(r"<replacement>\n?([\s\S]*?)\n?</replacement>")
+#: how much of a long note a prompt holds: this much around the quoted part
+NOTE_CHARS = 60_000
+
+
+def split_answer(answer: str) -> tuple[str, str | None]:
+    """An answer to a thread as (message, new text): the new text is what stands between the first
+    <replacement> and </replacement>, None when there is no such pair. As answerThread in
+    hooks/lib/comments.ts."""
+    m = REPLACEMENT.search(answer)
+    if not m:
+        return answer.strip(), None
+    return answer.replace(m.group(0), "", 1).strip(), m.group(1)
+
+
+def quoted(text: str) -> str:
+    return "\n".join(f"> {line}" for line in text.split("\n"))
+
+
+def thread_text(thread: dict, place: str) -> str:
+    """A thread in words, whole: what it is on, what was proposed, where it stands, who said what."""
+    kind = thread.get("kind")
+    what = "comment" if kind == "comment" else ("suggestion, an instruction (no replacement text yet)" if thread.get("replacement") is None else "suggestion")
+    lines = [f"{thread.get('id')} · {what}", quoted(str(thread.get("quote") or ""))]
+    if kind == "suggestion" and thread.get("replacement") is not None:
+        lines += ["Replacement:", quoted(str(thread["replacement"]))]
+    lines.append(place)
+    for m in thread.get("messages") or []:
+        who = "user" if m.get("by") == "you" else (m.get("agent") or "claude")
+        lines.append(f"- {who} · {m.get('at')}: " + str(m.get("text") or "").replace("\n", "\n  "))
+    return "\n".join(lines)
+
+
+def note_part(body: str, at: tuple[int, int] | None) -> tuple[str, bool]:
+    """The note's text for a prompt: whole, or the part around the quote when it is very long."""
+    if len(body) <= NOTE_CHARS:
+        return body, True
+    mid = (at[0] + at[1]) // 2 if at else 0
+    start = max(0, min(mid - NOTE_CHARS // 2, len(body) - NOTE_CHARS))
+    return body[start:start + NOTE_CHARS], False
+
+
+def thread_prompt(what: str, name: str, body: str, thread: dict, at: tuple[int, int, bool] | None, path: str | None = None) -> str:
+    """What an agent is asked to answer one thread: self-contained, with the text it is about in
+    it, and naming no tool of any harness. `what`: note, snippet or document; `path`: the file,
+    relative to the folder a harness runs in (None for a model, which reads nothing)."""
+    if at is None:
+        place = f"The quoted text is no longer in the {what}."
+    elif at[2]:
+        place = f"The quoted text is in the {what} as quoted."
+    else:
+        place = f"The quoted text changed since; that part of the {what} now reads:\n{quoted(body[at[0]:at[1]])}"
+    part, whole = note_part(body, at)
+    kind = {"snippet": "a snippet, a building block in LaTeX,", "document": "a document, in LaTeX,"}.get(what, "a note, in markdown,")
+    if thread.get("kind") == "comment":
+        todo = (f"It is a comment: a discussion of this part of the {what}. Your whole answer is your reply in the thread, "
+                "as the user will read it: markdown, short, and nothing about what you did.")
+    else:
+        how = "written as the instruction says" if thread.get("replacement") is None else f"from the proposed replacement, adapted only where the {what} needs it"
+        todo = (f"It is a suggestion. Your answer is the new text for the quoted part, between <replacement> and </replacement>, {how}, "
+                f"then one line on why. Give the new text for the quoted part only, in the {what}'s own form, and nothing around it inside the tags. "
+                "The user accepts or rejects it. When the suggestion is unclear or looks wrong, write no replacement: your whole answer is then your reply.")
+    reads = (f"\n\nIt is the file `{path}` in the folder you run in. Read what else the question needs (its code, results or references, the notes it names) "
+             "and nothing more. Change no file: your answer is written into the thread for you.") if path else ""
+    return "\n".join([
+        f"You answer one discussion thread on {kind} of a research project kept as a tree of notes. "
+        "Your answer is written into the thread exactly as you give it.",
+        "",
+        f"The {what} {name}, {'as it is now' if whole else 'the part of it around the quoted text (it is long)'}:",
+        "<text>", part, "</text>" + reads,
+        "",
+        "The thread:",
+        thread_text(thread, place),
+        "",
+        todo,
+    ])
+
+
+# ------------------------------------------------------------------ tasks
+
+class Busy(Exception):
+    """An agent is already at this thread or item."""
+
+
+class Task:
+    """One launched task: `key` (what it is on), `agent`, `what` (in words), `state` (running,
+    done, failed or cancelled), `error` (why it failed), `started` and `ended` (seconds)."""
+
+    def __init__(self, key: str, agent: str, what: str, limit: int):
+        self.key, self.agent, self.what, self.limit = key, agent, what, limit
+        self.state, self.error = "running", ""
+        self.started, self.ended = time.time(), None
+        self.run = Run()
+
+    def describe(self) -> dict:
+        return {"key": self.key, "agent": self.agent, "what": self.what, "state": self.state, "error": self.error,
+                "started": int(self.started), "ended": None if self.ended is None else int(self.ended), "limit": self.limit}
+
+
+class Tasks:
+    """The tasks launched by this server, in its memory: one at a time per thread or item, each
+    with a time limit. A task that ended is kept, with why it failed, until the next one on the
+    same thing."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._tasks: dict[str, Task] = {}
+
+    def start(self, key: str, agent: str, what: str, limit: int, work, on_end=None) -> Task:
+        """Runs `work(run)` in the background. It returns once the answer is written (after
+        run.commit()), or raises: AgentError with why. `on_end(task)` is called when it is over,
+        however it ended. Busy when a task on `key` is still running."""
+        with self._lock:
+            had = self._tasks.get(key)
+            if had and had.state == "running":
+                raise Busy(f"{had.agent} is already answering {what}")
+            task = self._tasks[key] = Task(key, agent, what, limit)
+        timer = threading.Timer(limit, lambda: task.run.stop(f"{agent} did not answer within {limit} seconds"))
+        timer.daemon = True
+
+        def go():
+            state, error = "done", ""
+            try:
+                work(task.run)
+            except Cancelled as err:
+                why = str(err)
+                state, error = ("cancelled", "") if why == "cancelled" else ("failed", why)
+            except AgentError as err:
+                state, error = "failed", str(err)
+            except Exception as err:  # noqa: BLE001 - a task never takes the server down
+                state, error = "failed", f"{agent} could not answer: {one_line(str(err)) or type(err).__name__}"
+            finally:
+                timer.cancel()
+            with self._lock:
+                task.state, task.error, task.ended = state, error, time.time()
+            if on_end:
+                try:
+                    on_end(task)
+                except Exception:  # noqa: BLE001
+                    pass
+
+        timer.start()
+        threading.Thread(target=go, daemon=True, name=f"rft-agent-{key}").start()
+        return task
+
+    def get(self, key: str) -> Task | None:
+        with self._lock:
+            return self._tasks.get(key)
+
+    def all(self) -> list[dict]:
+        with self._lock:
+            return [t.describe() for t in self._tasks.values()]
+
+    def cancel(self, key: str) -> bool:
+        """Stops the task on `key`; False when none is running, or its answer is being written."""
+        task = self.get(key)
+        return bool(task and task.state == "running" and task.run.stop("cancelled"))
+
+    def wait(self, key: str, seconds: float = 10) -> Task | None:
+        """For the tests: the task on `key`, once it is over."""
+        end = time.time() + seconds
+        while time.time() < end:
+            task = self.get(key)
+            if task is None or task.state != "running":
+                return task
+            time.sleep(0.01)
+        return self.get(key)
+
+
+class NoAgent(Exception):
+    """The agent asked for cannot do the task; in words for the user."""
+
+
+class Runner:
+    """The user's agents at work for one server: the setup, read as it changes, and the tasks."""
+
+    def __init__(self, setups: Setups | None = None, env=None):
+        self.setups = setups
+        self.env = env if env is not None else (setups.env if setups is not None else None)
+        self.tasks = Tasks()
+
+    def setup(self) -> Setup:
+        return self.setups.get() if self.setups is not None else Setup(Path(""))
+
+    def pick(self, task: str, name=None) -> Agent | None:
+        """Who does a task: the agent the page named, else the setup's default for it; None for
+        the connected chat. NoAgent when the one named is none, or may not do it."""
+        setup = self.setup()
+        if name is None:
+            name = setup.defaults.get(task, CHAT)
+        if not isinstance(name, str):
+            raise NoAgent("agent is the name of an agent")
+        if name == CHAT:
+            return None
+        agent = setup.agents.get(name)
+        if agent is None:
+            raise NoAgent(f'"{one_line(name, 60)}" is no agent of your setup ({setup.path})')
+        if task not in agent.tasks():
+            raise NoAgent(f"{agent.name} may not do this: {why_not(agent, task) or 'its grant does not allow it'}")
+        return agent
+
+    def answer(self, agent: Agent, prompt: str, run: Run, task: str = "thread", cwd: Path | None = None) -> str:
+        """The agent's answer to a prompt, as text."""
+        if agent.kind == "model":
+            return call_model(agent, prompt, run, self.env)
+        raise AgentError(f"{agent.name} is a harness, and this server cannot run one yet")

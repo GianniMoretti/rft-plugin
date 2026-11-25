@@ -13,6 +13,8 @@
 // pure parts are tested from tests/manuscript-view.test.ts.
 (function (root) {
   'use strict'
+  // the agents the user set up (agents.js): who answers a thread, and who wrote a message of one
+  const AG = (typeof window !== 'undefined' && window.RftAgents) || { extra: () => ({}), name: () => 'Claude', who: m => (m && m.by === 'you' ? 'You' : 'Claude'), asking: () => 'Claude', picker: () => null }
 
   // the head's buttons' symbols (24 px boxes, stroked as .ico draws them); the toolbar's are in index.html
   const ICONS = {
@@ -1425,6 +1427,9 @@
         }
       }
       if (composing) threadsEl.append(composer())
+      // who answers a thread, when the user set agents up
+      const pick = open.length ? AG.picker('thread', renderThreads) : null
+      if (pick) threadsEl.append(pick)
       for (const t of open) threadsEl.append(threadEl(t))
       const closed = threads.filter(t => t.state !== 'open')
       if (closed.length) threadsEl.append(el('details', { class: 'ms-history' }, el('summary', { text: `History (${closed.length})` }), closed.map(t => threadEl(t))))
@@ -1458,15 +1463,15 @@
       const quoteEl = el('blockquote', { class: 'ms-quote', text: t.quote, title: isOpen ? 'Show it in the text' : '' })
       if (isOpen && t.at && cm) quoteEl.addEventListener('click', () => { cm.setSelection(cm.posFromIndex(t.at[0]), cm.posFromIndex(t.at[1])); cm.focus() })
       return el('div', { class: `ms-thread ${t.kind}${isOpen ? '' : ' closed'}` },
-        el('div', { class: 'ms-thread-head' }, el('strong', { text: `${t.id} · ${t.kind}` }), el('span', { class: 'muted', text: isOpen ? (t.asked ? ' · Claude asked' : '') : ` · ${t.state}` }),
+        el('div', { class: 'ms-thread-head' }, el('strong', { text: `${t.id} · ${t.kind}` }), el('span', { class: 'muted', text: isOpen ? (t.asked ? ` · ${AG.asking(t)} asked` : '') : ` · ${t.state}` }),
           isOpen && !t.at ? el('span', { class: 'ms-flag-text', text: ' the quoted text is no longer there' }) : null,
           isOpen && t.at && !t.exact ? el('span', { class: 'ms-flag-text', text: ' the quoted text changed since' }) : null),
         quoteEl,
         t.kind === 'suggestion' && t.replacement != null ? el('div', { class: 'ms-repl' }, el('span', { class: 'muted', text: 'Replacement: ' }), el('code', { text: t.replacement })) : null,
-        (t.messages || []).map(m => el('div', { class: `ms-msg ${m.by}` }, el('span', { class: 'muted', text: `${m.by === 'you' ? 'You' : 'Claude'} · ${m.at}: ` }), m.text)),
+        (t.messages || []).map(m => el('div', { class: `ms-msg ${m.by}` }, el('span', { class: 'muted', text: `${AG.who(m)} · ${m.at}: ` }), m.text)),
         isOpen ? el('div', { class: 'ms-thread-act' }, reply,
           el('button', { type: 'button', text: 'Reply', onclick: act('reply') }),
-          el('button', { type: 'button', text: 'Ask Claude', title: 'Claude answers in the thread (a comment: a reply; a suggestion: its new text, for you to accept)', onclick: act('ask') }),
+          el('button', { type: 'button', text: `Ask ${AG.name('thread')}`, title: `${AG.name('thread')} answers in the thread (a comment: a reply; a suggestion: its new text, for you to accept)`, onclick: act('ask', AG.extra('thread')) }),
           t.kind === 'comment' ? el('button', { type: 'button', text: 'Resolve', onclick: act('resolve') }) : null,
           t.kind === 'suggestion' ? el('button', { type: 'button', text: 'Accept', disabled: t.replacement == null || !t.exact, title: 'Write its replacement into the text', onclick: act('accept') }) : null,
           t.kind === 'suggestion' ? el('button', { type: 'button', text: 'Reject', onclick: act('reject') }) : null)

@@ -3853,7 +3853,9 @@
   const mdm = M.make({ tex, image: (src, alt) => `<em class="missing">(image: ${escH(alt || src)})</em>`, link: idForLink })
   const noteOf = r => ({ id: r.id, body: r.body, version: r.version || null, locked: Boolean(r.locked), threads: Array.isArray(r.threads) ? r.threads : [] })
   const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s)
-  const who = by => (by === 'claude' ? 'Claude' : 'You')
+  // the agents the user set up (agents.js): who answers a thread, and who wrote a message of one
+  const AG = window.RftAgents || { extra: () => ({}), name: () => 'Claude', who: m => (m && m.by === 'you' ? 'You' : 'Claude'), asking: () => 'Claude', picker: () => null, onChange: () => {} }
+  const who = m => AG.who(m)
   const STATE = { resolved: 'Resolved', accepted: 'Accepted', rejected: 'Rejected', applied: 'Applied by Claude' }
   const TIP = {
     ask: 'Ask Claude to answer this thread (with your reply, if you wrote one), in the background: the answer comes into the thread',
@@ -3877,7 +3879,7 @@
   function threadButtons(t, replyTip) {
     const no = cantAccept(t)
     return iconBtn('reply', 'Reply', replyTip, 'neutral') +
-      iconBtn('ask', t.asked ? 'Ask Claude again' : 'Ask Claude', t.asked ? `Again: ${TIP.ask}` : TIP.ask, 'ask') +
+      iconBtn('ask', `Ask ${AG.name('thread')}${t.asked ? ' again' : ''}`, (t.asked ? 'Again: ' : '') + TIP.ask.replace('Ask Claude', `Ask ${AG.name('thread')}`), 'ask') +
       (t.kind === 'suggestion'
         ? iconBtn('accept', 'Accept', no || TIP.accept, 'ok', Boolean(no)) + iconBtn('reject', 'Reject', TIP.reject, 'no')
         : iconBtn('resolve', 'Resolve', TIP.resolve, 'ok'))
@@ -4068,8 +4070,8 @@
     el.innerHTML = `<div class="s-head"><b>${kind}</b>${replies ? ` · ${replies} ${replies > 1 ? 'replies' : 'reply'}` : ''}${t.exact ? '' : ' · the text changed'}</div>` +
       (t.kind === 'suggestion' && t.replacement != null
         ? `<div class="s-repl">${t.replacement ? escH(clip(t.replacement, 240)) : '<em>(delete the text)</em>'}</div>` : '') +
-      (last ? `<div class="s-msg"><span class="s-who">${who(last.by)}:</span> ${mdm.inline(clip(String(last.text || '').replace(/\s+/g, ' ').trim(), 320))}</div>` : '') +
-      (t.asked ? '<div class="s-asked">Claude is answering…</div>' : '') +
+      (last ? `<div class="s-msg"><span class="s-who">${escH(who(last))}:</span> ${mdm.inline(clip(String(last.text || '').replace(/\s+/g, ' ').trim(), 320))}</div>` : '') +
+      (t.asked ? `<div class="s-asked">${escH(AG.asking(t))} is answering…</div>` : '') +
       (err ? `<div class="s-error">${escH(err)}</div>` : '') + acts
     const box = el.querySelector('.s-reply')
     if (box) box.value = drafts.get(draftKey(t.id)) || ''
@@ -4450,14 +4452,14 @@
       : `${STATE[t.state] || t.state}${t.closed && t.state !== 'applied' ? ` · ${escH(t.closed.at)}` : t.closed ? ` · ${escH(t.closed.at)}` : ''}`
     const change = t.kind !== 'suggestion' ? ''
       : t.replacement == null
-        ? `<div class="t-note muted">No new text yet${isOpen ? ': Ask Claude to write it, or reply' : ''}.</div>`
+        ? `<div class="t-note muted">No new text yet${isOpen ? `: Ask ${escH(AG.name('thread'))} to write it, or reply` : ''}.</div>`
         : `<div class="t-change"><div class="muted">Replace with</div><div class="t-repl">${t.replacement ? escH(clip(t.replacement, 1200)) : '<em class="muted">(nothing: delete the text)</em>'}</div></div>`
     const where = !isOpen ? ''
       : !t.at ? `<div class="t-warn">The text this ${t.kind} is on is no longer in the note.</div>`
         : !t.exact ? `<div class="t-warn">The text changed since; that part now reads: <q>${escH(clip(shown.body.slice(t.at[0], t.at[1]), 240))}</q></div>` : ''
     const msgs = (t.messages || []).map(m =>
-      `<li class="by-${m.by === 'claude' ? 'claude' : 'you'}"><div class="t-who">${who(m.by)} <time>${escH(m.at || '')}</time></div><div class="t-text">${mdm.render(m.text || '').html}</div></li>`).join('')
-    const asked = isOpen && t.asked ? `<div class="t-asked">Claude is answering… <span class="muted">(asked ${escH(String(t.asked).slice(11) || t.asked)})</span></div>` : ''
+      `<li class="by-${m.by === 'claude' ? 'claude' : 'you'}"><div class="t-who">${escH(who(m))} <time>${escH(m.at || '')}</time></div><div class="t-text">${mdm.render(m.text || '').html}</div></li>`).join('')
+    const asked = isOpen && t.asked ? `<div class="t-asked">${escH(AG.asking(t))} is answering… <span class="muted">(asked ${escH(String(t.asked).slice(11) || t.asked)})</span></div>` : ''
     const err = threadErrors.get(draftKey(t.id))
     let bar = ''
     if (can && isOpen) {
@@ -4485,6 +4487,9 @@
     for (const box of threadsBox.querySelectorAll('.thread textarea')) {
       box.value = drafts.get(draftKey(box.closest('.thread').dataset.thread)) || ''
     }
+    // who answers a thread, when the user set agents up: picked here, for every Ask of the note
+    const pick = !EMBED && open.length ? AG.picker('thread', () => { renderThreads(); layoutSidenotes() }) : null
+    if (pick) threadsBox.querySelector('.threads-head').append(pick)
     if (focused) {
       const box = threadsBox.querySelector(`.thread[data-thread="${CSS.escape(focused.tid)}"] textarea`)
       if (box) { box.focus(); box.setSelectionRange(focused.at, focused.at) }
@@ -4516,7 +4521,7 @@
 
   async function act(id, tid, action, extra = {}) {
     threadErrors.delete(`${id} ${tid}`)
-    const r = await send({ id, thread: tid, action, ...extra })
+    const r = await send({ id, thread: tid, action, ...(action === 'ask' ? AG.extra('thread') : {}), ...extra })
     if (!r.ok) {
       threadErrors.set(`${id} ${tid}`, `Not done: ${r.error}.`)
       if (shown && shown.id === id) { renderThreads(); layoutSidenotes() }

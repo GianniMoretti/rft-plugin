@@ -16,7 +16,8 @@ export const COMMENTS_DIR = '.comments'
 export const CONTEXT = 40
 const MAX_TEXT = 20_000
 
-export type Message = { by: 'you' | 'claude'; at: string; text: string }
+/** `agent`: the name of the agent of the user's that wrote it, when the page's server launched one (server/rft_agents.py); with none, a message that is not the user's is Claude's. */
+export type Message = { by: 'you' | 'claude'; at: string; text: string; agent?: string }
 export type ThreadState = 'open' | 'resolved' | 'accepted' | 'rejected' | 'applied'
 export type Thread = {
   id: string
@@ -205,7 +206,7 @@ function threadText(body: string, t: Thread, full: boolean): string {
   if (t.kind === 'suggestion' && t.replacement != null) lines.push('Replacement:', quoted(t.replacement))
   if (t.state === 'open') lines.push(placeText(body, t))
   const msgs = full ? t.messages : t.messages.slice(-1)
-  for (const m of msgs) lines.push(`- ${m.by === 'you' ? 'user' : 'claude'} · ${m.at}: ${m.text.replace(/\n/g, '\n  ')}`)
+  for (const m of msgs) lines.push(`- ${m.by === 'you' ? 'user' : m.agent ? `${m.agent} (another agent of the user's)` : 'claude'} · ${m.at}: ${m.text.replace(/\n/g, '\n  ')}`)
   if (!full && t.messages.length > 1) lines.splice(lines.length - 1, 0, `  (${t.messages.length - 1} earlier message(s))`)
   return lines.join('\n')
 }

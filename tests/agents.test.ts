@@ -5,7 +5,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { Thread } from '../hooks/lib/comments'
-import { CommentError, answerThread } from '../hooks/lib/comments'
+import { CommentError, answerThread, commentsReport } from '../hooks/lib/comments'
 import { loadActive } from '../hooks/lib/ops'
 import { IMPRESSION_CHARS, impressionLines } from '../hooks/lib/reading'
 import { E02, MemoryFs, demoFiles } from './fixture'
@@ -42,6 +42,19 @@ describe('an agent\'s answer to a thread', () => {
       expect(fs.read(E02_PATH), c.name).toBe(CASES.note.text)
     }
     expect((CASES.threads as ThreadCase[]).length).toBeGreaterThan(10)
+  })
+})
+
+describe('a message another agent wrote', () => {
+  test('Claude reads who wrote it, and a message with no name is its own', async () => {
+    const c = (CASES.threads as ThreadCase[])[0]!
+    const thread = { ...c.want!, messages: [...c.want!.messages.slice(0, 1), { by: 'claude', at: CASES.now, text: 'From Claude.' }, { by: 'claude', at: CASES.now, text: 'From the model.', agent: 'qwen' }] }
+    const files = demoFiles()
+    files[SAVED] = JSON.stringify({ note: 'E02', next: 2, threads: [thread] })
+    const io = new MemoryFs(files).io()
+    const report = await commentsReport(io, await loadActive(io), 'E02')
+    expect(report).toContain(`- claude · ${CASES.now}: From Claude.`)
+    expect(report).toContain(`- qwen (another agent of the user's) · ${CASES.now}: From the model.`)
   })
 })
 

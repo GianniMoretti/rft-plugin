@@ -108,6 +108,7 @@ PAGE_FILES = {
     "/theme.js": ("theme.js", "text/javascript; charset=utf-8"),
     "/markdown.js": ("markdown.js", "text/javascript; charset=utf-8"),
     "/scratchpad.js": ("scratchpad.js", "text/javascript; charset=utf-8"),
+    "/agents.js": ("agents.js", "text/javascript; charset=utf-8"),
     "/inbox.js": ("inbox.js", "text/javascript; charset=utf-8"),
     "/reading.js": ("reading.js", "text/javascript; charset=utf-8"),
     "/queue.js": ("queue.js", "text/javascript; charset=utf-8"),
@@ -695,6 +696,9 @@ class Vault:
         self.arxiv_pause = 3.0
         self._arxiv_lock = threading.Lock()
         self._arxiv_last = 0.0
+        # the agents the user set up, and the tasks this server launched (rft_agents.Runner); None
+        # until a server gives it one: the page then has the session alone
+        self.runner: rft_agents.Runner | None = None
 
     def signature(self) -> str:
         parts = []
@@ -1014,7 +1018,9 @@ class Vault:
         threads = []
         for t in self._threads(nid)["threads"]:
             at = locate(body, str(t.get("quote") or ""), str(t.get("prefix") or ""), str(t.get("suffix") or ""))
-            threads.append({**t, "at": [at[0], at[1]] if at else None, "exact": bool(at and at[2])})
+            task = self.runner.tasks.get(thread_key(nid, t["id"])) if self.runner else None
+            threads.append({**t, "at": [at[0], at[1]] if at else None, "exact": bool(at and at[2]),
+                            **({"task": task.describe()} if task else {})})
         if rft_manuscript.SNIPPET_ID.match(nid):
             h = rft_manuscript.header(text)
             return {"id": nid, "name": f"{nid} {h['title']}" if h else nid, "body": body, "version": version_of(data),
@@ -1953,15 +1959,122 @@ class Vault:
                     if not is_open:
                         return 409, {"error": "the thread is closed: reopen it first", **self.note(nid)}
                     try:
-                        ask("RFT_ASK", {"id": nid, "thread": t["id"]})
-                    except (OSError, ValueError) as err:
-                        return 503, {"error": gone(err)}
+                        agent = self.runner.pick("thread", req.get("agent")) if self.runner else None
+                    except rft_agents.NoAgent as err:
+                        return 409, {"error": str(err), **self.note(nid)}
+                    if agent is None:
+                        # the connected chat answers, as a turn of its own or in a subagent
+                        try:
+                            ask("RFT_ASK", {"id": nid, "thread": t["id"]})
+                        except (OSError, ValueError) as err:
+                            return 503, {"error": gone(err)}
+                        t.pop("asking", None)
+                    else:
+                        try:
+                            self._launch_thread(agent, nid, path, body, t)
+                        except rft_agents.Busy as err:
+                            return 409, {"error": str(err), **self.note(nid)}
+                        t["asking"] = agent.name
                     t["asked"] = now
                 else:
                     return 400, {"error": "action must be new, reply, resolve, reopen, accept, reject or ask"}
             refreshed(body.replace("\r\n", "\n"), data["threads"])
             self._save_threads(nid, data)
         return 200, self.note(nid)
+
+    def _subject(self, nid: str) -> tuple[str, str]:
+        """What a thread is on, in words: (note | snippet | document, its name)."""
+        if rft_manuscript.SNIPPET_ID.match(nid):
+            return "snippet", nid
+        if rft_manuscript.DOC_RE.match(nid) and not ID_RE.match(nid):
+            return "document", nid
+        path = self.note_path(nid)
+        return "note", path.name[:-3] if path else nid
+
+    def _launch_thread(self, agent, nid: str, path: Path, body: str, t: dict) -> None:
+        """Starts an agent of the user's on a thread: it is given the thread and the text it is on,
+        and its answer is written into the thread by this server (answer_thread). The note is never
+        changed by it. rft_agents.Busy when an agent is already at the thread."""
+        runner = self.runner
+        what, name = self._subject(nid)
+        at = locate(body, str(t.get("quote") or ""), str(t.get("prefix") or ""), str(t.get("suffix") or ""))
+        rel = None
+        if agent.kind != "model":
+            try:
+                rel = path.resolve().relative_to(self.root).as_posix()
+            except ValueError:
+                rel = None
+        prompt = rft_agents.thread_prompt(what, name, body, json.loads(json.dumps(t)), at, rel)
+        tid = t["id"]
+
+        def work(run):
+            answer = runner.answer(agent, prompt, run, "thread", self.root)
+            status, got = self.answer_thread(nid, tid, answer, agent.name, run=run)
+            if status != 200:
+                raise rft_agents.AgentError(got["error"])
+
+        def over(task):
+            if task.state != "done":
+                self._unask(nid, tid, agent.name)
+
+        runner.tasks.start(thread_key(nid, tid), agent.name, f"{nid} {tid}", agent.limits["thread"], work, over)
+
+    def _unask(self, nid: str, tid: str, agent: str) -> None:
+        """A thread no longer waits for an agent that gave no answer."""
+        with self._write_lock:
+            data = self._threads(nid)
+            t = next((x for x in data["threads"] if x["id"] == tid), None)
+            if t is None or t.get("asking") != agent:
+                return
+            t["asked"] = None
+            t.pop("asking", None)
+            self._save_threads(nid, data)
+
+    def answer_thread(self, nid: str, tid: str, answer: str, agent: str | None = None, now: str | None = None, run=None) -> tuple[int, dict]:
+        """Writes an agent's answer into its thread: the new text between <replacement> and
+        </replacement> as the suggestion's replacement, for the user to accept or reject, and the
+        rest as a message; with no such pair, or where a new text does not fit (a comment thread,
+        the quoted text changed, the new text is the quoted text), all of it as a message. The
+        note is never changed. Nothing is written for a thread that is gone or closed. As
+        answerThread in hooks/lib/comments.ts, case for case (tests/fixtures/agents). `run`: the
+        task's, asked before the write whether it was stopped meanwhile."""
+        path = self.text_path(nid)
+        if path is None:
+            return 404, {"error": "the note is gone"}
+        text, new = rft_agents.split_answer(answer)
+        with self._write_lock:
+            data = self._threads(nid)
+            t = next((x for x in data["threads"] if x["id"] == tid), None)
+            if t is None:
+                return 404, {"error": f"{nid} has no thread {tid} any more"}
+            if t.get("state") != "open":
+                return 409, {"error": f"{nid} {tid} is {t.get('state')}: the answer was not written"}
+            body = body_of(path.read_bytes().decode("utf-8", errors="replace"))
+            now = now or stamp()
+            by = {"by": "claude", "at": now, **({"agent": agent} if agent else {})}
+            fits = False
+            if new is not None and t.get("kind") == "suggestion":
+                at = locate(body, str(t.get("quote") or ""), str(t.get("prefix") or ""), str(t.get("suffix") or ""))
+                repl = new.replace("\r\n", "\n")
+                fits = bool(at and at[2]) and len(repl) <= MAX_TEXT and repl != t.get("quote") and len(text) <= MAX_TEXT
+            if fits:
+                t["replacement"] = repl
+                message = text
+            else:
+                message = text if new is None else f"{text}\n\n{new}".strip()
+                if new is None and not message:
+                    message = "(no answer)"
+                if not message or len(message) > MAX_TEXT:
+                    return 409, {"error": "the answer is empty" if not message else f"the answer is longer than {MAX_TEXT} characters"}
+            if run is not None:
+                run.commit()  # rft_agents.Cancelled when the task was stopped meanwhile: nothing is written
+            if message:
+                t.setdefault("messages", []).append({**by, "text": message})
+            t["asked"] = None
+            t.pop("asking", None)
+            refreshed(body.replace("\r\n", "\n"), data["threads"])
+            self._save_threads(nid, data)
+        return 200, {"answered": True}
 
     def _wait(self, found) -> dict | None:
         """The note `found` picks out of the tree's nodes once the session has made the change,
@@ -2588,6 +2701,11 @@ def style_css(t: dict) -> str:
     return "\n/* the project's figure tokens (.rft/config.json \"style\") */\n:root { " + "; ".join(vars_) + "; }\n"
 
 
+def thread_key(nid: str, tid: str) -> str:
+    """What a task on a thread is known by."""
+    return f"thread:{nid}:{tid}"
+
+
 def ask_session(verb: str, request: dict) -> None:
     """Hands a request to the plugin, which reads this process's stdout line by line."""
     print(f"{verb} {json.dumps(request)}", flush=True)
@@ -2673,6 +2791,9 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
     terminal) hands the requests for the session to the chats that ask for them. `agents`: the user's
     setup of agents (rft_agents.Setups); without one the page has the session alone, as before."""
     web = web.resolve()
+
+    if agents is not None:
+        vault.runner = rft_agents.Runner(agents)
 
     def agents_now() -> dict:
         """The agents the page may pick from, and whether a chat is there to be one of them."""

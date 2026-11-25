@@ -286,5 +286,284 @@ class AgentsRouteTest(unittest.TestCase):
             self.assertTrue(self.get(port)["chat"])
 
 
+def note(nid, kind, status, parent, title):
+    p = f'"[[{parent}]]"' if parent else '""'
+    return f"---\nid: {nid}\ntype: {kind}\nstatus: {status}\ndate: 2026-01-01\nparent: {p}\ntags: [demo, {kind}, {status}]\n---\n\n# {nid} · {title}\n\nText of {nid}.\n"
+
+
+class Served(unittest.TestCase):
+    """A vault with the fixture's note, served as from a terminal, with a setup file of the test's."""
+
+    AGENTS = ""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        self.vault = root / "vault"
+        (self.vault / "directions").mkdir(parents=True)
+        (self.vault / "experiments").mkdir()
+        (self.vault / "directions" / "D00 Does the thing work.md").write_text(note("D00", "direction", "done", "", "Does the thing work"))
+        (self.vault / "directions" / "D01 A better variant.md").write_text(note("D01", "direction", "idea", "D00 Does the thing work", "A better variant"))
+        self.e02 = root / CASES["note"]["file"]
+        self.e02.write_text(CASES["note"]["text"], encoding="utf-8")
+        self.model = FakeModel("Yes: 5 seeds.")
+        self.addCleanup(self.model.close)
+        self.harness = FakeHarness(root / "harness")
+        self.setup_file = root / "agents.toml"
+        self.env = {"TEST_KEY": "sk-secret"}
+        self.write_setup(self.AGENTS)
+        self.relay = rft_server.Relay()
+        self.v = rft_server.Vault(self.vault, "demo")
+        self.v.arxiv_meta = None
+        handler = rft_server.make_handler(self.v, WEB, KEY, ask=self.relay.ask, relay=self.relay, agents=rft_agents.Setups(self.setup_file, self.env))
+        self.server = rft_server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self.port = self.server.server_address[1]
+        import threading
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+
+    def write_setup(self, text):
+        self.setup_file.write_text(text.replace("MODEL_URL", self.model.url))
+
+    def call(self, method, path, payload=None):
+        headers = {"Content-Type": "application/json", "Origin": f"http://127.0.0.1:{self.port}", "X-RFT-Token": KEY}
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", method=method, headers=headers,
+                                     data=None if payload is None else json.dumps(payload).encode())
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as err:
+            return err.code, json.loads(err.read() or b"{}")
+
+    def comment(self, **payload):
+        return self.call("POST", "/api/comment", {"id": "E02", **payload})
+
+    def threads(self):
+        return json.loads((self.vault / ".comments" / "E02.json").read_text())["threads"]
+
+    def put_thread(self, thread):
+        (self.vault / ".comments").mkdir(exist_ok=True)
+        (self.vault / ".comments" / "E02.json").write_text(json.dumps({"note": "E02", "next": 2, "threads": [thread]}))
+
+    def files(self):
+        """Every file of the vault with its bytes: what a test compares before and after."""
+        return {str(p.relative_to(self.vault)): p.read_bytes() for p in sorted(self.vault.rglob("*")) if p.is_file()}
+
+    def wait(self, key="thread:E02:c1"):
+        return self.v.runner.tasks.wait(key)
+
+
+MODELS = """
+[agents.qwen]
+kind = "model"
+url = "MODEL_URL"
+model = "qwen3:14b"
+
+[agents.remote]
+kind = "model"
+url = "MODEL_URL"
+model = "big"
+key = "TEST_KEY"
+"""
+
+
+class AnswerThreadTest(Served):
+    """What the server writes for an agent's answer, case for case with the plugin."""
+
+    def test_case_by_case_a_reply_a_new_text_to_accept_or_nothing(self):
+        for agent in (None, "qwen"):
+            for case in CASES["threads"]:
+                self.put_thread(case["thread"])
+                before = self.files()
+                status, got = self.v.answer_thread("E02", case["thread"]["id"], case["answer"], agent, CASES["now"])
+                if case["want"] is None:
+                    self.assertEqual(status, 409, case["name"])
+                    self.assertEqual(self.files(), before, case["name"])
+                    continue
+                self.assertEqual((status, got), (200, {"answered": True}), case["name"])
+                want = json.loads(json.dumps(case["want"]))
+                if agent:
+                    # signed: the message it added says which agent wrote it
+                    for m in want["messages"][len(case["thread"]["messages"]):]:
+                        m["agent"] = agent
+                self.assertEqual(self.threads(), [want], case["name"])
+                # the note is the user's to change, by accepting
+                self.assertEqual(self.e02.read_text(encoding="utf-8"), CASES["note"]["text"], case["name"])
+                after = self.files()
+                self.assertEqual([k for k in after if after[k] != before.get(k)], [".comments/E02.json"], case["name"])
+
+    def test_a_thread_or_a_note_that_is_gone(self):
+        self.put_thread(CASES["threads"][0]["thread"])
+        before = self.files()
+        self.assertEqual(self.v.answer_thread("E02", "c9", "Yes.")[0], 404)
+        self.assertEqual(self.v.answer_thread("E77", "c1", "Yes.")[0], 404)
+        self.assertEqual(self.v.answer_thread("E02", "c1", "   ")[0], 200)  # as the plugin: "(no answer)"
+        self.assertEqual(self.threads()[0]["messages"][-1]["text"], "(no answer)")
+        self.assertNotEqual(self.files(), before)
+
+
+class ModelThreadTest(Served):
+    """Ask on a thread, answered by a model the user set up, with no chat connected."""
+
+    AGENTS = MODELS
+
+    def new_thread(self, kind="comment", text="Is this right?"):
+        status, got = self.comment(action="new", kind=kind, quote="Text of E02.", prefix="", suffix="", text=text)
+        self.assertEqual(status, 200, got)
+        return got["threads"][-1]["id"]
+
+    def test_a_reply_from_the_model_signed_with_its_name(self):
+        tid = self.new_thread()
+        note_before = self.e02.read_bytes()
+        status, got = self.comment(action="ask", thread=tid, agent="qwen")
+        self.assertEqual(status, 200, got)
+        task = self.wait()
+        self.assertEqual((task.state, task.error, task.agent), ("done", "", "qwen"))
+        t = self.threads()[0]
+        self.assertEqual(t["messages"][-1], {"by": "claude", "at": t["messages"][-1]["at"], "agent": "qwen", "text": "Yes: 5 seeds."})
+        self.assertIsNone(t["asked"])
+        self.assertNotIn("asking", t)
+        self.assertEqual(self.e02.read_bytes(), note_before)
+        # the page reads who answered, and the task that did
+        shown = self.call("GET", "/api/note?id=E02")[1]["threads"][0]
+        self.assertEqual((shown["messages"][-1]["agent"], shown["task"]["state"], shown["task"]["agent"]), ("qwen", "done", "qwen"))
+
+    def test_the_prompt_is_self_contained_and_nothing_else_is_sent(self):
+        tid = self.new_thread()
+        self.comment(action="ask", thread=tid, agent="qwen")
+        self.wait()
+        (req,) = self.model.requests
+        self.assertEqual(req["path"], "/v1/chat/completions")
+        self.assertEqual((req["body"]["model"], req["body"]["stream"], len(req["body"]["messages"])), ("qwen3:14b", False, 1))
+        self.assertNotIn("authorization", req["headers"])  # no key named: none sent
+        prompt = req["body"]["messages"][0]["content"]
+        for part in ("Text of E02.", "## Result", "Is this right?", "> Text of E02.", "It is a comment", "The note E02 Variant run"):
+            self.assertIn(part, prompt)
+        # no tool, skill or file of any harness is named
+        for word in ("rft_", "Read(", "Grep", "ToolSearch", "AskUserQuestion", "manual", "skill", "the file", self.tmp.name):
+            self.assertNotIn(word, prompt)
+
+    def test_a_key_goes_in_the_header_from_the_variable_the_entry_names(self):
+        tid = self.new_thread()
+        self.comment(action="ask", thread=tid, agent="remote")
+        self.assertEqual(self.wait().state, "done")
+        self.assertEqual(self.model.requests[0]["headers"]["authorization"], "Bearer sk-secret")
+        self.assertNotIn("sk-secret", json.dumps(self.model.requests[0]["body"]))
+        self.assertEqual(self.threads()[0]["messages"][-1]["agent"], "remote")
+
+    def test_a_new_text_waits_for_the_user_who_accepts_or_rejects_it(self):
+        for decision in ("accept", "reject"):
+            self.e02.write_text(CASES["note"]["text"], encoding="utf-8")
+            (self.vault / ".comments" / "E02.json").unlink(missing_ok=True)
+            tid = self.new_thread("suggestion", "Say how many seeds.")
+            self.model.answer = "<replacement>Text of E02, over 5 seeds.</replacement>\nThe note gave no seed count."
+            self.assertEqual(self.comment(action="ask", thread=tid, agent="qwen")[0], 200)
+            self.assertEqual(self.wait().state, "done")
+            t = self.threads()[0]
+            self.assertEqual((t["replacement"], t["messages"][-1]["text"], t["messages"][-1]["agent"], t["state"]), ("Text of E02, over 5 seeds.", "The note gave no seed count.", "qwen", "open"))
+            self.assertEqual(self.e02.read_text(encoding="utf-8"), CASES["note"]["text"])  # nothing written until the user accepts
+            self.assertEqual(self.comment(action=decision, thread=tid)[0], 200)
+            want = CASES["note"]["text"].replace("Text of E02.", "Text of E02, over 5 seeds.") if decision == "accept" else CASES["note"]["text"]
+            self.assertEqual(self.e02.read_text(encoding="utf-8"), want)
+            self.assertIn("It is a suggestion", self.model.prompts[-1])
+            self.assertIn("<replacement>", self.model.prompts[-1])
+
+    def test_a_malformed_new_text_is_a_plain_reply(self):
+        tid = self.new_thread("suggestion", "Say how many seeds.")
+        self.model.answer = "<replacement>\nText of E02, over 5 seeds."
+        self.comment(action="ask", thread=tid, agent="qwen")
+        self.assertEqual(self.wait().state, "done")
+        t = self.threads()[0]
+        self.assertIsNone(t["replacement"])
+        self.assertEqual(t["messages"][-1]["text"], "<replacement>\nText of E02, over 5 seeds.")
+        self.assertEqual(self.comment(action="accept", thread=tid)[0], 409)  # there is no new text to accept
+
+    def test_a_model_that_thinks_aloud_first(self):
+        tid = self.new_thread()
+        self.model.answer = "<think>\nThe user asks about seeds.\n</think>\n\nYes: 5 seeds."
+        self.comment(action="ask", thread=tid, agent="qwen")
+        self.wait()
+        self.assertEqual(self.threads()[0]["messages"][-1]["text"], "Yes: 5 seeds.")
+
+    def failing(self, says, **how):
+        tid = self.new_thread()
+        before = None
+        for k, v in how.items():
+            setattr(self.model, k, v)
+        status, got = self.comment(action="ask", thread=tid, agent=how.get("agent", "qwen"))
+        self.assertEqual(status, 200, got)
+        task = self.wait()
+        self.assertEqual(task.state, "failed")
+        self.assertIn(says, task.error)
+        t = self.threads()[0]
+        # nothing was written, and the thread no longer waits
+        self.assertEqual((len(t["messages"]), t["asked"], t["replacement"]), (1, None, None))
+        self.assertNotIn("asking", t)
+        self.assertEqual(self.e02.read_text(encoding="utf-8"), CASES["note"]["text"])
+        shown = self.call("GET", "/api/note?id=E02")[1]["threads"][0]
+        self.assertEqual((shown["task"]["state"], shown["task"]["agent"]), ("failed", "qwen"))
+        self.assertIn(says, shown["task"]["error"])
+        return task
+
+    def test_a_model_that_answers_an_error(self):
+        self.failing("qwen answered 404: model not found", answer='{"error": "model not found"}', status=404)
+
+    def test_a_model_that_answers_what_is_no_chat_answer(self):
+        self.failing("not as a chat endpoint does", raw=b"<html>hello</html>")
+
+    def test_a_model_that_answers_nothing(self):
+        self.failing("answered with nothing", answer="  \n")
+
+    def test_a_model_that_is_not_running(self):
+        self.model.close()
+        self.failing("cannot be reached at 127.0.0.1")
+
+    def test_a_key_that_is_not_set_and_an_agent_that_is_none(self):
+        tid = self.new_thread()
+        before = self.files()
+        del self.env["TEST_KEY"]
+        status, got = self.comment(action="ask", thread=tid, agent="remote")
+        self.assertEqual(status, 409)
+        self.assertIn("TEST_KEY is not set", got["error"])
+        status, got = self.comment(action="ask", thread=tid, agent="nobody")
+        self.assertEqual(status, 409)
+        self.assertIn('"nobody" is no agent', got["error"])
+        self.assertEqual(self.comment(action="ask", thread=tid, agent=3)[0], 409)
+        self.assertEqual(self.files(), before)
+        self.assertEqual(self.model.requests, [])
+
+    def test_the_setups_default_answers_when_the_page_names_no_one(self):
+        self.write_setup('[defaults]\nthread = "qwen"\n' + MODELS)
+        tid = self.new_thread()
+        self.assertEqual(self.comment(action="ask", thread=tid)[0], 200)
+        self.assertEqual(self.wait().agent, "qwen")
+        self.assertEqual(self.threads()[0]["messages"][-1]["agent"], "qwen")
+
+    def test_with_no_default_and_no_one_named_it_is_the_chats_as_before(self):
+        tid = self.new_thread()
+        before = self.files()
+        status, got = self.comment(action="ask", thread=tid)
+        self.assertEqual(status, 503)  # served from a terminal, no chat connected
+        self.assertEqual(self.files(), before)
+        status, got = self.comment(action="ask", thread=tid, agent="chat")
+        self.assertEqual(status, 503)
+        self.assertEqual(self.model.requests, [])
+
+    def test_a_long_note_is_given_around_the_quoted_text(self):
+        long = CASES["note"]["text"].replace("## Result\n", "## Result\n" + "START " + "x" * 90_000 + "\n") + "y" * 90_000 + " END\n"
+        self.e02.write_text(long, encoding="utf-8")
+        tid = self.new_thread()
+        self.comment(action="ask", thread=tid, agent="qwen")
+        self.wait()
+        prompt = self.model.prompts[-1]
+        self.assertIn("Text of E02.", prompt)
+        self.assertIn("the part of it around the quoted text", prompt)
+        self.assertNotIn("START", prompt)
+        self.assertNotIn(" END", prompt)
+        self.assertLess(len(prompt), rft_agents.NOTE_CHARS + 3000)
+
+
 if __name__ == "__main__":
     unittest.main()

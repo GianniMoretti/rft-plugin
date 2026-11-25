@@ -1531,3 +1531,12 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
   .ms-ib, .ms-levels .ms-ib, .phone-panes .ms-ib { width: 44px; padding: 0; }
   .ms-ib .ico { width: 21px; height: 21px; }
 }
+
+/* who answers a thread or processes an item, when the user set agents up (agents.js) */
+.agent-pick { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 0.88em; color: var(--muted, inherit); }
+.threads-head .agent-pick { float: right; }
+.agent-pick select { font: inherit; max-width: 16em; padding: 2px 4px; }
+.agent-pick .agent-where { font-size: 0.95em; }
+.agent-pick .agent-error { flex-basis: 100%; color: var(--warn, #b45309); }
+.ms-threads > .agent-pick { margin: 0 0 6px; }
+@media (pointer: coarse) { .agent-pick select { min-height: 44px; font-size: 16px; } }
