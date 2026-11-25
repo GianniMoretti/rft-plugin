@@ -22,9 +22,14 @@ to its parent and lists its children. Legend: ✓ done · … running · → pla
                                     - → [[E06 CutMix with cosine schedule on three datasets]]
                                 - ? [[D09 Self-supervised pretraining on the same images]]
                                 - ↗ [[D10 Test on medical images]]
-                        - ? [[D08 Theory, augmentation as a data-dependent prior]]
+                            - ✓ [[R03 mixup, training on combinations of pairs of examples]]
+                            - ✓ [[R04 CutMix, patches pasted between images with labels mixed by area]]
+                        - … [[D08 Theory, augmentation as a data-dependent prior]]
+                            - … [[T01 Augmentation strength as a prior that scales with dataset size]]
                 - ✗ [[D06 Label smoothing instead of augmentation]]
                 - · [[D07 Larger models overfit less]]
+        - ✓ [[R01 RandAugment, automated augmentation without a search phase]]
+        - ✓ [[R02 TrivialAugment, one augmentation per image and nothing to tune]]
 
 ## How to keep it up to date
 The rft plugin maintains this list, the canvas and the children / up / down fields from the

@@ -4,9 +4,9 @@ type: experiment
 status: done
 date: 2026-03-04
 parent: "[[D00 Can strong augmentation replace early stopping on small datasets]]"
-children: ["[[D01 Baseline, early stopping vs long training]]"]
+children: ["[[D01 Baseline, early stopping vs long training]]", "[[R01 RandAugment, automated augmentation without a search phase]]", "[[R02 TrivialAugment, one augmentation per image and nothing to tune]]"]
 up: "[[D00 Can strong augmentation replace early stopping on small datasets]]"
-down: ["[[D01 Baseline, early stopping vs long training]]"]
+down: ["[[D01 Baseline, early stopping vs long training]]", "[[R01 RandAugment, automated augmentation without a search phase]]", "[[R02 TrivialAugment, one augmentation per image and nothing to tune]]"]
 tags: [small-data-regularisation, experiment, literature, done]
 ---
 
@@ -23,3 +23,5 @@ Nobody measures early stopping and augmentation together on very small datasets:
 
 ## Children in the tree
 - [[D01 Baseline, early stopping vs long training]]
+- [[R01 RandAugment, automated augmentation without a search phase]]
+- [[R02 TrivialAugment, one augmentation per image and nothing to tune]]

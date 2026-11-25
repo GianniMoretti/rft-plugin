@@ -8,6 +8,7 @@ children: ["[[E07 RandAugment magnitude sweep with long training]]"]
 up: "[[E02 Baseline on CIFAR-10 subsets of 1k, 5k and 10k images]]"
 down: ["[[E07 RandAugment magnitude sweep with long training]]"]
 tags: [small-data-regularisation, direction, augmentation, done]
+refs: ["[[R01 RandAugment, automated augmentation without a search phase]]"]
 concept: "Strong augmentation"
 concept_summary: "Whether heavy augmentation alone closes the small-data gap"
 ---

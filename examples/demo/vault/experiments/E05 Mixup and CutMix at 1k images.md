@@ -8,6 +8,7 @@ children: ["[[D05 A schedule that needs no stopping]]", "[[D09 Self-supervised p
 up: "[[D04 Mixup as an alternative]]"
 down: ["[[D05 A schedule that needs no stopping]]", "[[D09 Self-supervised pretraining on the same images]]", "[[D10 Test on medical images]]"]
 tags: [small-data-regularisation, experiment, mixup, cifar, done]
+refs: ["[[R03 mixup, training on combinations of pairs of examples]]", "[[R04 CutMix, patches pasted between images with labels mixed by area]]"]
 ---
 
 # E05 · Mixup and CutMix at 1k images

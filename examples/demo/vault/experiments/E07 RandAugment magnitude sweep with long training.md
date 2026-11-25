@@ -8,6 +8,7 @@ children: ["[[D03 Why augmentation fails at 1k images]]", "[[D04 Mixup as an alt
 up: "[[D02 Strong augmentation closes the gap]]"
 down: ["[[D03 Why augmentation fails at 1k images]]", "[[D04 Mixup as an alternative]]", "[[D08 Theory, augmentation as a data-dependent prior]]"]
 tags: [small-data-regularisation, experiment, augmentation, cifar, done]
+refs: ["[[R01 RandAugment, automated augmentation without a search phase]]", "[[R02 TrivialAugment, one augmentation per image and nothing to tune]]"]
 ---
 
 # E07 · RandAugment magnitude sweep with long training
