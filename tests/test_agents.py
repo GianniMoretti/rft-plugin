@@ -677,5 +677,179 @@ class TaskTest(Served):
         self.assertEqual(self.shown()["task"]["state"], "done")
 
 
+HARNESSES = """
+[agents.reader]
+kind = "harness"
+run = [PY, HARNESS, "--full", "{prompt}"]
+locked = [PY, HARNESS, "--locked", "{prompt}"]
+grant = "read"
+thread_seconds = 2
+
+[agents.writer]
+kind = "harness"
+run = [PY, HARNESS, "--full"]
+locked = [PY, HARNESS, "--locked"]
+grant = "change"
+
+[agents.loose]
+kind = "harness"
+run = [PY, HARNESS, "--full"]
+grant = "read"
+
+[agents.absent]
+kind = "harness"
+run = ["rft-no-such-harness"]
+locked = ["rft-no-such-harness", "--locked"]
+"""
+
+
+class HarnessThreadTest(Served):
+    """Ask on a thread, answered by a harness the server launches, locked below the full grant."""
+
+    AGENTS = HARNESSES.replace("PY", json.dumps(sys.executable)).replace("HARNESS", json.dumps(str(HERE / "fake_harness.py")))
+
+    def setUp(self):
+        super().setUp()
+        self.v.runner.harness_env = self.harness.env
+
+    def set(self, *a, **k):
+        self.harness.set(*a, **k)
+        self.v.runner.harness_env = self.harness.env
+
+    def ask(self, agent, kind="comment", text="Is this right?"):
+        status, got = self.comment(action="new", kind=kind, quote="Text of E02.", prefix="", suffix="", text=text)
+        tid = got["threads"][-1]["id"]
+        return tid, self.comment(action="ask", thread=tid, agent=agent)
+
+    def test_below_the_full_grant_it_is_run_with_its_locked_command_in_the_vault(self):
+        self.set("Yes: 5 seeds.")
+        before = self.files()
+        tid, (status, got) = self.ask("reader")
+        self.assertEqual(status, 200, got)
+        self.assertEqual(self.wait().state, "done")
+        (run,) = self.harness.runs
+        self.assertEqual(run["argv"][0], "--locked")
+        self.assertEqual(run["cwd"], os.path.realpath(self.vault))
+        self.assertEqual(run["stdin"], "")  # the prompt stood in the command
+        t = self.threads()[0]
+        self.assertEqual((t["messages"][-1]["text"], t["messages"][-1]["agent"]), ("Yes: 5 seeds.", "reader"))
+        # the server wrote the answer: the thread's file is the one change of the vault
+        after = self.files()
+        self.assertEqual([k for k in after if after[k] != before.get(k)], [".comments/E02.json"])
+        self.assertEqual(set(after), set(before) | {".comments/E02.json"})
+
+    def test_with_the_full_grant_it_is_run_with_its_own_command_and_the_prompt_on_its_input(self):
+        self.set("Yes.")
+        tid, (status, got) = self.ask("writer")
+        self.assertEqual(self.wait().state, "done")
+        (run,) = self.harness.runs
+        self.assertEqual(run["argv"], ["--full"])
+        self.assertIn("Text of E02.", run["stdin"])
+
+    def test_the_prompt_names_the_file_and_asks_for_no_change(self):
+        tid, _ = self.ask("reader", "suggestion", "Say how many seeds.")
+        self.wait()
+        prompt = self.harness.runs[0]["prompt"]
+        for part in ("`experiments/E02 Variant run.md` in the folder you run in", "Change no file", "It is a suggestion", "<replacement>", "> Text of E02.", "Say how many seeds."):
+            self.assertIn(part, prompt)
+        for word in ("rft_", "ToolSearch", "AskUserQuestion", "skill", self.tmp.name):
+            self.assertNotIn(word, prompt)
+
+    def test_a_harness_with_no_locked_command_is_never_run_below_the_full_grant(self):
+        before = None
+        status, got = self.comment(action="new", kind="comment", quote="Text of E02.", prefix="", suffix="", text="Is this right?")
+        before = self.files()
+        status, got = self.comment(action="ask", thread=got["threads"][-1]["id"], agent="loose")
+        self.assertEqual(status, 409)
+        self.assertIn("no locked command", got["error"])
+        self.assertEqual(self.harness.runs, [])
+        self.assertEqual(self.files(), before)
+        # and were it reached all the same, the launch itself refuses
+        loose = self.v.runner.setup().agents["loose"]
+        with self.assertRaises(rft_agents.AgentError):
+            rft_agents.run_harness(loose, "p", rft_agents.Run(), self.vault, 5, self.harness.env)
+        self.assertEqual(self.harness.runs, [])
+
+    def failed(self, agent, says):
+        tid, (status, got) = self.ask(agent)
+        self.assertEqual(status, 200, got)
+        task = self.wait()
+        self.assertEqual(task.state, "failed", task.error)
+        self.assertIn(says, task.error)
+        t = self.threads()[0]
+        self.assertEqual((len(t["messages"]), t["asked"]), (1, None))
+        self.assertEqual(self.e02.read_text(encoding="utf-8"), CASES["note"]["text"])
+        return task
+
+    def test_a_harness_that_ends_with_an_error(self):
+        self.set("usage: tool [options]\nnot logged in", exit=2)
+        self.failed("reader", "reader ended with an error (code 2): not logged in")
+
+    def test_a_command_that_is_not_on_this_machine(self):
+        self.failed("absent", "the command rft-no-such-harness is not found")
+
+    def test_a_harness_that_prints_nothing(self):
+        self.set("\n  \n")
+        self.failed("reader", "answered with nothing")
+
+    def test_out_of_time_the_harness_is_ended(self):
+        self.set("late", sleep=30)
+        task = self.failed("reader", "reader did not answer within 2 seconds")
+        self.assertFalse(alive(self.harness.runs[0]["pid"]))
+
+    def test_cancelled_the_harness_is_ended_and_nothing_is_written(self):
+        self.set("late", sleep=30)
+        tid, (status, got) = self.ask("writer")
+        import time
+        end = time.time() + 5
+        while not self.harness.runs and time.time() < end:
+            time.sleep(0.05)
+        pid = self.harness.runs[0]["pid"]
+        self.assertTrue(alive(pid))
+        self.assertEqual(self.comment(action="cancel", thread=tid)[0], 200)
+        self.assertEqual(self.wait().state, "cancelled")
+        end = time.time() + 5
+        while alive(pid) and time.time() < end:
+            time.sleep(0.05)
+        self.assertFalse(alive(pid))
+        self.assertEqual(len(self.threads()[0]["messages"]), 1)
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    # ended but not yet reaped by its parent counts as ended
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            return f.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except OSError:
+        return False
+
+
+class PresetTest(unittest.TestCase):
+    def test_the_ready_made_entries(self):
+        s = setup_of('[agents.claude]\nkind = "claude-code"\ngrant = "read"\n[agents.opus]\nkind = "claude-code"\ngrant = "change"\nmodel = "opus"\n[agents.codex]\nkind = "codex"\ngrant = "read"\n')
+        self.assertEqual(s.errors, [])
+        claude, opus, codex = s.agents["claude"], s.agents["opus"], s.agents["codex"]
+        locked = claude.command()
+        self.assertEqual(locked[:2], ["claude", "-p"])
+        for flag in ("--restricted", "--strict-mcp-config", "--tools"):
+            self.assertIn(flag, locked)
+        tools = locked[locked.index("--tools") + 1].split(",")
+        self.assertEqual(sorted(tools), ["Glob", "Grep", "Read", "WebFetch", "WebSearch"])  # none that writes or runs a command
+        self.assertEqual(claude.tasks(), ["thread", "process"])
+        self.assertEqual(opus.command()[:3], ["claude", "--model", "opus"])
+        self.assertNotIn("--restricted", opus.command())
+        self.assertEqual((claude.describe()["unverified"], codex.describe()["unverified"]), (False, True))
+        self.assertIn("read-only", codex.command())
+        self.assertEqual(codex.tasks(), ["thread"])  # no web until the user says so
+        self.assertEqual(set(rft_agents.PRESET_NOTES), set(rft_agents.PRESETS))
+        # an entry's own commands win over the ready-made ones
+        mine = setup_of('[agents.c]\nkind = "codex"\ngrant = "read"\nweb = true\nlocked = ["codex", "--search", "exec", "--sandbox", "read-only", "-"]\n').agents["c"]
+        self.assertEqual((mine.command()[1], mine.tasks()), ("--search", ["thread", "process"]))
+
+
 if __name__ == "__main__":
     unittest.main()

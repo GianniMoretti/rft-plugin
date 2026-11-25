@@ -41,7 +41,9 @@ import http.client
 import json
 import os
 import re
+import signal
 import socket
+import subprocess
 import threading
 import time
 import tomllib
@@ -63,8 +65,34 @@ PLACE = "{prompt}"
 
 #: Ready-made harness entries, by `kind`: {run, locked, web}. Filled where the commands are checked
 #: (see PRESET_NOTES); an entry's own `run`, `locked` and `web` win over them.
-PRESETS: dict[str, dict] = {}
-PRESET_NOTES: dict[str, str] = {}
+PRESETS: dict[str, dict] = {
+    # Claude Code. The prompt is given on its input. Locked: only its tools that read (files of the
+    # folder it runs in, and the web) exist at all, no settings of the user's or the project's are
+    # read (so no plugin's tools or hooks), and no MCP server is started.
+    "claude-code": {
+        "run": ["claude", "-p", "--no-session-persistence"],
+        "locked": ["claude", "-p", "--restricted", "--strict-mcp-config", "--tools", "Read,Grep,Glob,WebFetch,WebSearch",
+                   "--disable-slash-commands", "--no-session-persistence"],
+        "web": True, "model_flag": "--model",
+    },
+    # Codex. The prompt is given on its input (`-`). Locked: its read-only sandbox.
+    "codex": {
+        "run": ["codex", "exec", "--sandbox", "workspace-write", "--skip-git-repo-check", "-"],
+        "locked": ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check", "-"],
+        "web": False, "model_flag": "--model",
+    },
+}
+#: the ready-made entries nobody has run on a real install yet: the page says so
+UNVERIFIED = ("codex",)
+PRESET_NOTES: dict[str, str] = {
+    "claude-code": "Flags from `claude --help` of Claude Code 2.1.332. Tried for real on 2026-11-25: the locked command read a file of its "
+                   "folder, listed its tools as Glob, Grep, Read, WebFetch and WebSearch, and could not create a file when asked to by any means.",
+    "codex": "NOT TRIED: Codex was not installed where this was written. From its documentation as read on 2026-11-25 "
+             "(learn.chatgpt.com/docs/non-interactive-mode, /docs/developer-commands, /docs/sandboxing): `codex exec` takes the prompt on its "
+             "input with `-`, prints only its final message on stdout, and `--sandbox read-only` lets it inspect files but not edit them. "
+             "Live web search is the flag `--search`, whose place on an exec command line the documentation read did not settle, so the entry "
+             "says web = false: Process is not offered to it until the user sets web = true and the commands themselves.",
+}
 
 
 class SetupError(ValueError):
@@ -121,7 +149,7 @@ class Agent:
         """What the page is told of it: never a key, a variable's name or a command."""
         return {"name": self.name, "kind": self.kind, "grant": self.grant, "grant_words": GRANT_WORDS[self.grant],
                 "where": self.where(), "tasks": self.tasks(), "problem": self.problem,
-                "model": self.model if self.kind == "model" else "", "preset": self.preset,
+                "model": self.model if self.kind == "model" else "", "preset": self.preset, "unverified": self.preset in UNVERIFIED,
                 "why_not": {t: why_not(self, t) for t in TASKS if t not in self.tasks()}}
 
 
@@ -422,6 +450,60 @@ def call_model(agent: Agent, prompt: str, run: Run, env=None) -> str:
     return text
 
 
+def run_harness(agent: Agent, prompt: str, run: Run, cwd: Path | None, seconds: int, more_env=None) -> str:
+    """The harness's answer to one prompt: what it prints, run once in `cwd`. It is run with the
+    command its grant allows, the locked one below the full grant, and never when it has none. The
+    prompt is put where the command says {prompt}, or given on its input. Stopping the run ends the
+    harness and every process it started."""
+    command = agent.command()
+    if command is None:
+        raise AgentError(f"{agent.name} has no locked command, so it is not run below the full grant")
+    on_input = not any(PLACE in word for word in command)
+    argv = [word.replace(PLACE, prompt) for word in command]
+    try:
+        proc = subprocess.Popen(argv, cwd=str(cwd) if cwd else None, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                env={**os.environ, **(more_env or {})}, start_new_session=True)
+    except FileNotFoundError:
+        raise AgentError(f"{agent.name} cannot be run: the command {command[0]} is not found on this machine") from None
+    except OSError as err:
+        raise AgentError(f"{agent.name} cannot be run: {err.strerror or err}") from None
+
+    def end():
+        # the harness and what it started: it leads a process group of its own
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(proc.pid, sig)
+            except (ProcessLookupError, PermissionError):
+                return
+            try:
+                proc.wait(2)
+                return
+            except subprocess.TimeoutExpired:
+                continue
+
+    run.on_stop(end)
+    try:
+        out, err = proc.communicate(prompt.encode("utf-8") if on_input else b"", timeout=seconds + 5)
+    except subprocess.TimeoutExpired:
+        end()
+        proc.communicate()
+        run.check()
+        raise AgentError(f"{agent.name} did not answer within {seconds} seconds") from None
+    finally:
+        if proc.poll() is None:
+            end()
+    run.check()
+    if proc.returncode != 0:
+        last = [line for line in err.decode("utf-8", errors="replace").splitlines() if line.strip()][-1:]
+        raise AgentError(f"{agent.name} ended with an error (code {proc.returncode}){f': {one_line(last[0])}' if last else ''}")
+    if len(out) > MAX_ANSWER_BYTES:
+        raise AgentError(f"{agent.name}'s answer is too long to keep")
+    text = out.decode("utf-8", errors="replace")
+    if not text.strip():
+        raise AgentError(f"{agent.name} answered with nothing")
+    return text
+
+
 def one_line(text: str, most: int = 300) -> str:
     text = " ".join(text.split())
     return text if len(text) <= most else text[:most - 1] + "…"
@@ -619,6 +701,8 @@ class Runner:
     def __init__(self, setups: Setups | None = None, env=None):
         self.setups = setups
         self.env = env if env is not None else (setups.env if setups is not None else None)
+        #: what a harness's process is given beside this process's environment (the tests' fake harness)
+        self.harness_env: dict[str, str] | None = None
         self.tasks = Tasks()
 
     def setup(self) -> Setup:
@@ -642,7 +726,7 @@ class Runner:
         return agent
 
     def answer(self, agent: Agent, prompt: str, run: Run, task: str = "thread", cwd: Path | None = None) -> str:
-        """The agent's answer to a prompt, as text."""
+        """The agent's answer to a prompt, as text. A harness is run in `cwd`, the vault."""
         if agent.kind == "model":
             return call_model(agent, prompt, run, self.env)
-        raise AgentError(f"{agent.name} is a harness, and this server cannot run one yet")
+        return run_harness(agent, prompt, run, cwd, agent.limits[task], self.harness_env)
