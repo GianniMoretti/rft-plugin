@@ -36,7 +36,7 @@ def page() -> str:
     d = cases()
     out = ["# Agents: what an agent's answer becomes, case by case", "",
            "Written from tests/fixtures/agents/cases.json by to_ts.py: edit that file, not this one.", "",
-           "Claude proposed these cases on 2026-11-25; the user has not read them yet.", "",
+           "Claude proposed these cases on 2026-11-25; the user read them the same day and agreed (\"scenarios read, i agree\").", "",
            "An agent answers with text and the app writes it. Each case gives the answer as it came and what",
            "must be in the vault afterwards. Both sides are held to them: the page's server",
            "(tests/test_agents.py) and the plugin (tests/agents.test.ts).", "",
