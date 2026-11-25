@@ -1509,7 +1509,7 @@
         note = r.data
         if (askClaude) {
           const t = note.threads[note.threads.length - 1]
-          const a = await api('api/comment', { method: 'POST', body: { id, action: 'ask', thread: t.id } })
+          const a = await api('api/comment', { method: 'POST', body: { id, action: 'ask', thread: t.id, ...AG.extra('thread') } })
           if (a.ok) note = a.data
         }
         renderThreads()
@@ -1519,7 +1519,7 @@
         el('blockquote', { class: 'ms-quote', text: c.anchor.quote }), repl, msg,
         el('div', { class: 'ms-thread-act' },
           el('button', { type: 'button', class: 'primary', text: 'Post', onclick: post(false) }),
-          el('button', { type: 'button', text: c.kind === 'comment' ? 'Post and ask Claude' : 'Post and suggest', onclick: post(true) }),
+          el('button', { type: 'button', text: c.kind === 'comment' ? `Post and ask ${AG.name('thread')}` : 'Post and suggest', onclick: post(true) }),
           el('button', { type: 'button', text: 'Cancel', onclick: () => { composing = null; renderThreads() } })))
     }
 

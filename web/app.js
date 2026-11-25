@@ -4354,10 +4354,11 @@
       : kind === 'suggestion' ? 'Why; or, with the text above left as it is, what should change (Claude writes it when you ask)'
         : 'The footnote, shown in the margin'
     composerAsk.hidden = kind === 'footnote'
-    composerAsk.textContent = kind === 'suggestion' ? 'Post and suggest' : 'Post and ask Claude'
+    // whoever is picked to answer threads (agents.js): Claude, with no setup or with the chat picked
+    composerAsk.textContent = kind === 'suggestion' ? 'Post and suggest' : `Post and ask ${AG.name('thread')}`
     composerAsk.title = kind === 'suggestion'
-      ? 'Post it and ask Claude to write the new text, in the background, for you to accept'
-      : 'Post it and ask Claude to answer it, in the background: the answer comes into the thread'
+      ? `Post it and ask ${AG.name('thread')} to write the new text, in the background, for you to accept`
+      : `Post it and ask ${AG.name('thread')} to answer it, in the background: the answer comes into the thread`
     composerPost.textContent = kind === 'footnote' ? 'Add footnote' : 'Post'
     setComposerMsg('')
     hideSelBar()
