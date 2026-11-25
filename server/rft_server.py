@@ -675,7 +675,7 @@ class Vault:
         # tells two servers of the same vault apart from others, without saying where it is
         self.ident = hashlib.sha256(str(self.root).encode()).hexdigest()[:16]
         self._lock = threading.Lock()
-        self._write_lock = threading.Lock()
+        self._write_lock = threading.RLock()  # taken again by a read that tidies a thread whose agent is gone
         self._waiting: set[str] = set()  # the read inbox items whose discussion found no chat (by key)
         self._waiting_lock = threading.Lock()
         self._ask_lock = threading.Lock()
@@ -1019,6 +1019,12 @@ class Vault:
         for t in self._threads(nid)["threads"]:
             at = locate(body, str(t.get("quote") or ""), str(t.get("prefix") or ""), str(t.get("suffix") or ""))
             task = self.runner.tasks.get(thread_key(nid, t["id"])) if self.runner else None
+            if self.runner and task is None and isinstance(t.get("asking"), str):
+                # it waits for an agent this server never launched: the server was restarted meanwhile
+                task = self.runner.tasks.lost(thread_key(nid, t["id"]), t["asking"], f"{nid} {t['id']}")
+                self._unask(nid, t["id"], t["asking"])
+                t = {**t, "asked": None}
+                t.pop("asking", None)
             threads.append({**t, "at": [at[0], at[1]] if at else None, "exact": bool(at and at[2]),
                             **({"task": task.describe()} if task else {})})
         if rft_manuscript.SNIPPET_ID.match(nid):
@@ -1976,8 +1982,14 @@ class Vault:
                             return 409, {"error": str(err), **self.note(nid)}
                         t["asking"] = agent.name
                     t["asked"] = now
+                elif action == "cancel":
+                    # the user stops the agent of theirs that is at this thread: nothing is written
+                    if not self.runner or not isinstance(t.get("asking"), str) or not self.runner.tasks.cancel(thread_key(nid, t["id"])):
+                        return 409, {"error": "no agent of yours is answering this thread", **self.note(nid)}
+                    t["asked"] = None
+                    t.pop("asking", None)
                 else:
-                    return 400, {"error": "action must be new, reply, resolve, reopen, accept, reject or ask"}
+                    return 400, {"error": "action must be new, reply, resolve, reopen, accept, reject, ask or cancel"}
             refreshed(body.replace("\r\n", "\n"), data["threads"])
             self._save_threads(nid, data)
         return 200, self.note(nid)

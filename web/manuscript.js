@@ -1474,7 +1474,9 @@
           el('button', { type: 'button', text: `Ask ${AG.name('thread')}`, title: `${AG.name('thread')} answers in the thread (a comment: a reply; a suggestion: its new text, for you to accept)`, onclick: act('ask', AG.extra('thread')) }),
           t.kind === 'comment' ? el('button', { type: 'button', text: 'Resolve', onclick: act('resolve') }) : null,
           t.kind === 'suggestion' ? el('button', { type: 'button', text: 'Accept', disabled: t.replacement == null || !t.exact, title: 'Write its replacement into the text', onclick: act('accept') }) : null,
-          t.kind === 'suggestion' ? el('button', { type: 'button', text: 'Reject', onclick: act('reject') }) : null)
+          t.kind === 'suggestion' ? el('button', { type: 'button', text: 'Reject', onclick: act('reject') }) : null,
+          t.asked && t.asking && t.task && t.task.state === 'running' ? el('button', { type: 'button', text: 'Cancel', title: `Stop ${t.asking}: nothing is written`, onclick: act('cancel') }) : null,
+          !t.asked && t.task && t.task.state === 'failed' ? el('span', { class: 'ms-flag-text', text: ` Not answered: ${t.task.error}` }) : null)
           : el('div', { class: 'ms-thread-act' }, el('button', { type: 'button', text: 'Reopen', onclick: act('reopen') })))
     }
 

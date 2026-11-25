@@ -565,5 +565,117 @@ class ModelThreadTest(Served):
         self.assertLess(len(prompt), rft_agents.NOTE_CHARS + 3000)
 
 
+class TaskTest(Served):
+    """A launched task: one at a time per thread, shown, limited in time, cancelled by the user."""
+
+    AGENTS = MODELS + 'thread_seconds = 1\n'  # the last entry, remote: one second for a thread
+
+    def asked(self, agent="qwen", delay=0.0):
+        status, got = self.comment(action="new", kind="comment", quote="Text of E02.", prefix="", suffix="", text="Is this right?")
+        tid = got["threads"][-1]["id"]
+        self.model.delay = delay
+        status, got = self.comment(action="ask", thread=tid, agent=agent)
+        self.assertEqual(status, 200, got)
+        return tid, got
+
+    def shown(self):
+        return self.call("GET", "/api/note?id=E02")[1]["threads"][0]
+
+    def untouched(self):
+        t = self.threads()[0]
+        self.assertEqual((len(t["messages"]), t["asked"], t["replacement"]), (1, None, None))
+        self.assertNotIn("asking", t)
+        self.assertEqual(self.e02.read_text(encoding="utf-8"), CASES["note"]["text"])
+
+    def test_a_running_task_is_shown_on_its_thread_with_the_agents_name(self):
+        tid, got = self.asked(delay=0.6)
+        t = got["threads"][0]
+        self.assertEqual((t["asking"], t["task"]["state"], t["task"]["agent"], t["task"]["limit"]), ("qwen", "running", "qwen", 120))
+        self.assertIsNotNone(t["asked"])
+        self.assertEqual(self.shown()["task"]["state"], "running")
+        self.assertEqual(self.wait().state, "done")
+        self.assertEqual(self.shown()["task"]["state"], "done")
+
+    def test_a_second_ask_while_one_runs_is_refused_and_not_queued(self):
+        tid, _ = self.asked(delay=0.6)
+        status, got = self.comment(action="ask", thread=tid, agent="qwen")
+        self.assertEqual(status, 409)
+        self.assertIn("qwen is already answering", got["error"])
+        status, got = self.comment(action="ask", thread=tid, agent="remote")
+        self.assertEqual(status, 409)
+        self.assertEqual(self.wait().state, "done")
+        self.assertEqual(len(self.model.requests), 1)
+        self.assertEqual(len(self.threads()[0]["messages"]), 2)
+
+    def test_cancelled_nothing_is_written_even_when_the_agent_answers_afterwards(self):
+        tid, _ = self.asked(delay=1.0)
+        status, got = self.comment(action="cancel", thread=tid)
+        self.assertEqual(status, 200, got)
+        self.assertEqual((got["threads"][0]["asked"], got["threads"][0].get("asking")), (None, None))
+        task = self.wait()
+        self.assertEqual((task.state, task.error), ("cancelled", ""))
+        import time
+        time.sleep(1.3)  # the model answers now, to no one
+        self.untouched()
+        self.assertEqual(self.shown()["task"]["state"], "cancelled")
+        # and the thread can be asked again
+        self.model.delay = 0
+        self.assertEqual(self.comment(action="ask", thread=tid, agent="qwen")[0], 200)
+        self.assertEqual(self.wait().state, "done")
+        self.assertEqual(self.threads()[0]["messages"][-1]["agent"], "qwen")
+
+    def test_nothing_to_cancel(self):
+        status, got = self.comment(action="new", kind="comment", quote="Text of E02.", prefix="", suffix="", text="Is this right?")
+        tid = got["threads"][-1]["id"]
+        self.assertEqual(self.comment(action="cancel", thread=tid)[0], 409)
+        self.comment(action="ask", thread=tid, agent="qwen")
+        self.wait()
+        self.assertEqual(self.comment(action="cancel", thread=tid)[0], 409)  # it has answered
+
+    def test_out_of_time_nothing_is_written_and_the_reason_stays_until_the_next_ask(self):
+        tid, _ = self.asked(agent="remote", delay=2.0)
+        task = self.wait()
+        self.assertEqual(task.state, "failed")
+        self.assertIn("remote did not answer within 1 seconds", task.error)
+        import time
+        time.sleep(1.3)
+        self.untouched()
+        shown = self.shown()
+        self.assertEqual(shown["task"]["state"], "failed")
+        self.assertIn("did not answer within 1 seconds", shown["task"]["error"])
+        self.assertIn("did not answer", self.shown()["task"]["error"])  # still there at the next look
+        self.model.delay = 0
+        self.comment(action="ask", thread=tid, agent="qwen")
+        self.assertEqual(self.wait().state, "done")
+        self.assertEqual(self.shown()["task"]["error"], "")
+
+    def test_a_thread_closed_while_the_agent_was_at_it_gets_no_answer(self):
+        tid, _ = self.asked(delay=0.5)
+        self.assertEqual(self.comment(action="resolve", thread=tid)[0], 200)
+        task = self.wait()
+        self.assertEqual(task.state, "failed")
+        self.assertIn("resolved", task.error)
+        t = self.threads()[0]
+        self.assertEqual((len(t["messages"]), t["state"]), (1, "resolved"))
+
+    def test_after_a_restart_a_task_that_was_running_shows_as_failed_and_can_be_asked_again(self):
+        tid, _ = self.asked(delay=0.2)
+        self.wait()
+        # as a server that was stopped mid-task left it: the thread waits for an agent no server runs
+        data = json.loads((self.vault / ".comments" / "E02.json").read_text())
+        data["threads"][0].update(asked="2026-11-25 10:00", asking="qwen")
+        data["threads"][0]["messages"] = data["threads"][0]["messages"][:1]
+        (self.vault / ".comments" / "E02.json").write_text(json.dumps(data))
+        self.v.runner = rft_agents.Runner(self.v.runner.setups)  # a new server's memory
+        shown = self.shown()
+        self.assertEqual((shown["task"]["state"], shown["asked"]), ("failed", None))
+        self.assertIn("restarted while qwen was answering", shown["task"]["error"])
+        self.untouched()
+        self.assertEqual(self.shown()["task"]["state"], "failed")  # said until the next ask, not once and gone
+        self.assertEqual(self.comment(action="ask", thread=tid, agent="qwen")[0], 200)
+        self.assertEqual(self.wait().state, "done")
+        self.assertEqual(self.shown()["task"]["state"], "done")
+
+
 if __name__ == "__main__":
     unittest.main()

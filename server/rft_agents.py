@@ -578,6 +578,17 @@ class Tasks:
         with self._lock:
             return self._tasks.get(key)
 
+    def lost(self, key: str, agent: str, what: str) -> Task:
+        """A task this server has no memory of (it was restarted while the agent was at it): kept
+        as failed, so the page says so until the next one on the same thing."""
+        with self._lock:
+            task = self._tasks.get(key)
+            if task is None:
+                task = self._tasks[key] = Task(key, agent, what, 0)
+                task.state, task.ended = "failed", time.time()
+                task.error = f"the server was restarted while {agent} was answering: ask again"
+            return task
+
     def all(self) -> list[dict]:
         with self._lock:
             return [t.describe() for t in self._tasks.values()]

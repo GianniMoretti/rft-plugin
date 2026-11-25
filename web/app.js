@@ -4072,6 +4072,7 @@
         ? `<div class="s-repl">${t.replacement ? escH(clip(t.replacement, 240)) : '<em>(delete the text)</em>'}</div>` : '') +
       (last ? `<div class="s-msg"><span class="s-who">${escH(who(last))}:</span> ${mdm.inline(clip(String(last.text || '').replace(/\s+/g, ' ').trim(), 320))}</div>` : '') +
       (t.asked ? `<div class="s-asked">${escH(AG.asking(t))} is answering…</div>` : '') +
+      (!err && !t.asked && t.task && t.task.state === 'failed' ? `<div class="s-error">${escH(`Not answered: ${t.task.error}`)}</div>` : '') +
       (err ? `<div class="s-error">${escH(err)}</div>` : '') + acts
     const box = el.querySelector('.s-reply')
     if (box) box.value = drafts.get(draftKey(t.id)) || ''
@@ -4459,8 +4460,11 @@
         : !t.exact ? `<div class="t-warn">The text changed since; that part now reads: <q>${escH(clip(shown.body.slice(t.at[0], t.at[1]), 240))}</q></div>` : ''
     const msgs = (t.messages || []).map(m =>
       `<li class="by-${m.by === 'claude' ? 'claude' : 'you'}"><div class="t-who">${escH(who(m))} <time>${escH(m.at || '')}</time></div><div class="t-text">${mdm.render(m.text || '').html}</div></li>`).join('')
-    const asked = isOpen && t.asked ? `<div class="t-asked">${escH(AG.asking(t))} is answering… <span class="muted">(asked ${escH(String(t.asked).slice(11) || t.asked)})</span></div>` : ''
-    const err = threadErrors.get(draftKey(t.id))
+    // an agent of the user's that the server launched can be stopped; one that gave no answer says why, until the next ask
+    const running = can && t.task && t.task.state === 'running' && t.asking
+    const asked = isOpen && t.asked ? `<div class="t-asked">${escH(AG.asking(t))} is answering… <span class="muted">(asked ${escH(String(t.asked).slice(11) || t.asked)})</span>${running ? ' <button type="button" class="linkish" data-act="cancel" title="Stop it: nothing is written">Cancel</button>' : ''}</div>` : ''
+    const failed = isOpen && !t.asked && t.task && t.task.state === 'failed' ? `Not answered: ${t.task.error}` : ''
+    const err = threadErrors.get(draftKey(t.id)) || failed
     let bar = ''
     if (can && isOpen) {
       bar = `<textarea rows="2" placeholder="Reply" aria-label="Reply"></textarea>
@@ -4554,6 +4558,7 @@
       }
     }
     if (what !== 'reply') await act(id, tid, what)
+    if (what === 'cancel' && b.isConnected) b.disabled = false
   }
 
   /** A reply being written, in the box under the note or on the card in the margin: the other box shows it too. */
