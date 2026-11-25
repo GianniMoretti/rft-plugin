@@ -86,6 +86,7 @@ import rft_latex  # the manuscript's LaTeX: its generated files and the compile
 import rft_manuscript  # the manuscript as the page shows it
 import rft_notebook
 import rft_inbox  # the inbox, links saved to read later, as the page shows it
+import rft_agents  # the agents the user set up: models and harnesses, each with a grant (docs/adr/0006)
 import rft_reading  # an inbox item's reading note: the user's part, written by the page, and Claude's impression
 import rft_papers  # for an arXiv item's title, asked as the downloader asks it
 import rft_queue  # the experiment queue, beside this file
@@ -2666,11 +2667,17 @@ def follow(port: int, token: str, ask=ask_session) -> None:
 
 # ------------------------------------------------------------------ http
 
-def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_session, editors=None, relay=None):
+def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_session, editors=None, relay=None, agents=None):
     """The request handler; without a `token` it never writes. `ask` hands a new note to the session;
     `editors` serves the experiments' notebooks (rft_notebook.Editors); a `relay` (a server run from a
-    terminal) hands the requests for the session to the chats that ask for them."""
+    terminal) hands the requests for the session to the chats that ask for them. `agents`: the user's
+    setup of agents (rft_agents.Setups); without one the page has the session alone, as before."""
     web = web.resolve()
+
+    def agents_now() -> dict:
+        """The agents the page may pick from, and whether a chat is there to be one of them."""
+        setup = agents.get() if agents is not None else rft_agents.Setup(Path(""))
+        return {**setup.describe(), "chat": relay.alive() if relay else True}
     editors = editors if editors is not None else rft_notebook.Editors()
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -2926,6 +2933,8 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 return self._json(200, vault.tree(), head_only)
             if route == "/api/id":
                 return self._json(200, {"vault": vault.ident, **({"terminal": True} if relay else {})}, head_only)
+            if route == "/api/agents":
+                return self._json(200, agents_now(), head_only)
             if route == "/api/session/next":
                 # a chat's server takes what the page asked of the session (Relay): never a page,
                 # which sends an Origin, and only with the key
@@ -3677,7 +3686,8 @@ def main(argv=None):
     token = vault_key(Path(a.vault))
     editors = rft_notebook.Editors()
     relay = Relay() if a.terminal else None
-    handler = make_handler(vault, Path(a.web), token, ask=relay.ask if relay else ask_session, editors=editors, relay=relay)
+    handler = make_handler(vault, Path(a.web), token, ask=relay.ask if relay else ask_session, editors=editors, relay=relay,
+                           agents=rft_agents.Setups())
     if not a.no_watch:
         watch_parent(None, a.watch_stdin, on_exit=editors.stop_all)
 
