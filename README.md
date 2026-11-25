@@ -1,9 +1,13 @@
 # <img src="docs/logo.svg" width="34" align="top" alt=""> rft: Reasoning Flow Tree for Claude Code
 
-rft is a plugin for Claude Code that keeps the reasoning of a research project readable. Every
-experiment you run and every idea you consider becomes one short note, each note hangs under the
-one it came from, and Claude keeps the notes up to date as you work together. You see the result
-as a live tree in your browser.
+Claude can write a research project's code, launch its experiments and read its papers faster
+than you can follow them. What is the best way to do research with that help, so that it is still
+your research?
+
+rft is one answer, built as a plugin for Claude Code: hand over the work, keep the reasoning.
+Every experiment you run and every idea you consider becomes one short note, each note hangs
+under the one it came from, and Claude keeps the notes up to date as you work together. You read
+the result as a live tree in your browser, and only you mark a note as verified.
 
 ![The tree view of the demo project: directions, experiments, references and a theory note, each under the note it came from](docs/screenshots/tree.png)
 
