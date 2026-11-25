@@ -193,6 +193,7 @@ SCREENS = [
     ("manuscript", [page("manuscript")]),
     ("manuscript-files", MS_PDF[:2]),  # a document's file list: its bar, a row's own actions
     ("manuscript-text", MS_PDF[:2] + ["document.querySelector('.phone-panes[data-for=ms-body] [data-pane=text]').click()"]),  # a document's head: its engine, its repository
+    ("manuscript-text-folded", MS_PDF[:2] + ["document.querySelector('.phone-panes[data-for=ms-body] [data-pane=text]').click()", "document.querySelector('#ms-head .ms-fold').click()"]),  # its head folded to one line
     ("manuscript-new-document", MS_PDF[:2] + ["document.getElementById('ms-new-doc').click()"]),  # its template menu, and loading one
     ("manuscript-pdf", MS_PDF),
     ("slides", [page("slides")]),
@@ -395,6 +396,39 @@ class PhoneTest(unittest.TestCase):
         self.assertIsNotNone(got, "no line of the document drawn")
         self.assertIn("documentclass", got[2])
         self.assertGreaterEqual(got[1], got[0] - 0.5, f"its text starts at x {got[1]}, under the line numbers (to x {got[0]})")
+
+    def test_head_folds_to_one_line(self):
+        # a document's head (its engine, its repository, Place, Insert) folds to one line: the room goes to the text, and stays so
+        self.b.size(412, 915)
+        text = MS_PDF[:2] + ["document.querySelector('.phone-panes[data-for=ms-body] [data-pane=text]').click()"]
+        self.screen(text)
+        sizes = ("(() => { const h = id => document.getElementById(id).getBoundingClientRect().height, f = document.querySelector('#ms-head .ms-fold');"
+                 " return [h('ms-head'), h('ms-cm'), f.getAttribute('aria-expanded'), document.querySelector('#ms-head select[aria-label=Engine]').getClientRects().length,"
+                 " ['.ms-sel-btn[data-kind=comment]', '.ms-ib.primary', '.icon-btn'].every(q => document.querySelector('#ms-head ' + q).getClientRects().length)] })()")
+        head, cm, open_, engine, kept = self.b.js(sizes)
+        self.assertEqual([open_, engine, kept], ["true", 1, True])
+        self.b.tap("#ms-head .ms-fold")
+        time.sleep(0.4)
+        head2, cm2, open2, engine2, kept2 = self.b.js(sizes)
+        self.assertEqual([open2, engine2, kept2], ["false", 0, True], "folded: the engine is still shown, or Comment, Save or the lock is gone")
+        self.assertLessEqual(head2, 64, f"folded, the head is {head2} px high: more than one line")
+        self.assertAlmostEqual(cm2 - cm, head - head2, delta=1, msg="the room the head gave up did not go to the text")
+        self.assertGreater(cm2 - cm, 150)
+        # it stays folded when the page is opened again, and unfolds
+        self.b.open(self.url)
+        for s in text:
+            self.b.js(s)
+            time.sleep(0.45)
+        self.assertEqual(self.b.js(sizes)[2:4], ["false", 0], "opened again, it is not folded")
+        self.b.tap("#ms-head .ms-fold")
+        time.sleep(0.4)
+        self.assertEqual(self.b.js(sizes)[2:4], ["true", 1])
+        # with a mouse on a wide screen there is no such button, and a head folded on the phone is whole
+        self.b.js("document.querySelector('#ms-head .ms-fold').click()")
+        self.b.size(1280, 800)
+        time.sleep(0.4)
+        self.assertEqual(self.b.js("[document.querySelector('#ms-head .ms-fold').getClientRects().length, document.querySelector('#ms-head select[aria-label=Engine]').getClientRects().length]"), [0, 1])
+        self.assertEqual(self.b.errors, [])
 
     def test_suggestion_keeps_what_is_typed(self):
         # the Manuscript reads its threads again every 4 s: a suggestion being written keeps its text and the keyboard

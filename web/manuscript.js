@@ -19,6 +19,8 @@
     comment: '<path d="M4 5h16v11H10l-6 4.5z"/>',
     suggestion: '<path d="M15 4.5l4.5 4.5L9 19.5H4.5V15z"/><path d="M12.5 7l4.5 4.5"/>',
     save: '<path d="M12 4v10"/><path d="M8 10l4 4 4-4"/><path d="M4.5 15v4.5h15V15"/>',
+    fold: '<path d="M6 15l6-6 6 6"/>',
+    unfold: '<path d="M6 9l6 6 6-6"/>',
   }
 
   /** The characters kept on each side of a quote, to find it again (CONTEXT in hooks/lib/comments.ts). */
@@ -629,6 +631,15 @@
         const insert = focusCopy ? null : insertRow()
         if (insert) headEl.append(insert)
       }
+      // a phone: the head folds to its first line (the name, the lock, Comment, Suggest, Save), the editor takes the room
+      const folded = !!store.get('msHeadFolded', false)
+      headEl.classList.toggle('folded', folded)
+      const acts = headEl.querySelector('.ms-acts')
+      if (acts) acts.append(iconBtn(folded ? 'unfold' : 'fold', folded ? 'Show the settings' : 'Hide the settings', {
+        class: 'ms-fold', 'aria-expanded': String(!folded),
+        title: folded ? 'Show the rest: the engine, the repository, Place, Insert' : 'Leave one line here: more room for the text',
+        onclick: () => { store.set('msHeadFolded', !folded); renderHead() },
+      }))
       renderSelectionButtons()
     }
 

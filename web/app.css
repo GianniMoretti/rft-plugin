@@ -1001,6 +1001,7 @@ main:has(#drawer:not([hidden])) #manuscript { right: min(var(--drawer-w), 92vw);
 .ms-spacer { flex: 1; }
 /* Comment, Suggest and Save: together, on a row of their own only when the row has no room for the three */
 .ms-acts { display: inline-flex; gap: 6px; margin-left: auto; }
+.ms-ib.ms-fold { display: none; }
 .ms-chip { display: inline-flex; align-items: center; gap: 3px; padding: 1px 7px; }
 .ms-chip.missing { color: var(--dropped); }
 .ms-cm { flex: 1; min-height: 0; }
@@ -1521,6 +1522,11 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
   .ms-more { min-height: 44px; font-size: 16px; max-width: 9em; }
   .ms-row-acts { visibility: visible; }
   .ms-bar, .sl-bar { gap: 6px 8px; }
+  /* the head of the open text folds to one line (its name, its lock, Comment, Suggest, Save): the room is the editor's */
+  .ms-ib.ms-fold { display: inline-flex; }
+  .ms-head.folded > :not(:first-child), .ms-head.folded > .ms-head-row > :is(.ms-file, .muted, .ms-set, .ms-spacer) { display: none; }
+  .ms-head.folded > .ms-head-row { flex-wrap: nowrap; }
+  .ms-head.folded > .ms-head-row > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ms-ib .lbl { display: none; }
   .ms-ib, .ms-levels .ms-ib, .phone-panes .ms-ib { width: 44px; padding: 0; }
   .ms-ib .ico { width: 21px; height: 21px; }
