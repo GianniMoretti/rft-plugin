@@ -120,6 +120,25 @@ class InboxFileTest(unittest.TestCase):
                 self.assertEqual(box.processed[-1], done, case["name"])
                 self.assertEqual(len(box.shown()), len(before) - 1, case["name"])
 
+    def test_a_brief_case_by_case_as_the_plugin_writes_it(self):
+        for case in self.cases["briefs"]:
+            box = rft_inbox.Inbox(case["text"])
+            before = [{**i, "brief": None} for i in box.shown()]
+            if case.get("error"):
+                with self.assertRaises(rft_inbox.InboxError, msg=case["name"]):
+                    box.brief(case["key"], case.get("nth", 0), case["brief"], case["today"])
+                self.assertEqual(box.text(), case["text"], case["name"])
+                continue
+            done = box.brief(case["key"], case.get("nth", 0), case["brief"], case["today"])
+            self.assertEqual(done is None, bool(case.get("none")), case["name"])
+            if done is None:
+                self.assertEqual(box.text(), case["text"], case["name"])
+                continue
+            self.assertEqual(box.text(), case["want"], case["name"])
+            self.assertEqual(done["brief"], case["is"], case["name"])
+            # the item is what it was but for its brief, and so is every other
+            self.assertEqual([{**i, "brief": None} for i in box.shown()], before, case["name"])
+
     def test_a_change_and_a_close_in_the_fixture(self):
         box = rft_inbox.Inbox(self.text)
         before = self.text.split("\n")

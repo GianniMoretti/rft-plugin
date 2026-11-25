@@ -78,6 +78,39 @@ class ReadingNoteFileTest(unittest.TestCase):
             self.assertTrue(note.set_mine("> a quote\n\nmine") or note.mine == "> a quote\n\nmine", case["name"])
             self.assertEqual(note.impression, rft_reading.Note(case["want"]).impression, case["name"])
 
+    def test_the_impression_case_by_case_as_the_plugin_writes_it(self):
+        for case in self.cases["impressions"]:
+            note = note_of(case)
+            if case.get("error"):
+                with self.assertRaises(rft_reading.ReadingError, msg=case["name"]):
+                    rft_reading.impression_lines(case["impression"])
+                continue
+            lines = rft_reading.impression_lines(case["impression"])
+            mine = note.mine
+            note.set_impression(lines, case["today"])
+            self.assertEqual(note.text(), case["want"], case["name"])
+            self.assertEqual((note.key, note.mine), (case["item"]["key"], mine), case["name"])
+            self.assertEqual(note.impression, {"date": case["today"], "text": "\n".join(lines)}, case["name"])
+            note.set_impression(lines, case["today"])  # saved a second time, the file is the same
+            self.assertEqual(note.text(), case["want"], case["name"])
+        self.assertGreater(len([c for c in self.cases["impressions"] if c.get("error")]), 6)
+
+    def test_an_impression_of_another_agent_is_headed_with_its_name(self):
+        case = next(c for c in self.cases["impressions"] if not c.get("error") and c["text"] is None)
+        lines = rft_reading.impression_lines(case["impression"])
+        note = note_of(case)
+        note.set_impression(lines, case["today"], "qwen local-2")
+        self.assertEqual(note.text(), case["want"].replace("## Claude's impression", "## qwen local-2's impression"))
+        self.assertEqual(note.impression, {"date": case["today"], "text": "\n".join(lines), "by": "qwen local-2"})
+        # the user's part written afterwards leaves it, and Claude's own takes its place when it is written
+        note.set_mine("> a quote")
+        self.assertEqual(note.impression["by"], "qwen local-2")
+        note.set_impression(lines, case["today"])
+        self.assertEqual(note.text().count("impression ("), 1)
+        self.assertNotIn("by", note.impression)
+        with self.assertRaises(rft_reading.ReadingError):
+            note.set_mine("## Codex's impression (2026-11-25)")
+
     def test_the_file_of_an_item_by_its_key(self):
         files = {}
         read = files.get

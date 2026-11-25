@@ -37,7 +37,9 @@ export const READING_DIR = 'Reading notes'
 export const MINE_HEAD = '## My reading'
 export const IMPRESSION_HEAD = "## Claude's impression"
 const MINE = rx(String.raw`^##[ \t]+my[ \t]+reading[ \t]*$`, true)
-const IMPRESSION = rx(String.raw`^##[ \t]+claude['’]s[ \t]+impression(?:[ \t]+\(([0-9]{4}-[0-9]{2}-[0-9]{2})\))?[ \t]*$`, true)
+// the heading of the impression: Claude's, or that of another agent the user set up, by its name (server/rft_reading.py writes that one)
+const AGENT = '[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}'
+const IMPRESSION = rx(String.raw`^##[ \t]+(${AGENT})['’]s[ \t]+impression(?:[ \t]+\(([0-9]{4}-[0-9]{2}-[0-9]{2})\))?[ \t]*$`, true)
 const BLANK = rx(String.raw`^[ \t]*$`)
 const SCHEME = rx('^https?://', true)
 const UNSAFE = rx('[^A-Za-z0-9._-]+', false, true)
@@ -48,7 +50,8 @@ const TRIES = 50 // how many files of one name's family are looked at for an ite
 /** What cannot be written in a reading note, in words for Claude. */
 export class ReadingError extends InboxError {}
 
-export type Impression = { date: string; text: string }
+/** `by`: the name of the agent that wrote it, when it is not Claude's own. */
+export type Impression = { date: string; text: string; by?: string }
 /**
  * The file as read: its lines, as they are (`cr`: which ended with a carriage return before its
  * newline), and what they hold. `key`: the item it is of, by the first link of its head; `mine`:
@@ -103,9 +106,15 @@ function readLines(lines: string[], cr: boolean[], crlf: boolean): ReadingNote {
   return {
     crlf, lines, cr, key,
     mine: mine === null ? '' : linesOf(lines.slice(mine + 1, stop).join('\n')).join('\n'),
-    impression: imp === null ? null : { date: IMPRESSION.exec(lines[imp]!)![1] ?? '', text: linesOf(lines.slice(imp + 1).join('\n')).join('\n') },
+    impression: imp === null ? null : impressionAt(lines, imp),
     at: [mine, imp],
   }
+}
+
+function impressionAt(lines: string[], imp: number): Impression {
+  const head = IMPRESSION.exec(lines[imp]!)!
+  const by = head[1]!.toLowerCase() === 'claude' ? {} : { by: head[1]! }
+  return { date: head[2] ?? '', text: linesOf(lines.slice(imp + 1).join('\n')).join('\n'), ...by }
 }
 
 /** The file again: as it was read, when nothing changed. */
@@ -274,7 +283,8 @@ export async function readingOf(io: Io, loaded: Loaded, link: string): Promise<s
   const { item } = await itemAt(io, vault, link)
   const { note } = await findNote(io, vault, item.key)
   const imp = note?.impression ?? null
-  const yours = imp ? `Your impression of ${itemName(item)}${imp.date ? `, saved ${imp.date}` : ''}:\n\n${imp.text}` : `No impression of ${itemName(item)} is saved yet.`
+  // an impression another agent of the user's wrote (the page's server launched it) is said to be that agent's
+  const yours = imp ? `${imp.by ? `The impression of ${itemName(item)} written by ${imp.by}, another agent of the user's (not your own reading)` : `Your impression of ${itemName(item)}`}${imp.date ? `, saved ${imp.date}` : ''}:\n\n${imp.text}` : `No impression of ${itemName(item)} is saved yet.`
   if (!item.read) {
     return `${yours}\n\nThe user's part of its reading note is closed to you: the user has not marked the item as read. Only they set that mark, on the item's row in the tree view; `
       + 'until then your reading is written from the item alone, and a second one replaces the impression (rft_inbox {link, impression}).'

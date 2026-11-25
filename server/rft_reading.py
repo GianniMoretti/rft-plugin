@@ -37,7 +37,16 @@ DIR = "Reading notes"
 MINE_HEAD = "## My reading"
 IMPRESSION_HEAD = "## Claude's impression"
 MINE = rx(r"^##[ \t]+my[ \t]+reading[ \t]*\Z", True)
-IMPRESSION = rx(r"^##[ \t]+claude['’]s[ \t]+impression(?:[ \t]+\(([0-9]{4}-[0-9]{2}-[0-9]{2})\))?[ \t]*\Z", True)
+# the heading of the impression: Claude's, or that of another agent the user set up, by its name
+AGENT = r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}"
+IMPRESSION = rx(rf"^##[ \t]+({AGENT})['’]s[ \t]+impression(?:[ \t]+\(([0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}})\))?[ \t]*\Z", True)
+PARTS = ("Claims", "How", "Key results", "Bearing on", "Left open")  # every impression has each, once, in this order
+IMPRESSION_CHARS = 3000  # about one screen
+PART = rx(r"^#{1,6}[ \t]+(.*?)[ \t]*:?[ \t]*#*[ \t]*\Z")
+TRAIL = rx(r"[ \t]+\Z")
+SAYS = ("An impression has five parts, each under its heading and in this order: " + ", ".join(f"### {p}" for p in PARTS)
+        + " (what the item claims; how it gets there; its key results, with their numbers and where they are in the item; "
+        "its bearing on notes of the tree, named by id; what it leaves open)")
 BLANK = rx(r"^[ \t]*\Z")
 SCHEME = rx(r"^https?://", True)
 UNSAFE = rx(r"[^A-Za-z0-9._-]+")
@@ -111,8 +120,12 @@ class Note:
                 self.key = got[0]
                 break
         self.mine = "" if mine is None else "\n".join(lines_of("\n".join(self.lines[mine + 1:stop])))
-        self.impression = None if imp is None else {
-            "date": IMPRESSION.match(self.lines[imp]).group(1) or "", "text": "\n".join(lines_of("\n".join(self.lines[imp + 1:])))}
+        self.impression = None
+        if imp is not None:
+            head = IMPRESSION.match(self.lines[imp])
+            self.impression = {"date": head.group(2) or "", "text": "\n".join(lines_of("\n".join(self.lines[imp + 1:])))}
+            if head.group(1).lower() != "claude":
+                self.impression["by"] = head.group(1)  # another agent's, by its name
         self._at = (mine, imp)
 
     def text(self) -> str:
@@ -128,6 +141,23 @@ class Note:
         self.cr[-1] = False  # nothing ends the last line
         self._read()
 
+    def set_impression(self, impression: list[str], today: str, by: str = "Claude") -> None:
+        """Writes the impression of the day: its heading, which names who wrote it, and its lines
+        in place of the impression the file had (everything from that heading on), or at the
+        file's end. The user's part and every line before it stay as they were. As withImpression
+        in hooks/lib/reading.ts."""
+        block = [f"## {by}'s impression ({today})", "", *impression, ""]
+        mine, imp = self._at
+        if imp is not None:
+            self._splice(imp, len(self.lines), block)
+            return
+        at = len(self.lines)
+        while at > 0 and BLANK.match(self.lines[at - 1]):
+            at -= 1
+        # a note with no part yet gets the user's, empty, before the impression: the file always shows the two
+        head = [MINE_HEAD, ""] if mine is None else []
+        self._splice(at, len(self.lines), ([""] if at > 0 else []) + head + block)
+
     def set_mine(self, text: str) -> bool:
         """Writes the user's part: its heading and its lines, in place of what the part held, or
         before the impression (at the file's end, when there is none) when the file had no such
@@ -135,7 +165,7 @@ class Note:
         says this. ReadingError when a line of it would read as the heading of the impression."""
         new = lines_of(text)
         if any(IMPRESSION.match(line) for line in new):
-            raise ReadingError(f'a line of your part reads as the heading of Claude\'s part ("{IMPRESSION_HEAD}"): write it another way')
+            raise ReadingError(f'a line of your part reads as the heading of an agent\'s impression (as "{IMPRESSION_HEAD}"): write it another way')
         mine, imp = self._at
         if "\n".join(new) == self.mine and (mine is not None or not new):
             return False
@@ -149,6 +179,49 @@ class Note:
             at -= 1
         self._splice(at, stop, ([""] if at > 0 else []) + block)
         return True
+
+
+def impression_lines(text: str) -> list[str]:
+    """An impression as it is written in the file: its five parts under their headings, a blank
+    line between two. ReadingError when a part is missing, empty, twice or out of its place, when
+    there is a heading that is none of the five or text before the first, or when it is longer
+    than a screen. As impressionLines in hooks/lib/reading.ts."""
+    out: list[str] = []
+    part = -1
+    body: list[str] = []
+
+    def close():
+        nonlocal body
+        kept = lines_of("\n".join(body))
+        if part >= 0 and not kept:
+            raise ReadingError(f'the part "{PARTS[part]}" of the impression is empty. {SAYS}')
+        if part < 0 and kept:
+            raise ReadingError(f"the impression starts with text under no heading. {SAYS}")
+        if part >= 0:
+            out.extend(([""] if out else []) + [f"### {PARTS[part]}", "", *kept])
+        body = []
+
+    for line in (TRAIL.sub("", l) for l in lines_of(text)):
+        h = PART.match(line)
+        if not h:
+            body.append(line)
+            continue
+        name = rft_inbox.one_line(h.group(1))
+        at = next((n for n, p in enumerate(PARTS) if p.lower() == name.lower()), -1)
+        if at < 0:
+            raise ReadingError(f'"{name}" is not a part of an impression. {SAYS}')
+        if at != part + 1:
+            where = "there twice or out of its place" if at <= part else f'before "{PARTS[part + 1]}"'
+            raise ReadingError(f'the part "{PARTS[at]}" is {where}. {SAYS}')
+        close()
+        part = at
+    close()
+    if part != len(PARTS) - 1:
+        raise ReadingError(f'the impression has no part "{PARTS[part + 1]}". {SAYS}')
+    chars = len("\n".join(out))
+    if chars > IMPRESSION_CHARS:
+        raise ReadingError(f"an impression is about one screen, at most {IMPRESSION_CHARS} characters, and this has {chars}: keep what the user needs to compare it with their own reading")
+    return out
 
 
 def find(read, key: str) -> tuple[str, Note | None]:

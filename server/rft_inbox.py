@@ -66,6 +66,9 @@ WEB = rx(r"^https?://", True)
 LINKS = rx(rf"(https?://[^{WS})>\]\"']+)|\barxiv(?:\.org/(?:abs|pdf|html)/|:?[{WS}]*)({ARXIV_ID})(?:v[0-9]+)?(?![0-9])"
            rf"|\b(10\.[0-9]{{4,9}}/[^{WS})>\]\"']+)", True)
 ITEM = rx(r"^[-*+][ \t]+(.*)\Z")
+MARKER = rx(r"^[-*+][ \t]+")
+BRIEF_LINES = 3  # a brief is short: read in a minute, shown whole in the panel
+BRIEF_LINE_CHARS = 400
 SUB = rx(r"^[ \t]+[-*+][ \t]+(.*)\Z")
 PROCESSED = rx(r"^##[ \t]+processed[ \t]*\Z", True)
 HEADING = rx(r"^#{1,2}[ \t]")
@@ -293,6 +296,39 @@ class Inbox:
         self.lines[end:end] = put
         self.cr[end:end] = [self.crlf] * len(put)
         self.cr[-1] = False  # nothing ends the last line
+
+    def brief(self, key: str, nth: int, brief: str, today: str) -> dict | None:
+        """Puts a brief under an item: at most three indented lines, the first saying the day. A
+        brief the item had is replaced whole; indented lines of the user's that are no brief stay,
+        after it. None when the inbox has no such item; InboxError when the brief is empty or too
+        long. As briefOn in hooks/lib/inbox.ts, case for case (tests/fixtures/inbox, `briefs`)."""
+        item = self.nth(key, nth)
+        if not item:
+            return None
+        said = [MARKER.sub("", one_line(line), count=1) for line in brief.split("\n")]
+        if said:
+            b = BRIEFED.match(said[0])
+            said[0] = strip(b.group(2)) if b else said[0]
+        said = [line for line in said if line and not MARKER.match(f"{line} ")]
+        if not said:
+            raise InboxError("a brief says what the item claims, which notes of the tree it touches and the outcome you recommend")
+        if len(said) > BRIEF_LINES:
+            raise InboxError(f"a brief is at most {BRIEF_LINES} lines and this has {len(said)}: what the item claims, which notes of the tree it touches, the outcome you recommend")
+        if any(len(line) > BRIEF_LINE_CHARS for line in said):
+            raise InboxError(f"a line of a brief is at most {BRIEF_LINE_CHARS} characters: the user decides from it in a minute")
+        lines, cr = list(self.lines), list(self.cr)
+        a, b = item["at"]
+        if item["brief"]:
+            del self.lines[a + 1:b]
+            del self.cr[a + 1:b]
+        self._put(a + 1, [f"  - {f'briefed {today}: ' if n == 0 else ''}{line}" for n, line in enumerate(said)])
+        self._read()
+        now = next((i for i in self.items if i["at"][0] == a), None)
+        if not now or not now["brief"] or now["brief"]["date"] != today or now["brief"]["lines"][:len(said)] != said:
+            self.lines, self.cr = lines, cr
+            self._read()
+            raise InboxError("the brief would not read back as written: say it in other words")
+        return {k: v for k, v in now.items() if k != "at"}
 
     def nth(self, key: str, nth: int = 0) -> dict | None:
         """The item with this link: the first, or the `nth` after it when the link was typed more than once."""
