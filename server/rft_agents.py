@@ -691,8 +691,8 @@ class Tasks:
 
     def start(self, key: str, agent: str, what: str, limit: int, work, on_end=None) -> Task:
         """Runs `work(run)` in the background. It returns once the answer is written (after
-        run.commit()), or raises: AgentError with why. `on_end(task)` is called when it is over,
-        however it ended. Busy when a task on `key` is still running."""
+        run.commit()), or raises: AgentError with why. `on_end(state)` is called when it is over,
+        however it ended, with the state it ends in. Busy when a task on `key` is still running."""
         with self._lock:
             had = self._tasks.get(key)
             if had and had.state == "running":
@@ -714,13 +714,15 @@ class Tasks:
                 state, error = "failed", f"{agent} could not answer: {one_line(str(err)) or type(err).__name__}"
             finally:
                 timer.cancel()
-            with self._lock:
-                task.state, task.error, task.ended = state, error, time.time()
+            # what the end leaves to tidy (a thread that no longer waits) is done before the task
+            # reads as over, so that no one sees it failed and still waiting
             if on_end:
                 try:
-                    on_end(task)
+                    on_end(state)
                 except Exception:  # noqa: BLE001
                     pass
+            with self._lock:
+                task.state, task.error, task.ended = state, error, time.time()
 
         timer.start()
         threading.Thread(target=go, daemon=True, name=f"rft-agent-{key}").start()

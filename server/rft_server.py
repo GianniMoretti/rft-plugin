@@ -2130,8 +2130,8 @@ class Vault:
             if status != 200:
                 raise rft_agents.AgentError(got["error"])
 
-        def over(task):
-            if task.state != "done":
+        def over(state):
+            if state != "done":
                 self._unask(nid, tid, agent.name)
 
         runner.tasks.start(thread_key(nid, tid), agent.name, f"{nid} {tid}", agent.limits["thread"], work, over)
