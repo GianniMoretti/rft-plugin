@@ -67,12 +67,13 @@ PLACE = "{prompt}"
 #: (see PRESET_NOTES); an entry's own `run`, `locked` and `web` win over them.
 PRESETS: dict[str, dict] = {
     # Claude Code. The prompt is given on its input. Locked: only its tools that read (files of the
-    # folder it runs in, and the web) exist at all, no settings of the user's or the project's are
-    # read (so no plugin's tools or hooks), and no MCP server is started.
+    # folder it runs in, and the web) exist at all (--tools) and those same ones are allowed without
+    # asking (--allowedTools: with no one to ask, a web tool is refused otherwise), no settings of the
+    # user's or the project's are read (so no plugin's tools or hooks), and no MCP server is started.
     "claude-code": {
         "run": ["claude", "-p", "--no-session-persistence"],
         "locked": ["claude", "-p", "--restricted", "--strict-mcp-config", "--tools", "Read,Grep,Glob,WebFetch,WebSearch",
-                   "--disable-slash-commands", "--no-session-persistence"],
+                   "--allowedTools", "Read,Grep,Glob,WebFetch,WebSearch", "--disable-slash-commands", "--no-session-persistence"],
         "web": True, "model_flag": "--model",
     },
     # Codex. The prompt is given on its input (`-`). Locked: its read-only sandbox.
@@ -86,7 +87,9 @@ PRESETS: dict[str, dict] = {
 UNVERIFIED = ("codex",)
 PRESET_NOTES: dict[str, str] = {
     "claude-code": "Flags from `claude --help` of Claude Code 2.1.332. Tried for real on 2026-11-25: the locked command read a file of its "
-                   "folder, listed its tools as Glob, Grep, Read, WebFetch and WebSearch, and could not create a file when asked to by any means.",
+                   "folder, listed its tools as Glob, Grep, Read, WebFetch and WebSearch, and could not create a file when asked to by any means; "
+                   "launched by the server on a demo vault it answered a suggestion thread and processed arXiv 1710.09412 (without --allowedTools "
+                   "its web tools were refused, there being no one to ask).",
     "codex": "NOT TRIED: Codex was not installed where this was written. From its documentation as read on 2026-11-25 "
              "(learn.chatgpt.com/docs/non-interactive-mode, /docs/developer-commands, /docs/sandboxing): `codex exec` takes the prompt on its "
              "input with `-`, prints only its final message on stdout, and `--sandbox read-only` lets it inspect files but not edit them. "
@@ -650,7 +653,8 @@ def process_prompt(item: dict, parts, chars: int, reading_dir: str, inbox: str) 
         "one line: the one outcome you recommend (reference, literature entry, direction, discard or later), with where it would go",
         "</brief>",
         "",
-        f"The impression has these {len(parts)} parts, each under its heading, in this order, none empty, and is about one screen: at most {chars} characters in all. "
+        f"The impression has these {len(parts)} parts, each under its heading, in this order, none empty, and is about one screen: "
+        f"aim for {chars * 2 // 3} to {chars * 5 // 6} characters in all, headings included. Above {chars} characters nothing is saved, so count before you answer and cut. "
         f"{parts[0]}: what the item claims. {parts[1]}: how it gets there. {parts[2]}: its key results, with their numbers and where they are in the item (table, figure, section). "
         f"{parts[3]}: the notes of the tree it bears on, by id, and how. {parts[4]}: what it leaves open. The brief is exactly three lines.",
         "",

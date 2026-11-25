@@ -980,7 +980,7 @@ class ProcessTest(Served):
             self.assertNotIn(secret, given)
         prompt = run["stdin"]
         for part in ("Mixup at scale (https://arxiv.org/abs/2406.01234)", "maybe relevant to D01", "<impression>", "### Left open", "<brief>", "<unreadable>",
-                     "Do not open the folder `Reading notes/` or the file `Inbox.md`", "Change no file", "at most 3000 characters"):
+                     "Do not open the folder `Reading notes/` or the file `Inbox.md`", "Change no file", "aim for 2000 to 2500 characters", "Above 3000 characters nothing is saved"):
             self.assertIn(part, prompt)
         for word in ("rft_", "ToolSearch", "AskUserQuestion", "skill", "manual", self.tmp.name):
             self.assertNotIn(word, prompt)
