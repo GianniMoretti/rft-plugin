@@ -1,7 +1,7 @@
 # Design note: slide decks for meetings and talks
 
-Status: designed 2026-11-21; phase 1 built the same day. The user-facing description is the README's
-"Slides", Claude's the manual's "Slides".
+Status: designed 2026-11-21; phase 1 built the same day. The user-facing description is the guide's
+"Slides" (https://alex-pv01.github.io/rft-guide/using/slides/), Claude's the manual's "Slides".
 
 ## The problem
 

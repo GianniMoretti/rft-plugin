@@ -7,7 +7,8 @@ are plain LaTeX that names nothing of the tree, so they can be shared with co-au
 what ties a document to the tree is kept in a tracking file outside its folder. This note says
 what is built now; a document of the first design (copies between `% rft-begin` and `% rft-end`
 lines, macros in its text) is converted once, the first time it is read. The user-facing
-description is the README's "Snippets and documents" and "Statuses"; Claude's is the manual's
+description is the guide's "Snippets and documents" and "Statuses" (https://alex-pv01.github.io/rft-guide/using/documents/,
+https://alex-pv01.github.io/rft-guide/reference/statuses/); Claude's is the manual's
 "Verified notes" and "Snippets and documents". Revised 2026-11-24 again to **folders and
 templates**: a document is a folder of files made from a template, with a file list, a main file
 of any name and an engine of its own; to **git**: a document is a repository of its own, pushed
