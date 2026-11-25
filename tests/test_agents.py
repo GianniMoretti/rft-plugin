@@ -853,7 +853,7 @@ class PresetTest(unittest.TestCase):
         self.assertEqual(claude.tasks(), ["thread", "process"])
         self.assertEqual(opus.command()[:3], ["claude", "--model", "opus"])
         self.assertNotIn("--restricted", opus.command())
-        self.assertEqual((claude.describe()["unverified"], codex.describe()["unverified"]), (False, True))
+        self.assertEqual((claude.describe()["unverified"], codex.describe()["unverified"]), (False, False))
         self.assertIn("read-only", codex.command())
         self.assertEqual(codex.command()[:3], ["codex", "--search", "exec"])  # --search is a flag of codex itself, not of exec
         self.assertNotIn("read-only", setup_of('[agents.c]\nkind = "codex"\ngrant = "change"\n').agents["c"].command())

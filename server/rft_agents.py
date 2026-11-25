@@ -85,17 +85,17 @@ PRESETS: dict[str, dict] = {
     },
 }
 #: the ready-made entries nobody has run on a real install yet: the page says so
-UNVERIFIED = ("codex",)
+UNVERIFIED: tuple[str, ...] = ()
 PRESET_NOTES: dict[str, str] = {
     "claude-code": "Flags from `claude --help` of Claude Code 2.1.332. Tried for real on 2026-11-25: the locked command read a file of its "
                    "folder, listed its tools as Glob, Grep, Read, WebFetch and WebSearch, and could not create a file when asked to by any means; "
                    "launched by the server on a demo vault it answered a suggestion thread and processed arXiv 1710.09412 (without --allowedTools "
                    "its web tools were refused, there being no one to ask).",
-    "codex": "NEVER RUN: the flags are those of `codex --help` and `codex exec --help` of codex-cli 0.172.0 (2026-11-25): the prompt on its "
-             "input with `-`, `--sandbox read-only | workspace-write | danger-full-access`, `--skip-git-repo-check`, `--ephemeral` (no session "
-             "kept), and `--search` and `--model` before `exec`. Its documentation says exec prints only its final message on stdout and that "
-             "the read-only sandbox lets it inspect files but not edit them. No task was run with it (it was not logged in), so that the "
-             "locked command truly cannot write, and that web search works under it, are not checked.",
+    "codex": "Flags from `codex --help` and `codex exec --help` of codex-cli 0.172.0. Tried for real on 2026-11-25, launched locked by the "
+             "server on a demo vault: it answered a thread and processed arXiv 1710.09412 with its web search, and asked to create a file three "
+             "ways it could not. On that machine (Ubuntu 24.04, kernel.apparmor_restrict_unprivileged_userns = 1) its sandbox, bubblewrap, could "
+             "not start at all ('bwrap: loopback: Failed RTM_NEWADDR'), so it could run no command and read no note either: that a WORKING "
+             "read-only sandbox reads and does not write is Codex's documentation's word, not something seen here.",
 }
 
 
