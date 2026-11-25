@@ -1754,8 +1754,19 @@ class Vault:
         try:
             ask("RFT_PROCESS", {"key": key, "nth": nth})
         except (OSError, ValueError) as err:
-            return 503, {"error": gone(err)}
+            return 503, {"error": self._no_one(err, "process")}
         return 200, {"asked": True, "item": same[nth]}
+
+    def _no_one(self, err: Exception, task: str) -> str:
+        """Why a thread or an item found no one to go to: no chat is connected, and what the user
+        can do about it with agents of their own (a server that knows of none says what it did)."""
+        why = gone(err)
+        if not self.runner or not isinstance(err, NoSession):
+            return why
+        able = [a.name for a in self.runner.setup().for_task(task)]
+        if able:
+            return f"no Claude Code chat is connected: pick one of your agents ({', '.join(able)}), or run /rft in a chat"
+        return f"{why}. Or set up an agent of your own, which needs no chat: see Agents in the README ({self.runner.setup().path})"
 
     def _frozen(self, item: dict) -> str | None:
         """Why an item's impression may not be written again: the user marked it as read and it
@@ -2078,7 +2089,7 @@ class Vault:
                         try:
                             ask("RFT_ASK", {"id": nid, "thread": t["id"]})
                         except (OSError, ValueError) as err:
-                            return 503, {"error": gone(err)}
+                            return 503, {"error": self._no_one(err, "thread")}
                         t.pop("asking", None)
                     else:
                         try:
@@ -3902,9 +3913,10 @@ def serve_terminal(a, vault: Vault, handler, url, say):
 
 
 CHAT_ON = ("a Claude Code chat on this tree is connected: it makes what the page asks of the session "
-           "(Add child, Change type, Move, Verify, the Manuscript's changes, Ask Claude)")
+           "(Add child, Change type, Move, Verify, the Manuscript's changes, Ask Claude, Process, Discuss)")
 CHAT_OFF = ("no Claude Code chat is connected: the page's Add child, Change type, Move, Verify, "
-            "Manuscript changes and Ask Claude are refused until /rft runs in one")
+            "Manuscript changes and Discuss are refused until /rft runs in one; a thread and Process "
+            "go to an agent of your setup, when you have one that may take them")
 
 
 def watch_chats(relay: Relay, say, every: float = 0.5) -> None:

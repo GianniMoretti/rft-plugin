@@ -548,7 +548,16 @@ class ModelThreadTest(Served):
         before = self.files()
         status, got = self.comment(action="ask", thread=tid)
         self.assertEqual(status, 503)  # served from a terminal, no chat connected
+        self.assertEqual(got["error"], "no Claude Code chat is connected: pick one of your agents (qwen, remote), or run /rft in a chat")
         self.assertEqual(self.files(), before)
+        # with no agent that may take it, the page is told how to set one up
+        self.write_setup("")
+        status, got = self.comment(action="ask", thread=tid)
+        self.assertEqual(status, 503)
+        self.assertTrue(got["error"].startswith(rft_server.NO_SESSION))
+        self.assertIn("set up an agent of your own", got["error"])
+        self.assertIn("Agents in the README", got["error"])
+        self.write_setup(self.AGENTS)
         status, got = self.comment(action="ask", thread=tid, agent="chat")
         self.assertEqual(status, 503)
         self.assertEqual(self.model.requests, [])
@@ -1077,6 +1086,7 @@ class ProcessTest(Served):
         before = self.files()
         status, got = self.inbox(action="process", key=ITEM_KEY)
         self.assertEqual(status, 503)
+        self.assertEqual(got["error"], "no Claude Code chat is connected: pick one of your agents (web), or run /rft in a chat")
         self.assertEqual(self.inbox(action="process", key=ITEM_KEY, agent="chat")[0], 503)
         self.assertEqual((self.harness.runs, self.files()), ([], before))
 

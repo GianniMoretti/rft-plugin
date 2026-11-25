@@ -1534,7 +1534,9 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
 
 /* who answers a thread or processes an item, when the user set agents up (agents.js) */
 .agent-pick { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 0.88em; color: var(--muted, inherit); }
-.threads-head .agent-pick { float: right; }
+/* only with a picker in it: with no setup the head is laid out as it always was */
+.threads-head:has(.agent-pick) { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; }
+.threads-head .agent-pick { margin-left: auto; }
 .agent-pick select { font: inherit; max-width: 16em; padding: 2px 4px; }
 .agent-pick .agent-where { font-size: 0.95em; }
 .agent-pick .agent-error { flex-basis: 100%; color: var(--warn, #b45309); }
@@ -1542,4 +1544,4 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
 @media (pointer: coarse) { .agent-pick select { min-height: 44px; font-size: 16px; } }
 .inbox-running { color: var(--accent); }
 .inbox-failed { color: var(--warn, #b45309); }
-#inbox > .agent-pick { margin: 4px 0 6px; }
+#inbox > .agent-pick { margin: 6px 12px; }
