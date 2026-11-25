@@ -11,7 +11,7 @@ down: []
 tags: [small-data-regularisation, reference, mixup, done]
 ---
 
-# R03 · mixup, training on combinations of pairs of examples
+# R03 · Zhang 2017 mixup, combinations of pairs of examples
 
 **Parent:** [[D04 Mixup as an alternative]]  
 **Status:** done · **Date:** 2026-03-18

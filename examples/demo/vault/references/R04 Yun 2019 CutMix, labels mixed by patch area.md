@@ -11,7 +11,7 @@ down: []
 tags: [small-data-regularisation, reference, cutmix, done]
 ---
 
-# R04 · CutMix, patches pasted between images with labels mixed by area
+# R04 · Yun 2019 CutMix, labels mixed by patch area
 
 **Parent:** [[D04 Mixup as an alternative]]  
 **Status:** done · **Date:** 2026-03-18

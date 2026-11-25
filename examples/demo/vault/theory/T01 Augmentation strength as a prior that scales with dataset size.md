@@ -22,7 +22,7 @@ Training on augmented images is training on a smoothed copy of the training set.
 ## Builds on
 - [[E07 RandAugment magnitude sweep with long training]]: magnitude 15 closes the gap at 5k and 10k images and not at 1k.
 - [[E04 Distance of augmented samples to the training set]]: the distance to the source image grows linearly with magnitude (1k pending).
-- [[R01 RandAugment, automated augmentation without a search phase]]: the strength may be tailored to model and dataset size.
+- [[R01 Cubuk 2019 RandAugment, no separate search phase]]: the strength may be tailored to model and dataset size.
 
 ## Explanation
 With many images, neighbours are close and a wide smoothing mostly lands on other plausible images. With 1k images the neighbours are far apart, and the same width lands between classes.

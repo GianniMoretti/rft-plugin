@@ -11,7 +11,7 @@ down: []
 tags: [small-data-regularisation, reference, augmentation, randaugment, done]
 ---
 
-# R01 · RandAugment, automated augmentation without a search phase
+# R01 · Cubuk 2019 RandAugment, no separate search phase
 
 **Parent:** [[D02 Strong augmentation closes the gap]]  
 **Status:** done · **Date:** 2026-03-04

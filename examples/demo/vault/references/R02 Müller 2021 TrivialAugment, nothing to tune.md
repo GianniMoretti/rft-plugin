@@ -11,7 +11,7 @@ down: []
 tags: [small-data-regularisation, reference, augmentation, trivialaugment, done]
 ---
 
-# R02 · TrivialAugment, one augmentation per image and nothing to tune
+# R02 · Müller 2021 TrivialAugment, nothing to tune
 
 **Parent:** [[D02 Strong augmentation closes the gap]]  
 **Status:** done · **Date:** 2026-03-04
