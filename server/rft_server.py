@@ -1766,7 +1766,7 @@ class Vault:
         able = [a.name for a in self.runner.setup().for_task(task)]
         if able:
             return f"no Claude Code chat is connected: pick one of your agents ({', '.join(able)}), or run /rft in a chat"
-        return f"{why}. Or set up an agent of your own, which needs no chat: see Agents in the README ({self.runner.setup().path})"
+        return f"{why}. Or set up an agent of your own, which needs no chat: see Agents in the guide, https://alex-pv01.github.io/rft-guide/using/agents/ ({self.runner.setup().path})"
 
     def _frozen(self, item: dict) -> str | None:
         """Why an item's impression may not be written again: the user marked it as read and it

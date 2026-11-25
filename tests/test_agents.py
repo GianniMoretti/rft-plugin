@@ -556,7 +556,7 @@ class ModelThreadTest(Served):
         self.assertEqual(status, 503)
         self.assertTrue(got["error"].startswith(rft_server.NO_SESSION))
         self.assertIn("set up an agent of your own", got["error"])
-        self.assertIn("Agents in the README", got["error"])
+        self.assertIn("Agents in the guide", got["error"])
         self.write_setup(self.AGENTS)
         status, got = self.comment(action="ask", thread=tid, agent="chat")
         self.assertEqual(status, 503)
@@ -1119,36 +1119,9 @@ class ProcessTest(Served):
         self.assertEqual(self.files(), left)
 
 
-class ReadmeTest(unittest.TestCase):
-    """The README's Agents section: its example is a setup that loads."""
-
-    def setUp(self):
-        text = (HERE.parent / "README.md").read_text(encoding="utf-8")
-        self.section = text.split("\n### Agents\n", 1)[1].split("\n### ", 1)[0]
-
-    def test_the_example_setup_loads_as_the_section_says(self):
-        import re
-        (example,) = re.findall(r"```toml\n(.*?)```", self.section, re.S)
-        s = setup_of(example, env={"DEEPSEEK_API_KEY": "x"})
-        self.assertEqual(s.errors, [])
-        d = {a["name"]: a for a in s.describe()["agents"]}
-        self.assertEqual(list(d), ["qwen", "deepseek", "claude", "other"])
-        self.assertEqual(s.defaults, {"thread": "qwen", "process": "claude"})
-        self.assertEqual((d["qwen"]["where"], d["deepseek"]["where"]), ("runs on this machine", "sends text to api.deepseek.com"))
-        self.assertEqual([n for n, a in d.items() if "process" in a["tasks"]], ["claude", "other"])
-        self.assertEqual(s.agents["other"].limits, {"thread": 120, "process": 900})
-        self.assertEqual(s.agents["other"].command()[2], "--read-only")
-        self.assertEqual(rft_agents.LIMITS, {"thread": 120, "process": 600})
-        # with the key not set, that one agent is out of reach and says why
-        self.assertIn("DEEPSEEK_API_KEY is not set", setup_of(example, env={}).agents["deepseek"].problem)
-
-    def test_it_names_the_file_the_grants_and_what_was_never_run(self):
-        for said in ("~/.config/rft/agents.toml", "RFT_AGENTS", '`"text"`', '`"read"`', '`"change"`', "never run", "tests/fixtures/agents/SCENARIOS.md", "Discuss"):
-            self.assertIn(said, self.section)
-        self.assertEqual(rft_agents.UNVERIFIED, ("codex",))
-        # nothing of one user's machine
-        for word in ("alexpv", "/media/", "/home/"):
-            self.assertNotIn(word, self.section)
+# What people read about agents is the guide's Agents page, in the guide's repository. Its example
+# setup is loaded with this code, and the page checked against it, by that repository's
+# scripts/check_agents.py (the test that stood here, moved with the text).
 
 
 if __name__ == "__main__":
