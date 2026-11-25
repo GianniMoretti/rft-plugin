@@ -4,10 +4,11 @@ Claude can write a research project's code, launch its experiments and read its 
 than you can follow them. What is the best way to do research with that help, so that it is still
 your research?
 
-rft is one answer, built as a plugin for Claude Code: hand over the work, keep the reasoning.
-Every experiment you run and every idea you consider becomes one short note, each note hangs
-under the one it came from, and Claude keeps the notes up to date as you work together. You read
-the result as a live tree in your browser, and only you mark a note as verified.
+rft is one answer, built as a plugin for Claude Code: you stay in charge, and Claude works where
+you can see it. Every experiment you run and every idea you consider becomes one short note,
+each note hangs under the one it came from, and Claude keeps the notes up to date as you work
+together. You read them as a live tree in your browser, and from there you monitor, steer,
+correct, direct and limit what Claude does.
 
 ![The tree view of the demo project: directions, experiments, references and a theory note, each under the note it came from](docs/screenshots/tree.png)
 
@@ -20,6 +21,8 @@ the result as a live tree in your browser, and only you mark a note as verified.
   ideas stay in the tree, so it also says why a path was not taken.
 - **Claude does the bookkeeping.** It adds an experiment's note before launching it, records the
   result, and adds a direction for each new idea. You do not fill in forms.
+- **Keeps you in charge.** A note's priority is set by you alone. Lock a note and Claude can
+  only suggest changes to it. Only you mark a note verified.
 - **Shows it live.** A tree in the browser: click a note to read it, filter by tag or status,
   group the notes into lines of research.
 - **Stays plain.** The notes are markdown files in your project (`vault/` by default). They work
