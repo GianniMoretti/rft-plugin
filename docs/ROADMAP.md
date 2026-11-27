@@ -33,6 +33,7 @@ could be done, and when it is done. A package builds only on the ones before it.
 | 1.3.1 | Inbox and reading notes (built, not released) | 1.1.0 |
 | 1.3.2 | Phone layout (built, not released) | 1.1.0 |
 | 1.3.3 | Figure style (first step built, not released) | 1.1.0 |
+| 1.3.4 | Grilling (built, not released) | 1.3.1 |
 | 2.0.0 | Agents (step one built, not released) | 1.2.0–1.3.3 |
 
 ---
@@ -408,7 +409,7 @@ The Documents view of the Manuscript tab becomes a local Overleaf.
 - Checked with two real kits (the ICML 2027 style, the AAU PhD collection thesis).
 - Done when a real round trip through Overleaf (push, edit there, pull) has been made by hand.
 
-## 1.3.1 to 1.3.3 — Smaller features (built, not released)
+## 1.3.1 to 1.3.4 — Smaller features (built, not released)
 
 - **1.3.1, Inbox and reading notes.** A panel of links saved to read later, outside the tree,
   each with a reading priority. Process has Claude read an item and save its impression and a
@@ -423,6 +424,13 @@ The Documents view of the Manuscript tab becomes a local Overleaf.
 - **1.3.3, Figure style.** `rft_style.py` beside every notebook applies the project's tokens
   (`.rft/config.json`, `style`) in every run; the same tokens colour artifacts and slides.
   Still open: a render per medium, a figure lint at save time, a preview before placing.
+- **1.3.4, Grilling.** `/rft-grill-me <question, note id or concept>`: Claude questions the user
+  about one direction, in rounds, each question with a recommended answer, until seven subjects
+  are settled (the question, its place in the tree, literature, preliminary experiments, order,
+  milestone, referee). Only the grilled direction is written while it runs; the rest is one
+  table at the end, of which only the confirmed rows are written. A search it plans is a
+  literature note at `planned`, which `/rft-literature` then fills. Still open: a Grill button
+  in the note's drawer; the five scenarios of `bench/grilling.py` run on each release.
 
 ## 2.0.0 — Agents
 
