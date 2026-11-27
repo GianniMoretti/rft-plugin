@@ -15,12 +15,12 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import procs  # noqa: E402
 import test_phone  # noqa: E402
 from test_documents import empty_document, png  # noqa: E402
 
@@ -32,17 +32,16 @@ ROWS = "[...document.querySelectorAll('#ms-list .ms-tree > .ms-file')].map(r => 
 @unittest.skipUnless(test_phone.CHROME and test_phone.websocket, "needs Chromium (Playwright's, or RFT_CHROME) and websocket-client")
 class DocumentsPage(unittest.TestCase):
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="rft-documents-"))
+        self.tmp = procs.folder("rft-documents-")
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.vault = self.tmp / "vault"
         shutil.copytree(FIXTURE / "project" / "vault", self.vault)
         body = "\\documentclass{article}\n\\begin{document}\n%s\n\\end{document}\n"
         empty_document(self.vault, "two", {"paper.tex": body % "Paper.", "supplement.tex": body % "Supplement."})
         self.doc = self.vault / "documents" / "paper"
-        self.server = subprocess.Popen([sys.executable, str(ROOT / "server" / "rft_server.py"), "--vault", str(self.vault), "--web", str(ROOT / "web"),
+        self.server = procs.start([sys.executable, str(ROOT / "server" / "rft_server.py"), "--vault", str(self.vault), "--web", str(ROOT / "web"),
                                         "--port", "0", "--project", "demo", "--no-watch"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-        self.addCleanup(self.server.wait, 10)
-        self.addCleanup(self.server.terminate)
+        self.addCleanup(procs.stop, self.server)
         self.url = re.search(r"RFT_SERVER_URL (\S+)", self.server.stdout.readline()).group(1)
         (self.tmp / "profile").mkdir()
         self.b = test_phone.Browser(self.tmp / "profile")

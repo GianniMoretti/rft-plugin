@@ -21,12 +21,12 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import procs  # noqa: E402
 from test_phone import CHROME, ROOT, Browser, demo_vault, page, websocket  # noqa: E402
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "slides"
@@ -107,19 +107,22 @@ def rgb(hex_: str) -> str:
 class SlidesTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.tmp = Path(tempfile.mkdtemp(prefix="rft-slides-"))
+        cls.tmp = procs.folder("rft-slides-")
+        cls.addClassCleanup(shutil.rmtree, cls.tmp, True)
         vault = cls.tmp / "vault"
         demo_vault(vault)
         shutil.copy(FIXTURES / DECK, vault / "decks" / DECK)
         shutil.copy(FIXTURES / "E08_loss.svg", vault / "decks" / "E08_loss.svg")
         (vault / "decks" / "P03 Written wrong.md").write_text(WRONG)
         cls.slides = slides_of((FIXTURES / DECK).read_text())
-        cls.server = subprocess.Popen([sys.executable, str(ROOT / "server" / "rft_server.py"), "--vault", str(vault),
-                                       "--web", str(ROOT / "web"), "--port", "0", "--project", "demo", "--no-watch"],
-                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        cls.server = procs.start([sys.executable, str(ROOT / "server" / "rft_server.py"), "--vault", str(vault),
+                                  "--web", str(ROOT / "web"), "--port", "0", "--project", "demo", "--no-watch"],
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        cls.addClassCleanup(procs.stop, cls.server)
         cls.url = re.search(r"RFT_SERVER_URL (\S+)", cls.server.stdout.readline()).group(1)
         (cls.tmp / "profile").mkdir()
         cls.b = Browser(cls.tmp / "profile")
+        cls.addClassCleanup(cls.b.close)
         cls.b.call("Emulation.setDeviceMetricsOverride", width=1600, height=1000, deviceScaleFactor=1, mobile=False)
         cls.b.open(cls.url)
         cls.b.js(page("slides"))
@@ -127,13 +130,6 @@ class SlidesTest(unittest.TestCase):
         cls.shots = os.environ.get("RFT_SLIDES_SHOTS")
         if cls.shots:
             Path(cls.shots).mkdir(parents=True, exist_ok=True)
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.b.close()
-        cls.server.terminate()
-        cls.server.wait(10)
-        shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def open_deck(self, did: str):
         b = self.b
@@ -268,7 +264,8 @@ class Tools(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.tmp = Path(tempfile.mkdtemp(prefix="rft-slides-"))
+        cls.tmp = procs.folder("rft-slides-")
+        cls.addClassCleanup(shutil.rmtree, cls.tmp, True)
         vault = cls.tmp / "vault"
         demo_vault(vault)
         cls.orig = (FIXTURES / DECK).read_text().replace("id: P02", f"id: {cls.ID}")
@@ -276,25 +273,20 @@ class Tools(unittest.TestCase):
         cls.file.write_text(cls.orig)
         shutil.copy(FIXTURES / "E08_loss.svg", vault / "decks" / "E08_loss.svg")
         cls.vault = vault
-        cls.server = subprocess.Popen([sys.executable, str(ROOT / "server" / "rft_server.py"), "--vault", str(vault),
-                                       "--web", str(ROOT / "web"), "--port", "0", "--project", "demo", "--no-watch"],
-                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        cls.server = procs.start([sys.executable, str(ROOT / "server" / "rft_server.py"), "--vault", str(vault),
+                                  "--web", str(ROOT / "web"), "--port", "0", "--project", "demo", "--no-watch"],
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        cls.addClassCleanup(procs.stop, cls.server)
         cls.url = re.search(r"RFT_SERVER_URL (\S+)", cls.server.stdout.readline()).group(1)
         (cls.tmp / "profile").mkdir()
         cls.b = Browser(cls.tmp / "profile")
+        cls.addClassCleanup(cls.b.close)
         cls.b.call("Emulation.setDeviceMetricsOverride", width=1600, height=1000, deviceScaleFactor=1, mobile=False)
         cls.b.open(cls.url)
         cls.b.js(page("slides"))
         cls.shots = os.environ.get("RFT_SLIDES_SHOTS")
         if cls.shots:
             Path(cls.shots).mkdir(parents=True, exist_ok=True)
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.b.close()
-        cls.server.terminate()
-        cls.server.wait(10)
-        shutil.rmtree(cls.tmp, ignore_errors=True)
 
     # ---- the deck
 

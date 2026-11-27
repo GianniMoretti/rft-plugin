@@ -16,6 +16,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import procs  # noqa: E402
 import test_documents_page  # noqa: E402
 import test_phone  # noqa: E402
 from test_git import git  # noqa: E402
@@ -27,7 +28,7 @@ HEAD = "(document.querySelector('#ms-head .ms-git') || { textContent: '' }).text
 class GitPage(test_documents_page.DocumentsPage):
     def setUp(self):
         # git as a fresh machine has it, for the server too
-        self.home = Path(__import__("tempfile").mkdtemp(prefix="rft-git-page-"))
+        self.home = procs.folder("rft-git-page-")
         self.addCleanup(shutil.rmtree, self.home, True)
         config = self.home / "gitconfig"
         config.write_text("[user]\n\tname = The User\n\temail = user@example.org\n[init]\n\tdefaultBranch = main\n")

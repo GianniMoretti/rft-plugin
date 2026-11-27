@@ -25,7 +25,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 import unittest
 import urllib.request
@@ -35,6 +34,9 @@ try:
     import websocket  # websocket-client
 except ImportError:  # pragma: no cover
     websocket = None
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import procs  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SIZES = [(360, 780), (412, 915)]
@@ -235,9 +237,17 @@ class Browser:
     """Headless Chromium over the DevTools protocol, with a phone's screen and touch."""
 
     def __init__(self, profile: Path):
-        self.proc = subprocess.Popen([CHROME, "--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run",
-                                      "--remote-debugging-port=0", f"--user-data-dir={profile}", "about:blank"],
-                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.ws = None
+        self.proc = procs.start([CHROME, "--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run",
+                                 "--remote-debugging-port=0", f"--user-data-dir={profile}", "about:blank"],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            self.connect(profile)
+        except BaseException:  # a browser that did not come up is not left running
+            self.close()
+            raise
+
+    def connect(self, profile: Path):
         port_file = profile / "DevToolsActivePort"
         for _ in range(100):
             if port_file.exists() and port_file.read_text().strip():
@@ -305,33 +315,30 @@ class Browser:
 
     def close(self):
         try:
-            self.ws.close()
+            if self.ws:
+                self.ws.close()
         finally:
-            self.proc.terminate()
-            self.proc.wait(10)
+            procs.stop(self.proc)
 
 
 @unittest.skipUnless(CHROME and websocket, "needs Chromium (Playwright's, or RFT_CHROME) and websocket-client")
 class PhoneTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.tmp = Path(tempfile.mkdtemp(prefix="rft-phone-"))
+        # each cleanup is set as soon as there is something to clean: a setUpClass that fails has no tearDownClass
+        cls.tmp = procs.folder("rft-phone-")
+        cls.addClassCleanup(shutil.rmtree, cls.tmp, True)
         demo_vault(cls.tmp / "vault")
-        cls.server = subprocess.Popen([sys.executable, str(ROOT / "server" / "rft_server.py"), "--vault", str(cls.tmp / "vault"),
-                                       "--web", str(ROOT / "web"), "--port", "0", "--project", "demo", "--no-watch"],
-                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        cls.server = procs.start([sys.executable, str(ROOT / "server" / "rft_server.py"), "--vault", str(cls.tmp / "vault"),
+                                  "--web", str(ROOT / "web"), "--port", "0", "--project", "demo", "--no-watch"],
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        cls.addClassCleanup(procs.stop, cls.server)
         line = cls.server.stdout.readline()
         cls.url = re.search(r"RFT_SERVER_URL (\S+)", line).group(1)
         (cls.tmp / "profile").mkdir()
         cls.b = Browser(cls.tmp / "profile")
+        cls.addClassCleanup(cls.b.close)
         cls.shots = os.environ.get("RFT_PHONE_SHOTS")
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.b.close()
-        cls.server.terminate()
-        cls.server.wait(10)
-        shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def screen(self, steps):
         # each screen from a fresh start: the page keeps which panels were open

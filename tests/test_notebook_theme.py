@@ -21,6 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
 sys.path.insert(0, str(ROOT / "server"))
+import procs  # noqa: E402
 import rft_notebook  # noqa: E402
 from test_notebook import HAS_UV, note, uv_project  # noqa: E402
 from test_phone import CHROME, READY, Browser, tap_node, websocket  # noqa: E402
@@ -122,7 +123,8 @@ class MarimoStillReadsTheseTest(unittest.TestCase):
 class NotebookThemeTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.tmp = Path(tempfile.mkdtemp(prefix="rft-nbtheme-")).resolve()
+        cls.tmp = procs.folder("rft-nbtheme-").resolve()
+        cls.addClassCleanup(shutil.rmtree, cls.tmp, True)
         vault = cls.tmp / "vault"
         (vault / "directions").mkdir(parents=True)
         (vault / "experiments").mkdir()
@@ -136,20 +138,15 @@ class NotebookThemeTest(unittest.TestCase):
         (cls.tmp / "toy" / "notebooks" / "own.css").write_text(OWN_CSS)
         rft_notebook.link("../../toy/notebooks/E02_baseline.py", vault / "notebooks" / "E02.py")
         rft_notebook.link("../../toy/notebooks/E03_styled.py", vault / "notebooks" / "E03.py")
-        cls.server = subprocess.Popen([sys.executable, str(ROOT / "server" / "rft_server.py"), "--vault", str(vault),
-                                       "--web", str(ROOT / "web"), "--port", "0", "--project", "demo", "--no-watch"],
-                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        cls.server = procs.start([sys.executable, str(ROOT / "server" / "rft_server.py"), "--vault", str(vault),
+                                  "--web", str(ROOT / "web"), "--port", "0", "--project", "demo", "--no-watch"],
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        cls.addClassCleanup(procs.stop, cls.server, 20)  # its editors with it
         cls.url = re.search(r"RFT_SERVER_URL (\S+)", cls.server.stdout.readline()).group(1)
         (cls.tmp / "profile").mkdir()
         cls.b = Browser(cls.tmp / "profile")
+        cls.addClassCleanup(cls.b.close)
         cls.b.call("Emulation.setDeviceMetricsOverride", width=1500, height=950, deviceScaleFactor=1, mobile=False)
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.b.close()
-        cls.server.terminate()  # its editors with it
-        cls.server.wait(20)
-        shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def same(self, editor, page, theme):
         self.assertIn(theme, editor["theme"])

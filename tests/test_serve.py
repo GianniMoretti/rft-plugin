@@ -16,7 +16,9 @@ import time
 import unittest
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import procs  # noqa: E402
 import rft_serve  # noqa: E402
 import rft_server  # noqa: E402
 
@@ -63,6 +65,7 @@ class Proc:
 
         self.p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, cwd=cwd,
                                   preexec_fn=signals)
+        procs.watch(self.p)  # stopped when the run is killed too, which no tearDown sees
         self.lines = queue.Queue()
         threading.Thread(target=self._read, daemon=True).start()
 

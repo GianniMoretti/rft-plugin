@@ -22,7 +22,9 @@ import unittest
 from pathlib import Path
 from urllib.parse import quote
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import procs  # noqa: E402
 import rft_decks  # noqa: E402
 import rft_manuscript  # noqa: E402
 import rft_style  # noqa: E402
@@ -1697,6 +1699,7 @@ class ServerTest(unittest.TestCase):
         """The server as the plugin runs it, its cache in `cache`: its process, port and key."""
         proc = subprocess.Popen([sys.executable, str(SERVER), "--vault", str(self.vault), "--web", str(WEB), "--no-watch"],
                                 stdout=subprocess.PIPE, text=True, env={**os.environ, "XDG_CACHE_HOME": str(cache)})
+        procs.watch(proc)
         self.addCleanup(lambda: (proc.kill(), proc.wait(), proc.stdout.close()))
         m = re.fullmatch(r"RFT_SERVER_URL http://127\.0\.0\.1:(\d+)/\?token=([\w-]{16})", proc.stdout.readline().strip())
         self.assertIsNotNone(m)
@@ -2335,6 +2338,7 @@ class SharedPortTest(unittest.TestCase):
              "--port", str(port), "--project", project, "--no-watch"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             env={**os.environ, "XDG_CACHE_HOME": str(Path(self.tmp.name) / "cache")})
+        procs.watch(p)
         self.procs.append(p)
         lines = queue.Queue()
         threading.Thread(target=lambda: lines.put(p.stdout.readline()), daemon=True).start()

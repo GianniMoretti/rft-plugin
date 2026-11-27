@@ -14,12 +14,12 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import procs  # noqa: E402
 import test_phone  # noqa: E402
 from agents_fakes import HARNESS, FakeHarness, FakeModel  # noqa: E402
 
@@ -57,7 +57,7 @@ SENT = "window.sent.filter(r => r.url.includes(%s)).map(r => JSON.parse(r.body))
 @unittest.skipUnless(test_phone.CHROME and test_phone.websocket, "needs Chromium (Playwright's, or RFT_CHROME) and websocket-client")
 class AgentsPage(unittest.TestCase):
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="rft-agents-"))
+        self.tmp = procs.folder("rft-agents-")
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.vault = self.tmp / "vault"
         test_phone.demo_vault(self.vault)
@@ -77,9 +77,8 @@ class AgentsPage(unittest.TestCase):
         env = {**os.environ, **self.harness.env, "RFT_AGENTS": str(self.setup_file), "XDG_CACHE_HOME": str(self.tmp / "cache")}
         env.pop("RFT_TEST_NO_SUCH_KEY", None)
         args = [sys.executable, str(ROOT / "server" / "rft_server.py"), "--vault", str(self.vault), "--web", str(ROOT / "web"), "--port", "0", "--project", "demo", "--no-watch"]
-        self.server = subprocess.Popen(args + (["--terminal"] if terminal else []), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
-        self.addCleanup(self.server.wait, 10)
-        self.addCleanup(self.server.terminate)
+        self.server = procs.start(args + (["--terminal"] if terminal else []), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
+        self.addCleanup(procs.stop, self.server)
         url = None
         while url is None:
             line = self.server.stdout.readline()
