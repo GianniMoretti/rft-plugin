@@ -20,7 +20,7 @@ describe('activation', () => {
     const w = world(on, {})
     on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.commands).toEqual(['rft', 'rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-next', 'rft-machine', 'rft-jobs', 'rft-summarize', 'rft-manuscript', 'rft-artifact', 'rft-update', 'rft-view', 'rft-inbox', 'rft-handoff'])
+    expect(w.commands).toEqual(['rft', 'rft-init', 'rft-concepts', 'rft-literature', 'rft-grill-me', 'rft-rebalance', 'rft-next', 'rft-machine', 'rft-jobs', 'rft-summarize', 'rft-manuscript', 'rft-artifact', 'rft-update', 'rft-view', 'rft-inbox', 'rft-handoff'])
     expect(w.tools).toEqual([])
     expect(w.opened).toEqual([])
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
@@ -51,7 +51,7 @@ describe('activation', () => {
     const w = world(on, demoFiles(), { refuse: ['rft'] })
     on('prompt.compose', () => ({ sections: [] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.commands).toEqual(['rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-next', 'rft-machine', 'rft-jobs', 'rft-summarize', 'rft-manuscript', 'rft-artifact', 'rft-update', 'rft-view', 'rft-inbox', 'rft-handoff'])
+    expect(w.commands).toEqual(['rft-init', 'rft-concepts', 'rft-literature', 'rft-grill-me', 'rft-rebalance', 'rft-next', 'rft-machine', 'rft-jobs', 'rft-summarize', 'rft-manuscript', 'rft-artifact', 'rft-update', 'rft-view', 'rft-inbox', 'rft-handoff'])
     expect(w.tools).toHaveLength(41)
     expect(w.opened).toEqual(['rft-tree'])
     expect(w.toasts.join()).toContain('/rft')
@@ -61,7 +61,7 @@ describe('activation', () => {
 
   test('no command takes the name of the plugin skill', async () => {
     // a plugin skill named <x> is the command /rft:<x>; the engine refuses a command of the same name
-    expect(['rft', 'rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-next', 'rft-machine', 'rft-jobs', 'rft-summarize', 'rft-manuscript', 'rft-artifact', 'rft-update', 'rft-view', 'rft-inbox', 'rft-handoff']).not.toContain(SKILL)
+    expect(['rft', 'rft-init', 'rft-concepts', 'rft-literature', 'rft-grill-me', 'rft-rebalance', 'rft-next', 'rft-machine', 'rft-jobs', 'rft-summarize', 'rft-manuscript', 'rft-artifact', 'rft-update', 'rft-view', 'rft-inbox', 'rft-handoff']).not.toContain(SKILL)
   })
 
   test('autoOpen off keeps the pane closed', { options: { autoOpen: false } }, async ($, on) => {
@@ -229,6 +229,100 @@ describe('concepts', () => {
       expect(prompts[prompts.length - 1]).toContain('Place it under')
     }
     expect(prompts).toHaveLength(4)
+  })
+
+  test('/rft-grill-me alone prints its usage and the directions to grill, at no model turn', async ($, on) => {
+    const clock = mock.clock(on)
+    world(on, demoFiles())
+    const prompts: string[] = []
+    on('prompt.submit', (_$, e) => { prompts.push(String(e.text)); return { text: e.text } as never })
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const res = await $.command.run({ command: 'rft-grill-me', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } } as never)
+    expect(res.text).toContain('Usage: /rft-grill-me <question, note id or concept>')
+    expect(res.text).toContain(`${D01} (idea; under it: E02 running)`)
+    await clock.advance(5000)
+    expect(prompts).toEqual([])
+  })
+
+  test('/rft-grill-me asks for the grilling the note calls for, and changes no note itself', async ($, on) => {
+    const clock = mock.clock(on)
+    const w = world(on, demoFiles())
+    const prompts: string[] = []
+    on('prompt.submit', (_$, e) => { prompts.push(String(e.text)); return { text: e.text } as never })
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const run = async (args: string) => {
+      const res = await $.command.run({ command: 'rft-grill-me', args, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } } as never)
+      await clock.advance(5000)
+      return { said: String(res.text), prompt: prompts[prompts.length - 1]! }
+    }
+    const path = `vault/directions/${D01}.md`
+    const start = w.fs.read(path)
+    const vault = () => JSON.stringify([...w.fs.files].filter(([k]) => k.startsWith('vault/')).map(([k, v]) => [k, v.text]))
+
+    // a direction at idea with a run under it: grilled in place, the run refined and not doubled
+    const before = vault()
+    const inPlace = await run('D01')
+    expect(inPlace.said).toContain(`Claude will grill you on ${D01}`)
+    expect(inPlace.said).toContain('only the rows you confirm are written')
+    expect(inPlace.prompt).toContain(`Grill me on ${D01}. The grilled direction is this note (idea).`)
+    expect(inPlace.prompt).toContain('Already under it: E02 (running)')
+    expect(inPlace.prompt).toContain('add no second note for the same run or search')
+    expect(inPlace.prompt).toContain('skills/rft-manual/grilling.md')
+    expect(inPlace.prompt).toContain('write only the grilled direction')
+    expect(inPlace.prompt).toContain('Write no code and queue nothing')
+    expect(vault()).toBe(before)
+
+    // an earlier grilling wrote on it: resumed from what the note answers
+    w.fs.write(path, start.replace('## Children in the tree', '## Hypothesis\nThe variant gains two points.\n\n## Open questions\n- Which dataset?\n\n## Children in the tree'))
+    const resumed = await run('d01')
+    expect(resumed.said).toContain('go on with the grilling')
+    expect(resumed.prompt).toContain('already has its Hypothesis and Open questions')
+    expect(resumed.prompt).toContain('do not ask it again')
+
+    // dropped: the tree holds an answer, and nothing is written until the user says reopen
+    w.fs.write(path, start.replace(/^status: idea$/m, 'status: dropped'))
+    const answered = await run('D01')
+    expect(answered.said).toContain(`${D01} is dropped`)
+    expect(answered.prompt).toContain('Write nothing until I answer')
+    expect(answered.prompt).not.toContain('The grilled direction is this note')
+
+    // locked by the user, or verified: left as it is
+    w.fs.write(path, start.replace(/^status: idea$/m, 'status: idea\nlocked: true'))
+    const locked = await run('D01')
+    expect(locked.said).toContain('stays as it is')
+    expect(locked.prompt).toContain(`${D01} is locked: do not edit it`)
+    w.fs.write(path, start.replace(/^status: idea$/m, 'status: verified'))
+    expect((await run('D01')).prompt).toContain(`${D01} is verified: do not edit it`)
+
+    // an experiment: the direction that comes out of it
+    w.fs.write(path, start)
+    const other = await run('E02')
+    expect(other.said).toContain('is not a direction')
+    expect(other.prompt).toContain(`${E02} is an experiment, not a direction`)
+
+    // anything that is no note and no concept is a question, with or without its quotes
+    const asked = await run('"does the variant transfer to video?"')
+    expect(asked.said).toContain('adds its note only once you agreed where it goes')
+    expect(asked.prompt).toContain('a question that is not a note of the tree yet: "does the variant transfer to video?"')
+    expect(asked.prompt).toContain('only then create the grilled direction')
+    expect(prompts).toHaveLength(7)
+  })
+
+  test('/rft-grill-me <concept> asks which of its open questions to grill', async ($, on) => {
+    const clock = mock.clock(on)
+    const files = demoFiles()
+    const path = `vault/directions/${D01}.md`
+    files[path] = files[path]!.replace(/^(status: .*)$/m, '$1\nconcept: "Better variants"\nconcept_summary: "Variants of the thing"')
+    world(on, files)
+    const prompts: string[] = []
+    on('prompt.submit', (_$, e) => { prompts.push(String(e.text)); return { text: e.text } as never })
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const res = await $.command.run({ command: 'rft-grill-me', args: 'better variants', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } } as never)
+    expect(res.text).toContain('list the open questions of "Better variants"')
+    await clock.advance(5000)
+    expect(prompts[0]).toContain(`the concept "Better variants", which starts at ${D01}`)
+    expect(prompts[0]).toContain('ask me which one to grill')
+    expect(prompts[0]).toContain('write nothing')
   })
 
   test('/rft-rebalance asks Claude for moves to confirm, optionally in one part of the tree, and moves nothing', async ($, on) => {

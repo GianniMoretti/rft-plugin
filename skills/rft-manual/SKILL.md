@@ -1,6 +1,6 @@
 ---
 name: rft-manual
-description: Manual of the Reasoning Flow Tree (rft) plugin, for a project with .rft/config.json: how experiment, direction, reference and theory notes are created, updated and linked. A short core indexing its parts (concepts and code, literature, map, artifacts, notebooks, planning, queue, writing, comments, inbox): read only the part needed.
+description: Manual of the Reasoning Flow Tree (rft) plugin, for a project with .rft/config.json: how experiment, direction, reference and theory notes are created, updated and linked. A short core indexing its parts (concepts and code, literature, map, artifacts, notebooks, planning, queue, writing, comments, inbox, grilling): read only the part needed.
 ---
 
 # Reasoning Flow Tree (rft)
@@ -33,6 +33,7 @@ the parts the work at hand needs:
 | `slides.md` | a slide deck is asked for or written | |
 | `comments.md` | a note is locked; a comment or suggestion of the tree view is to be answered; a note has footnotes or highlights | `rft_comments`, `rft_comment`, `rft_suggest` |
 | `inbox.md` | the user saves something to read later, asks what waits there, or to process or discuss an item | `rft_inbox` |
+| `grilling.md` | a grilling is asked for (`/rft-grill-me`) or you offer one | |
 
 This file's own tools: `rft_add_node`, `rft_set_status`, `rft_set_tags`, `rft_tags`, `rft_set_refs`,
 `rft_set_type`, `rft_tree`, `rft_sync`, `rft_validate`, `rft_handoff`. A tool that is not in the
@@ -119,6 +120,8 @@ topical tags**: what it is about, so the tree view can filter by them (`ablation
 3. **When a new idea or question comes up** (from a result, the user, a discussion), even if it
    is rejected at once: `rft_add_node` with `type: direction` and `parent` = the note it comes
    from, and its topical `tags`. A rejected idea gets status `discussed`.
+   A direction opened with no experiment planned under it: offer a grilling (`grilling.md`),
+   never start one unasked. In a grilling, ideas wait for its proposal.
 4. **When a paper, method or literature review is read**: `rft_add_node` with
    `type: reference`, `parent` = the note that led to it, and its topical `tags`. Fill
    **Source** with a link that can be checked (DOI, arXiv id or URL), **Summary**, **Method**,

@@ -16,7 +16,8 @@ import { CWD, MemoryFs, demoFiles, world } from './fixture'
 const FEATURES = Object.keys(FEATURE_TOOLS) as Feature[]
 
 /** The most characters of the rules without any feature, the map or the tree. */
-const RULES_CORE = 8400
+// raised from 8400 on 2026-11-27 for `grilling` in the list of the manual's parts (the part's name: nothing else says it)
+const RULES_CORE = 8410
 /** The most each feature's rule adds. */
 const RULE: Record<Feature, number> = {
   dates: 700, priorities: 450, verify: 550, locks: 600, comments: 330, artifacts: 680, notebooks: 1100, queue: 1250, manuscript: 980, handoff: 300,

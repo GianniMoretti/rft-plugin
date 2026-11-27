@@ -47,6 +47,7 @@ import { artifactMarks, artifactReport, artifactWarnings, artifactsToWrite, setA
 import type { ApplyOutcome, NotebookEnv } from './lib/notebooks'
 import { runNotebook, setNotebook } from './lib/notebooks'
 import { MACHINE_FILE, machinePrompt, probeText, readMachine, statusText } from './lib/machine'
+import { caseOf, grillConceptPrompt, grillNotePrompt, grillQuestionPrompt, grillUsage, sectionsIn, underNote } from './lib/grilling'
 import { manualDir } from './lib/manual'
 import { artifactPrompt, candidatesPrompt, literatureFillPrompt, literaturePrompt, manuscriptPrompt, notebooksPrompt, rebalancePrompt, suggestConceptsPrompt, summarizePrompt } from './lib/prompts'
 import { closeWithNote, readingOf, saveImpression } from './lib/reading'
@@ -291,6 +292,7 @@ async function registerCommands($: EngineInterface): Promise<void> {
   await attempt('rft-init', () => $.command.register({ name: 'rft-init', description: 'Activate the Reasoning Flow Tree in this project and create its vault', argumentHint: '[starting question]' }))
   await attempt('rft-concepts', () => $.command.register({ name: 'rft-concepts', description: 'Print the concept tree (/rft-concepts suggest: ask Claude to propose a concept split)', argumentHint: '[suggest]' }))
   await attempt('rft-literature', () => $.command.register({ name: 'rft-literature', description: 'Ask Claude for a literature search on a topic, a note or a concept, ending in reference notes', argumentHint: '<topic, note id or concept>' }))
+  await attempt('rft-grill-me', () => $.command.register({ name: 'rft-grill-me', description: 'Ask Claude to grill you on a direction: rounds of questions, each with a recommended answer, until its hypothesis, literature, first experiments, order and referee are agreed; only the rows you confirm are written', argumentHint: '<question, note id or concept>' }))
   await attempt('rft-rebalance', () => $.command.register({ name: 'rft-rebalance', description: 'Ask Claude to propose moving branches under the line of research they belong to; nothing moves until you confirm', argumentHint: '[concept or note id] [--full]' }))
   await attempt('rft-next', () => $.command.register({ name: 'rft-next', description: 'What is still open, by concept: running and planned experiments, unexplored directions, open questions', argumentHint: '[concept]' }))
   await attempt('rft-machine', () => $.command.register({ name: 'rft-machine', description: 'Pair this machine with the experiment queue (add: checked at no model turn, then Claude asks you where outputs go and which GPUs to keep, and turns the queue on), or show how it stands', argumentHint: '[add|status]' }))
@@ -1427,6 +1429,38 @@ export const register: Register = (on, options) => {
       const where = id ? loaded.tree.nodes[id]!.name : concept ? `${loaded.tree.nodes[concept.root!]!.name} (the start of the concept "${concept.name}")` : null
       pendingPrompts.push(literaturePrompt(manualDir($.plugin.root), id ? `${loaded.tree.nodes[id]!.title}` : concept ? concept.name : subject, where))
       return { text: `Claude will search the literature on ${where ?? JSON.stringify(subject)} in a moment and write it as one literature note; notes for single papers, directions and experiments only after you choose.` }
+    } catch (err) {
+      return { text: message(err) }
+    }
+  })
+
+  on('command.run', { command: 'rft-grill-me' }, async ($, e) => {
+    try {
+      const loaded = await loadActive((await mustHere($)).io)
+      const subject = e.args.trim().replace(/^"(.*)"$/s, '$1').trim()
+      if (!subject) return { text: grillUsage(loaded.tree) }
+      const m = manualDir($.plugin.root)
+      const kept = 'Only the grilled direction is written while it runs; everything else waits for the proposal, and only the rows you confirm are written.'
+      const id = resolveId(loaded.tree, subject)
+      if (id) {
+        const n = loaded.tree.nodes[id]!
+        const text = loaded.texts[id] ?? ''
+        const kase = caseOf(n, text)
+        pendingPrompts.push(grillNotePrompt(m, n, kase, underNote(loaded.tree, id), sectionsIn(text)))
+        const said = kase === 'answered' ? `${n.name} is ${n.status}: Claude will say in a moment what the tree already holds on it and ask whether to stop or to reopen it as a new direction. Nothing is written until you answer.`
+          : kase === 'locked' ? `${n.name} is ${n.status === 'verified' ? 'verified' : 'locked'} and stays as it is: Claude will grill you in a moment on a new direction under it. ${kept}`
+          : kase === 'another type' ? `${n.name} is not a direction: Claude will grill you in a moment on the direction that comes out of it. ${kept}`
+          : kase === 'resume' ? `Claude will go on with the grilling of ${n.name} in a moment, from what the note already answers. ${kept}`
+          : `Claude will grill you on ${n.name} in a moment: rounds of questions, each with the answer it recommends. ${kept}`
+        return { text: said }
+      }
+      const concept = Object.values(loaded.tree.concepts ?? {}).find(c => c.root && c.name.toLowerCase() === subject.toLowerCase())
+      if (concept) {
+        pendingPrompts.push(grillConceptPrompt(m, concept.name, loaded.tree.nodes[concept.root!]!.name))
+        return { text: `Claude will list the open questions of "${concept.name}" in a moment and ask which one to grill. Nothing is written until you pick.` }
+      }
+      pendingPrompts.push(grillQuestionPrompt(m, subject))
+      return { text: `Claude will grill you on ${JSON.stringify(subject)} in a moment: it first looks up what the tree holds on it, and adds its note only once you agreed where it goes. ${kept}` }
     } catch (err) {
       return { text: message(err) }
     }

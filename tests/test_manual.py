@@ -15,7 +15,7 @@ MANUAL = ROOT / 'skills' / 'rft-manual'
 
 # In characters (about 3.5 to a token). The whole manual was one file of 64,400.
 MAX_DESCRIPTION = 350
-MAX_CORE = 15650
+MAX_CORE = 15906
 MAX_PART = 8000
 
 
@@ -105,6 +105,31 @@ class Manual(unittest.TestCase):
         for part in parts:
             self.assertIn(f'### {part}', spec)
         self.assertIn('every paper', ' '.join(text(MANUAL / 'literature.md').split()).lower())
+
+    def test_the_grilling_part_says_what_a_grilling_covers_writes_and_how_it_ends(self):
+        """The sections as the plugin looks for them (hooks/lib/grilling.ts), and the subjects, rows and endings of the part."""
+        sections = re.findall(r"'([A-Za-z ]+)'", re.search(r'export const SECTIONS = \[([^\]]+)\]', text(ROOT / 'hooks/lib/grilling.ts')).group(1))
+        self.assertEqual(sections, ['Hypothesis', 'Scope', 'Plan', 'Referee', 'Open questions'])
+        body = text(MANUAL / 'grilling.md')
+        flat = ' '.join(body.split())
+        for section in sections:
+            self.assertIn(f'- **{section}**:', body, section)
+        subjects = re.findall(r'(?m)^(\d)\. \*\*([^*]+)\*\*', body)
+        self.assertEqual([s for _, s in subjects], ['The question.', 'Its place in the tree.', 'Literature.', 'Preliminary experiments.', 'Order and priority.', 'Milestone.', 'The referee.'])
+        rows = [m.group(1) for m in re.finditer(r'(?m)^\| ([a-z -]+) \| `rft_', body)]
+        self.assertEqual(rows, ['sub-direction', 'rejected alternative', 'definition that settled', 'literature search', 'preliminary experiment', 'priority', 'start and estimate', 'milestone'])
+        for ending in ('**Agreed**', '**Not worth pursuing**', '**Stopped early**'):
+            self.assertIn(ending, body, ending)
+        for said in ('never start one unasked', 'every question that can be asked now', 'word it so that "yes" accepts it', 'Ask the user only for decisions',
+                     'While the grilling runs, only the grilled direction', 'Everything else waits for the proposal', 'write only those',
+                     'never a second note for the same run or search', 'A verified or locked note is never edited', 'a search is missing',
+                     'write none of it as a reference', 'depends neither on the user\'s judgment nor on yours', 'No code is written and nothing is queued',
+                     'which fills that note', 'the status is not changed'):
+            self.assertIn(said, flat.replace('*', ''), said)
+        # the core sends to the part, and the search a grilling planned is filled by /rft-literature
+        core = ' '.join(text(MANUAL / 'SKILL.md').split())
+        self.assertIn('offer a grilling (`grilling.md`), never start one unasked', core)
+        self.assertIn('add no second note', ' '.join(text(MANUAL / 'literature.md').split()))
 
     def test_a_part_opens_by_saying_what_it_is_part_of(self):
         for part in parts_in_code():
