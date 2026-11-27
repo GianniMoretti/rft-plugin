@@ -11,13 +11,23 @@
 //
 //     ## Processed
 //
-//     - 2026-11-23 https://example.org/blog/post — discarded: superseded by R07
+//     - 2026-11-23 [Mixup at scale](https://arxiv.org/abs/2406.01234) → R15
+//
+//     ## Discarded
+//
+//     - https://example.org/blog/post — from Bea · added 2026-11-20
+//       - discarded 2026-11-23: superseded by R07
 //
 // An item is a top-level list line that starts with a link: a markdown link, a URL, an arXiv id or
 // a DOI. After the link, parts set apart by `·`: why it was saved (after a dash), its reading
 // priority as one word, `added <date>`, and `read <date>` once the user marked it as read. A brief
 // is the indented list lines under it, the first starting `briefed <date>:`. Any other line is not
 // an item.
+//
+// A discard keeps the item (docs/adr/0007): its lines move, as they are, under `## Discarded`, and
+// one indented line is added as their last, `discarded <date>: <reason>`. Brought back, the lines
+// return to the open list without that line. An item under that heading is a discarded item
+// whatever its lines say; the line that says when and why is its last indented one, when it reads so.
 //
 // server/rft_inbox.py reads and writes the same file the same way, pattern for pattern, and
 // tests/fixtures/inbox holds both to one file and one list of cases. So that the two cannot differ
@@ -41,12 +51,14 @@ export type Brief = { date: string; lines: string[] }
 /** An item as the page and the tool show it. `key` is what it is: the same paper has the same key however its link was typed. */
 export type InboxItem = { key: string; url: string; title: string; why: string; priority: string; added: string; read: string; duplicate: boolean; brief: Brief | null }
 export type ProcessedItem = { date: string; key: string; title: string; outcome: string }
+/** An item a discard took out of the inbox, kept whole: what it was, the day it was discarded and why. */
+export type DiscardedItem = Omit<InboxItem, 'duplicate'> & { discarded: string; reason: string }
 /**
  * The file as read: its lines, as they are, and what they hold, in the file's order. Each line is
  * apart from how it ended (`cr`: with a carriage return before its newline), so that a file goes
  * back with the endings it had, mixed or not. `at`: an item's first line, and one past its last.
  */
-export type Inbox = { crlf: boolean; lines: string[]; cr: boolean[]; items: (InboxItem & { at: [number, number] })[]; processed: ProcessedItem[] }
+export type Inbox = { crlf: boolean; lines: string[]; cr: boolean[]; items: (InboxItem & { at: [number, number] })[]; processed: ProcessedItem[]; discarded: (DiscardedItem & { at: [number, number] })[] }
 
 /** White space, for inside a character class. */
 const WS = String.raw` \t\n\v\f\r   -     　`
@@ -74,6 +86,9 @@ const LINKS = String.raw`(https?://[^${WS})>\]"']+)|\barxiv(?:\.org/(?:abs|pdf|h
 const ITEM = rx(String.raw`^[-*+][ \t]+(.*)$`)
 const SUB = rx(String.raw`^[ \t]+[-*+][ \t]+(.*)$`)
 const PROCESSED = rx(String.raw`^##[ \t]+processed[ \t]*$`, true)
+const DISCARDED = rx(String.raw`^##[ \t]+discarded[ \t]*$`, true)
+// the last indented line of a discarded item: the day it was discarded and why, either of them or neither
+const DISCARDED_AT = rx(String.raw`^discarded(?:[ \t]+([0-9]{4}-[0-9]{2}-[0-9]{2}))?[ \t]*(?::[ \t]*(.*))?$`, true)
 const HEADING = rx(String.raw`^#{1,2}[ \t]`)
 const SOURCE = rx(String.raw`^##[ \t]+Source[ \t]*$`)
 const BRIEFED = rx(String.raw`^briefed[ \t]+([0-9]{4}-[0-9]{2}-[0-9]{2})[ \t]*:?[ \t]*(.*)$`, true)
@@ -177,19 +192,19 @@ export function readInbox(text: string): Inbox {
 }
 
 function readLines(lines: string[], cr: boolean[], crlf: boolean): Inbox {
-  const box: Inbox = { crlf, lines, cr, items: [], processed: [] }
+  const box: Inbox = { crlf, lines, cr, items: [], processed: [], discarded: [] }
   const seen = new Set<string>()
-  let done = false
+  let mode: 'open' | 'processed' | 'discarded' = 'open'
   for (let i = 0; i < box.lines.length;) {
     const line = box.lines[i++]!
     if (HEADING.test(line)) {
-      done = PROCESSED.test(line)
+      mode = PROCESSED.test(line) ? 'processed' : DISCARDED.test(line) ? 'discarded' : 'open'
       continue
     }
     const m = ITEM.exec(line)
     if (!m) continue
     const rest = strip(m[1]!)
-    if (done) {
+    if (mode === 'processed') {
       const d = DATED.exec(rest)
       const got = linkAt(d ? d[2]! : rest)
       if (got) box.processed.push({ date: d ? d[1]! : '', key: got.key, title: got.title, outcome: strip(strip(got.tail).replace(DASH, '')) })
@@ -202,9 +217,18 @@ function readLines(lines: string[], cr: boolean[], crlf: boolean): Inbox {
       subs.push(strip(s[1]!))
       i++
     }
+    const at: [number, number] = [i - subs.length - 1, i]
+    // of a discarded item, the last indented line says when and why; the others are its own
+    const d = mode === 'discarded' && subs.length ? DISCARDED_AT.exec(subs[subs.length - 1]!) : null
+    if (d) subs.pop()
     const b = subs.length ? BRIEFED.exec(subs[0]!) : null
     const brief = b ? { date: b[1]!, lines: [strip(b[2]!), ...subs.slice(1)].filter(Boolean) } : null
-    box.items.push({ key: got.key, url: got.url, title: got.title, ...tailOf(got.tail), duplicate: seen.has(got.key), brief, at: [i - subs.length - 1, i] })
+    const item = { key: got.key, url: got.url, title: got.title, ...tailOf(got.tail) }
+    if (mode === 'discarded') {
+      box.discarded.push({ ...item, brief, discarded: d?.[1] ?? '', reason: strip(d?.[2] ?? ''), at })
+      continue
+    }
+    box.items.push({ ...item, duplicate: seen.has(got.key), brief, at })
     seen.add(got.key)
   }
   return box
@@ -217,10 +241,16 @@ export const inboxText = (box: Inbox): string => box.lines.map((line, n) => (box
 export const shown = (box: Inbox): InboxItem[] =>
   box.items.map(({ key, url, title, why, priority, added, read, duplicate, brief }) => ({ key, url, title, why, priority, added, read, duplicate, brief }))
 
-/** What already holds this link: the first item with it, else the latest processed item with it. */
-export function findIn(box: Inbox, key: string): { item: InboxItem } | { processed: ProcessedItem } | null {
+/** The discarded items, each as it was in the inbox, with the day it was discarded and why (without their place in the file). */
+export const kept = (box: Inbox): DiscardedItem[] =>
+  box.discarded.map(({ key, url, title, why, priority, added, read, brief, discarded, reason }) => ({ key, url, title, why, priority, added, read, brief, discarded, reason }))
+
+/** What already holds this link: the first item with it, else the latest discarded item with it, else the latest processed item with it. */
+export function findIn(box: Inbox, key: string): { item: InboxItem } | { discarded: DiscardedItem } | { processed: ProcessedItem } | null {
   const item = box.items.find(i => i.key === key)
   if (item) return { item }
+  const discarded = kept(box).filter(d => d.key === key).pop()
+  if (discarded) return { discarded }
   const processed = box.processed.filter(p => p.key === key).pop()
   return processed ? { processed } : null
 }
@@ -253,11 +283,7 @@ export function addTo(box: Inbox, input: AddInput): { box: Inbox; item: InboxIte
   let lines: string[], cr: boolean[], at: number
   if (!box.lines.some(l => strip(l))) [lines, cr, at] = [['# Inbox', '', line, ''], [box.crlf, box.crlf, box.crlf, false], 2]
   else {
-    // the end of the open list: before the processed heading and the blank lines above it
-    const found = box.lines.findIndex(l => PROCESSED.test(l))
-    const stop = found < 0 ? box.lines.length : found
-    let end = stop
-    while (end > 0 && !strip(box.lines[end - 1]!)) end--
+    const [stop, end] = openEnd(box.lines)
     // after free text or a heading, a blank line first; one after it when nothing follows or the
     // processed heading is right there
     const before = end > 0 && !(ITEM.test(box.lines[end - 1]!) || SUB.test(box.lines[end - 1]!)) ? [''] : []
@@ -275,6 +301,42 @@ export function addTo(box: Inbox, input: AddInput): { box: Inbox; item: InboxIte
 
 /** The item with this link: the first, or the `nth` after it when the link was typed more than once. */
 export const nthItem = (box: Inbox, key: string, nth = 0): Inbox['items'][number] | null => (nth >= 0 ? box.items.filter(i => i.key === key)[nth] ?? null : null)
+
+/**
+ * Where the open list ends: the first heading of the processed or of the discarded ones (the file's
+ * end, with neither), and the line past the last one above it that is not blank.
+ */
+function openEnd(lines: string[]): [number, number] {
+  const found = lines.findIndex(l => PROCESSED.test(l) || DISCARDED.test(l))
+  const stop = found < 0 ? lines.length : found
+  let end = stop
+  while (end > 0 && !strip(lines[end - 1]!)) end--
+  return [stop, end]
+}
+
+/**
+ * Takes lines a to b out and answers them. Where they were, a blank line that is now the file's
+ * first, or the second of two, goes with them.
+ */
+function take(lines: string[], cr: boolean[], a: number, b: number): string[] {
+  const taken = lines.splice(a, b - a)
+  cr.splice(a, b - a)
+  if (!lines.length) {
+    lines.push('')
+    cr.push(false)
+  }
+  if (lines.length > 1 && a < lines.length && !strip(lines[a]!) && (a === 0 || !strip(lines[a - 1]!))) {
+    lines.splice(a, 1)
+    cr.splice(a, 1)
+  }
+  cr[cr.length - 1] = false
+  return taken
+}
+
+/** What a discarded item keeps of the item it was. */
+const KEPT = ['key', 'url', 'title', 'why', 'priority', 'added', 'read'] as const
+const sameItem = (a: Omit<InboxItem, 'duplicate'>, b: Omit<InboxItem, 'duplicate'>) =>
+  KEPT.every(k => a[k] === b[k]) && (a.brief?.date ?? null) === (b.brief?.date ?? null) && (a.brief?.lines ?? []).join('\n') === (b.brief?.lines ?? []).join('\n') && !a.brief === !b.brief
 
 /** New lines before line `end` (after the last one, when there is none), with the file's endings. */
 function put(lines: string[], cr: boolean[], crlf: boolean, end: number, add: string[]): void {
@@ -340,22 +402,16 @@ export function closeIn(box: Inbox, key: string, nth = 0, outcome = 'discarded',
   }
   if (line === null || !want) throw new InboxError('the outcome would not read back as it is: say it in other words')
   const lines = [...box.lines], cr = [...box.cr]
-  const [a, b] = item.at
-  lines.splice(a, b - a)
-  cr.splice(a, b - a)
-  if (!lines.length) {
-    lines.push('')
-    cr.push(false)
-  }
-  // where the item was: a blank line that is now the file's first, or the second of two, goes
-  if (lines.length > 1 && a < lines.length && !strip(lines[a]!) && (a === 0 || !strip(lines[a - 1]!))) {
-    lines.splice(a, 1)
-    cr.splice(a, 1)
-  }
-  cr[cr.length - 1] = false
+  take(lines, cr, item.at[0], item.at[1])
   const head = lines.findIndex(l => PROCESSED.test(l))
+  const disc = lines.findIndex(l => DISCARDED.test(l))
   let end: number, stop: number, add: string[]
-  if (head < 0) {
+  if (head < 0 && disc >= 0) {
+    // before the discarded ones and the blank lines above them
+    stop = end = disc
+    while (end > 0 && !strip(lines[end - 1]!)) end--
+    add = [...(end > 0 ? [''] : []), '## Processed', '', line]
+  } else if (head < 0) {
     // at the file's end, a blank line before the heading unless one is there
     stop = lines.length
     end = lines[lines.length - 1] === '' ? stop - 1 : stop
@@ -370,6 +426,69 @@ export function closeIn(box: Inbox, key: string, nth = 0, outcome = 'discarded',
   }
   put(lines, cr, box.crlf, end, [...add, ...(end === stop ? [''] : [])])
   return { box: readLines(lines, cr, box.crlf), processed: want }
+}
+
+/**
+ * The file with an item taken out of the inbox and kept whole (docs/adr/0007): its line and the
+ * indented ones under it move, as they are, to the end of the discarded ones (under a
+ * `## Discarded` heading, made at the file's end when there is none), and one indented line is
+ * added as their last: the day and, when one is given, the reason. Null when the inbox has no such
+ * item; InboxError when it would not read back as that item. As server/rft_inbox.py's `discard`.
+ */
+export function discardIn(box: Inbox, key: string, nth = 0, reason = '', today = ''): { box: Inbox; discarded: DiscardedItem } | null {
+  const item = nthItem(box, key, nth)
+  if (!item) return null
+  const why = oneLine(reason)
+  const mark = `  - discarded${today ? ` ${today}` : ''}${why ? `: ${why}` : ''}`
+  const lines = [...box.lines], cr = [...box.cr]
+  const moved = [...take(lines, cr, item.at[0], item.at[1]), mark]
+  const head = lines.findIndex(l => DISCARDED.test(l))
+  let end: number, stop: number, add: string[]
+  if (head < 0) {
+    // at the file's end, a blank line before the heading unless one is there
+    stop = lines.length
+    end = lines[lines.length - 1] === '' ? stop - 1 : stop
+    add = [...(end > 0 && strip(lines[end - 1]!) ? [''] : []), '## Discarded', '', ...moved]
+  } else {
+    // the end of the discarded ones: before the next heading and the blank lines above it
+    const after = lines.findIndex((l, n) => n > head && HEADING.test(l))
+    stop = after < 0 ? lines.length : after
+    end = stop
+    while (end > head + 1 && !strip(lines[end - 1]!)) end--
+    add = [...(ITEM.test(lines[end - 1]!) || SUB.test(lines[end - 1]!) ? [] : ['']), ...moved]
+  }
+  put(lines, cr, box.crlf, end, [...add, ...(end === stop ? [''] : [])])
+  const next = readLines(lines, cr, box.crlf)
+  const at = end + add.length - moved.length
+  const now = next.discarded.find(d => d.at[0] === at)
+  if (!now || !sameItem(now, item) || now.discarded !== today || now.reason !== why) {
+    throw new InboxError('the item would not read back as discarded: give the day as 2026-11-24 and the reason in one line')
+  }
+  return { box: next, discarded: kept(next)[next.discarded.indexOf(now)]! }
+}
+
+/**
+ * The file with a discarded item back in the inbox, as it was: its lines move to the end of the
+ * open list, and the line that said when and why it was discarded goes. The latest one, when the
+ * link was discarded more than once. Null when no discarded item has the link; InboxError when it
+ * would not read back as that item. As server/rft_inbox.py's `restore`.
+ */
+export function restoreIn(box: Inbox, key: string): { box: Inbox; item: InboxItem } | null {
+  const item = box.discarded.filter(d => d.key === key).pop()
+  if (!item) return null
+  const lines = [...box.lines], cr = [...box.cr]
+  const [a, b] = item.at
+  const last = b - a > 1 ? SUB.exec(lines[b - 1]!) : null
+  const marked = !!last && DISCARDED_AT.test(strip(last[1]!))
+  const moved = take(lines, cr, a, b)
+  if (marked) moved.pop()
+  const [stop, end] = openEnd(lines)
+  const before = end > 0 && !(ITEM.test(lines[end - 1]!) || SUB.test(lines[end - 1]!)) ? [''] : []
+  put(lines, cr, box.crlf, end, [...before, ...moved, ...(end === stop ? [''] : [])])
+  const next = readLines(lines, cr, box.crlf)
+  const now = next.items.find(i => i.at[0] === end + before.length)
+  if (!now || !sameItem(now, item)) throw new InboxError('the item would not read back as it was: mend its line in the file')
+  return { box: next, item: shown(next)[next.items.indexOf(now)]! }
 }
 
 // ---------------------------------------------------------------- in a session
@@ -414,7 +533,7 @@ export function inboxReport(box: Inbox): string {
   return [`${countsOf(items)}, saved to read later and not decided about (${INBOX} in the vault).`, ...lines].join('\n')
 }
 
-function countsOf(items: readonly InboxItem[]): string {
+export function countsOf(items: readonly InboxItem[]): string {
   const urgent = items.filter(i => i.priority === 'urgent').length
   const briefed = items.filter(i => i.brief).length
   return [`Inbox: ${items.length} ${items.length === 1 ? 'item' : 'items'}`, urgent ? `${urgent} urgent` : '', briefed ? `${briefed} briefed` : ''].filter(Boolean).join(', ')
@@ -428,7 +547,8 @@ export function inboxLine(box: Inbox): string {
 
 /**
  * Saves a link to read later and says so, or says where it already is: in the inbox, among the
- * processed items, or in a reference's Source. Nothing is written for a duplicate.
+ * discarded or the processed items, or in a reference's Source. Nothing is written for a
+ * duplicate: a discarded item comes back only by the user's act (restoreItem, in reading.ts).
  */
 export async function addItem(io: Io, loaded: Loaded, input: AddInput): Promise<string> {
   const vault = loaded.config.vault
@@ -439,6 +559,11 @@ export async function addItem(io: Io, loaded: Loaded, input: AddInput): Promise<
   if (held && 'item' in held) {
     const about = [held.item.added ? `added ${held.item.added}` : '', held.item.priority ? `reading priority ${held.item.priority}` : ''].filter(Boolean).join(', ')
     return `Already in the inbox${about ? ` (${about})` : ''}: ${itemName(held.item)}. Nothing added.${briefText(held.item)}`
+  }
+  if (held && 'discarded' in held) {
+    const d = held.discarded
+    return `Discarded${d.discarded ? ` on ${d.discarded}` : ''}${d.reason ? ` (${d.reason})` : ''}: ${itemName(d)}. Nothing added. `
+      + `It is kept whole under Discarded in ${INBOX}, and only the user brings it back: when they ask for it, rft_inbox {link, restore: true}.`
   }
   if (held) {
     const p = held.processed
@@ -468,6 +593,11 @@ export async function itemAt(io: Io, vault: string, link: string): Promise<{ box
   const box = await loadInbox(io, vault)
   const item = nthItem(box, got.key)
   if (item) return { box, item }
+  const d = kept(box).filter(x => x.key === got.key).pop()
+  if (d) {
+    throw new InboxError(`Not in the inbox any more: ${itemName(d)} was discarded${d.discarded ? ` on ${d.discarded}` : ''}${d.reason ? ` (${d.reason})` : ''}. `
+      + 'It is kept, with its reading note, which stays closed; only the user brings it back (rft_inbox {link, restore: true} when they ask).')
+  }
   const p = box.processed.filter(x => x.key === got.key).pop()
   throw new InboxError(p
     ? `Not in the inbox any more: ${itemName({ ...got, title: p.title })} was processed${p.date ? ` on ${p.date}` : ''}${p.outcome ? ` (${p.outcome})` : ''}.`
@@ -504,9 +634,9 @@ const A = (type: string) => `${/^[aeiou]/.test(type) ? 'an' : 'a'} ${type}`
 
 /**
  * Closes an item with the outcome the user picked (rft_inbox {link, outcome, ...}): it leaves the
- * inbox for the processed ones, pointing at the note it became or saying why it was discarded.
- * The note is there already: an outcome that needs one is refused while it is missing or of
- * another kind. `later` closes nothing.
+ * inbox for the processed ones, pointing at the note it became, or for the discarded ones, kept
+ * whole with the day and the reason (docs/adr/0007). The note is there already: an outcome that
+ * needs one is refused while it is missing or of another kind. `later` closes nothing.
  */
 export async function closeItem(io: Io, loaded: Loaded, input: CloseInput): Promise<string> {
   const vault = loaded.config.vault
@@ -530,8 +660,24 @@ export async function closeItem(io: Io, loaded: Loaded, input: CloseInput): Prom
   if (outcome === 'discard') {
     const reason = oneLine(input.reason)
     if (!reason) throw new InboxError('Not closed: a discard gives its reason in one line (reason): the user reads it later to know why they passed on the item.')
-    line = `discarded: ${reason}`
-  } else if (outcome === 'reference') {
+    // a link the user typed twice is two items: both are discarded, each kept with its own lines
+    let now = box
+    let n = 0
+    try {
+      for (let next = discardIn(now, item.key, 0, reason, input.today); next; next = discardIn(now, item.key, 0, reason, input.today)) {
+        now = next.box
+        n++
+      }
+    } catch (err) {
+      if (err instanceof InboxError) throw new InboxError(`Not discarded: ${err.message}.`)
+      throw err
+    }
+    await io.write(join(vault, INBOX), inboxText(now))
+    const left = shown(now)
+    return `Discarded: ${name} — ${reason}. It is kept whole under Discarded in ${INBOX}${input.today ? `, dated ${input.today}` : ''}${n > 1 ? ` (it was in the inbox ${n} times: all are discarded)` : ''}: only the user brings it back. `
+      + `${left.length ? countsOf(left) : 'The inbox is empty'}.`
+  }
+  if (outcome === 'reference') {
     const id = noteOf(input.note, 'note', 'the reference note of the item')
     const n = nodes[id]!
     if (n.type !== 'reference') throw new InboxError(`Not closed: ${id} is ${A(n.type)}, not a reference.`)

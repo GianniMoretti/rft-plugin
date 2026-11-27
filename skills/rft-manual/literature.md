@@ -31,10 +31,11 @@ The tree should start from what is already known, not from scratch.
   keep a reading note of it and decide what it becomes. A search also turns up more papers than
   it reads: those that look worth reading and were not read are neither written about nor
   dropped, and are saved the same way ("from the literature search on <topic>, not read"). Say
-  how many of each were saved. A paper already in the inbox, processed or a reference of its own
-  is reported by the tool and not added. This is for a search made from now on: a literature
-  note that already exists is left as it is unless the user asks for its papers. The user
-  processes them when they choose (`inbox.md`).
+  how many of each were saved. A paper already in the inbox, discarded, processed or a reference
+  of its own is reported by the tool and not added: say which were discarded, and leave them
+  so. This is for a search made from now on: a literature note that already exists is left as
+  it is unless the user asks for its papers. The user processes them when they choose
+  (`inbox.md`).
 - **Papers in the vault.** `rft_collect_papers(ids?)` downloads, in the background, the PDFs of
   reference notes whose **Source** has an arXiv id or link, or a PDF link on an open-access
   host (OpenReview, PMLR, ACL Anthology, NeurIPS and CVF proceedings, JMLR, bioRxiv...), into

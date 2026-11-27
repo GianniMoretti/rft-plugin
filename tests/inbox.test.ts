@@ -11,7 +11,7 @@
 
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { INBOX, InboxError, addTo, briefOn, byPriority, closeIn, commandInput, discussPrompt, findIn, inboxLine, inboxReport, inboxText, linksIn, processPrompt, readInbox, shown, sourceOf, strip } from '../hooks/lib/inbox'
+import { INBOX, InboxError, addTo, briefOn, byPriority, closeIn, commandInput, discardIn, discussPrompt, findIn, inboxLine, inboxReport, inboxText, kept, linksIn, processPrompt, readInbox, restoreIn, shown, sourceOf, strip } from '../hooks/lib/inbox'
 import { CASES, EXPECTED, INBOX_MD } from './fixtures/inbox'
 import { CWD, D00, demoFiles, note, world } from './fixture'
 
@@ -52,7 +52,7 @@ describe('inbox: the file', () => {
     for (const [key, kind, fields] of CASES.finds as [string, string | null, Record<string, unknown> | null][]) {
       const got = findIn(box, key)
       expect({ key, kind: got ? Object.keys(got)[0] : null }).toEqual({ key, kind })
-      if (got) expect('item' in got ? got.item : got.processed).toMatchObject(fields ?? {})
+      if (got) expect('item' in got ? got.item : 'processed' in got ? got.processed : got.discarded).toMatchObject(fields ?? {})
     }
   })
 
@@ -115,6 +115,70 @@ describe('inbox: the file', () => {
       expect([shown(again), again.processed]).toEqual([shown(done.box), done.box.processed])
     }
     expect((CASES.closes as CloseCase[]).length).toBeGreaterThan(15)
+  })
+
+  test('the discarded ones, case by case: an item under `## Discarded` is kept whole, and its last indented line says when and why', () => {
+    type KeptCase = { name: string; text: string; items: string[]; discarded: object[]; open?: object[]; holds?: [string, string][] }
+    for (const c of CASES.kept as KeptCase[]) {
+      const box = readInbox(c.text)
+      expect({ name: c.name, items: shown(box).map(i => i.key), discarded: kept(box) }).toEqual({ name: c.name, items: c.items, discarded: c.discarded })
+      if (c.open) expect(shown(box)).toEqual(c.open)
+      for (const [key, kind] of c.holds ?? []) expect({ name: c.name, key, kind: Object.keys(findIn(box, key) ?? {})[0] }).toEqual({ name: c.name, key, kind })
+      expect(inboxText(box)).toBe(c.text)
+    }
+    expect((CASES.kept as KeptCase[]).length).toBeGreaterThan(6)
+  })
+
+  test('discard, case by case, as the server discards: the item\'s lines move under Discarded as they are, with one line more', () => {
+    type DiscardCase = { name: string; text: string; key: string; nth?: number; reason?: string; today: string; want?: string; is?: object; none?: boolean; error?: boolean }
+    for (const c of CASES.discards as DiscardCase[]) {
+      const box = readInbox(c.text)
+      if (c.error) {
+        expect(() => discardIn(box, c.key, c.nth ?? 0, c.reason ?? '', c.today)).toThrow(InboxError)
+        expect(inboxText(box)).toBe(c.text)
+        continue
+      }
+      const done = discardIn(box, c.key, c.nth ?? 0, c.reason ?? '', c.today)
+      expect({ name: c.name, none: done === null }).toEqual({ name: c.name, none: !!c.none })
+      expect(inboxText(box)).toBe(c.text)
+      if (!done) continue
+      expect({ name: c.name, text: inboxText(done.box) }).toEqual({ name: c.name, text: c.want })
+      expect({ name: c.name, is: done.discarded }).toEqual({ name: c.name, is: c.is })
+      expect(kept(done.box)[kept(done.box).length - 1]).toEqual(done.discarded)
+      expect(shown(done.box).length).toBe(shown(box).length - 1)
+      const again = readInbox(c.want!)
+      expect([shown(again), again.processed, kept(again)]).toEqual([shown(done.box), done.box.processed, kept(done.box)])
+    }
+    expect((CASES.discards as DiscardCase[]).length).toBeGreaterThan(10)
+  })
+
+  test('a return, case by case: the discarded item is back at the end of the open list, as it was', () => {
+    type ReturnCase = { name: string; text: string; key: string; want?: string; item?: object; none?: boolean }
+    for (const c of CASES.returns as ReturnCase[]) {
+      const box = readInbox(c.text)
+      const back = restoreIn(box, c.key)
+      expect({ name: c.name, none: back === null }).toEqual({ name: c.name, none: !!c.none })
+      expect(inboxText(box)).toBe(c.text)
+      if (!back) continue
+      expect({ name: c.name, text: inboxText(back.box) }).toEqual({ name: c.name, text: c.want })
+      expect({ name: c.name, item: back.item }).toEqual({ name: c.name, item: c.item })
+      expect(shown(back.box)[shown(back.box).length - 1]).toEqual(back.item)
+      expect(kept(back.box).length).toBe(kept(box).length - 1)
+    }
+  })
+
+  test('the fixture\'s first item discarded and brought back: its own lines are what they were, and the old discards stay processed lines', () => {
+    const box = readInbox(INBOX_MD)
+    const before = INBOX_MD.split('\n')
+    const done = discardIn(box, 'arxiv:2406.01234', 0, 'superseded by R07', '2026-11-27')!
+    expect(inboxText(done.box).split('\n')).toEqual([...before.slice(0, 4), ...before.slice(8, -1), '', '## Discarded', '', ...before.slice(4, 8), '  - discarded 2026-11-27: superseded by R07', ''])
+    expect(done.discarded).toMatchObject({ title: 'Mixup at scale', brief: EXPECTED.items[0]!.brief, discarded: '2026-11-27', reason: 'superseded by R07' })
+    expect(done.box.processed).toEqual(EXPECTED.processed)
+    expect(Object.keys(findIn(done.box, 'https://example.org/blog/old-post')!)).toEqual(['processed'])
+    const back = restoreIn(done.box, 'arxiv:2406.01234')!
+    const at = before.indexOf('- see also the list in Scratchpad') + 1
+    expect(inboxText(back.box).split('\n')).toEqual([...before.slice(0, 4), ...before.slice(8, at), ...before.slice(4, 8), ...before.slice(at, -1), '', '## Discarded', ''])
+    expect({ ...back.item, duplicate: false }).toEqual(EXPECTED.items[0])
   })
 
   test('a brief, case by case: at most three lines under the item, in place of the one it had', () => {
@@ -256,7 +320,7 @@ describe('inbox: in a session', () => {
     const w = await session($, on, INBOX_MD)
     // behind ToolSearch, and with no way to give a reading priority
     expect(w.deferred).toContain('rft_inbox')
-    expect(Object.keys((w.specs.rft_inbox!.inputSchema as { properties: object }).properties)).toEqual(['link', 'why', 'title', 'impression', 'brief', 'reading', 'outcome', 'note', 'cites', 'reason', 'confirmed'])
+    expect(Object.keys((w.specs.rft_inbox!.inputSchema as { properties: object }).properties)).toEqual(['link', 'why', 'title', 'impression', 'brief', 'reading', 'outcome', 'note', 'cites', 'reason', 'restore'])
     expect(await tool($)).toBe(inboxReport(readInbox(INBOX_MD)))
     expect(w.fs.read(FILE)).toBe(INBOX_MD)
 
@@ -362,15 +426,49 @@ describe('inbox: in a session', () => {
     expect(await tool($, { link: 'https://example.org/blog/post', outcome: 'later' })).toBe('Left in the inbox for later: https://example.org/blog/post, with no brief. Nothing closed.')
     expect(w.fs.read(FILE)).toBe(start)
 
-    // a discard, with its reason
+    // a discard, with its reason: the item is kept whole under Discarded, its line as it was (docs/adr/0007)
     const discarded = await tool($, { link: 'https://example.org/blog/post/', outcome: 'discard', reason: ' superseded\nby R01 ' })
-    expect(discarded).toMatch(/^Closed: https:\/\/example\.org\/blog\/post — discarded: superseded by R01\. It is under Processed in Inbox\.md, dated \d{4}-\d{2}-\d{2}\. Inbox: 2 items, 1 urgent, 1 briefed\.$/)
+    expect(discarded).toMatch(/^Discarded: https:\/\/example\.org\/blog\/post — superseded by R01\. It is kept whole under Discarded in Inbox\.md, dated \d{4}-\d{2}-\d{2}: only the user brings it back\. Inbox: 2 items, 1 urgent, 1 briefed\.$/)
     const day = /dated (\d{4}-\d{2}-\d{2})/.exec(discarded)![1]!
-    expect(w.fs.read(FILE)).toBe(`${ITEM}\n  - briefed 2026-11-20: claims x\n- 2406.01234 — typed again\n\n## Processed\n\n- ${day} https://example.org/blog/post — discarded: superseded by R01\n`)
-    // a literature entry; the link typed twice is two items, and both are closed
+    const keptLines = `## Discarded\n\n${OTHER}\n  - discarded ${day}: superseded by R01\n`
+    expect(w.fs.read(FILE)).toBe(`${ITEM}\n  - briefed 2026-11-20: claims x\n- 2406.01234 — typed again\n\n${keptLines}`)
+    // a literature entry; the link typed twice is two items, and both are closed; the processed ones come before the discarded ones
     const entry = await tool($, { link, outcome: 'literature entry', note: 'R02' })
     expect(entry).toBe(`Closed: Mixup at scale (https://arxiv.org/abs/2406.01234) → R02 (literature entry). It is under Processed in Inbox.md, dated ${day} (it was in the inbox 2 times: all are closed). The inbox is empty.`)
-    expect(w.fs.read(FILE)).toBe(`## Processed\n\n- ${day} https://example.org/blog/post — discarded: superseded by R01\n- ${day} [Mixup at scale](https://arxiv.org/abs/2406.01234) → R02 (literature entry)\n- ${day} https://arxiv.org/abs/2406.01234 → R02 (literature entry)\n`)
+    expect(w.fs.read(FILE)).toBe(`## Processed\n\n- ${day} [Mixup at scale](https://arxiv.org/abs/2406.01234) → R02 (literature entry)\n- ${day} https://arxiv.org/abs/2406.01234 → R02 (literature entry)\n\n${keptLines}`)
+  })
+
+  test('a discarded item is kept whole and only the user brings it back: a link met again is said to be discarded, restore and /rft-inbox return it as it was', async ($, on) => {
+    const lines = `${ITEM} · read 2026-11-21\n  - briefed 2026-11-20: claims x\n  - touches R01\n`
+    const w = await session($, on, `${lines}${OTHER}\n- 2406.01234 — typed again\n`)
+    const link = 'https://arxiv.org/abs/2406.01234'
+    const done = await tool($, { link, outcome: 'discard', reason: 'not for us', confirmed: true })
+    const day = /dated (\d{4}-\d{2}-\d{2})/.exec(done)![1]!
+    // a link typed twice is two items: both are discarded, each with its own lines, and `confirmed`, which this tool had, changes nothing
+    expect(done).toBe(`Discarded: Mixup at scale (${link}) — not for us. It is kept whole under Discarded in Inbox.md, dated ${day} (it was in the inbox 2 times: all are discarded): only the user brings it back. Inbox: 1 item.`)
+    const kept = `${OTHER}\n\n## Discarded\n\n${lines}  - discarded ${day}: not for us\n- 2406.01234 — typed again\n  - discarded ${day}: not for us\n`
+    expect(w.fs.read(FILE)).toBe(kept)
+    // what waits is what the list and rft_next count
+    expect(await tool($)).toMatch(/^Inbox: 1 item, saved to read later/)
+    // met again (a later search), in any form: said to be discarded, and nothing is added
+    const again = `Discarded on ${day} (not for us): https://arxiv.org/abs/2406.01234. Nothing added. It is kept whole under Discarded in Inbox.md, and only the user brings it back: when they ask for it, rft_inbox {link, restore: true}.`
+    expect(await tool($, { link: 'arXiv:2406.01234v3', why: 'from the literature search on mixup, not read' })).toBe(again)
+    // nothing of it is Claude's to read or write while it is there
+    for (const input of [{ reading: true }, { brief: 'claims y' }, { impression: 'x' }, { outcome: 'reference', note: 'R01' }]) {
+      expect(await tool($, { link, ...input })).toBe(`Not in the inbox any more: https://arxiv.org/abs/2406.01234 was discarded on ${day} (not for us). It is kept, with its reading note, which stays closed; only the user brings it back (rft_inbox {link, restore: true} when they ask).`)
+    }
+    expect(w.fs.read(FILE)).toBe(kept)
+    // the user asked: the latest of the link comes back, as it was, at the end of the list
+    expect(await tool($, { link, restore: true })).toBe(`Brought back into the inbox: https://arxiv.org/abs/2406.01234, as it was when it was discarded on ${day}. Inbox: 2 items.`)
+    expect(w.fs.read(FILE)).toBe(`${OTHER}\n- 2406.01234 — typed again\n\n## Discarded\n\n${lines}  - discarded ${day}: not for us\n`)
+    expect(await tool($, { link, restore: true })).toBe('Already in the inbox: https://arxiv.org/abs/2406.01234. Nothing to bring back.')
+    expect(await tool($, { link: 'https://example.org/none', restore: true })).toBe('Not brought back: no discarded item has this link (https://example.org/none). rft_inbox with the link alone saves it as a new item.')
+    // the user's own /rft-inbox <link> is their act too. The twin gone from the file (deleted by hand), the kept one returns with what it had:
+    // its line as it was, whatever priority and why the command gives
+    w.fs.write(FILE, w.fs.read(FILE).replace('- 2406.01234 — typed again\n', ''))
+    expect(await command($, '2406.01234 urgent and a why')).toBe(`Brought back into the inbox: Mixup at scale (https://arxiv.org/abs/2406.01234), as it was when it was discarded on ${day}, with its brief, its read mark (2026-11-21). Inbox: 2 items, 1 urgent, 1 briefed.`)
+    expect(w.fs.read(FILE)).toBe(`${OTHER}\n${lines}\n## Discarded\n`)
+    expect(await command($, 'arxiv:2406.01234')).toMatch(/^Already in the inbox \(added /)
   })
 
   test('a direction closes an item with the reference it cites; a note that does not name the link is said', async ($, on) => {

@@ -24,6 +24,10 @@ plugin the impression (hooks/lib/reading.ts), and each leaves every other line a
 endings the file has. The plugin gives Claude the user's part only once the user marked the item as
 read (docs/adr/0004).
 
+A discarded item keeps its reading note (docs/adr/0007): the file moves, as it is, to a folder
+inside the reading notes' (Reading notes/Discarded/), and comes back with the item when the user
+brings it back. Nothing shows what a note holds while it is there.
+
 hooks/lib/reading.ts reads the same file the same way, pattern for pattern, and
 tests/fixtures/reading-note holds both to one list of cases. As in rft_inbox.py, nothing is left to
 what Python and JavaScript each take a word to mean. Standard library only.
@@ -34,6 +38,7 @@ import rft_inbox
 from rft_inbox import rx
 
 DIR = "Reading notes"
+DISCARDED = "Discarded"  # inside it: the reading notes of the discarded items, kept as they were
 MINE_HEAD = "## My reading"
 IMPRESSION_HEAD = "## Claude's impression"
 MINE = rx(r"^##[ \t]+my[ \t]+reading[ \t]*\Z", True)

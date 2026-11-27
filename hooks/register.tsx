@@ -50,7 +50,7 @@ import { MACHINE_FILE, machinePrompt, probeText, readMachine, statusText } from 
 import { caseOf, grillConceptPrompt, grillNotePrompt, grillQuestionPrompt, grillUsage, sectionsIn, underNote } from './lib/grilling'
 import { manualDir } from './lib/manual'
 import { artifactPrompt, candidatesPrompt, literatureFillPrompt, literaturePrompt, manuscriptPrompt, notebooksPrompt, rebalancePrompt, suggestConceptsPrompt, summarizePrompt } from './lib/prompts'
-import { closeWithNote, readingOf, saveImpression } from './lib/reading'
+import { closeWithNote, readingOf, restoreItem, saveImpression, saveMine } from './lib/reading'
 import { InboxError, addItem, commandInput, discussPrompt, inboxLine, inboxReport, loadInbox, nthItem, processPrompt, saveBrief, shown } from './lib/inbox'
 import { clearHandoff, handoffPrompt, handoffRules, hasHandoffs, leaveHandoff, showHandoff, sizeToast, toTell, uncommittedIn } from './lib/handoff'
 import type { MachineStatus, Probe } from './lib/machine'
@@ -505,12 +505,14 @@ async function runTool($: EngineInterface, name: string, i: Record<string, unkno
       const impression = str(i.impression)?.trim(), reading = i.reading === true
       if (!link && (brief || outcome || impression || reading)) throw new InboxError('Name the item by its link (link), as rft_inbox with no field lists it.')
       if (!link) return inboxReport(await loadInbox(io, loaded.config.vault))
+      // a discarded item comes back only when the user asked: Claude says so with restore
+      if (!brief && !outcome && !impression && !reading && i.restore === true) return restoreItem(io, loaded, link)
       if (!brief && !outcome && !impression && !reading) return addItem(io, loaded, { link, why: str(i.why), title: str(i.title), today: today() })
       // several in one call, in the order of the work: the impression before the user's part is asked for, the brief, the outcome last
       const said = impression ? [await saveImpression(io, loaded, link, impression, today())] : []
       if (brief) said.push(await saveBrief(io, loaded, link, brief, today()))
       if (reading) said.push(await readingOf(io, loaded, link))
-      if (outcome) said.push(await closeWithNote(io, loaded, { link, outcome, note: str(i.note), cites: str(i.cites), reason: str(i.reason), confirmed: i.confirmed === true, today: today() }))
+      if (outcome) said.push(await closeWithNote(io, loaded, { link, outcome, note: str(i.note), cites: str(i.cites), reason: str(i.reason), today: today() }))
       return said.join('\n')
     }
     case 'rft_handoff': {
@@ -1637,7 +1639,8 @@ export const register: Register = (on, options) => {
       if (!e.args.trim()) return { text: inboxReport(await loadInbox(io, loaded.config.vault)) }
       const input = commandInput(e.args)
       if (!input) return { text: `"${e.args.trim()}" does not start with a link. /rft-inbox <link> [urgent|high|medium|low] [why]: the link is a URL, an arXiv id or a DOI.` }
-      return { text: await addItem(io, loaded, { ...input, today: today() }) }
+      // the user's own save: a link they discarded comes back, as it was
+      return { text: await saveMine(io, loaded, { ...input, today: today() }) }
     } catch (err) {
       return { text: message(err) }
     }

@@ -1641,7 +1641,9 @@ class Vault:
     def add_inbox(self, link: str, why: str = "") -> tuple[int, dict]:
         """Saves a link in the inbox with today's date: one new line in the file. A link that is
         already in the inbox, among the processed items or the Source of a reference note is not
-        added (409, saying where it is). An arXiv paper's title is asked for afterwards."""
+        added (409, saying where it is). A link the user discarded comes back as the item it was,
+        its reading note with it (`restored`: the day it was discarded and why): pasting it again
+        is the user's act (docs/adr/0007). An arXiv paper's title is asked for afterwards."""
         got = rft_inbox.link_at(rft_inbox.one_line(link))
         if not got or rft_inbox.strip(got[3]):
             return 400, {"error": "not a link: paste a URL, an arXiv id or a DOI"}
@@ -1653,6 +1655,8 @@ class Vault:
             if found and found[0] == "item":
                 when = f", added {found[1]['added']}" if found[1]["added"] else ""
                 return 409, {"error": f"already in the inbox{when}", "duplicate": {"in": "inbox", "key": key}}
+            if found and found[0] == "discarded":
+                return 200, {"item": box.restore(key), "restored": {"discarded": found[1]["discarded"], "reason": found[1]["reason"]}}
             if found:
                 when = f" on {found[1]['date']}" if found[1]["date"] else ""
                 how = f" ({found[1]['outcome']})" if found[1]["outcome"] else ""
@@ -1662,7 +1666,12 @@ class Vault:
             return 200, {"item": box.add(link, why, today=time.strftime("%Y-%m-%d"))}
 
         status, answer = self._inbox_edit(edit)
-        if status == 200 and key.startswith("arxiv:") and not answer["item"]["title"]:
+        if status == 200 and "restored" in answer:
+            with self._write_lock:
+                self._return_reading(key)
+            answer.update(self._inbox_answer(answer["items"]))
+        # (an item that came back is as it was: no title is asked for it)
+        if status == 200 and "restored" not in answer and key.startswith("arxiv:") and not answer["item"]["title"]:
             threading.Thread(target=self._arxiv_title, args=(key,), daemon=True).start()
         return status, answer
 
@@ -1670,28 +1679,21 @@ class Vault:
         """One change to an item of the inbox, named by its link's key (and which one, when a link
         was typed twice): its reading priority ("priority": one plain word in the item's line, ""
         for none), its why ("why": "" for none), the user's mark that they have read it ("read":
-        True sets it, with today's date, False takes it off), or the item removed ("discard": its
-        line goes under Processed with today's date, as discarded). Only that item's line changes;
-        409 when the item is no longer there.
+        True sets it, with today's date, False takes it off), or the item discarded ("discard": its
+        lines move under Discarded as they are, with today's date, and it is kept whole:
+        docs/adr/0007). Only that item's lines change; 409 when the item is no longer there.
 
         Marking an item as read starts its discussion: asked of the session, as a turn of the chat
         (docs/adr/0001, 0004). With no chat the mark is saved all the same and the item is said to
-        wait (`waiting`); nothing is queued. A discard is refused (409, `holds`) while the user's
-        part of the item's reading note holds something, unless `confirm`; the reading note goes
-        with the last item of its link."""
+        wait (`waiting`); nothing is queued. A discard asks nothing, whatever the item's reading
+        note holds: the note is kept, moved to the discarded ones with the last item of its link
+        (`confirm`, which a page from before this still sends, changes nothing)."""
         today = time.strftime("%Y-%m-%d")
-        if action == "discard" and not confirm:
-            try:
-                note = self._reading_at(key)[1]
-            except (rft_reading.ReadingError, OSError):
-                note = None
-            if note and note.mine:
-                return 409, {"error": "its reading note holds what you wrote: discarding the item removes it", "holds": True}
 
         def edit(box):
             if action == "discard":
-                done = box.close(key, nth, "discarded", today)
-                return (200, {"processed": done}) if done else (409, {"error": "that item is no longer in the inbox"})
+                done = box.discard(key, nth, "", today)
+                return (200, {"discarded": done}) if done else (409, {"error": "that item is no longer in the inbox"})
             if action == "read":
                 item = box.change(key, nth, read=(box.nth(key, nth) or {}).get("read") or today) if value else box.change(key, nth, read="")
             else:
@@ -1702,7 +1704,8 @@ class Vault:
         if status != 200:
             return status, answer
         if action == "discard" and not any(i["key"] == key for i in answer["items"]):
-            self._remove_reading(key)
+            with self._write_lock:
+                self._keep_reading(key)
             answer["notes"].pop(key, None)
         if action == "read":
             with self._waiting_lock:
@@ -1887,12 +1890,53 @@ class Vault:
         name, note = rft_reading.find(read, key)
         return folder / name, note, held.get(name)
 
-    def _remove_reading(self, key: str) -> None:
-        """Removes the reading note of an item that left the inbox, when it has one."""
+    def _kept_dir(self) -> Path | None:
+        """The folder of the reading notes kept for discarded items, inside the reading notes';
+        None when either name is held by something else than a folder."""
+        folder = self._reading_dir()
+        if folder is None:
+            return None
+        path = folder / rft_reading.DISCARDED
+        return None if path.is_symlink() or (path.exists() and not path.is_dir()) else path
+
+    def _keep_reading(self, key: str) -> None:
+        """Moves the reading note of a discarded item, as it is, to the folder of the kept ones
+        (docs/adr/0007), under the first name of its family that is free there. A note that
+        cannot be moved stays where it is: nothing is removed."""
         try:
             path, note, _ = self._reading_at(key)
-            if note:
-                path.unlink(missing_ok=True)
+            kept = self._kept_dir()
+            if not note or kept is None:
+                return
+            kept.mkdir(exist_ok=True)
+            for n in range(rft_reading.TRIES):
+                to = kept / rft_reading.file_name(key, n)
+                if not to.exists() and not to.is_symlink():
+                    os.replace(path, to)
+                    return
+        except (rft_reading.ReadingError, OSError):
+            pass
+
+    def _return_reading(self, key: str) -> None:
+        """Moves the reading note kept for a discarded item back beside the others: the latest of
+        its name's family in the kept ones that is of this item. A note the item already has is
+        not written over: the kept one then stays where it is."""
+        try:
+            kept = self._kept_dir()
+            if kept is None or not kept.is_dir():
+                return
+            found = None
+            for n in range(rft_reading.TRIES):
+                path = kept / rft_reading.file_name(key, n)
+                if path.is_symlink() or not path.is_file():
+                    continue
+                if rft_reading.Note(path.read_bytes().decode("utf-8", errors="replace")).key == key:
+                    found = path
+            if found is None:
+                return
+            to, note, _ = self._reading_at(key)
+            if note is None:
+                os.replace(found, to)
         except (rft_reading.ReadingError, OSError):
             pass
 
@@ -3455,12 +3499,12 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
             POST api/notebook {"id": "<id>"}: the address of the experiment's notebook in its repo's
             marimo editor ({"url"}, under notebook/ on this server), the editor started first if need be.
             POST api/inbox {"link": a URL, an arXiv id or a DOI, "why"?: "one line"}: the link saved in
-            the inbox ({"item", "items"}), or 409 with where it already is; {"action": "priority" |
+            the inbox ({"item", "items"}; with "restored" when it is a discarded item that came
+            back as it was), or 409 with where it already is; {"action": "priority" |
             "why" | "discard", "key": the item's key, "nth"?: which of the items with that key,
             "priority" | "why"?: the new value, "" for none}: the item's reading priority or why
-            changed ({"item", "items"}), or the item moved under Processed as discarded
-            ({"processed", "items"}; 409 with "holds" while its reading note holds what the user
-            wrote, unless "confirm": true); {"action": "read", "key", "nth"?, "read": true | false}:
+            changed ({"item", "items"}), or the item moved under Discarded, kept whole with its
+            reading note ({"discarded", "items"}); {"action": "read", "key", "nth"?, "read": true | false}:
             the user's mark that they have read the item set or taken off ({"item", "items"}; set,
             the session is asked to discuss the item: "asked", false when there is no chat, and
             the item is then among "waiting"); {"action": "process" | "discuss", "key", "nth"?}:
@@ -3553,7 +3597,7 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                     key, nth, value, confirm = req.get("key"), req.get("nth", 0), req.get(action, ""), req.get("confirm", False)
                     if (not isinstance(key, str) or not key or len(key) > MAX_INBOX_LINK or type(nth) is not int or nth < 0 or type(confirm) is not bool
                             or not isinstance(value, str) or len(value) > MAX_INBOX_WHY or (action != "discard" and action not in req)):
-                        return self._json(400, {"error": 'expected {"action": "priority" | "why" | "discard", "key": the item\'s key, "nth"?: which of them, "priority" | "why": the new value, "confirm"?: true to discard an item whose reading note holds something}'})
+                        return self._json(400, {"error": 'expected {"action": "priority" | "why" | "discard", "key": the item\'s key, "nth"?: which of them, "priority" | "why": the new value, "confirm"?: true (of an older page: it changes nothing)}'})
                     return self._json(*vault.change_inbox(action, key, nth, value, confirm=confirm))
                 if action == "read":
                     key, nth, value = req.get("key"), req.get("nth", 0), req.get("read")

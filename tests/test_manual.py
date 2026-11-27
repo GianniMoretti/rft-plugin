@@ -92,12 +92,18 @@ class Manual(unittest.TestCase):
         for outcome in ('discard', 'later'):
             self.assertTrue(rows[outcome].startswith('nothing'), outcome)
         self.assertIn('Discussing an item', headings('inbox'))
+        self.assertNotIn('confirmed', body)
+        self.assertIn("restore: { type: 'boolean'", spec)
+        self.assertNotIn('confirmed:', spec[spec.index('rft_inbox: {'):spec.index('rft_handoff: {')])
         # processing is Claude's own reading and ends at the brief; the outcome is the discussion's (docs/adr/0004)
         for said in ('Read the item itself, from the item alone', 'Save your impression', '`### Claims`', '`### How`', '`### Key results`', '`### Bearing on`', '`### Left open`',
                      'Save the brief', 'at most three lines', 'never write from the title', 'Give the brief in the chat and stop', 'the impression is **frozen**',
                      'never open, search or edit its file by other means', 'never edit the user\'s part', 'Your reading is always written before you see the user\'s',
                      'Say where the two readings differ', 'only the user picks', 'Write nothing to the tree until they do', 'word for word, as quote lines (`>`)',
-                     'propose the wording in the chat first and write it only once they accept', 'its reading note is removed', '`confirmed: true`', 'gets **no priority**'):
+                     'propose the wording in the chat first and write it only once they accept', 'its reading note is removed', 'gets **no priority**',
+                     # a discard keeps the item, and only the user brings it back (docs/adr/0007)
+                     'A `discard` asks nothing: the item is kept (`## Discarded`, `Reading notes/Discarded/`), closed to you',
+                     'Only the user brings it back (`restore: true` if they ask)', 'met again, it stays discarded'):
             self.assertIn(said, ' '.join(body.split()), said)
         # the parts of an impression as the plugin checks them
         parts = re.findall(r"'([A-Za-z ]+)'", re.search(r'export const IMPRESSION_PARTS = \[([^\]]+)\]', text(ROOT / 'hooks/lib/reading.ts')).group(1))

@@ -103,7 +103,7 @@
    * The panel in the live page. The button beside the scratchpad's opens it and shows how many
    * items wait; what changes in the file (Obsidian, Claude) comes in while it is open or shut. The
    * field at its top saves a link; on each item, its reading priority as an icon a tap steps, its why to edit,
-   * ✕ to discard it (two taps: a discarded link is not added again from here), and Process, which
+   * ✕ to discard it (two taps: the item is kept whole, with its reading note, and its link pasted again brings it back), and Process, which
    * asks Claude in the chat that ran /rft to read it and discuss what becomes of it; an item Claude
    * has briefed says so, and shows its brief at a tap. An item's reading note opens from its row
    * (`reading`: the view, web/reading.js); its read mark is the user's to set and take off, and
@@ -300,26 +300,22 @@
     }
 
     /**
-     * ✕ on an item: the first tap asks, the second discards it (its line goes under Processed).
-     * When its reading note holds what the user wrote, the question says so, and the note goes
-     * with the item; the server asks the same of a page that did not know.
+     * ✕ on an item: the first tap asks, the second discards it. Nothing is lost: the item is kept
+     * whole under Discarded in the file, its reading note with it, whatever it holds, and its link
+     * pasted in the field again brings both back.
      */
     function discardOf(r) {
       const { item } = r
       const x = el('button', 'inbox-x', '✕')
       x.type = 'button'
-      let timer = 0, holds = false
+      let timer = 0
       const arm = on => {
         clearTimeout(timer)
-        if (on) holds = holds || reading(item, notes, waiting).mine
-        else holds = false
         x.classList.toggle('armed', on)
-        x.textContent = on ? (holds ? 'Discard, notes too?' : 'Discard?') : '✕'
-        x.title = !on ? 'Discard: take it out of the inbox'
-          : holds ? 'Its reading note holds what you wrote. Tap again to discard the item and remove the note with it'
-            : 'Tap again to discard it: it leaves the inbox and is kept under Processed as discarded'
-        x.setAttribute('aria-label', !on ? `Discard ${label(item)}` : holds ? `Discard ${label(item)} and the reading note that holds what you wrote: again to confirm` : `Discard ${label(item)}: again to confirm`)
-        if (on) timer = setTimeout(() => { arm(false); draw(last) }, holds ? 8000 : 5000)
+        x.textContent = on ? 'Discard?' : '✕'
+        x.title = !on ? 'Discard: take it out of the inbox' : 'Tap again to discard it: it leaves the inbox and is kept, with its reading note. Paste its link again to bring it back'
+        x.setAttribute('aria-label', !on ? `Discard ${label(item)}` : `Discard ${label(item)}: again to confirm`)
+        if (on) timer = setTimeout(() => { arm(false); draw(last) }, 5000)
       }
       arm(false)
       x.addEventListener('blur', () => arm(false))
@@ -328,24 +324,15 @@
         clearTimeout(timer)
         const at = [...list.children].indexOf(x.closest('li'))
         const focused = document.activeElement === x || document.activeElement === document.body
-        const confirm = holds
         x.disabled = true
         x.classList.remove('armed')
-        // the server found a reading note this page did not know of: asked again, saying so
-        let asked = false
-        const again = (status, got) => {
-          if (status !== 409 || !got || !got.holds || confirm) return false
-          asked = true
-          return true
-        }
-        if (await change(r, 'discard', '', x, confirm ? { confirm: true } : {}, again)) {
+        if (await change(r, 'discard', '', x)) {
+          setMsg('Discarded: kept with its reading note. Paste its link again to bring it back.', false, ASKED_MS)
           const next = list.children[Math.min(at, list.children.length - 1)]
           if (focused && !list.contains(document.activeElement)) (next ? next.querySelector('.inbox-link') : $('inbox-close')).focus()
         } else if (x.isConnected) {
           x.disabled = false
-          holds = asked
-          arm(asked)
-          if (asked && focused) x.focus()
+          arm(false)
         }
       })
       return x
@@ -614,7 +601,9 @@
         reads++
         link.value = why.value = ''
         setNote('')
-        setMsg('')
+        // a link the user had discarded: the item it was is back, with its reading note
+        if (got.restored) setMsg(`Brought back as it was${got.restored.discarded ? `: you discarded it on ${got.restored.discarded}` : ''}.`, false, ASKED_MS)
+        else setMsg('')
         take(got)
         draw(got.items)
         const rows = [...list.children].filter(li => li.dataset.key === got.item.key).sort((a, b) => Number(a.dataset.nth) - Number(b.dataset.nth))

@@ -741,20 +741,34 @@ class ServerTest(unittest.TestCase):
             self.assertEqual((status, got["error"]), (409, "that item is no longer in the inbox"), (action, key))
         self.assertEqual(p.read_bytes(), now)
 
-    def test_inbox_discard_moves_the_item_under_processed(self):
+    def test_inbox_discard_keeps_the_item_whole_and_its_link_pasted_again_brings_it_back(self):
         today = time.strftime("%Y-%m-%d")
-        p = self.fresh_inbox(b"# Inbox\n\n- [A title](https://arxiv.org/abs/2406.01234v2) \xe2\x80\x94 why \xc2\xb7 high\n  - briefed 2026-11-20: claims x\n- https://b.org/y\n")
+        item = "- [A title](https://arxiv.org/abs/2406.01234v2) \u2014 why \u00b7 high\n  - briefed 2026-11-20: claims x\n"
+        brief = {"date": "2026-11-20", "lines": ["claims x"]}
+        p = self.fresh_inbox(("# Inbox\n\n" + item + "- https://b.org/y\n").encode())
         status, got = self.change_inbox("discard", "arxiv:2406.01234")
-        self.assertEqual((status, got["processed"]), (200, {"date": today, "key": "arxiv:2406.01234", "title": "A title", "outcome": "discarded"}))
+        self.assertEqual((status, got["discarded"]), (200, {"key": "arxiv:2406.01234", "url": "https://arxiv.org/abs/2406.01234", "title": "A title", "why": "why", "priority": "high",
+                                                           "added": "", "read": "", "brief": brief, "discarded": today, "reason": ""}))
         self.assertEqual([i["key"] for i in got["items"]], ["https://b.org/y"])
-        self.assertEqual(p.read_text(), f"# Inbox\n\n- https://b.org/y\n\n## Processed\n\n- {today} [A title](https://arxiv.org/abs/2406.01234) \u2014 discarded\n")
-        # the link added again is said to have been discarded, in any of its forms
-        status, got = self.add_inbox("https://arxiv.org/pdf/2406.01234")
-        self.assertEqual((status, got["error"], got["duplicate"]), (409, f"already processed on {today} (discarded)", {"in": "processed", "key": "arxiv:2406.01234"}))
+        # its lines as they were typed, and one more that says when (docs/adr/0007)
+        self.assertEqual(p.read_text(), f"# Inbox\n\n- https://b.org/y\n\n## Discarded\n\n{item}  - discarded {today}\n")
+        self.assertEqual(json.loads(self.get("/api/inbox")[2])["items"], got["items"])  # the page lists what waits, not what was discarded
         self.assertEqual(self.change_inbox("discard", "arxiv:2406.01234")[0], 409)
-        self.assertEqual(self.change_inbox("discard", "https://b.org/y")[0], 200)
-        self.assertEqual(p.read_text(), f"# Inbox\n\n## Processed\n\n- {today} [A title](https://arxiv.org/abs/2406.01234) \u2014 discarded\n- {today} https://b.org/y \u2014 discarded\n")
+        # the link pasted again, in any of its forms, is the user's act: the item is back as it was, at the end of the list
+        status, got = self.add_inbox("https://arxiv.org/pdf/2406.01234", "another why")
+        self.assertEqual((status, got["restored"], got["item"]["why"], got["item"]["priority"], got["item"]["brief"]), (200, {"discarded": today, "reason": ""}, "why", "high", brief))
+        self.assertEqual([i["key"] for i in got["items"]], ["https://b.org/y", "arxiv:2406.01234"])
+        self.assertEqual(p.read_text(), f"# Inbox\n\n- https://b.org/y\n{item}\n## Discarded\n")
+        # a discard of before this change is a line under Processed, and still says where the link is
+        p.write_text(p.read_text() + "\n## Processed\n\n- 2026-11-12 https://c.org/z \u2014 discarded: superseded by R07\n")
+        status, got = self.add_inbox("https://c.org/z")
+        self.assertEqual((status, got["error"]), (409, "already processed on 2026-11-12 (discarded: superseded by R07)"))
+        # both discarded: nothing waits, both are kept, and the processed line is as it was
+        for key in ("https://b.org/y", "arxiv:2406.01234"):
+            self.assertEqual(self.change_inbox("discard", key)[0], 200)
         self.assertEqual(json.loads(self.get("/api/inbox")[2])["items"], [])
+        self.assertEqual(p.read_text(), f"# Inbox\n\n## Discarded\n\n- https://b.org/y\n  - discarded {today}\n{item}  - discarded {today}\n\n"
+                                        "## Processed\n\n- 2026-11-12 https://c.org/z \u2014 discarded: superseded by R07\n")
 
     def test_inbox_change_is_a_write_of_the_page(self):
         p = self.fresh_inbox(b"- https://a.org/x\n")
@@ -832,7 +846,7 @@ class ServerTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, folder, True)
         p = self.fresh_inbox(inbox.encode())
         for name, text in (notes or {}).items():
-            folder.mkdir(exist_ok=True)
+            (folder / name).parent.mkdir(parents=True, exist_ok=True)
             (folder / name).write_bytes(text.encode())
         return p, folder
 
@@ -993,26 +1007,43 @@ class ServerTest(unittest.TestCase):
         self.write("POST", "/api/inbox", {"action": "read", "key": "https://b.org/y", "read": False})
         self.assertEqual(json.loads(self.get("/api/inbox")[2])["waiting"], [])
 
-    def test_inbox_discard_asks_first_while_the_reading_note_holds_the_users_part(self):
+    def test_inbox_discard_keeps_the_reading_note_whatever_it_holds(self):
         today = time.strftime("%Y-%m-%d")
         head = "# Mixup at scale\n<https://arxiv.org/abs/2406.01234>\n"
         inbox = self.MIXUP + "- https://b.org/y\n- 2406.01234 \u2014 again\n"
-        p, folder = self.fresh_reading(inbox, {
-            "arxiv-2406.01234.md": f"{head}\n## My reading\n\n> a quote\n",
-            "b.org-y.md": f"# b.org/y\n<https://b.org/y>\n\n## My reading\n\n## Claude's impression (2026-11-24)\n\n{self.IMP}\n"})
-        key, f = "arxiv:2406.01234", folder / "arxiv-2406.01234.md"
+        mine = f"{head}\n## My reading\n\n> a quote\n"
+        imp = f"# b.org/y\n<https://b.org/y>\n\n## My reading\n\n## Claude's impression (2026-11-24)\n\n{self.IMP}\n"
+        p, folder = self.fresh_reading(inbox, {"arxiv-2406.01234.md": mine, "b.org-y.md": imp})
+        key, f, kept = "arxiv:2406.01234", folder / "arxiv-2406.01234.md", folder / "Discarded" / "arxiv-2406.01234.md"
+        files = lambda: sorted(x.relative_to(folder).as_posix() for x in folder.rglob("*") if x.is_file())  # noqa: E731
+        # nothing is asked, whatever the note holds; it stays while the link typed twice is still in the inbox
         status, got = self.change_inbox("discard", key)
-        self.assertEqual((status, got), (409, {"error": "its reading note holds what you wrote: discarding the item removes it", "holds": True}))
-        self.assertEqual((p.read_text(), f.exists()), (inbox, True))
-        # said yes: the item goes; its reading note stays while the link typed twice is still in the inbox
+        self.assertEqual((status, got["discarded"]["discarded"], [i["key"] for i in got["items"]], files()), (200, today, ["https://b.org/y", key], ["arxiv-2406.01234.md", "b.org-y.md"]))
+        # the last item of the link: the note moves to the kept ones, byte for byte (a page from before this still sends confirm)
         status, got = self.write("POST", "/api/inbox", {"action": "discard", "key": key, "confirm": True})
-        self.assertEqual((status, got["processed"]["outcome"], [i["key"] for i in got["items"]], f.exists()), (200, "discarded", ["https://b.org/y", key], True))
-        status, got = self.write("POST", "/api/inbox", {"action": "discard", "key": key, "confirm": True})
-        self.assertEqual((status, f.exists(), got["notes"]), (200, False, {"https://b.org/y": {"mine": False, "impression": True}}))
-        # a note with Claude's impression alone is not the user's to lose: no question, and it goes with the item
+        self.assertEqual((status, kept.read_text(), got["notes"], files()), (200, mine, {"https://b.org/y": {"mine": False, "impression": True}}, ["Discarded/arxiv-2406.01234.md", "b.org-y.md"]))
+        # the reading note of a discarded item is not the page's to show or to write
+        self.assertEqual(self.reading(key)[0], 409)
+        self.assertEqual(self.write_reading({"key": key, "text": "x", "version": None})[0], 409)
+        self.assertEqual(kept.read_text(), mine)
+        # a note with an impression alone is kept as well
         self.assertEqual(self.change_inbox("discard", "https://b.org/y")[0], 200)
-        self.assertEqual(list(folder.iterdir()), [])
-        self.assertEqual(p.read_text().count(f"- {today} "), 3)
+        self.assertEqual(files(), ["Discarded/arxiv-2406.01234.md", "Discarded/b.org-y.md"])
+        # the link pasted again: the latest item of the link is back, and its note beside the others.
+        # It is as it was: an item with no title is not given one (arXiv is not asked)
+        asked = self.arxiv(lambda aid: "A title looked up")
+        status, got = self.add_inbox("2406.01234")
+        self.assertEqual((got["item"]["title"], asked), ("", []))
+        self.assertEqual((status, got["item"]["why"], got["notes"], f.read_text(), files()), (200, "again", {key: {"mine": True, "impression": False}}, mine, ["Discarded/b.org-y.md", "arxiv-2406.01234.md"]))
+        # discarded again while a kept note has its name: it takes the next name, and none is written over
+        kept.write_text(head + "\n## My reading\n\nan older one\n")
+        self.assertEqual(self.change_inbox("discard", key)[0], 200)
+        self.assertEqual(files(), ["Discarded/arxiv-2406.01234-2.md", "Discarded/arxiv-2406.01234.md", "Discarded/b.org-y.md"])
+        self.assertEqual(((folder / "Discarded" / "arxiv-2406.01234-2.md").read_text(), kept.read_text()), (mine, head + "\n## My reading\n\nan older one\n"))
+        # brought back: the latest kept note of the item returns, the older one stays kept
+        self.assertEqual(self.add_inbox("2406.01234")[0], 200)
+        self.assertEqual((f.read_text(), files()), (mine, ["Discarded/arxiv-2406.01234.md", "Discarded/b.org-y.md", "arxiv-2406.01234.md"]))
+        self.assertEqual(p.read_text().count(f"  - discarded {today}\n"), 2)
 
     def test_reading_note_cases_step_by_step_the_users_side(self):
         """Cases A, B and C of tests/fixtures/reading-note (scenarios.json; SCENARIOS.md says them in
@@ -1048,12 +1079,12 @@ class ServerTest(unittest.TestCase):
                 status, got = self.write(call["method"], call["path"], body)
                 self.assertEqual(status, step["status"], f"{name}{n}: {got}")
                 for k, v in (step.get("answer") or {}).items():
-                    self.assertEqual(got[k], v, f"{name}{n}: {k}")
+                    self.assertEqual(got[k], json.loads(json.dumps(v).replace("{today}", today)), f"{name}{n}: {k}")
                 if "chat" in step:
                     self.assertEqual(self.asked, [("RFT_DISCUSS", {"key": body["key"], "nth": 0})], f"{name}{n}")
                 now = {"Inbox.md": p.read_text(encoding="utf-8")}
                 if folder.exists():
-                    now.update({f"Reading notes/{f.name}": f.read_text(encoding="utf-8") for f in folder.iterdir()})
+                    now.update({f"Reading notes/{f.relative_to(folder).as_posix()}": f.read_text(encoding="utf-8") for f in folder.rglob("*") if f.is_file()})
                 self.assertEqual(now, vault_of(after), f"{name}{n}")
                 ran += 1
         self.assertEqual(ran, 7)

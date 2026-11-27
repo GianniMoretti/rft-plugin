@@ -24,16 +24,22 @@
 // the endings the file has. Claude is given the user's part only once the user marked the item as
 // read (docs/adr/0004): what decides that is in inbox.ts.
 //
+// A discarded item keeps its reading note (docs/adr/0007): the file moves, as it is, to a folder
+// inside the reading notes' (Reading notes/Discarded/), and comes back with the item when the user
+// brings it back. No tool gives what a note holds while it is there.
+//
 // server/rft_reading.py reads the same file the same way, pattern for pattern, and
 // tests/fixtures/reading-note holds both to one list of cases. A change to a pattern here is a
 // change to the same pattern there.
 
-import type { CloseInput } from './inbox'
-import { InboxError, OUTCOMES, closeItem, itemAt, itemName, linkAt, oneLine, outcomeOf, rx, strip } from './inbox'
+import type { AddInput, CloseInput } from './inbox'
+import { INBOX, InboxError, OUTCOMES, addItem, closeItem, countsOf, findIn, inboxText, itemAt, itemName, linkAt, loadInbox, oneLine, outcomeOf, restoreIn, rx, shown, strip } from './inbox'
 import type { Io, Loaded } from './vault'
 import { join, resolveId } from './vault'
 
 export const READING_DIR = 'Reading notes'
+/** Inside it: the reading notes of the discarded items, kept as they were. */
+export const DISCARDED_DIR = 'Discarded'
 export const MINE_HEAD = '## My reading'
 export const IMPRESSION_HEAD = "## Claude's impression"
 const MINE = rx(String.raw`^##[ \t]+my[ \t]+reading[ \t]*$`, true)
@@ -245,6 +251,91 @@ export async function findNote(io: Io, vault: string, key: string): Promise<{ pa
 // ---------------------------------------------------------------- in a session
 
 const fileOf = (path: string) => `${READING_DIR}/${path.slice(path.lastIndexOf('/') + 1)}`
+const keptFileOf = (path: string) => `${READING_DIR}/${DISCARDED_DIR}/${path.slice(path.lastIndexOf('/') + 1)}`
+
+/** The names of the reading notes kept for discarded items; none while the folder is not there. */
+async function keptNames(io: Io, vault: string): Promise<Set<string>> {
+  try {
+    return new Set((await io.list(join(vault, READING_DIR, DISCARDED_DIR))).filter(f => f.kind === 'file').map(f => f.name))
+  } catch {
+    return new Set()
+  }
+}
+
+/**
+ * Moves the reading note of a discarded item, as it is, to the discarded folder, under the first
+ * name of its family that is free there. Its path there, or null when the item had no note.
+ */
+export async function keepNote(io: Io, vault: string, key: string): Promise<string | null> {
+  const { path, note } = await findNote(io, vault, key)
+  if (!note) return null
+  const names = await keptNames(io, vault)
+  for (let n = 0; n < TRIES; n++) {
+    if (names.has(fileName(key, n))) continue
+    const to = join(vault, READING_DIR, DISCARDED_DIR, fileName(key, n))
+    await io.write(to, noteText(note))
+    await io.remove(path)
+    return to
+  }
+  throw new ReadingError("too many kept reading notes share this item's file name")
+}
+
+/**
+ * Moves the reading note kept for a discarded item back beside the others: the latest of its
+ * name's family in the discarded folder that is of this item. Its path, or null when none was
+ * kept. A note the item already has is not written over: the kept one then stays where it is.
+ */
+export async function returnNote(io: Io, vault: string, key: string): Promise<string | null> {
+  const names = await keptNames(io, vault)
+  let from: string | null = null
+  let text = ''
+  for (let n = 0; n < TRIES; n++) {
+    if (!names.has(fileName(key, n))) continue
+    const path = join(vault, READING_DIR, DISCARDED_DIR, fileName(key, n))
+    const read = await io.read(path)
+    if (readNote(read).key === key) [from, text] = [path, read]
+  }
+  if (!from) return null
+  const { path, note } = await findNote(io, vault, key)
+  if (note) return null
+  await io.write(path, text)
+  await io.remove(from)
+  return path
+}
+
+/**
+ * Brings a discarded item back into the inbox, as it was, with its reading note (rft_inbox {link,
+ * restore: true}, when the user asked; the user's own /rft-inbox <link>). Only the user's act does
+ * this (docs/adr/0007).
+ */
+export async function restoreItem(io: Io, loaded: Loaded, link: string): Promise<string> {
+  const vault = loaded.config.vault
+  const got = linkAt(oneLine(link))
+  if (!got || strip(got.tail)) throw new InboxError(`"${oneLine(link)}" is not a link: name the item by its link (a URL, an arXiv id or a DOI).`)
+  const box = await loadInbox(io, vault)
+  const held = findIn(box, got.key)
+  if (held && 'item' in held) return `Already in the inbox: ${itemName(held.item)}. Nothing to bring back.`
+  if (!held || !('discarded' in held)) throw new InboxError(`Not brought back: no discarded item has this link (${got.url}). rft_inbox with the link alone saves it as a new item.`)
+  let back: NonNullable<ReturnType<typeof restoreIn>>
+  try {
+    back = restoreIn(box, got.key)!
+  } catch (err) {
+    if (err instanceof InboxError) throw new InboxError(`Not brought back: ${err.message}.`)
+    throw err
+  }
+  await io.write(join(vault, INBOX), inboxText(back.box))
+  const note = await returnNote(io, vault, got.key)
+  const d = held.discarded
+  const has = [back.item.brief ? 'its brief' : '', back.item.read ? `its read mark (${back.item.read})` : '', note ? `its reading note (${fileOf(note)})` : ''].filter(Boolean)
+  return `Brought back into the inbox: ${itemName(back.item)}, as it was${d.discarded ? ` when it was discarded on ${d.discarded}` : ''}${has.length ? `, with ${has.join(', ')}` : ''}. ${countsOf(shown(back.box))}.`
+}
+
+/** A link the user saves themselves (/rft-inbox <link>): a discarded item comes back as it was, any other link is saved as a new item. */
+export async function saveMine(io: Io, loaded: Loaded, input: AddInput): Promise<string> {
+  const got = linkAt(oneLine(input.link))
+  const held = got && !strip(got.tail) ? findIn(await loadInbox(io, loaded.config.vault), got.key) : null
+  return held && 'discarded' in held ? restoreItem(io, loaded, input.link) : addItem(io, loaded, input)
+}
 
 /**
  * Saves Claude's impression of an item (rft_inbox {link, impression}) in its reading note, made
@@ -300,14 +391,15 @@ export async function readingOf(io: Io, loaded: Loaded, link: string): Promise<s
 }
 
 /**
- * Closes an item with the outcome the user picked, its reading note with it. While the user's part
- * holds something: a discard is refused until the user said yes to losing it (`confirmed`); an
- * outcome that writes to the tree is refused until the user marked the item as read, and until
- * every quote of theirs stands word for word, as a quote, in the note the outcome names (the
- * reference, the literature note, the reference a direction cites). Once the item is closed the
- * reading note's file is removed. `later` closes nothing and removes nothing.
+ * Closes an item with the outcome the user picked, its reading note with it. A discard keeps the
+ * note: it moves to the discarded folder as it is, whatever it holds, and nothing is asked
+ * (docs/adr/0007). While the user's part holds something, an outcome that writes to the tree is
+ * refused until the user marked the item as read, and until every quote of theirs stands word for
+ * word, as a quote, in the note the outcome names (the reference, the literature note, the
+ * reference a direction cites); once the item is closed the reading note's file is removed, its
+ * quotes being in the tree. `later` closes nothing and removes nothing.
  */
-export async function closeWithNote(io: Io, loaded: Loaded, input: CloseInput & { confirmed?: boolean }): Promise<string> {
+export async function closeWithNote(io: Io, loaded: Loaded, input: CloseInput): Promise<string> {
   const vault = loaded.config.vault
   const outcome = outcomeOf(input.outcome)
   if (outcome === 'later' || !(OUTCOMES as readonly string[]).includes(outcome)) return closeItem(io, loaded, input)
@@ -315,11 +407,7 @@ export async function closeWithNote(io: Io, loaded: Loaded, input: CloseInput & 
   const { path, note } = await findNote(io, vault, item.key)
   const mine = note?.mine ?? ''
   let carried = ''
-  if (mine && outcome === 'discard') {
-    if (!input.confirmed) {
-      throw new ReadingError(`Not closed: the user's part of the reading note of ${itemName(item)} holds something, and a discard removes the reading note with it. Ask the user first; once they say yes, close with confirmed: true.`)
-    }
-  } else if (mine) {
+  if (mine && outcome !== 'discard') {
     if (!item.read) {
       throw new ReadingError(`Not closed: the user's part of the reading note of ${itemName(item)} holds something you have not seen, and the outcome ${outcome} carries their quotes into the tree. `
         + 'Ask the user to mark the item as read (on its row in the tree view): the discussion starts from there.')
@@ -335,6 +423,10 @@ export async function closeWithNote(io: Io, loaded: Loaded, input: CloseInput & 
   }
   const said = await closeItem(io, loaded, input)
   if (!note) return said
+  if (outcome === 'discard') {
+    const to = await keepNote(io, vault, item.key)
+    return `${said} Its reading note is kept with it (${keptFileOf(to ?? path)})${mine ? ', with what the user wrote in it' : ''}.`
+  }
   await io.remove(path)
-  return `${said} Its reading note (${fileOf(path)}) is removed${carried ? `: the user's quotes are in ${carried}` : mine && outcome === 'discard' ? ', with what the user had written in it' : ''}.`
+  return `${said} Its reading note (${fileOf(path)}) is removed${carried ? `: the user's quotes are in ${carried}` : ''}.`
 }

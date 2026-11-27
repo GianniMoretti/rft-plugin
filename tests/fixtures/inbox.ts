@@ -571,6 +571,13 @@ export const CASES = {
    "link": "https://a.org",
    "priority": "soon",
    "error": true
+  },
+  {
+   "name": "before the discarded ones, when nothing is processed yet",
+   "text": "- https://a.org/x\n\n## Discarded\n\n- https://c.org/z\n  - discarded 2026-11-01\n",
+   "link": "https://b.org/y",
+   "today": "2026-11-27",
+   "want": "- https://a.org/x\n- https://b.org/y \u00b7 added 2026-11-27\n\n## Discarded\n\n- https://c.org/z\n  - discarded 2026-11-01\n"
   }
  ],
  "changes": [
@@ -963,6 +970,34 @@ export const CASES = {
    "today": "2026-11-23",
    "outcome": "\u2192 R15",
    "want": "- https://a.org/x#top \u2014 two\n\n## Processed\n\n- 2026-11-23 https://a.org/x \u2192 R15\n"
+  },
+  {
+   "name": "the processed heading is made before the discarded ones",
+   "text": "- https://a.org/x\n- https://b.org/y\n\n## Discarded\n\n- https://c.org/z\n  - discarded 2026-11-01\n",
+   "key": "https://a.org/x",
+   "today": "2026-11-27",
+   "outcome": "\u2192 R15",
+   "want": "- https://b.org/y\n\n## Processed\n\n- 2026-11-27 https://a.org/x \u2192 R15\n\n## Discarded\n\n- https://c.org/z\n  - discarded 2026-11-01\n",
+   "processed": {
+    "date": "2026-11-27",
+    "key": "https://a.org/x",
+    "title": "",
+    "outcome": "R15"
+   }
+  },
+  {
+   "name": "the last open item closed, with discarded ones under it",
+   "text": "- https://a.org/x\n\n## Discarded\n\n- https://c.org/z\n",
+   "key": "https://a.org/x",
+   "today": "2026-11-27",
+   "outcome": "\u2192 R15",
+   "want": "## Processed\n\n- 2026-11-27 https://a.org/x \u2192 R15\n\n## Discarded\n\n- https://c.org/z\n",
+   "processed": {
+    "date": "2026-11-27",
+    "key": "https://a.org/x",
+    "title": "",
+    "outcome": "R15"
+   }
   }
  ],
  "briefs": [
@@ -1185,6 +1220,621 @@ export const CASES = {
    "link": "https://b.org/y",
    "why": "read 2026-11-24",
    "error": true
+  }
+ ],
+ "kept": [
+  {
+   "name": "an item under the heading, with its parts, its brief and the line that says when and why",
+   "text": "# Inbox\n\n- https://b.org/y\n\n## Discarded\n\n- [Mixup at scale](https://arxiv.org/abs/2406.01234) \u2014 maybe relevant to D04 \u00b7 high \u00b7 added 2026-11-16 \u00b7 read 2026-11-20\n  - briefed 2026-11-23: claims x\n  - touches R07, E12\n  - recommends: reference under D04\n  - discarded 2026-11-27: superseded by R07\n",
+   "items": [
+    "https://b.org/y"
+   ],
+   "discarded": [
+    {
+     "key": "arxiv:2406.01234",
+     "url": "https://arxiv.org/abs/2406.01234",
+     "title": "Mixup at scale",
+     "why": "maybe relevant to D04",
+     "priority": "high",
+     "added": "2026-11-16",
+     "read": "2026-11-20",
+     "brief": {
+      "date": "2026-11-23",
+      "lines": [
+       "claims x",
+       "touches R07, E12",
+       "recommends: reference under D04"
+      ]
+     },
+     "discarded": "2026-11-27",
+     "reason": "superseded by R07"
+    }
+   ],
+   "holds": [
+    [
+     "arxiv:2406.01234",
+     "discarded"
+    ],
+    [
+     "https://b.org/y",
+     "item"
+    ]
+   ]
+  },
+  {
+   "name": "a line typed there by hand: discarded, with no day and no reason",
+   "text": "## Discarded\n- https://a.org/x\n",
+   "items": [],
+   "discarded": [
+    {
+     "key": "https://a.org/x",
+     "url": "https://a.org/x",
+     "title": "",
+     "why": "",
+     "priority": "",
+     "added": "",
+     "read": "",
+     "brief": null,
+     "discarded": "",
+     "reason": ""
+    }
+   ]
+  },
+  {
+   "name": "the day alone, the reason alone, neither",
+   "text": "## Discarded\n\n- https://a.org/x\n  - discarded 2026-11-27\n- https://b.org/y\n  - discarded: not for us\n- https://c.org/z\n  - Discarded\n",
+   "items": [],
+   "discarded": [
+    {
+     "key": "https://a.org/x",
+     "url": "https://a.org/x",
+     "title": "",
+     "why": "",
+     "priority": "",
+     "added": "",
+     "read": "",
+     "brief": null,
+     "discarded": "2026-11-27",
+     "reason": ""
+    },
+    {
+     "key": "https://b.org/y",
+     "url": "https://b.org/y",
+     "title": "",
+     "why": "",
+     "priority": "",
+     "added": "",
+     "read": "",
+     "brief": null,
+     "discarded": "",
+     "reason": "not for us"
+    },
+    {
+     "key": "https://c.org/z",
+     "url": "https://c.org/z",
+     "title": "",
+     "why": "",
+     "priority": "",
+     "added": "",
+     "read": "",
+     "brief": null,
+     "discarded": "",
+     "reason": ""
+    }
+   ]
+  },
+  {
+   "name": "only the last indented line says it, and only when it reads so; one before it is the item's own",
+   "text": "## Discarded\n\n- https://a.org/x\n  - discarded: an old remark of mine\n  - from the reading group\n- https://b.org/y\n  - discarded papers of 2019\n- https://c.org/z\n  - briefed 2026-11-23: claims x\n  - discarded: not a brief line\n  - discarded 2026-11-27: superseded\n",
+   "items": [],
+   "discarded": [
+    {
+     "key": "https://a.org/x",
+     "url": "https://a.org/x",
+     "title": "",
+     "why": "",
+     "priority": "",
+     "added": "",
+     "read": "",
+     "brief": null,
+     "discarded": "",
+     "reason": ""
+    },
+    {
+     "key": "https://b.org/y",
+     "url": "https://b.org/y",
+     "title": "",
+     "why": "",
+     "priority": "",
+     "added": "",
+     "read": "",
+     "brief": null,
+     "discarded": "",
+     "reason": ""
+    },
+    {
+     "key": "https://c.org/z",
+     "url": "https://c.org/z",
+     "title": "",
+     "why": "",
+     "priority": "",
+     "added": "",
+     "read": "",
+     "brief": {
+      "date": "2026-11-23",
+      "lines": [
+       "claims x",
+       "discarded: not a brief line"
+      ]
+     },
+     "discarded": "2026-11-27",
+     "reason": "superseded"
+    }
+   ]
+  },
+  {
+   "name": "the heading in any case; the discarded ones end at the next heading",
+   "text": "- https://a.org/x\n\n##  DISCARDED  \n\n- https://b.org/y\n  - discarded 2026-11-27\n\n## Processed\n\n- 2026-11-10 https://c.org/z \u2192 R03\n\n## Later\n\n- https://d.org/w\n",
+   "items": [
+    "https://a.org/x",
+    "https://d.org/w"
+   ],
+   "discarded": [
+    {
+     "key": "https://b.org/y",
+     "url": "https://b.org/y",
+     "title": "",
+     "why": "",
+     "priority": "",
+     "added": "",
+     "read": "",
+     "brief": null,
+     "discarded": "2026-11-27",
+     "reason": ""
+    }
+   ],
+   "holds": [
+    [
+     "https://b.org/y",
+     "discarded"
+    ],
+    [
+     "https://c.org/z",
+     "processed"
+    ],
+    [
+     "https://d.org/w",
+     "item"
+    ]
+   ]
+  },
+  {
+   "name": "in the open list a line that says discarded is the item's own, and such a part of its line is its why",
+   "text": "- https://a.org/x \u2014 discarded 2026-11-01\n  - discarded 2026-11-27: not here\n",
+   "items": [
+    "https://a.org/x"
+   ],
+   "discarded": [],
+   "open": [
+    {
+     "key": "https://a.org/x",
+     "url": "https://a.org/x",
+     "title": "",
+     "why": "discarded 2026-11-01",
+     "priority": "",
+     "added": "",
+     "read": "",
+     "duplicate": false,
+     "brief": null
+    }
+   ]
+  },
+  {
+   "name": "the same link discarded twice, and lines that are no item among them",
+   "text": "## Discarded\n\nthings I passed on\n\n- https://a.org/x\n  - discarded 2026-11-01\n- [ ] not an item\n* <https://a.org/x> - again\n  - discarded 2026-11-27: twice\n",
+   "items": [],
+   "discarded": [
+    {
+     "key": "https://a.org/x",
+     "url": "https://a.org/x",
+     "title": "",
+     "why": "",
+     "priority": "",
+     "added": "",
+     "read": "",
+     "brief": null,
+     "discarded": "2026-11-01",
+     "reason": ""
+    },
+    {
+     "key": "https://a.org/x",
+     "url": "https://a.org/x",
+     "title": "",
+     "why": "again",
+     "priority": "",
+     "added": "",
+     "read": "",
+     "brief": null,
+     "discarded": "2026-11-27",
+     "reason": "twice"
+    }
+   ]
+  },
+  {
+   "name": "with carriage returns",
+   "text": "- https://b.org/y\r\n\r\n## Discarded\r\n\r\n- https://a.org/x \u2014 why\r\n  - discarded 2026-11-27: no\r\n",
+   "items": [
+    "https://b.org/y"
+   ],
+   "discarded": [
+    {
+     "key": "https://a.org/x",
+     "url": "https://a.org/x",
+     "title": "",
+     "why": "why",
+     "priority": "",
+     "added": "",
+     "read": "",
+     "brief": null,
+     "discarded": "2026-11-27",
+     "reason": "no"
+    }
+   ]
+  }
+ ],
+ "discards": [
+  {
+   "name": "the first discard makes the heading at the file's end, after the processed ones",
+   "text": "# Inbox\n\n- https://a.org/x \u2014 why \u00b7 high \u00b7 added 2026-11-01\n- https://b.org/y\n\n## Processed\n\n- 2026-11-10 https://c.org/z \u2192 R03\n",
+   "key": "https://a.org/x",
+   "reason": "superseded by R07",
+   "today": "2026-11-27",
+   "want": "# Inbox\n\n- https://b.org/y\n\n## Processed\n\n- 2026-11-10 https://c.org/z \u2192 R03\n\n## Discarded\n\n- https://a.org/x \u2014 why \u00b7 high \u00b7 added 2026-11-01\n  - discarded 2026-11-27: superseded by R07\n",
+   "is": {
+    "key": "https://a.org/x",
+    "url": "https://a.org/x",
+    "title": "",
+    "why": "why",
+    "priority": "high",
+    "added": "2026-11-01",
+    "read": "",
+    "brief": null,
+    "discarded": "2026-11-27",
+    "reason": "superseded by R07"
+   }
+  },
+  {
+   "name": "its brief and its read mark go with it, as they are",
+   "text": "- [Mixup at scale](https://arxiv.org/abs/2406.01234) \u2014 maybe relevant to D04 \u00b7 high \u00b7 added 2026-11-16 \u00b7 read 2026-11-20\n  - briefed 2026-11-23: claims x\n  - touches R07, E12\n  - recommends: reference under D04\n- https://b.org/y\n",
+   "key": "arxiv:2406.01234",
+   "today": "2026-11-27",
+   "want": "- https://b.org/y\n\n## Discarded\n\n- [Mixup at scale](https://arxiv.org/abs/2406.01234) \u2014 maybe relevant to D04 \u00b7 high \u00b7 added 2026-11-16 \u00b7 read 2026-11-20\n  - briefed 2026-11-23: claims x\n  - touches R07, E12\n  - recommends: reference under D04\n  - discarded 2026-11-27\n",
+   "is": {
+    "key": "arxiv:2406.01234",
+    "url": "https://arxiv.org/abs/2406.01234",
+    "title": "Mixup at scale",
+    "why": "maybe relevant to D04",
+    "priority": "high",
+    "added": "2026-11-16",
+    "read": "2026-11-20",
+    "brief": {
+     "date": "2026-11-23",
+     "lines": [
+      "claims x",
+      "touches R07, E12",
+      "recommends: reference under D04"
+     ]
+    },
+    "discarded": "2026-11-27",
+    "reason": ""
+   }
+  },
+  {
+   "name": "at the end of the discarded ones, before the heading that follows them",
+   "text": "- https://a.org/x\n- https://b.org/y\n\n## Discarded\n\n- https://c.org/z\n  - discarded 2026-11-01\n\n## Processed\n\n- 2026-11-10 https://d.org/w \u2192 R03\n",
+   "key": "https://b.org/y",
+   "reason": "not for us",
+   "today": "2026-11-27",
+   "want": "- https://a.org/x\n\n## Discarded\n\n- https://c.org/z\n  - discarded 2026-11-01\n- https://b.org/y\n  - discarded 2026-11-27: not for us\n\n## Processed\n\n- 2026-11-10 https://d.org/w \u2192 R03\n",
+   "is": {
+    "key": "https://b.org/y",
+    "url": "https://b.org/y",
+    "title": "",
+    "why": "",
+    "priority": "",
+    "added": "",
+    "read": "",
+    "brief": null,
+    "discarded": "2026-11-27",
+    "reason": "not for us"
+   }
+  },
+  {
+   "name": "the line as it was typed: its bullet, its spaces, the user's own line under it",
+   "text": "*   <https://a.org/x>   urgent\n\t- from the reading group\n- https://b.org/y\n",
+   "key": "https://a.org/x",
+   "today": "2026-11-27",
+   "want": "- https://b.org/y\n\n## Discarded\n\n*   <https://a.org/x>   urgent\n\t- from the reading group\n  - discarded 2026-11-27\n",
+   "is": {
+    "key": "https://a.org/x",
+    "url": "https://a.org/x",
+    "title": "",
+    "why": "",
+    "priority": "urgent",
+    "added": "",
+    "read": "",
+    "brief": null,
+    "discarded": "2026-11-27",
+    "reason": ""
+   }
+  },
+  {
+   "name": "the second of a link typed twice",
+   "text": "- https://a.org/x \u2014 first\n- https://a.org/x \u2014 second\n",
+   "key": "https://a.org/x",
+   "nth": 1,
+   "today": "2026-11-27",
+   "want": "- https://a.org/x \u2014 first\n\n## Discarded\n\n- https://a.org/x \u2014 second\n  - discarded 2026-11-27\n",
+   "is": {
+    "key": "https://a.org/x",
+    "url": "https://a.org/x",
+    "title": "",
+    "why": "second",
+    "priority": "",
+    "added": "",
+    "read": "",
+    "brief": null,
+    "discarded": "2026-11-27",
+    "reason": ""
+   }
+  },
+  {
+   "name": "the only line of the file",
+   "text": "- https://a.org/x\n",
+   "key": "https://a.org/x",
+   "today": "2026-11-27",
+   "want": "## Discarded\n\n- https://a.org/x\n  - discarded 2026-11-27\n",
+   "is": {
+    "key": "https://a.org/x",
+    "url": "https://a.org/x",
+    "title": "",
+    "why": "",
+    "priority": "",
+    "added": "",
+    "read": "",
+    "brief": null,
+    "discarded": "2026-11-27",
+    "reason": ""
+   }
+  },
+  {
+   "name": "a file with no newline at its end",
+   "text": "- https://a.org/x\n- https://b.org/y",
+   "key": "https://b.org/y",
+   "today": "2026-11-27",
+   "want": "- https://a.org/x\n\n## Discarded\n\n- https://b.org/y\n  - discarded 2026-11-27\n",
+   "is": {
+    "key": "https://b.org/y",
+    "url": "https://b.org/y",
+    "title": "",
+    "why": "",
+    "priority": "",
+    "added": "",
+    "read": "",
+    "brief": null,
+    "discarded": "2026-11-27",
+    "reason": ""
+   }
+  },
+  {
+   "name": "with carriage returns",
+   "text": "- https://a.org/x\r\n- https://b.org/y\r\n",
+   "key": "https://a.org/x",
+   "reason": "no",
+   "today": "2026-11-27",
+   "want": "- https://b.org/y\r\n\r\n## Discarded\r\n\r\n- https://a.org/x\r\n  - discarded 2026-11-27: no\r\n",
+   "is": {
+    "key": "https://a.org/x",
+    "url": "https://a.org/x",
+    "title": "",
+    "why": "",
+    "priority": "",
+    "added": "",
+    "read": "",
+    "brief": null,
+    "discarded": "2026-11-27",
+    "reason": "no"
+   }
+  },
+  {
+   "name": "under a discarded heading that has nothing yet",
+   "text": "- https://a.org/x\n\n## Discarded\n",
+   "key": "https://a.org/x",
+   "today": "2026-11-27",
+   "want": "## Discarded\n\n- https://a.org/x\n  - discarded 2026-11-27\n",
+   "is": {
+    "key": "https://a.org/x",
+    "url": "https://a.org/x",
+    "title": "",
+    "why": "",
+    "priority": "",
+    "added": "",
+    "read": "",
+    "brief": null,
+    "discarded": "2026-11-27",
+    "reason": ""
+   }
+  },
+  {
+   "name": "a reason given in two lines is one line",
+   "text": "- https://a.org/x\n",
+   "key": "https://a.org/x",
+   "reason": "superseded\n  by R07 ",
+   "today": "2026-11-27",
+   "want": "## Discarded\n\n- https://a.org/x\n  - discarded 2026-11-27: superseded by R07\n",
+   "is": {
+    "key": "https://a.org/x",
+    "url": "https://a.org/x",
+    "title": "",
+    "why": "",
+    "priority": "",
+    "added": "",
+    "read": "",
+    "brief": null,
+    "discarded": "2026-11-27",
+    "reason": "superseded by R07"
+   }
+  },
+  {
+   "name": "no day given: the line says it was discarded, and why",
+   "text": "- https://a.org/x\n",
+   "key": "https://a.org/x",
+   "reason": "not for us",
+   "today": "",
+   "want": "## Discarded\n\n- https://a.org/x\n  - discarded: not for us\n",
+   "is": {
+    "key": "https://a.org/x",
+    "url": "https://a.org/x",
+    "title": "",
+    "why": "",
+    "priority": "",
+    "added": "",
+    "read": "",
+    "brief": null,
+    "discarded": "",
+    "reason": "not for us"
+   }
+  },
+  {
+   "name": "a day that is not one",
+   "text": "- https://a.org/x\n",
+   "key": "https://a.org/x",
+   "today": "tomorrow",
+   "error": true
+  },
+  {
+   "name": "no item has the link",
+   "text": "- https://a.org/x\n",
+   "key": "https://b.org/y",
+   "today": "2026-11-27",
+   "none": true
+  }
+ ],
+ "returns": [
+  {
+   "name": "back at the end of the open list, as it was; the line that said when and why goes",
+   "text": "# Inbox\n\n- https://b.org/y\n\n## Processed\n\n- 2026-11-10 https://c.org/z \u2192 R03\n\n## Discarded\n\n- https://a.org/x \u2014 why \u00b7 high \u00b7 added 2026-11-01\n  - discarded 2026-11-27: superseded by R07\n",
+   "key": "https://a.org/x",
+   "want": "# Inbox\n\n- https://b.org/y\n- https://a.org/x \u2014 why \u00b7 high \u00b7 added 2026-11-01\n\n## Processed\n\n- 2026-11-10 https://c.org/z \u2192 R03\n\n## Discarded\n",
+   "item": {
+    "key": "https://a.org/x",
+    "url": "https://a.org/x",
+    "title": "",
+    "why": "why",
+    "priority": "high",
+    "added": "2026-11-01",
+    "read": "",
+    "duplicate": false,
+    "brief": null
+   }
+  },
+  {
+   "name": "with its brief and its read mark",
+   "text": "- https://b.org/y\n\n## Discarded\n\n- [Mixup at scale](https://arxiv.org/abs/2406.01234) \u2014 maybe relevant to D04 \u00b7 high \u00b7 added 2026-11-16 \u00b7 read 2026-11-20\n  - briefed 2026-11-23: claims x\n  - touches R07, E12\n  - recommends: reference under D04\n  - discarded 2026-11-27\n",
+   "key": "arxiv:2406.01234",
+   "want": "- https://b.org/y\n- [Mixup at scale](https://arxiv.org/abs/2406.01234) \u2014 maybe relevant to D04 \u00b7 high \u00b7 added 2026-11-16 \u00b7 read 2026-11-20\n  - briefed 2026-11-23: claims x\n  - touches R07, E12\n  - recommends: reference under D04\n\n## Discarded\n",
+   "item": {
+    "key": "arxiv:2406.01234",
+    "url": "https://arxiv.org/abs/2406.01234",
+    "title": "Mixup at scale",
+    "why": "maybe relevant to D04",
+    "priority": "high",
+    "added": "2026-11-16",
+    "read": "2026-11-20",
+    "duplicate": false,
+    "brief": {
+     "date": "2026-11-23",
+     "lines": [
+      "claims x",
+      "touches R07, E12",
+      "recommends: reference under D04"
+     ]
+    }
+   }
+  },
+  {
+   "name": "the latest, when the link was discarded twice",
+   "text": "## Discarded\n\n- https://a.org/x \u2014 first\n  - discarded 2026-11-01\n- https://a.org/x \u2014 second\n  - discarded 2026-11-27\n",
+   "key": "https://a.org/x",
+   "want": "- https://a.org/x \u2014 second\n\n## Discarded\n\n- https://a.org/x \u2014 first\n  - discarded 2026-11-01\n",
+   "item": {
+    "key": "https://a.org/x",
+    "url": "https://a.org/x",
+    "title": "",
+    "why": "second",
+    "priority": "",
+    "added": "",
+    "read": "",
+    "duplicate": false,
+    "brief": null
+   }
+  },
+  {
+   "name": "a line typed under the heading by hand, with none that says when: all its lines come back",
+   "text": "- https://b.org/y\n\n## Discarded\n- https://a.org/x\n  - from the reading group\n",
+   "key": "https://a.org/x",
+   "want": "- https://b.org/y\n- https://a.org/x\n  - from the reading group\n\n## Discarded\n",
+   "item": {
+    "key": "https://a.org/x",
+    "url": "https://a.org/x",
+    "title": "",
+    "why": "",
+    "priority": "",
+    "added": "",
+    "read": "",
+    "duplicate": false,
+    "brief": null
+   }
+  },
+  {
+   "name": "after free text, a blank line first",
+   "text": "# Inbox\n\nto read\n\n## Discarded\n\n- https://a.org/x\n  - discarded 2026-11-27\n",
+   "key": "https://a.org/x",
+   "want": "# Inbox\n\nto read\n\n- https://a.org/x\n\n## Discarded\n",
+   "item": {
+    "key": "https://a.org/x",
+    "url": "https://a.org/x",
+    "title": "",
+    "why": "",
+    "priority": "",
+    "added": "",
+    "read": "",
+    "duplicate": false,
+    "brief": null
+   }
+  },
+  {
+   "name": "with carriage returns",
+   "text": "## Discarded\r\n\r\n- https://a.org/x\r\n  - discarded 2026-11-27\r\n",
+   "key": "https://a.org/x",
+   "want": "- https://a.org/x\r\n\r\n## Discarded\r\n",
+   "item": {
+    "key": "https://a.org/x",
+    "url": "https://a.org/x",
+    "title": "",
+    "why": "",
+    "priority": "",
+    "added": "",
+    "read": "",
+    "duplicate": false,
+    "brief": null
+   }
+  },
+  {
+   "name": "no discarded item has the link",
+   "text": "- https://a.org/x\n\n## Discarded\n\n- https://b.org/y\n",
+   "key": "https://a.org/x",
+   "none": true
   }
  ]
 }

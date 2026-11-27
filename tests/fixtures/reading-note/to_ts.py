@@ -34,7 +34,9 @@ def page() -> str:
     scenarios = json.loads((HERE / "scenarios.json").read_text(encoding="utf-8"))
     out = ["# Reading notes: the three cases, step by step", "",
            "Written from tests/fixtures/reading-note/scenarios.json by to_ts.py: edit that file, not this one.", "",
-           "Claude proposed these cases; the user tried the feature and read them on 2026-11-24 and asked for no change.", "",
+           "Claude proposed these cases; the user tried the feature and read them on 2026-11-24 and asked for no change.",
+           "Case C was written again on 2026-11-27, when a discard came to keep the item and its reading note",
+           "(docs/adr/0007): it was \"a discard after quoting asks first\". The user has not read the new C yet.", "",
            "Each step says who acts and what happens, the call it is tested with, what the answer must say, and the",
            "files it changes, as they are after it. `{today}` is the day the test runs. A step of the user's is run",
            "against the page's server (tests/test_reading.py), a step of Claude's against the plugin's tool",
@@ -59,7 +61,7 @@ def page() -> str:
                 out += ["- Files: " + ("none changes" if not files else "only these change")]
             out += [""]
             for path, text in files.items():
-                out += [f"`{path}`" + (": removed" if text is None else ""), ""]
+                out += [f"`{path}`" + (": no longer there" if text is None else ""), ""]
                 if text is not None:
                     out += [fence(text)]
     return "\n".join(out).rstrip("\n") + "\n"

@@ -949,7 +949,7 @@ export const SCENARIOS = {
   ]
  },
  "C": {
-  "title": "C. A discard after quoting asks first",
+  "title": "C. A discard after quoting keeps the note",
   "steps": [
    {
     "who": "given",
@@ -961,7 +961,7 @@ export const SCENARIOS = {
    },
    {
     "who": "user",
-    "does": "Taps \u2715 on the item in the panel: refused, the panel asks first, because the reading note holds what they wrote.",
+    "does": "Taps \u2715 on the item in the panel, and again to confirm. Nothing more is asked: the item leaves the inbox for the discarded ones, kept whole, and its reading note is kept with it, as it is.",
     "page": {
      "method": "POST",
      "path": "/api/inbox",
@@ -970,22 +970,23 @@ export const SCENARIOS = {
       "action": "discard"
      }
     },
-    "status": 409,
-    "answer": {
-     "holds": true
+    "status": 200,
+    "files": {
+     "Inbox.md": "# Inbox\n\n- https://example.org/blog/post \u2014 from Bea\n\n## Discarded\n\n- [Mixup at scale](https://arxiv.org/abs/2406.01234) \u2014 maybe relevant to D01 \u00b7 high \u00b7 added 2026-11-16\n  - discarded {today}\n",
+     "Reading notes/arxiv-2406.01234.md": null,
+     "Reading notes/Discarded/arxiv-2406.01234.md": "# Mixup at scale\n<https://arxiv.org/abs/2406.01234>\n\n## My reading\n\n> The gain vanishes below 1k images (Sec. 4.2)\n\nSame subset sizes as E02?\n"
     }
    },
    {
     "who": "claude",
-    "does": "In the chat the user says to discard it. Claude closes with discard: refused, it must ask the user first.",
+    "does": "Later a literature search meets the paper again and saves it. It is said to be discarded and nothing is added: only the user brings it back.",
     "tool": {
      "link": "https://arxiv.org/abs/2406.01234",
-     "outcome": "discard",
-     "reason": "superseded by R01"
+     "why": "from the literature search on mixup, not read"
     },
     "says": [
-     "Not closed: the user's part of the reading note of Mixup at scale",
-     "Ask the user first; once they say yes, close with confirmed: true."
+     "Discarded on {today}: Mixup at scale (https://arxiv.org/abs/2406.01234). Nothing added.",
+     "only the user brings it back"
     ],
     "never": [
      "gain vanishes"
@@ -993,39 +994,82 @@ export const SCENARIOS = {
    },
    {
     "who": "claude",
-    "does": "The user says yes. Claude closes with the confirmation: the item goes under Processed with its reason, the reading note is removed.",
+    "does": "Claude asks for its reading note: refused. No tool gives what a discarded item's note holds.",
     "tool": {
      "link": "https://arxiv.org/abs/2406.01234",
-     "outcome": "discard",
-     "reason": "superseded by R01",
-     "confirmed": true
+     "reading": true
     },
     "says": [
-     "Closed: Mixup at scale (https://arxiv.org/abs/2406.01234) \u2014 discarded: superseded by R01.",
-     "Its reading note (Reading notes/arxiv-2406.01234.md) is removed, with what the user had written in it."
+     "Not in the inbox any more: Mixup at scale",
+     "was discarded on {today}"
     ],
-    "files": {
-     "Inbox.md": "# Inbox\n\n- https://example.org/blog/post \u2014 from Bea\n\n## Processed\n\n- {today} [Mixup at scale](https://arxiv.org/abs/2406.01234) \u2014 discarded: superseded by R01\n",
-     "Reading notes/arxiv-2406.01234.md": null
-    }
+    "never": [
+     "gain vanishes"
+    ]
    },
    {
     "who": "user",
-    "after": 2,
-    "does": "Or, from step 2, on the panel: the user taps \u2715 and confirms the question. The item goes under Processed as discarded, the reading note is removed.",
+    "does": "Pastes the link in the panel again: the item comes back as it was, at the end of the list, and its reading note with it.",
     "page": {
      "method": "POST",
      "path": "/api/inbox",
      "body": {
-      "key": "arxiv:2406.01234",
-      "action": "discard",
-      "confirm": true
+      "link": "https://arxiv.org/abs/2406.01234"
      }
     },
     "status": 200,
+    "answer": {
+     "restored": {
+      "discarded": "{today}",
+      "reason": ""
+     }
+    },
     "files": {
-     "Inbox.md": "# Inbox\n\n- https://example.org/blog/post \u2014 from Bea\n\n## Processed\n\n- {today} [Mixup at scale](https://arxiv.org/abs/2406.01234) \u2014 discarded\n",
-     "Reading notes/arxiv-2406.01234.md": null
+     "Inbox.md": "# Inbox\n\n- https://example.org/blog/post \u2014 from Bea\n- [Mixup at scale](https://arxiv.org/abs/2406.01234) \u2014 maybe relevant to D01 \u00b7 high \u00b7 added 2026-11-16\n\n## Discarded\n",
+     "Reading notes/arxiv-2406.01234.md": "# Mixup at scale\n<https://arxiv.org/abs/2406.01234>\n\n## My reading\n\n> The gain vanishes below 1k images (Sec. 4.2)\n\nSame subset sizes as E02?\n",
+     "Reading notes/Discarded/arxiv-2406.01234.md": null
+    }
+   },
+   {
+    "who": "claude",
+    "after": 0,
+    "does": "Or, from the start, in the chat: the user says to discard it. Claude closes with discard and its reason, and nothing is asked: the item is kept whole with the day and the reason, and its reading note with it.",
+    "tool": {
+     "link": "https://arxiv.org/abs/2406.01234",
+     "outcome": "discard",
+     "reason": "superseded by R01"
+    },
+    "says": [
+     "Discarded: Mixup at scale (https://arxiv.org/abs/2406.01234) \u2014 superseded by R01.",
+     "Its reading note is kept with it (Reading notes/Discarded/arxiv-2406.01234.md), with what the user wrote in it."
+    ],
+    "never": [
+     "gain vanishes"
+    ],
+    "files": {
+     "Inbox.md": "# Inbox\n\n- https://example.org/blog/post \u2014 from Bea\n\n## Discarded\n\n- [Mixup at scale](https://arxiv.org/abs/2406.01234) \u2014 maybe relevant to D01 \u00b7 high \u00b7 added 2026-11-16\n  - discarded {today}: superseded by R01\n",
+     "Reading notes/arxiv-2406.01234.md": null,
+     "Reading notes/Discarded/arxiv-2406.01234.md": "# Mixup at scale\n<https://arxiv.org/abs/2406.01234>\n\n## My reading\n\n> The gain vanishes below 1k images (Sec. 4.2)\n\nSame subset sizes as E02?\n"
+    }
+   },
+   {
+    "who": "claude",
+    "does": "The user asks for it back. Claude brings it back, saying so with restore: the item returns as it was, and its reading note with it, still closed to Claude since the item is not marked as read.",
+    "tool": {
+     "link": "https://arxiv.org/abs/2406.01234",
+     "restore": true
+    },
+    "says": [
+     "Brought back into the inbox: Mixup at scale (https://arxiv.org/abs/2406.01234), as it was when it was discarded on {today}",
+     "its reading note (Reading notes/arxiv-2406.01234.md)"
+    ],
+    "never": [
+     "gain vanishes"
+    ],
+    "files": {
+     "Inbox.md": "# Inbox\n\n- https://example.org/blog/post \u2014 from Bea\n- [Mixup at scale](https://arxiv.org/abs/2406.01234) \u2014 maybe relevant to D01 \u00b7 high \u00b7 added 2026-11-16\n\n## Discarded\n",
+     "Reading notes/arxiv-2406.01234.md": "# Mixup at scale\n<https://arxiv.org/abs/2406.01234>\n\n## My reading\n\n> The gain vanishes below 1k images (Sec. 4.2)\n\nSame subset sizes as E02?\n",
+     "Reading notes/Discarded/arxiv-2406.01234.md": null
     }
    }
   ]

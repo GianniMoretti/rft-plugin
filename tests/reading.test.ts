@@ -218,24 +218,49 @@ describe('reading note: in a session', () => {
     expect(w.fs.exists(NOTE)).toBe(false)
   })
 
-  test('a discard asks first while the user\'s part holds something; an empty part needs neither the mark nor the question', async ($, on) => {
+  test('a discard keeps the reading note whatever it holds, asks nothing, and the note comes back with the item; an empty part needs no mark for another outcome', async ($, on) => {
     const blog = 'vault/Reading notes/example.org-blog-post.md'
     const w = await session($, on, {
       [INBOX]: `${LINE}\n${OTHER}\n`, [NOTE]: `${HEAD}\n## My reading\n\n${MINE}\n`,
       [blog]: `# example.org/blog/post\n<https://example.org/blog/post>\n\n## My reading\n\n## Claude's impression (2026-11-20)\n\n${imp('A post.')}\n`,
       [R02]: reference('none'),
     })
-    const before = w.fs.read(INBOX)
-    expect(await tool($, { link, outcome: 'discard', reason: 'not for us' })).toBe("Not closed: the user's part of the reading note of Mixup at scale (https://arxiv.org/abs/2406.01234) holds something, and a discard removes the reading note with it. Ask the user first; once they say yes, close with confirmed: true.")
-    expect([w.fs.read(INBOX), w.fs.exists(NOTE)]).toEqual([before, true])
+    const before = w.fs.read(INBOX), mine = w.fs.read(NOTE)
+    const KEPT = 'vault/Reading notes/Discarded/arxiv-2406.01234.md'
     // later closes nothing and removes nothing
     expect(await tool($, { link, outcome: 'later' })).toContain('Left in the inbox for later')
-    expect(w.fs.exists(NOTE)).toBe(true)
-    expect(await tool($, { link, outcome: 'discard', reason: 'not for us', confirmed: true })).toMatch(/— discarded: not for us\..*Its reading note \(Reading notes\/arxiv-2406\.01234\.md\) is removed, with what the user had written in it\.$/)
+    expect([w.fs.read(INBOX), w.fs.exists(NOTE)]).toEqual([before, true])
+    // a discard: not marked as read, the user's part unseen, and nothing is asked, since nothing is lost (docs/adr/0007)
+    const said = await tool($, { link, outcome: 'discard', reason: 'not for us' })
+    expect(said).toMatch(/^Discarded: Mixup at scale \(https:\/\/arxiv\.org\/abs\/2406\.01234\) — not for us\. .*Its reading note is kept with it \(Reading notes\/Discarded\/arxiv-2406\.01234\.md\), with what the user wrote in it\.$/)
+    expect(said).not.toContain('gain vanishes')
+    expect([w.fs.exists(NOTE), w.fs.read(KEPT)]).toEqual([false, mine])
+    // no tool gives what the kept note holds
+    expect(await tool($, { link, reading: true })).toMatch(/^Not in the inbox any more: .* was discarded/)
+    // the user asks for it back: the note returns beside the others, byte for byte, and is as closed to Claude as it was
+    const back = await tool($, { link, restore: true })
+    expect(back).toMatch(/^Brought back into the inbox: Mixup at scale \(https:\/\/arxiv\.org\/abs\/2406\.01234\), as it was when it was discarded on \d{4}-\d{2}-\d{2}, with its reading note \(Reading notes\/arxiv-2406\.01234\.md\)\. Inbox: 2 items/)
+    expect([w.fs.read(NOTE), w.fs.exists(KEPT)]).toEqual([mine, false])
+    expect(await tool($, { link, reading: true })).toContain("The user's part of its reading note is closed to you")
+    // discarded again while a kept note has its name: the next name, and none is written over
+    w.fs.write(KEPT, `${HEAD}\n## My reading\n\nan older one\n`)
+    expect(await tool($, { link, outcome: 'discard', reason: 'again' })).toContain('(Reading notes/Discarded/arxiv-2406.01234-2.md)')
+    expect([w.fs.read('vault/Reading notes/Discarded/arxiv-2406.01234-2.md'), w.fs.read(KEPT)]).toEqual([mine, `${HEAD}\n## My reading\n\nan older one\n`])
     expect(w.fs.exists(NOTE)).toBe(false)
     // a note with Claude's impression alone: the inbox's short path still closes, unread and unasked
     expect(await tool($, { link: 'https://example.org/blog/post', outcome: 'reference', note: 'R02' })).toMatch(/^Closed: https:\/\/example\.org\/blog\/post → R02\..* Its reading note \(Reading notes\/example\.org-blog-post\.md\) is removed\.$/)
     expect(w.fs.exists(blog)).toBe(false)
+  })
+
+  test('a read item discarded and brought back is still read: its note is as it was and its impression stays frozen', async ($, on) => {
+    const kept = `${HEAD}\n## My reading\n\n${MINE}\n\n## Claude's impression (2026-11-20)\n\n${imp('First.')}\n`
+    const w = await session($, on, { [INBOX]: `${LINE} · read 2026-11-24\n`, [NOTE]: kept })
+    expect(await tool($, { link, outcome: 'discard', reason: 'not now' })).toContain('Its reading note is kept with it')
+    expect(await tool($, { link, restore: true })).toContain('its read mark (2026-11-24), its reading note (Reading notes/arxiv-2406.01234.md)')
+    expect(w.fs.read(NOTE)).toBe(kept)
+    expect(await tool($, { link, impression: imp('Second.') })).toContain('is frozen from then on')
+    expect(await tool($, { link, reading: true })).toContain("The user's part, marked as read 2026-11-24")
+    expect(w.fs.read(NOTE)).toBe(kept)
   })
 })
 

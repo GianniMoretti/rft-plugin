@@ -623,22 +623,30 @@ class PhoneTest(unittest.TestCase):
         self.b.js("document.activeElement.blur()")
         self.assertTrue(self.b.wait(f"{said} === '✕'"), self.b.js(said))
         self.assertEqual(box.read_text(encoding="utf-8").split("\n"), lines)
-        # a second tap discards it: out of the list, and one line under Processed
+        # a second tap discards it: out of the list, and kept whole under Discarded, its line as it was (docs/adr/0007)
         tap(x)
         self.assertTrue(self.b.wait(f"{said} === 'Discard?'"), self.b.js(said))
         tap(x)
         self.assertTrue(self.b.wait(f"!{row(paper)}", 4), self.b.js("document.getElementById('inbox-msg').textContent"))
         self.assertEqual(self.b.js("[document.querySelectorAll('#inbox-list .inbox-item').length, document.getElementById('inbox-count').textContent, document.getElementById('inbox-badge').textContent]"), [7, "7 items", "7"])
-        del lines[at]
+        foot = "document.getElementById('inbox-msg').textContent"
+        self.assertEqual(self.b.js(foot), "Discarded: kept with its reading note. Paste its link again to bring it back.")
+        self.assertEqual(self.b.js("document.documentElement.scrollWidth <= innerWidth"), True)
+        kept = lines.pop(at)
         self.assertEqual(lines[-1], "")
-        lines[-1:] = [f"- {today} https://arxiv.org/abs/2311.09876 — discarded", ""]
+        open_list = list(lines)
+        lines[-1:] = ["", "## Discarded", "", kept, f"  - discarded {today}", ""]
         self.assertEqual(box.read_text(encoding="utf-8").split("\n"), lines)
-        # the link saved again is said to have been discarded
+        # its link pasted again brings it back as it was, at the end of the list, and the foot says so
         self.b.js("(() => { const f = document.getElementById('inbox-link'); f.focus(); f.select() })()")
         self.b.call("Input.insertText", text="2311.09876")
         self.b.tap("#inbox-save")
-        note = f"Not added: already processed on {today} (discarded)."
-        self.assertTrue(self.b.wait(f"document.getElementById('inbox-add-msg').textContent === {json.dumps(note)}"), self.b.js("document.getElementById('inbox-add-msg').textContent"))
+        self.assertTrue(self.b.wait(f"!!{row(paper)}", 4), self.b.js("document.getElementById('inbox-add-msg').textContent"))
+        self.assertEqual(self.b.js(foot), f"Brought back as it was: you discarded it on {today}.")
+        self.assertEqual(self.b.js("[document.querySelectorAll('#inbox-list .inbox-item').length, document.getElementById('inbox-badge').textContent]"), [8, "8"])
+        back = box.read_text(encoding="utf-8").split("\n")
+        self.assertEqual((kept in back[:back.index("## Discarded")], back[back.index("## Discarded"):]), (True, ["## Discarded", ""]))
+        self.assertEqual(sorted(l for l in back if l.startswith(("- ", "* "))), sorted(l for l in open_list + [kept] if l.startswith(("- ", "* "))))
         self.assertEqual(self.b.js("[innerWidth, visualViewport.offsetTop, document.documentElement.scrollWidth <= innerWidth]"), [w, 0, True])
         self.assertEqual(self.b.errors, [])
 
@@ -727,9 +735,9 @@ class PhoneTest(unittest.TestCase):
         self.assertTrue(self.b.wait(f"document.querySelector({json.dumps(button)}).textContent === 'Discuss'"), "the button does not read Discuss")
         self.assertEqual(self.b.js(f"[document.querySelector({json.dumps(mark)}).textContent, document.querySelector({json.dumps(mark)}).getAttribute('aria-pressed'), document.querySelectorAll('#inbox-list .inbox-process[data-action=discuss]').length]"), ["✓ read", "true", 1])
         time.sleep(0.3)
-        # ✕ on an item whose note holds what the user wrote says so before it discards
+        # ✕ asks once, whatever the item's note holds: a discard keeps the note with the item (docs/adr/0007)
         tap(f"{item} .inbox-x")
-        self.assertTrue(self.b.wait(f"document.querySelector({json.dumps(item + ' .inbox-x')}).textContent === 'Discard, notes too?'"), "✕ did not ask about the notes")
+        self.assertTrue(self.b.wait(f"document.querySelector({json.dumps(item + ' .inbox-x')}).textContent === 'Discard?'"), "✕ did not ask")
         self.assertEqual(self.b.js(f"(() => {{ const r = document.querySelector({json.dumps(item + ' .inbox-x')}).getBoundingClientRect(); return r.right <= innerWidth && document.documentElement.scrollWidth <= innerWidth }})()"), True)
         self.b.js("document.activeElement && document.activeElement.blur()")
         self.assertTrue(note.exists())

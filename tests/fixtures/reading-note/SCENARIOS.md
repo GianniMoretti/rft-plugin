@@ -3,6 +3,8 @@
 Written from tests/fixtures/reading-note/scenarios.json by to_ts.py: edit that file, not this one.
 
 Claude proposed these cases; the user tried the feature and read them on 2026-11-24 and asked for no change.
+Case C was written again on 2026-11-27, when a discard came to keep the item and its reading note
+(docs/adr/0007): it was "a discard after quoting asks first". The user has not read the new C yet.
 
 Each step says who acts and what happens, the call it is tested with, what the answer must say, and the
 files it changes, as they are after it. `{today}` is the day the test runs. A step of the user's is run
@@ -310,7 +312,7 @@ Claude closes the item. It leaves the inbox for one line under Processed, and it
 - {today} [Mixup at scale](https://arxiv.org/abs/2406.01234) → R02
 ```
 
-`Reading notes/arxiv-2406.01234.md`: removed
+`Reading notes/arxiv-2406.01234.md`: no longer there
 
 ## B. Process with no reading note, then later
 
@@ -467,7 +469,7 @@ In the discussion the user says: later, again. The item, its reading note and it
 - The answer says: "Left in the inbox for later: Mixup at scale"
 - Files: none changes
 
-## C. A discard after quoting asks first
+## C. A discard after quoting keeps the note
 
 ### C0. Given
 
@@ -498,50 +500,9 @@ Same subset sizes as E02?
 
 ### C1. The user, on the page
 
-Taps ✕ on the item in the panel: refused, the panel asks first, because the reading note holds what they wrote.
+Taps ✕ on the item in the panel, and again to confirm. Nothing more is asked: the item leaves the inbox for the discarded ones, kept whole, and its reading note is kept with it, as it is.
 
 - Asked: `POST /api/inbox` `{"key": "arxiv:2406.01234", "action": "discard"}`
-- Answered: 409, with `{"holds": true}`
-- Files: none changes
-
-### C2. Claude, with `rft_inbox`
-
-In the chat the user says to discard it. Claude closes with discard: refused, it must ask the user first.
-
-- Asked: `rft_inbox {"link": "https://arxiv.org/abs/2406.01234", "outcome": "discard", "reason": "superseded by R01"}`
-- The answer says: "Not closed: the user's part of the reading note of Mixup at scale"
-- The answer says: "Ask the user first; once they say yes, close with confirmed: true."
-- The answer never says: "gain vanishes"
-- Files: none changes
-
-### C3. Claude, with `rft_inbox`
-
-The user says yes. Claude closes with the confirmation: the item goes under Processed with its reason, the reading note is removed.
-
-- Asked: `rft_inbox {"link": "https://arxiv.org/abs/2406.01234", "outcome": "discard", "reason": "superseded by R01", "confirmed": true}`
-- The answer says: "Closed: Mixup at scale (https://arxiv.org/abs/2406.01234) — discarded: superseded by R01."
-- The answer says: "Its reading note (Reading notes/arxiv-2406.01234.md) is removed, with what the user had written in it."
-- Files: only these change
-
-`Inbox.md`
-
-```markdown
-# Inbox
-
-- https://example.org/blog/post — from Bea
-
-## Processed
-
-- {today} [Mixup at scale](https://arxiv.org/abs/2406.01234) — discarded: superseded by R01
-```
-
-`Reading notes/arxiv-2406.01234.md`: removed
-
-### C4. The user, on the page
-
-Or, from step 2, on the panel: the user taps ✕ and confirms the question. The item goes under Processed as discarded, the reading note is removed.
-
-- Asked: `POST /api/inbox` `{"key": "arxiv:2406.01234", "action": "discard", "confirm": true}`
 - Answered: 200
 - Files: only these change
 
@@ -552,9 +513,151 @@ Or, from step 2, on the panel: the user taps ✕ and confirms the question. The 
 
 - https://example.org/blog/post — from Bea
 
-## Processed
+## Discarded
 
-- {today} [Mixup at scale](https://arxiv.org/abs/2406.01234) — discarded
+- [Mixup at scale](https://arxiv.org/abs/2406.01234) — maybe relevant to D01 · high · added 2026-11-16
+  - discarded {today}
 ```
 
-`Reading notes/arxiv-2406.01234.md`: removed
+`Reading notes/arxiv-2406.01234.md`: no longer there
+
+`Reading notes/Discarded/arxiv-2406.01234.md`
+
+```markdown
+# Mixup at scale
+<https://arxiv.org/abs/2406.01234>
+
+## My reading
+
+> The gain vanishes below 1k images (Sec. 4.2)
+
+Same subset sizes as E02?
+```
+
+### C2. Claude, with `rft_inbox`
+
+Later a literature search meets the paper again and saves it. It is said to be discarded and nothing is added: only the user brings it back.
+
+- Asked: `rft_inbox {"link": "https://arxiv.org/abs/2406.01234", "why": "from the literature search on mixup, not read"}`
+- The answer says: "Discarded on {today}: Mixup at scale (https://arxiv.org/abs/2406.01234). Nothing added."
+- The answer says: "only the user brings it back"
+- The answer never says: "gain vanishes"
+- Files: none changes
+
+### C3. Claude, with `rft_inbox`
+
+Claude asks for its reading note: refused. No tool gives what a discarded item's note holds.
+
+- Asked: `rft_inbox {"link": "https://arxiv.org/abs/2406.01234", "reading": true}`
+- The answer says: "Not in the inbox any more: Mixup at scale"
+- The answer says: "was discarded on {today}"
+- The answer never says: "gain vanishes"
+- Files: none changes
+
+### C4. The user, on the page
+
+Pastes the link in the panel again: the item comes back as it was, at the end of the list, and its reading note with it.
+
+- Asked: `POST /api/inbox` `{"link": "https://arxiv.org/abs/2406.01234"}`
+- Answered: 200, with `{"restored": {"discarded": "{today}", "reason": ""}}`
+- Files: only these change
+
+`Inbox.md`
+
+```markdown
+# Inbox
+
+- https://example.org/blog/post — from Bea
+- [Mixup at scale](https://arxiv.org/abs/2406.01234) — maybe relevant to D01 · high · added 2026-11-16
+
+## Discarded
+```
+
+`Reading notes/arxiv-2406.01234.md`
+
+```markdown
+# Mixup at scale
+<https://arxiv.org/abs/2406.01234>
+
+## My reading
+
+> The gain vanishes below 1k images (Sec. 4.2)
+
+Same subset sizes as E02?
+```
+
+`Reading notes/Discarded/arxiv-2406.01234.md`: no longer there
+
+### C5. Claude, with `rft_inbox`
+
+Or, from the start, in the chat: the user says to discard it. Claude closes with discard and its reason, and nothing is asked: the item is kept whole with the day and the reason, and its reading note with it.
+
+- Asked: `rft_inbox {"link": "https://arxiv.org/abs/2406.01234", "outcome": "discard", "reason": "superseded by R01"}`
+- The answer says: "Discarded: Mixup at scale (https://arxiv.org/abs/2406.01234) — superseded by R01."
+- The answer says: "Its reading note is kept with it (Reading notes/Discarded/arxiv-2406.01234.md), with what the user wrote in it."
+- The answer never says: "gain vanishes"
+- Files: only these change
+
+`Inbox.md`
+
+```markdown
+# Inbox
+
+- https://example.org/blog/post — from Bea
+
+## Discarded
+
+- [Mixup at scale](https://arxiv.org/abs/2406.01234) — maybe relevant to D01 · high · added 2026-11-16
+  - discarded {today}: superseded by R01
+```
+
+`Reading notes/arxiv-2406.01234.md`: no longer there
+
+`Reading notes/Discarded/arxiv-2406.01234.md`
+
+```markdown
+# Mixup at scale
+<https://arxiv.org/abs/2406.01234>
+
+## My reading
+
+> The gain vanishes below 1k images (Sec. 4.2)
+
+Same subset sizes as E02?
+```
+
+### C6. Claude, with `rft_inbox`
+
+The user asks for it back. Claude brings it back, saying so with restore: the item returns as it was, and its reading note with it, still closed to Claude since the item is not marked as read.
+
+- Asked: `rft_inbox {"link": "https://arxiv.org/abs/2406.01234", "restore": true}`
+- The answer says: "Brought back into the inbox: Mixup at scale (https://arxiv.org/abs/2406.01234), as it was when it was discarded on {today}"
+- The answer says: "its reading note (Reading notes/arxiv-2406.01234.md)"
+- The answer never says: "gain vanishes"
+- Files: only these change
+
+`Inbox.md`
+
+```markdown
+# Inbox
+
+- https://example.org/blog/post — from Bea
+- [Mixup at scale](https://arxiv.org/abs/2406.01234) — maybe relevant to D01 · high · added 2026-11-16
+
+## Discarded
+```
+
+`Reading notes/arxiv-2406.01234.md`
+
+```markdown
+# Mixup at scale
+<https://arxiv.org/abs/2406.01234>
+
+## My reading
+
+> The gain vanishes below 1k images (Sec. 4.2)
+
+Same subset sizes as E02?
+```
+
+`Reading notes/Discarded/arxiv-2406.01234.md`: no longer there

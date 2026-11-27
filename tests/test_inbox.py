@@ -120,6 +120,83 @@ class InboxFileTest(unittest.TestCase):
                 self.assertEqual(box.processed[-1], done, case["name"])
                 self.assertEqual(len(box.shown()), len(before) - 1, case["name"])
 
+    def test_the_discarded_ones_case_by_case(self):
+        # an item under `## Discarded` is a discarded item, kept whole; its last indented line says when and why
+        for case in self.cases["kept"]:
+            box = rft_inbox.Inbox(case["text"])
+            self.assertEqual([i["key"] for i in box.shown()], case["items"], case["name"])
+            self.assertEqual(box.kept(), case["discarded"], case["name"])
+            if "open" in case:
+                self.assertEqual(box.shown(), case["open"], case["name"])
+            for key, kind in case.get("holds", []):
+                self.assertEqual(box.find(key)[0], kind, (case["name"], key))
+            self.assertEqual(box.text(), case["text"], case["name"])
+
+    def test_discard_case_by_case(self):
+        for case in self.cases["discards"]:
+            box = rft_inbox.Inbox(case["text"])
+            before = box.shown()
+            args = (case["key"], case.get("nth", 0), case.get("reason", ""), case["today"])
+            if case.get("error"):
+                with self.assertRaises(rft_inbox.InboxError, msg=case["name"]):
+                    box.discard(*args)
+                self.assertEqual((box.text(), box.shown()), (case["text"], before), case["name"])
+                continue
+            done = box.discard(*args)
+            self.assertEqual(done is None, bool(case.get("none")), case["name"])
+            self.assertEqual(box.text(), case.get("want", case["text"]), case["name"])
+            again = rft_inbox.Inbox(box.text())
+            self.assertEqual((again.shown(), again.processed, again.kept()), (box.shown(), box.processed, box.kept()), case["name"])
+            if done:
+                self.assertEqual(done, case["is"], case["name"])
+                self.assertEqual(box.kept()[-1], done, case["name"])
+                self.assertEqual(len(box.shown()), len(before) - 1, case["name"])
+                # kept whole: it is what the item was, with the day and the reason
+                was = next(i for i in before if i["key"] == done["key"] and i["why"] == done["why"])
+                self.assertEqual({k: done[k] for k in rft_inbox.KEPT}, {k: was[k] for k in rft_inbox.KEPT}, case["name"])
+
+    def test_return_case_by_case(self):
+        for case in self.cases["returns"]:
+            box = rft_inbox.Inbox(case["text"])
+            kept = box.kept()
+            item = box.restore(case["key"])
+            self.assertEqual(item is None, bool(case.get("none")), case["name"])
+            self.assertEqual(box.text(), case.get("want", case["text"]), case["name"])
+            if item:
+                self.assertEqual(item, case["item"], case["name"])
+                self.assertEqual(box.shown()[-1], item, case["name"])
+                self.assertEqual(len(box.kept()), len(kept) - 1, case["name"])
+
+    def test_discarded_and_brought_back_the_item_is_what_it_was(self):
+        # every discard of the fixture, then the return: the item's own lines are byte for byte what they were
+        for case in self.cases["discards"]:
+            if "want" not in case:
+                continue
+            box = rft_inbox.Inbox(case["text"])
+            was = box.nth(case["key"], case.get("nth", 0))
+            lines = box.lines[was["at"][0]:was["at"][1]]
+            box.discard(case["key"], case.get("nth", 0), case.get("reason", ""), case["today"])
+            back = box.restore(case["key"])
+            now = next(i for i in box.items if all(i[k] == back[k] for k in rft_inbox.KEPT) and box.lines[i["at"][0]:i["at"][1]] == lines)
+            self.assertEqual({k: now[k] for k in rft_inbox.KEPT}, {k: was[k] for k in rft_inbox.KEPT}, case["name"])
+            self.assertEqual(box.kept(), rft_inbox.Inbox(case["text"]).kept(), case["name"])
+
+    def test_the_fixture_discarded_and_brought_back(self):
+        box = rft_inbox.Inbox(self.text)
+        done = box.discard("arxiv:2406.01234", reason="superseded by R07", today="2026-11-27")
+        self.assertEqual((done["title"], done["brief"], done["discarded"], done["reason"]),
+                         ("Mixup at scale", self.want["items"][0]["brief"], "2026-11-27", "superseded by R07"))
+        before = self.text.split("\n")
+        self.assertEqual(box.text().split("\n"), before[:4] + before[8:-1] + ["", "## Discarded", ""] + before[4:8] + ["  - discarded 2026-11-27: superseded by R07", ""])
+        self.assertEqual(box.processed, self.want["processed"])
+        self.assertEqual(box.find("arxiv:2406.01234")[0], "item")  # the one typed twice is still in the inbox
+        self.assertEqual(box.find("https://example.org/blog/old-post")[0], "processed")  # a discard of before stays a processed line
+        back = box.restore("arxiv:2406.01234")
+        self.assertEqual({k: back[k] for k in rft_inbox.KEPT}, {k: self.want["items"][0][k] for k in rft_inbox.KEPT})
+        # back at the end of the open list, before the processed ones; the heading it made stays
+        at = before.index("- see also the list in Scratchpad") + 1
+        self.assertEqual(box.text().split("\n"), before[:4] + before[8:at] + before[4:8] + before[at:-1] + ["", "## Discarded", ""])
+
     def test_a_brief_case_by_case_as_the_plugin_writes_it(self):
         for case in self.cases["briefs"]:
             box = rft_inbox.Inbox(case["text"])

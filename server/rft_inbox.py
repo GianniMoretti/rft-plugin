@@ -15,12 +15,21 @@ what was decided for it) changes single lines and leaves the rest as it was.
     ## Processed
 
     - 2026-11-23 [Mixup at scale](https://arxiv.org/abs/2406.01234) → R15
-    - 2026-11-23 https://example.org/blog/post — discarded: superseded by R07
+
+    ## Discarded
+
+    - https://example.org/blog/post — from Bea · added 2026-11-20
+      - discarded 2026-11-23: superseded by R07
 
 An item is a top-level list line that starts with a link: a markdown link, a URL, an arXiv id or a
 DOI. After the link, parts set apart by `·`: why it was saved (after a dash), its reading priority
 as one word, `added <date>`, and `read <date>` once the user marked it as read. A brief is the
 indented list lines under it, the first starting `briefed <date>:`. Any other line (free text, a to-do, a heading of the user's own) is not an item.
+
+A discard keeps the item (docs/adr/0007): its lines move, as they are, under `## Discarded`, and one
+indented line is added as their last, `discarded <date>: <reason>`. Brought back, the lines return to
+the open list without that line. An item under that heading is a discarded item whatever its lines
+say; the line that says when and why is its last indented one, when it reads so.
 
 hooks/lib/inbox.ts reads and writes the same file the same way, pattern for pattern, and
 tests/fixtures/inbox holds both to one file and one list of cases. So that the two cannot differ on
@@ -67,10 +76,14 @@ LINKS = rx(rf"(https?://[^{WS})>\]\"']+)|\barxiv(?:\.org/(?:abs|pdf|html)/|:?[{W
            rf"|\b(10\.[0-9]{{4,9}}/[^{WS})>\]\"']+)", True)
 ITEM = rx(r"^[-*+][ \t]+(.*)\Z")
 MARKER = rx(r"^[-*+][ \t]+")
+KEPT = ("key", "url", "title", "why", "priority", "added", "read", "brief")  # what a discarded item keeps of the item it was
 BRIEF_LINES = 3  # a brief is short: read in a minute, shown whole in the panel
 BRIEF_LINE_CHARS = 400
 SUB = rx(r"^[ \t]+[-*+][ \t]+(.*)\Z")
 PROCESSED = rx(r"^##[ \t]+processed[ \t]*\Z", True)
+DISCARDED = rx(r"^##[ \t]+discarded[ \t]*\Z", True)
+# the last indented line of a discarded item: the day it was discarded and why, either of them or neither
+DISCARDED_AT = rx(r"^discarded(?:[ \t]+([0-9]{4}-[0-9]{2}-[0-9]{2}))?[ \t]*(?::[ \t]*(.*))?\Z", True)
 HEADING = rx(r"^#{1,2}[ \t]")
 SOURCE = rx(r"^##[ \t]+Source[ \t]*\Z")
 BRIEFED = rx(r"^briefed[ \t]+([0-9]{4}-[0-9]{2}-[0-9]{2})[ \t]*:?[ \t]*(.*)\Z", True)
@@ -181,8 +194,9 @@ def item_line(url: str, title: str = "", why: str = "", priority: str = "", adde
 
 
 class Inbox:
-    """The file as read: its lines, as they are, and what they hold. `items` and `processed` are
-    in the file's order; each item knows its lines (`at`: the first, and one past its last)."""
+    """The file as read: its lines, as they are, and what they hold. `items`, `processed` and
+    `discarded` are in the file's order; each item, open or discarded, knows its lines (`at`: the
+    first, and one past its last)."""
 
     def __init__(self, text: str):
         raw = text.split("\n")
@@ -196,20 +210,21 @@ class Inbox:
     def _read(self) -> None:
         self.items: list[dict] = []
         self.processed: list[dict] = []
+        self.discarded: list[dict] = []
         seen: set[str] = set()
-        done = False
+        mode = "open"
         i = 0
         while i < len(self.lines):
             line = self.lines[i]
             i += 1
             if HEADING.match(line):
-                done = bool(PROCESSED.match(line))
+                mode = "processed" if PROCESSED.match(line) else "discarded" if DISCARDED.match(line) else "open"
                 continue
             m = ITEM.match(line)
             if not m:
                 continue
             rest = strip(m.group(1))
-            if done:
+            if mode == "processed":
                 d = DATED.match(rest)
                 got = link_at(d.group(2) if d else rest)
                 if got:
@@ -226,10 +241,18 @@ class Inbox:
             while i < len(self.lines) and SUB.match(self.lines[i]):
                 subs.append(strip(SUB.match(self.lines[i]).group(1)))
                 i += 1
+            at = (i - len(subs) - 1, i)
+            # of a discarded item, the last indented line says when and why; the others are its own
+            d = DISCARDED_AT.match(subs[-1]) if mode == "discarded" and subs else None
+            if d:
+                subs = subs[:-1]
             b = BRIEFED.match(subs[0]) if subs else None
             brief = {"date": b.group(1), "lines": [s for s in [strip(b.group(2)), *subs[1:]] if s]} if b else None
-            self.items.append({"key": key, "url": url, "title": title, "why": why, "priority": priority, "added": added, "read": read,
-                               "duplicate": key in seen, "brief": brief, "at": (i - len(subs) - 1, i)})
+            item = {"key": key, "url": url, "title": title, "why": why, "priority": priority, "added": added, "read": read}
+            if mode == "discarded":
+                self.discarded.append({**item, "brief": brief, "discarded": (d.group(1) or "") if d else "", "reason": strip(d.group(2) or "") if d else "", "at": at})
+                continue
+            self.items.append({**item, "duplicate": key in seen, "brief": brief, "at": at})
             seen.add(key)
 
     def text(self) -> str:
@@ -240,12 +263,20 @@ class Inbox:
         """The items as the page and the tool show them (without their place in the file)."""
         return [{k: v for k, v in item.items() if k != "at"} for item in self.items]
 
+    def kept(self) -> list[dict]:
+        """The discarded items, each as it was in the inbox, with the day it was discarded and why (without their place in the file)."""
+        return [{k: v for k, v in item.items() if k != "at"} for item in self.discarded]
+
     def find(self, key: str) -> tuple[str, dict] | None:
-        """What already holds this link: ("item", the first item with it), else ("processed", the
-        latest processed item with it), else None."""
+        """What already holds this link: ("item", the first item with it), else ("discarded", the
+        latest discarded item with it), else ("processed", the latest processed item with it),
+        else None."""
         for item in self.items:
             if item["key"] == key:
                 return "item", item
+        for item in reversed(self.discarded):
+            if item["key"] == key:
+                return "discarded", item
         for done in reversed(self.processed):
             if done["key"] == key:
                 return "processed", done
@@ -275,11 +306,7 @@ class Inbox:
         if not any(strip(l) for l in self.lines):
             self.lines, self.cr, at = ["# Inbox", "", line, ""], [self.crlf] * 3 + [False], 2
         else:
-            # the end of the open list: before the processed heading and the blank lines above it
-            stop = next((n for n, l in enumerate(self.lines) if PROCESSED.match(l)), len(self.lines))
-            end = stop
-            while end > 0 and not strip(self.lines[end - 1]):
-                end -= 1
+            stop, end = self._open_end()
             # after free text or a heading, a blank line first; one after it when nothing follows
             # or the processed heading is right there
             before = [""] if end > 0 and not (ITEM.match(self.lines[end - 1]) or SUB.match(self.lines[end - 1])) else []
@@ -288,6 +315,29 @@ class Inbox:
             at = end + len(before)
         self._read()
         return next({k: v for k, v in i.items() if k != "at"} for i in self.items if i["at"][0] == at)
+
+    def _open_end(self) -> tuple[int, int]:
+        """Where the open list ends: the first heading of the processed or of the discarded ones
+        (the file's end, with neither), and the line past the last one above it that is not blank."""
+        stop = next((n for n, l in enumerate(self.lines) if PROCESSED.match(l) or DISCARDED.match(l)), len(self.lines))
+        end = stop
+        while end > 0 and not strip(self.lines[end - 1]):
+            end -= 1
+        return stop, end
+
+    def _take(self, a: int, b: int) -> list[str]:
+        """Takes lines a to b out and answers them. Where they were, a blank line that is now the
+        file's first, or the second of two, goes with them."""
+        taken = self.lines[a:b]
+        del self.lines[a:b]
+        del self.cr[a:b]
+        if not self.lines:
+            self.lines, self.cr = [""], [False]
+        if len(self.lines) > 1 and a < len(self.lines) and not strip(self.lines[a]) and (a == 0 or not strip(self.lines[a - 1])):
+            del self.lines[a]
+            del self.cr[a]
+        self.cr[-1] = False
+        return taken
 
     def _put(self, end: int, put: list[str]) -> None:
         """New lines before line `end` (after the last one, when there is none), with the file's endings."""
@@ -391,18 +441,16 @@ class Inbox:
                 break
         if line is None:
             raise InboxError("the outcome would not read back as it is: say it in other words")
-        a, b = item["at"]
-        del self.lines[a:b]
-        del self.cr[a:b]
-        if not self.lines:
-            self.lines, self.cr = [""], [False]
-        # where the item was: a blank line that is now the file's first, or the second of two, goes
-        if len(self.lines) > 1 and a < len(self.lines) and not strip(self.lines[a]) and (a == 0 or not strip(self.lines[a - 1])):
-            del self.lines[a]
-            del self.cr[a]
-        self.cr[-1] = False
+        self._take(*item["at"])
         head = next((n for n, l in enumerate(self.lines) if PROCESSED.match(l)), None)
-        if head is None:
+        disc = next((n for n, l in enumerate(self.lines) if DISCARDED.match(l)), None)
+        if head is None and disc is not None:
+            # before the discarded ones and the blank lines above them
+            stop = end = disc
+            while end > 0 and not strip(self.lines[end - 1]):
+                end -= 1
+            put = ([""] if end > 0 else []) + ["## Processed", "", line]
+        elif head is None:
             # at the file's end, a blank line before the heading unless one is there
             stop = len(self.lines)
             end = stop - 1 if self.lines[-1] == "" else stop
@@ -417,6 +465,68 @@ class Inbox:
         self._put(end, put + ([""] if end == stop else []))
         self._read()
         return want
+
+    def discard(self, key: str, nth: int = 0, reason: str = "", today: str = "") -> dict | None:
+        """Takes an item out of the inbox and keeps it whole (docs/adr/0007): its line and the
+        indented ones under it move, as they are, to the end of the discarded ones (under a
+        `## Discarded` heading, made at the file's end when there is none), and one indented line is
+        added as their last: the day and, when one is given, the reason. Answers the discarded item,
+        or None when the inbox has no such item. InboxError, and nothing changed, when it would not
+        read back as that item."""
+        item = self.nth(key, nth)
+        if not item:
+            return None
+        reason = one_line(reason)
+        mark = "  - discarded" + (f" {today}" if today else "") + (f": {reason}" if reason else "")
+        lines, cr = list(self.lines), list(self.cr)
+        moved = self._take(*item["at"]) + [mark]
+        head = next((n for n, l in enumerate(self.lines) if DISCARDED.match(l)), None)
+        if head is None:
+            # at the file's end, a blank line before the heading unless one is there
+            stop = len(self.lines)
+            end = stop - 1 if self.lines[-1] == "" else stop
+            put = ([""] if end > 0 and strip(self.lines[end - 1]) else []) + ["## Discarded", ""] + moved
+        else:
+            # the end of the discarded ones: before the next heading and the blank lines above it
+            stop = next((n for n in range(head + 1, len(self.lines)) if HEADING.match(self.lines[n])), len(self.lines))
+            end = stop
+            while end > head + 1 and not strip(self.lines[end - 1]):
+                end -= 1
+            put = ([] if ITEM.match(self.lines[end - 1]) or SUB.match(self.lines[end - 1]) else [""]) + moved
+        self._put(end, put + ([""] if end == stop else []))
+        self._read()
+        at = end + len(put) - len(moved)
+        now = next((d for d in self.discarded if d["at"][0] == at), None)
+        if not now or any(now[k] != item[k] for k in KEPT) or (now["discarded"], now["reason"]) != (today, reason):
+            self.lines, self.cr = lines, cr
+            self._read()
+            raise InboxError("the item would not read back as discarded: give the day as 2026-11-24 and the reason in one line")
+        return {k: v for k, v in now.items() if k != "at"}
+
+    def restore(self, key: str) -> dict | None:
+        """Brings a discarded item back into the inbox, as it was: its lines move to the end of the
+        open list, and the line that said when and why it was discarded goes. The latest one, when
+        the link was discarded more than once. Answers the item, or None when no discarded item has
+        the link. InboxError, and nothing changed, when it would not read back as that item."""
+        item = next((d for d in reversed(self.discarded) if d["key"] == key), None)
+        if not item:
+            return None
+        lines, cr = list(self.lines), list(self.cr)
+        a, b = item["at"]
+        marked = b - a > 1 and DISCARDED_AT.match(strip(SUB.match(self.lines[b - 1]).group(1)))
+        moved = self._take(a, b)
+        if marked:
+            moved = moved[:-1]
+        stop, end = self._open_end()
+        before = [""] if end > 0 and not (ITEM.match(self.lines[end - 1]) or SUB.match(self.lines[end - 1])) else []
+        self._put(end, before + moved + ([""] if end == stop else []))
+        self._read()
+        now = next((i for i in self.items if i["at"][0] == end + len(before)), None)
+        if not now or any(now[k] != item[k] for k in KEPT):
+            self.lines, self.cr = lines, cr
+            self._read()
+            raise InboxError("the item would not read back as it was: mend its line in the file")
+        return {k: v for k, v in now.items() if k != "at"}
 
     def set_title(self, key: str, title: str) -> dict | None:
         """Gives the first untitled item with this link its title: the link on its line becomes

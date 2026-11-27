@@ -9,7 +9,7 @@ A part of the rft manual (the `rft-manual` skill is its core, with the index of 
   and no note links to it.
 - **`rft_inbox`** with no argument lists the items, the most urgent first; `rft_inbox {link, why,
   title}` saves one (`title` only when the source's title is known, never a guess). A link that
-  is already in the inbox, among the processed items or the **Source** of a reference note is
+  is already in the inbox, discarded, processed or the **Source** of a reference note is
   reported and nothing is added. `rft_next` says in one line how many items wait.
 - **Save to the inbox what nobody read yet.** When the user asks to keep something for later,
   save it. When a source turns up in the work that there is no time to read now, offer to save
@@ -88,16 +88,17 @@ ends with the outcome. One item at a time.
 
 An item whose user's part is empty needs no mark: if the user picks an outcome right after
 the brief, write it and close. While their part holds something, an outcome that writes to
-the tree is refused until they mark the item as read, and a `discard` until they said yes to
-losing it (ask them, then `confirmed: true`).
+the tree is refused until they mark the item as read. A `discard` asks nothing: the item is
+kept (`## Discarded`, `Reading notes/Discarded/`), closed to you. Only the user brings it back
+(`restore: true` if they ask); met again, it stays discarded.
 
 | Outcome | What is written first | Closing call |
 |---|---|---|
 | `reference` | a reference note of the item (`rft_add_node`, `type: reference`, its link in **Source**), under the note it bears on | `outcome: "reference", note: "R15"` |
 | `literature entry` | one `### <year> <first author> — <title>` entry, with the link, in the **Papers** of an existing literature note (kept as it is when the paper already has one) | `outcome: "literature entry", note: "R07"` |
 | `direction` | the reference note of the item, then the direction with it among its `refs` | `outcome: "direction", note: "D12", cites: "R15"` |
-| `discard` | nothing | `outcome: "discard", reason: "one line, in the user's terms"` (and `confirmed: true` once the user said yes, when their part holds something) |
-| `later` | nothing: the item stays in the inbox with its brief, its reading note and its read mark | none needed (`outcome: "later"` closes nothing) |
+| `discard` | nothing | `outcome: "discard", reason: "one line, in the user's terms"` |
+| `later` | nothing: it stays, with its brief, its reading note and its read mark | none needed (`outcome: "later"` closes nothing) |
 
 A note made from an item gets **no priority**, and none suggested because the item had a reading
 priority: the two are different things. The notes follow the core's rules as any other (a
