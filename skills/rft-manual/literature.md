@@ -22,6 +22,9 @@ The tree should start from what is already known, not from scratch.
   (known, open, setups to start from) and list the directions it suggests and the papers worth
   a note of their own: add them only once the user chooses. The tree shows literature notes in
   a colour of their own (cyan; `▤` in the pane).
+- **A search that was planned.** A grilling leaves each search it agreed as a literature note at
+  `planned`, its question in **Search** (`grilling.md`). `/rft-literature <its id>` runs it: fill
+  that note (Papers, Synthesis, Relevance), set it `done` and add no second note.
 - **Every paper of a search goes to the inbox.** Once the literature note is written, save each
   paper it lists as an entry with `rft_inbox {link, title, why}`, the why naming the search and
   its note ("entry of R07, literature search on <topic>"): the user may then read it closely,

@@ -48,7 +48,7 @@ import type { ApplyOutcome, NotebookEnv } from './lib/notebooks'
 import { runNotebook, setNotebook } from './lib/notebooks'
 import { MACHINE_FILE, machinePrompt, probeText, readMachine, statusText } from './lib/machine'
 import { manualDir } from './lib/manual'
-import { artifactPrompt, candidatesPrompt, literaturePrompt, manuscriptPrompt, notebooksPrompt, rebalancePrompt, suggestConceptsPrompt, summarizePrompt } from './lib/prompts'
+import { artifactPrompt, candidatesPrompt, literatureFillPrompt, literaturePrompt, manuscriptPrompt, notebooksPrompt, rebalancePrompt, suggestConceptsPrompt, summarizePrompt } from './lib/prompts'
 import { closeWithNote, readingOf, saveImpression } from './lib/reading'
 import { InboxError, addItem, commandInput, discussPrompt, inboxLine, inboxReport, loadInbox, nthItem, processPrompt, saveBrief, shown } from './lib/inbox'
 import { clearHandoff, handoffPrompt, handoffRules, hasHandoffs, leaveHandoff, showHandoff, sizeToast, toTell, uncommittedIn } from './lib/handoff'
@@ -1418,6 +1418,12 @@ export const register: Register = (on, options) => {
       // a note id, or a concept by name: its references go there
       const id = resolveId(loaded.tree, subject)
       const concept = Object.values(loaded.tree.concepts ?? {}).find(c => c.root && c.name.toLowerCase() === subject.toLowerCase())
+      // a search a grilling planned: its note is filled, not a second one added
+      const planned = id ? loaded.tree.nodes[id]! : null
+      if (planned && isLiterature(planned) && planned.status === 'planned') {
+        pendingPrompts.push(literatureFillPrompt(manualDir($.plugin.root), planned.name))
+        return { text: `Claude will run the search ${planned.name} planned and fill that note in a moment; no second literature note is added, and notes for single papers, directions and experiments come only after you choose.` }
+      }
       const where = id ? loaded.tree.nodes[id]!.name : concept ? `${loaded.tree.nodes[concept.root!]!.name} (the start of the concept "${concept.name}")` : null
       pendingPrompts.push(literaturePrompt(manualDir($.plugin.root), id ? `${loaded.tree.nodes[id]!.title}` : concept ? concept.name : subject, where))
       return { text: `Claude will search the literature on ${where ?? JSON.stringify(subject)} in a moment and write it as one literature note; notes for single papers, directions and experiments only after you choose.` }

@@ -202,6 +202,35 @@ describe('concepts', () => {
     expect(w.fs.read(`vault/directions/${D01}.md`)).toBe(demoFiles()[`vault/directions/${D01}.md`])
   })
 
+  test('/rft-literature on a literature note at planned fills that note; on any other note it adds one', async ($, on) => {
+    const clock = mock.clock(on)
+    const w = world(on, demoFiles())
+    const prompts: string[] = []
+    on('prompt.submit', (_$, e) => { prompts.push(String(e.text)); return { text: e.text } as never })
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const io = w.fs.io()
+    const planned = await addNode(io, await loadActive(io), { type: 'reference', title: 'Literature on variants', parent: 'D01', date: '2026-02-01', tags: ['literature'], status: 'planned', sections: { Search: 'Does the variant hold on video?' } })
+    const done = await addNode(io, await loadActive(io), { type: 'reference', title: 'Literature on baselines', parent: 'D01', date: '2026-02-01', tags: ['literature'], status: 'done' })
+    const paper = await addNode(io, await loadActive(io), { type: 'reference', title: 'One paper', parent: 'D01', date: '2026-02-01', status: 'planned' })
+    const run = (args: string) => $.command.run({ command: 'rft-literature', args, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } } as never)
+    expect((await run(planned.id)).text).toContain('no second literature note is added')
+    await clock.advance(5000)
+    expect(prompts[0]).toContain(`Run the literature search that ${planned.id} Literature on variants planned`)
+    expect(prompts[0]).toContain('fill it and add no other note')
+    expect(prompts[0]).toContain('rft_set_status done')
+    expect(prompts[0]).toContain('never invent a citation')
+    expect(prompts[0]).toContain('save every paper the note lists as an entry in the inbox')
+    expect(prompts[0]).not.toContain('rft_add_node')
+    // a literature note that is done, a planned reference of one paper, a direction: a new search under it, as before
+    for (const id of [done.id, paper.id, 'D01']) {
+      await run(id)
+      await clock.advance(5000)
+      expect(prompts[prompts.length - 1]).toContain('Write the whole search as ONE literature note')
+      expect(prompts[prompts.length - 1]).toContain('Place it under')
+    }
+    expect(prompts).toHaveLength(4)
+  })
+
   test('/rft-rebalance asks Claude for moves to confirm, optionally in one part of the tree, and moves nothing', async ($, on) => {
     const clock = mock.clock(on)
     const w = world(on, demoFiles())
