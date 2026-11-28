@@ -159,7 +159,7 @@ class AgentsPage(unittest.TestCase):
         b.js("document.querySelector('#threads .agent-open').click()")
         self.assertTrue(b.wait("!!document.querySelector('dialog.agent-setup[open]')"), "no dialog")
         # nothing is prefilled: where the model is, is the user's to say
-        self.assertEqual(b.js("[...document.querySelectorAll('dialog.agent-setup input')].map(i => i.value)"), ["", "", "", ""])
+        self.assertEqual(b.js("[...document.querySelectorAll('dialog.agent-setup input')].map(i => i.value)"), ["", "", "", "", "", ""])
         self.assertEqual(b.js("[...document.querySelectorAll('dialog.agent-setup .agent-form select')][0].value"), "model")
         self.shot("dialog-empty")
         # a list asked before the address is said
@@ -216,6 +216,53 @@ class AgentsPage(unittest.TestCase):
         self.assertEqual(b.errors, [])
         self.shot("after-setup")
 
+    def test_how_long_an_agent_has_is_set_in_the_form(self):
+        self.serve(SETUP)
+        b = self.b
+        self.open_note()
+        b.js("document.getElementById('agents-open').click()")
+        self.assertTrue(b.wait("!!document.querySelector('dialog.agent-setup[open]')"), "no dialog")
+        shown = "[7, 8].map(n => { const l = document.querySelector('dialog.agent-setup .agent-field:nth-of-type(' + n + ')'); return [l.querySelector('span').textContent, l.hidden, l.querySelector('input').value, l.querySelector('input').placeholder] })"
+        empty = [["Seconds for a thread", False, "", "120 (the default)"], ["Seconds for Process", True, "", "600 (the default)"]]
+        limit = json.dumps(self.FIELD % (7, "input"))
+        row = "[...document.querySelectorAll('dialog.agent-setup .agent-list li')].find(li => li.querySelector('.agent-name').textContent === 'qwen')"
+        save = "document.querySelector('dialog.agent-setup button[type=submit]').click()"
+        # a new agent: a model has a time for a thread and none for Process, and nothing is filled in
+        self.assertEqual(b.js(shown), empty)
+        b.js("(() => { const s = document.querySelector('dialog.agent-setup .agent-form select'); s.value = 'claude-code'; s.dispatchEvent(new Event('change', { bubbles: true })) })()")
+        self.assertEqual([r[1] for r in b.js(shown)], [False, False])
+        # qwen is given ten minutes for a thread
+        b.js(row + ".querySelector('button').click()")
+        self.assertTrue(b.wait("document.querySelector(%s).value === 'qwen3:14b'" % json.dumps(self.FIELD % (5, "input"))), "the entry did not come")
+        self.assertEqual(b.js(shown), empty)
+        self.type(self.FIELD % (7, "input"), "600")
+        self.shot("limit-filled")
+        b.js(save)
+        self.assertTrue(b.wait("document.querySelector('dialog.agent-setup .agent-msg').textContent.includes('qwen is saved in')"), b.js("document.querySelector('dialog.agent-setup .agent-msg').textContent"))
+        self.assertIn('model = "qwen3:14b"\nthread_seconds = 600\n', self.setup_file.read_text())
+        self.assertIn("model qwen3:14b · text only · runs on this machine · 600 s for a thread", b.js(row + ".textContent"))
+        # a model's save says nothing of Process
+        self.assertEqual(b.js(SENT % "'api/agents'")[-1], {"action": "save", "name": "qwen", "kind": "model", "url": self.model.url, "key": "", "model": "qwen3:14b", "grant": "text", "thread_seconds": "600"})
+        self.shot("limit-saved")
+        # the form shows it again, and emptied it is the default again
+        b.js(row + ".querySelector('button').click()")
+        self.assertTrue(b.wait("document.querySelector(%s).value === '600'" % limit), "the limit did not come back")
+        self.type(self.FIELD % (7, "input"), "")
+        b.js(save)
+        self.assertTrue(b.wait("!%s.textContent.includes('s for a thread')" % row), "the limit is still said")
+        self.assertNotIn("_seconds", self.setup_file.read_text())
+        # what is no number of seconds the browser itself refuses: nothing is sent, and the file stays
+        before, sent = self.setup_file.read_text(), len(b.js(SENT % "'api/agents'"))
+        b.js(row + ".querySelector('button').click()")
+        self.assertTrue(b.wait("document.querySelector(%s).value === 'qwen3:14b'" % json.dumps(self.FIELD % (5, "input"))))
+        self.type(self.FIELD % (7, "input"), "4000")
+        self.assertTrue(b.js("document.querySelector(%s).validity.rangeOverflow" % limit))
+        b.js(save)
+        import time
+        time.sleep(0.5)
+        self.assertEqual((self.setup_file.read_text(), len(b.js(SENT % "'api/agents'")) - sent), (before, 1))  # the one request: the entry read for the form
+        self.assertEqual(b.errors, [])
+
     def test_the_setup_on_a_phone(self):
         self.serve()
         b = self.b
@@ -257,7 +304,7 @@ class AgentsPage(unittest.TestCase):
         self.assertLessEqual(e["right"], 1500)
         b.js("document.getElementById('agents-open').click()")
         self.assertTrue(b.wait("!!document.querySelector('dialog.agent-setup[open]')"), "the entry opened no dialog")
-        self.assertEqual(b.js("[...document.querySelectorAll('dialog.agent-setup input')].map(i => i.value)"), ["", "", "", ""])
+        self.assertEqual(b.js("[...document.querySelectorAll('dialog.agent-setup input')].map(i => i.value)"), ["", "", "", "", "", ""])
         b.js("document.querySelector('dialog.agent-setup .agent-head button').click()")
         self.assertTrue(b.wait("!document.querySelector('dialog.agent-setup')"))
         self.shot("bar-entry")

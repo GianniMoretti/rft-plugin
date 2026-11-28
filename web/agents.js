@@ -129,6 +129,10 @@
     const msg = el('p', { class: 'agent-msg', role: 'status' })
     const say = (text, bad = false) => { msg.textContent = text; msg.classList.toggle('bad', bad) }
     const rows = el('ul', { class: 'agent-list' })
+    // how long an agent has for a task, in seconds: empty for the default, which the server says (an older one says none, and has no such fields)
+    const limits = state.limits || null
+    const most = state.max_limit || 3600
+    const seconds = task => el('input', { type: 'number', min: '1', max: String(most), step: '1', inputmode: 'numeric', autocomplete: 'off', placeholder: limits ? `${limits[task]} (the default)` : '' })
     const f = {
       name: el('input', { type: 'text', maxlength: '40', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', placeholder: 'a name of your choice' }),
       kind: el('select', {}, (state.kinds || ['model']).map(k => el('option', { value: k, text: KIND[k] || k }))),
@@ -136,6 +140,8 @@
       key: el('input', { type: 'text', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', placeholder: 'the NAME of the variable that holds its key, if it needs one' }),
       model: el('input', { type: 'text', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', list: 'agent-models' }),
       grant: el('select', {}, Object.entries(GRANT).map(([v, text]) => el('option', { value: v, text }))),
+      thread: seconds('thread'),
+      process: seconds('process'),
     }
     const models = el('datalist', { id: 'agent-models' })
     const listBtn = el('button', { type: 'button', text: 'List its models', title: 'Ask the endpoint which models it has' })
@@ -144,15 +150,19 @@
     const keyField = field('Its key', f.key, 'Never the key itself: the name of an environment variable, set where the server is started.', 'for-model')
     const modelField = el('label', { class: 'agent-field' }, el('span', { text: 'Model' }), el('span', { class: 'agent-row' }, f.model, listBtn), models)
     const grantField = field('It may', f.grant, 'Below "change the project" a harness is run locked: it can read, and cannot write a file or run a command.', 'for-harness')
+    const threadField = field('Seconds for a thread', f.thread, limits ? `How long it has to answer a thread. Empty: ${limits.thread}. A model on a slow machine, or a long note, can need several minutes. At most ${most}.` : '')
+    const processField = field('Seconds for Process', f.process, limits ? `How long it has to process an inbox item. Empty: ${limits.process}. At most ${most}.` : '', 'for-harness')
     const saveBtn = el('button', { type: 'submit', class: 'primary', text: 'Save' })
     const form = el('form', { class: 'agent-form', autocomplete: 'off' },
       el('h3', { text: 'Add an agent' }),
-      field('Name', f.name), field('What it is', f.kind), urlField, keyField, modelField, grantField,
+      field('Name', f.name), field('What it is', f.kind), urlField, keyField, modelField, grantField, threadField, processField,
       el('div', { class: 'agent-row' }, saveBtn, el('button', { type: 'button', text: 'Clear', onclick: () => fill(null) })))
     const shape = () => {
       const isModel = f.kind.value === 'model'
       urlField.hidden = keyField.hidden = listBtn.hidden = !isModel
       grantField.hidden = isModel
+      threadField.hidden = !limits
+      processField.hidden = !limits || isModel  // a model cannot process an item
       f.model.placeholder = isModel ? 'the name the endpoint knows it by' : 'optional: the model the harness is told to run'
     }
     let editing = null
@@ -167,6 +177,8 @@
       f.key.value = entry ? entry.key : ''
       f.model.value = entry ? entry.model : ''
       f.grant.value = entry && entry.kind !== 'model' ? entry.grant : 'text'
+      f.thread.value = entry && entry.thread_seconds != null ? entry.thread_seconds : ''
+      f.process.value = entry && entry.process_seconds != null ? entry.process_seconds : ''
       models.replaceChildren()
       shape()
     }
@@ -186,7 +198,9 @@
       const name = f.name.value.trim()
       if (!name) { say('Give it a name.', true); f.name.focus(); return }
       saveBtn.disabled = true
-      const r = await post({ action: 'save', name, kind: f.kind.value, url: f.url.value, key: f.key.value.trim(), model: f.model.value.trim(), grant: f.grant.value })
+      // the limits go only as the form shows them: an empty one is the default, and one not shown is not sent, so the entry keeps its own
+      const times = limits ? { thread_seconds: f.thread.value.trim(), ...(f.kind.value === 'model' ? {} : { process_seconds: f.process.value.trim() }) } : {}
+      const r = await post({ action: 'save', name, kind: f.kind.value, url: f.url.value, key: f.key.value.trim(), model: f.model.value.trim(), grant: f.grant.value, ...times })
       saveBtn.disabled = false
       if (!r.ok) { say(`Not saved: ${r.error}.`, true); return }
       say(`${name} is saved in ${state.path}.`)
@@ -209,9 +223,11 @@
           fill(r.data)
           f.model.focus()
         } })
+        // a time limit that is not the default is said, for the tasks the agent may take
+        const own = limits && a.limits ? (a.tasks || []).filter(t => a.limits[t] && a.limits[t] !== limits[t]).map(t => ` · ${a.limits[t]} s for ${t === 'process' ? 'Process' : 'a thread'}`).join('') : ''
         return el('li', { class: a.problem ? 'off' : '' },
           el('span', { class: 'agent-name', text: a.name }),
-          el('span', { class: 'muted', text: ` ${a.kind === 'model' ? `model ${a.model}` : a.preset || 'harness'} · ${a.grant_words} · ${a.where}` }),
+          el('span', { class: 'muted', text: ` ${a.kind === 'model' ? `model ${a.model}` : a.preset || 'harness'} · ${a.grant_words} · ${a.where}${own}` }),
           a.problem ? el('span', { class: 'agent-error', text: a.problem }) : null,
           el('span', { class: 'agent-row' }, change, remove))
       }), ...state.errors.map(e => el('li', { class: 'off' }, el('span', { class: 'agent-error', text: e.name ? `${e.name}: ${e.error}` : e.error }))))

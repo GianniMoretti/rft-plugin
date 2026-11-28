@@ -648,7 +648,7 @@ class TaskTest(Served):
         task = self.wait()
         self.assertEqual(task.state, "failed")
         # with where its limit is set: the default is short for a model on a slow machine
-        self.assertEqual(task.error, "remote did not answer within 1 seconds. To give it longer, set thread_seconds in its entry of the agents' setup file (at most 3600)")
+        self.assertEqual(task.error, "remote did not answer within 1 seconds. To give it longer, raise its Seconds for a thread under Agents… (thread_seconds in the setup file), at most 3600")
         import time
         time.sleep(1.3)
         self.untouched()
@@ -806,7 +806,7 @@ class HarnessThreadTest(Served):
 
     def test_out_of_time_the_harness_is_ended(self):
         self.set("late", sleep=30)
-        task = self.failed("reader", "reader did not answer within 2 seconds. To give it longer, set thread_seconds in its entry")
+        task = self.failed("reader", "reader did not answer within 2 seconds. To give it longer, raise its Seconds for a thread under Agents…")
         self.assertFalse(alive(self.harness.runs[0]["pid"]))
 
     def test_cancelled_the_harness_is_ended_and_nothing_is_written(self):
@@ -1055,7 +1055,7 @@ class ProcessTest(Served):
         self.set("boom", exit=1)
         self.nothing_saved("ended with an error (code 1): boom")
         self.set(GOOD["answer"], sleep=30)
-        self.nothing_saved("web did not answer within 2 seconds. To give it longer, set process_seconds in its entry")
+        self.nothing_saved("web did not answer within 2 seconds. To give it longer, raise its Seconds for Process under Agents… (process_seconds in the setup file)")
 
     def test_cancelled_nothing_is_saved_and_one_task_per_item(self):
         self.set(GOOD["answer"], sleep=30)
@@ -1178,6 +1178,42 @@ class EditSetupTest(unittest.TestCase):
         # saved again as it is, the file is the same
         self.assertEqual(self.edit(out, "qwen", {"kind": "model", "url": "http://localhost:11434/v1", "model": "qwen3:4b"}), out)
 
+    def test_a_time_limit_from_the_form_is_written_changed_and_taken_out(self):
+        model = {"kind": "model", "url": "http://localhost:11434/v1", "model": "qwen3:14b"}
+        # given with a new agent, it is its last line; a model gets none for Process, which it cannot do
+        out = self.edit("", "qwen", {**model, "thread_seconds": " 600 ", "process_seconds": "900"})
+        self.assertTrue(out.endswith('\n[agents.qwen]\nkind = "model"\nurl = "http://localhost:11434/v1"\nmodel = "qwen3:14b"\nthread_seconds = 600\n'), out)
+        self.assertEqual(setup_of(out).agents["qwen"].limits, {"thread": 600, "process": 600})
+        # left empty, no line is written and the default holds
+        out = self.edit("", "qwen", {**model, "thread_seconds": ""})
+        self.assertNotIn("_seconds", out)
+        self.assertEqual(setup_of(out).agents["qwen"].limits["thread"], 120)
+        # a harness takes both
+        out = self.edit("", "cc", {"kind": "claude-code", "grant": "read", "thread_seconds": 300, "process_seconds": "1800"})
+        self.assertTrue(out.endswith('\n[agents.cc]\nkind = "claude-code"\ngrant = "read"\nthread_seconds = 300\nprocess_seconds = 1800\n'), out)
+        self.assertEqual(setup_of(out).agents["cc"].limits, {"thread": 300, "process": 1800})
+        # saved with the limit it already has, the file is the same: the line and its comment stay
+        self.assertEqual(self.edit(BY_HAND, "qwen", {**model, "thread_seconds": "30"}), BY_HAND)
+        # another limit: the one line changes
+        out = self.edit(BY_HAND, "qwen", {**model, "thread_seconds": "600"})
+        self.assertEqual(out, BY_HAND.replace("thread_seconds = 30   # it is fast", "thread_seconds = 600"))
+        self.assertEqual(setup_of(out).agents["qwen"].limits["thread"], 600)
+        # emptied: the line is taken out, the default is back, and nothing else moved
+        out = self.edit(BY_HAND, "qwen", {**model, "thread_seconds": ""})
+        self.assertEqual(out, BY_HAND.replace("thread_seconds = 30   # it is fast\n", ""))
+        self.assertEqual(setup_of(out).agents["qwen"].limits["thread"], 120)
+        # a limit for Process written by hand in a model's entry is not the form's to take out
+        odd = BY_HAND.replace("thread_seconds = 30   # it is fast", "process_seconds = 700")
+        self.assertEqual(self.edit(odd, "qwen", {**model, "thread_seconds": "", "process_seconds": ""}), odd)
+        # what is no number of seconds is refused, in the form's own words
+        for bad in ("0", "3601", "two minutes", "1.5", "-5", 0, 4000, 2.5, True, ["60"]):
+            with self.assertRaises(rft_agents.SetupError, msg=repr(bad)) as got:
+                self.edit(BY_HAND, "qwen", {**model, "thread_seconds": bad})
+            self.assertIn("Seconds for a thread is a whole number from 1 to 3600, or empty for the default", str(got.exception), repr(bad))
+        with self.assertRaises(rft_agents.SetupError) as got:
+            self.edit("", "cc", {"kind": "claude-code", "grant": "read", "process_seconds": "soon"})
+        self.assertIn("Seconds for Process is a whole number", str(got.exception))
+
     def test_an_agent_removed_takes_its_lines_and_its_default(self):
         out = self.edit(BY_HAND, "qwen", None)
         self.assertEqual(out, """# my agents, kept by hand
@@ -1263,12 +1299,24 @@ class SetupRouteTest(Served):
 
     def test_the_form_reads_an_entry_changes_it_and_removes_it(self):
         self.agents(action="save", name="far", kind="model", url="https://api.example.com/v1", model="big", key="TEST_KEY")
-        self.assertEqual(self.agents(action="entry", name="far"), (200, {"name": "far", "kind": "model", "url": "https://api.example.com/v1", "model": "big", "key": "TEST_KEY", "grant": "text", "by_hand": False}))
+        self.assertEqual(self.agents(action="entry", name="far"), (200, {"name": "far", "kind": "model", "url": "https://api.example.com/v1", "model": "big", "key": "TEST_KEY", "grant": "text", "by_hand": False, "thread_seconds": "", "process_seconds": ""}))
         self.assertNotIn("sk-secret", self.setup_file.read_text())
         told = json.dumps(self.call("GET", "/api/agents")[1])
         self.assertNotIn("TEST_KEY", told)   # the list never names the variable; the form's own read does
         self.agents(action="save", name="cc", kind="claude-code", grant="read", model="opus")
-        self.assertEqual(self.agents(action="entry", name="cc")[1], {"name": "cc", "kind": "claude-code", "url": "", "model": "opus", "key": "", "grant": "read", "by_hand": False})
+        self.assertEqual(self.agents(action="entry", name="cc")[1], {"name": "cc", "kind": "claude-code", "url": "", "model": "opus", "key": "", "grant": "read", "by_hand": False, "thread_seconds": "", "process_seconds": ""})
+        # a time limit: saved from the form, told to the list, read back by the form, and taken out when emptied
+        status, got = self.agents(action="save", name="cc", kind="claude-code", grant="read", model="opus", thread_seconds="300", process_seconds="")
+        self.assertEqual((status, got["limits"], got["max_limit"], [a["limits"] for a in got["agents"]]), (200, {"thread": 120, "process": 600}, 3600, [{"thread": 120, "process": 600}, {"thread": 300, "process": 600}]))
+        self.assertIn("thread_seconds = 300\n", self.setup_file.read_text())
+        self.assertEqual([self.agents(action="entry", name="cc")[1][k] for k in ("thread_seconds", "process_seconds")], [300, ""])
+        # a page from before the limits were the form's sends none: the line stays
+        self.agents(action="save", name="cc", kind="claude-code", grant="read", model="opus")
+        self.assertIn("thread_seconds = 300\n", self.setup_file.read_text())
+        status, got = self.agents(action="save", name="cc", kind="claude-code", grant="read", model="opus", thread_seconds="4000")
+        self.assertEqual((status, "Seconds for a thread is a whole number from 1 to 3600" in got["error"]), (422, True))
+        self.agents(action="save", name="cc", kind="claude-code", grant="read", model="opus", thread_seconds="", process_seconds="")
+        self.assertNotIn("_seconds", self.setup_file.read_text())
         status, got = self.agents(action="save", name="far", kind="model", url="https://api.example.com/v1", model="bigger", key="TEST_KEY")
         self.assertEqual((status, [a["model"] for a in got["agents"]]), (200, ["bigger", ""]))
         status, got = self.agents(action="remove", name="far")

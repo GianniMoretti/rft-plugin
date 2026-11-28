@@ -2976,12 +2976,12 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
         """The agents the page may pick from, and whether a chat is there to be one of them."""
         setup = agents.get() if agents is not None else rft_agents.Setup(Path(""))
         # a server with a setup to write says where it is and what the page's form may add
-        more = {"path": str(agents.path), "kinds": list(rft_agents.FORM_KINDS)} if agents is not None else {}
+        more = {"path": str(agents.path), "kinds": list(rft_agents.FORM_KINDS), "limits": dict(rft_agents.LIMITS), "max_limit": rft_agents.MAX_LIMIT} if agents is not None else {}
         return {**setup.describe(), "chat": relay.alive() if relay else True, **more}
 
     def change_agents(req: dict) -> tuple[int, dict]:
         """The user's setup changed from the page, one agent at a time (rft_agents.Setups.change):
-        save {name, kind, url?, model?, key?, grant?}, remove {name}; entry {name}: an agent as the
+        save {name, kind, url?, model?, key?, grant?, thread_seconds?, process_seconds?}, remove {name}; entry {name}: an agent as the
         form shows it for a change; models {url, key?}: the models an endpoint says it has. The
         file is the user's own, outside the vault; a key is never taken, only its variable's name."""
         action, name = req.get("action"), req.get("name")
@@ -2996,7 +2996,8 @@ def make_handler(vault: Vault, web: Path, token: str | None = None, ask=ask_sess
                 got = agents.entry(name)
                 return (200, got) if got else (404, {"error": f"{name} is no agent of the setup"})
             if action == "save":
-                agents.change(name, {k: req.get(k, "") for k in ("kind", "url", "model", "key", "grant")})
+                # a time limit is passed on only when the form gave it: left out, the entry keeps its own
+                agents.change(name, {**{k: req.get(k, "") for k in ("kind", "url", "model", "key", "grant")}, **{k: req[k] for k in rft_agents.LIMIT_KEYS if k in req}})
             elif action == "remove":
                 agents.change(name, None)
             else:

@@ -56,15 +56,19 @@ TASKS = ("thread", "process")
 #: seconds an agent has for a task, unless its entry says otherwise (`thread_seconds`, `process_seconds`)
 LIMITS = {"thread": 120, "process": 600}
 MAX_LIMIT = 3600
+#: the lines of an entry that say them, and the names the page's form gives them
+LIMIT_KEYS = tuple(f"{task}_seconds" for task in TASKS)
+LIMIT_WORDS = {"thread_seconds": "Seconds for a thread", "process_seconds": "Seconds for Process"}
 #: the connected Claude Code chat, in the picker: no entry of the file may take its name
 CHAT = "chat"
 
 
 def out_of_time(name: str, seconds: int, task: str = "thread") -> str:
     """What is said of an agent that ran out of time, with where its limit is set: a model on a
-    slow machine, or a long paper, needs longer than the default, and only the setup's file says so."""
-    return (f"{name} did not answer within {seconds} seconds. To give it longer, set {task}_seconds "
-            f"in its entry of the agents' setup file (at most {MAX_LIMIT})")
+    slow machine, or a long paper, needs longer than the default."""
+    key = f"{task}_seconds"
+    return (f"{name} did not answer within {seconds} seconds. To give it longer, raise its {LIMIT_WORDS[key]} "
+            f"under Agents… ({key} in the setup file), at most {MAX_LIMIT}")
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}\Z")
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 LOOPBACK = ("localhost", "127.0.0.1", "::1")
@@ -134,7 +138,8 @@ class Agent:
         self.web: bool = more.get("web", False)
         self.preset: str = more.get("preset", "")
         self.given_model: str = more.get("given_model", "")  # the model a harness was told to run
-        self.limits: dict[str, int] = {**LIMITS, **more.get("limits", {})}
+        self.given_limits: dict[str, int] = dict(more.get("limits", {}))  # what its entry says, without the defaults
+        self.limits: dict[str, int] = {**LIMITS, **self.given_limits}
         self.problem: str = more.get("problem", "")
 
     def command(self) -> list[str] | None:
@@ -160,7 +165,7 @@ class Agent:
     def describe(self) -> dict:
         """What the page is told of it: never a key, a variable's name or a command."""
         return {"name": self.name, "kind": self.kind, "grant": self.grant, "grant_words": GRANT_WORDS[self.grant],
-                "where": self.where(), "tasks": self.tasks(), "problem": self.problem,
+                "where": self.where(), "tasks": self.tasks(), "problem": self.problem, "limits": dict(self.limits),
                 "model": self.model if self.kind == "model" else "", "preset": self.preset, "unverified": self.preset in UNVERIFIED,
                 "why_not": {t: why_not(self, t) for t in TASKS if t not in self.tasks()}}
 
@@ -324,12 +329,14 @@ class Setups:
 
     def entry(self, name: str) -> dict | None:
         """An agent's entry as the page's form shows it for a change: what `describe` leaves out
-        (its address, the NAME of its key's variable), never a key."""
+        (its address, the NAME of its key's variable, the time limits its entry gives or "" for
+        the default), never a key."""
         a = self.get().agents.get(name)
         if a is None:
             return None
         return {"name": a.name, "kind": "model" if a.kind == "model" else (a.preset or "harness"), "url": a.url, "model": a.model if a.kind == "model" else a.given_model,
-                "key": a.key, "grant": a.grant, "by_hand": a.kind != "model" and not a.preset}
+                "key": a.key, "grant": a.grant, "by_hand": a.kind != "model" and not a.preset,
+                **{k: a.given_limits.get(k[:-len("_seconds")], "") for k in LIMIT_KEYS}}
 
     def __init__(self, path: Path | None = None, env=None):
         self.path = path or setup_path(env)
@@ -887,12 +894,27 @@ def _blocks(lines: list[str]) -> list[tuple[int, int]]:
 
 def _entry_lines(name: str, fields: dict) -> list[str]:
     head = name if BARE.match(name) else json.dumps(name, ensure_ascii=False)
-    return [f"[agents.{head}]", *(f"{k} = {json.dumps(fields[k], ensure_ascii=False)}" for k in MANAGED if fields.get(k) not in (None, ""))]
+    return [f"[agents.{head}]", *(f"{k} = {json.dumps(fields[k], ensure_ascii=False)}" for k in (*MANAGED, *LIMIT_KEYS) if fields.get(k) not in (None, ""))]
+
+
+def _seconds(key: str, value) -> int | None:
+    """A time limit as the form gives it: a number of seconds, or nothing for the default."""
+    if isinstance(value, str):
+        value = value.strip()
+        if value == "":
+            return None
+        value = int(value) if value.isascii() and value.isdigit() else value
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= MAX_LIMIT:
+        raise SetupError(f"{LIMIT_WORDS[key]} is a whole number from 1 to {MAX_LIMIT}, or empty for the default")
+    return value
 
 
 def checked_fields(fields: dict) -> dict:
-    """What the page's form gave for an entry, as the lines the file gets. SetupError in words for
-    the user. A harness that has no ready-made entry is not written from the page."""
+    """What the page's form gave for an entry, as the lines the file gets (a time limit as a
+    number or None). SetupError in words for the user. A harness that has no ready-made entry is
+    not written from the page."""
     kind = fields.get("kind")
     if kind not in FORM_KINDS:
         raise SetupError(f"from the page an agent is a model, or one of the ready-made harnesses ({', '.join(PRESETS)}): any other harness is written by hand, with its commands")
@@ -908,13 +930,20 @@ def checked_fields(fields: dict) -> dict:
     else:
         out["url"] = out["key"] = ""
         out["grant"] = out["grant"] or "text"
+    # a time limit the form gave: a number of seconds, or None for the default (its line is then
+    # taken out). One the form did not give at all (a page from before it could) is not in `out`,
+    # and the entry's own line stays. A model is given none for Process, which it cannot do.
+    for k in LIMIT_KEYS:
+        if k in fields and not (kind == "model" and k == "process_seconds"):
+            out[k] = _seconds(k, fields[k])
     return out
 
 
 def edited(text: str, name: str, fields: dict | None, env=None) -> str:
     """The setup file's text with one agent added or changed (`fields`, as checked_fields gives
     them) or removed (None). Every other line stays as it is: the comments, the other agents, and
-    in a changed entry what the page does not manage (its time limits, its own commands). A
+    in a changed entry what the page does not manage (its own commands, and a time limit the
+    form did not give or gave as it already is, which keeps its line and its comment). A
     removed agent is no longer anyone's default. SetupError, and nothing to write, when the entry
     is wrong, when the file is one the page cannot change safely (agents written another way than
     as [agents.<name>] tables), or when the change would not read back as meant."""
@@ -955,10 +984,23 @@ def edited(text: str, name: str, fields: dict | None, env=None) -> str:
                 for n in reversed(gone):
                     del lines[n]
     else:
-        new = _entry_lines(name, fields)
+        managed = {*MANAGED, *(k for k in LIMIT_KEYS if k in fields)}
         if mine:
             a, b = mine[0]
-            kept = [line for line in lines[a + 1:b] if not ((k := KEY_LINE.match(line)) and k.group(1) in MANAGED)]
+            # a time limit that already reads as the form gave it: its line is not the form's to rewrite
+            for line in lines[a + 1:b]:
+                k = KEY_LINE.match(line)
+                if k and k.group(1) in LIMIT_KEYS and k.group(1) in managed:
+                    try:
+                        same = tomllib.loads(line).get(k.group(1)) == fields[k.group(1)]
+                    except tomllib.TOMLDecodeError:
+                        same = False
+                    if same:
+                        managed.discard(k.group(1))
+                        fields = {f: v for f, v in fields.items() if f != k.group(1)}
+        new = _entry_lines(name, fields)
+        if mine:
+            kept = [line for line in lines[a + 1:b] if not ((k := KEY_LINE.match(line)) and k.group(1) in managed)]
             lines[a:b] = [lines[a].rstrip() if AGENT_TABLE.match(lines[a]) else new[0], *new[1:], *kept]
         else:
             if not lines:
