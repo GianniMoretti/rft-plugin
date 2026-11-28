@@ -149,6 +149,70 @@ class Git(test_documents.Server):
         self.assertEqual(self.do("connect", "nope", url=str(self.remote))[0], 404)
         self.assertEqual(self.do("rebase")[0], 400)
 
+    def test_what_ssh_could_not_settle_without_a_prompt_is_said_with_what_to_do(self):
+        """Real git, and in ssh's place a program that says what ssh itself said on the user's
+        machine on 2026-11-28 (OpenSSH 9.6, LC_ALL=C), each copied as it was printed: a key that
+        needs its passphrase with no agent to unlock it; a host met for the first time; a host
+        that shows another key than the known one."""
+        def ssh_says(*lines: str) -> None:
+            script = self.tmpdir / "stand-in" / "ssh"  # git reads the program's name to know how to give it a port
+            script.parent.mkdir(exist_ok=True)
+            script.write_text("#!/bin/sh\n" + "".join(f"echo {json.dumps(line)} >&2\n" for line in lines) + "exit 255\n")
+            script.chmod(0o755)
+            os.environ["GIT_SSH_COMMAND"] = str(script)
+
+        was = os.environ.get("GIT_SSH_COMMAND")
+        self.addCleanup(lambda: os.environ.pop("GIT_SSH_COMMAND", None) if was is None else os.environ.__setitem__("GIT_SSH_COMMAND", was))
+        before = sorted(p.name for p in (self.vault / "documents").iterdir()), sorted(p.name for p in (self.vault / "documents" / ".rft").iterdir())
+        locked = ("ssh could use no key for github.com. The page runs git without a prompt, so a key with a passphrase needs an SSH agent that holds it (ssh-add), "
+                  "named by IdentityAgent in ~/.ssh/config or by SSH_AUTH_SOCK where Claude Code was started. A public repository can be given by its https address instead")
+        new_host = "This machine has never connected to gitlab.com, and the page cannot answer ssh's question about its key: run ssh -T git@gitlab.com once in a terminal and accept it"
+        changed = "host.example shows another key than the one this machine has for it: find out why before changing ~/.ssh/known_hosts"
+
+        # a new document from a repository: git's own words, nothing made, then what to do
+        ssh_says("git@github.com: Permission denied (publickey).")
+        status, got = self.write("POST", "/api/manuscript/clone", {"name": "other", "url": "git@github.com:you/paper.git"})
+        self.assertEqual(status, 502)
+        self.assertIn("the repository could not be cloned (git@github.com: Permission denied (publickey). fatal: Could not read from remote repository.", got["error"])
+        self.assertTrue(got["error"].endswith(f"): nothing was made. {locked}"), got["error"])
+        ssh_says("Host key verification failed.")
+        status, got = self.write("POST", "/api/manuscript/clone", {"name": "other", "url": "git@gitlab.com:you/paper.git"})
+        self.assertEqual(status, 502)
+        self.assertIn("(Host key verification failed. fatal: Could not read from remote repository.", got["error"])
+        self.assertTrue(got["error"].endswith(f"): nothing was made. {new_host}"), got["error"])
+        # a changed key is never something to accept: the words for a new host are not said for it
+        ssh_says("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@", "@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @", "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@",
+                 "IT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!", "Host key for host.example has changed and you have requested strict checking.", "Host key verification failed.")
+        status, got = self.write("POST", "/api/manuscript/clone", {"name": "other", "url": "ssh://git@host.example:2222/you/paper.git"})
+        self.assertEqual(status, 502)
+        self.assertTrue(got["error"].endswith(f"): nothing was made. {changed}"), got["error"])
+        self.assertNotIn("accept it", got["error"])
+        self.assertEqual((sorted(p.name for p in (self.vault / "documents").iterdir()), sorted(p.name for p in (self.vault / "documents" / ".rft").iterdir())), before)
+
+        # a document connected to such a remote: the same after "could not be reached", on Check and on Push
+        ssh_says("git@github.com: Permission denied (publickey).")
+        status, got = self.do("connect", url="git@github.com:you/paper.git")
+        self.assertEqual(status, 200)
+        self.assertTrue(got["error"].startswith("the remote could not be reached (git@github.com: Permission denied (publickey)."), got["error"])
+        self.assertTrue(got["error"].endswith(f"). {locked}"), got["error"])
+        self.assertEqual(self.state(fetch=True)["error"], got["error"])
+        status, got = self.do("push", message="x")
+        self.assertEqual(status, 502)
+        self.assertTrue(got["error"].endswith(f"). {locked}"), got["error"])
+        self.assertEqual(self.log(), [], "nothing is recorded when nothing can be sent")
+        # with another port and no user, ssh is named as it would be typed
+        ssh_says("Host key verification failed.")
+        self.assertEqual(self.do("connect", url="ssh://host.example:2222/you/paper.git")[0], 200)
+        self.assertTrue(self.state(fetch=True)["error"].endswith("run ssh -T -p 2222 host.example once in a terminal and accept it"))
+
+        # nothing is added where ssh's words name none of these: a path that is no repository, an https address
+        os.environ.pop("GIT_SSH_COMMAND", None)
+        status, got = self.write("POST", "/api/manuscript/clone", {"name": "other", "url": str(self.tmpdir / "nowhere.git")})
+        self.assertEqual(status, 502)
+        self.assertTrue(got["error"].endswith("): nothing was made"), got["error"])
+        self.assertEqual(rft_git.ssh_target("https://github.com/you/paper.git"), ("", ""))
+        self.assertEqual(rft_git.ssh_target("git@github.com:you/paper.git"), ("git@github.com", "github.com"))
+
     # ------------------------------------------------------------ push (ticket 23)
 
     def test_a_push_cloned_elsewhere_compiles_there(self):

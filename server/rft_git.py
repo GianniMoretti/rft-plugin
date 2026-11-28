@@ -10,7 +10,8 @@ through GitHub and, from there, with Overleaf. Standard library only; git is run
   (hooks/lib/guards.ts). The remote is an address the user pastes, reached over their own SSH keys
   or credentials: the plugin creates no repository and stores no secret. Git never prompts
   (GIT_TERMINAL_PROMPT=0, ssh in batch mode): a remote that cannot be reached is an error said in
-  the page, which blocks nothing else.
+  the page, which blocks nothing else. Where ssh's words name what a prompt would have settled (a
+  key that needs its passphrase, a host met for the first time), the error says what to do.
 - **Push** records every change of the document with the message the user typed, and sends it.
   It is refused, with the reason and the place, when the scan finds a trace of the tree (so that
   no commit ever holds one: a trace recorded once would stay in the history), when the document
@@ -79,10 +80,51 @@ def run(vault: Path, doc: str, *args: str, timeout: float = LOCAL_S) -> subproce
         return subprocess.CompletedProcess(cmd, 127, "", str(err))
 
 
+# what git adds after any remote it could not read: it names no cause, and would push ssh's own line out of the three kept
+NO_CAUSE = ("Please make sure you have the correct access rights", "and the repository exists.")
+
+
 def said(r: subprocess.CompletedProcess) -> str:
-    """What git said went wrong, in a line or two."""
-    lines = [line.strip() for line in (r.stderr or r.stdout or "").splitlines() if line.strip() and not line.startswith("hint:")]
+    """What git said went wrong, in a line or two: the lines that name a cause."""
+    lines = [line.strip() for line in (r.stderr or r.stdout or "").splitlines() if line.strip() and not line.startswith("hint:") and line.strip() not in NO_CAUSE]
     return " ".join(lines[-3:])[:400] or f"git exited with {r.returncode}"
+
+
+def ssh_target(url: object) -> tuple[str, str]:
+    """Whom an address is reached as over ssh, as `ssh` is given it (git@github.com, or
+    -p 2222 git@host), and the host alone; ('', '') for an https address or a path."""
+    u = str(url or "").strip()
+    m = re.match(r"^ssh://(?:([^@/\s]+)@)?(\[[^\]\s]+\]|[^:/\s]+)(?::(\d+))?(?:/|$)", u)
+    if m:
+        user, host, port = m.groups()
+        host = host.strip("[]")
+        return f"{f'-p {port} ' if port else ''}{f'{user}@' if user else ''}{host}", host
+    m = re.match(r"^([\w.-]+)@([\w.-]+):", u)
+    return (f"{m.group(1)}@{m.group(2)}", m.group(2)) if m else ("", "")
+
+
+def advice(r: subprocess.CompletedProcess, url: object = "") -> str:
+    """What the user can do about a remote ssh could not reach, said after git's own words; ''
+    when those name no cause known here. The page's git never prompts, so what a terminal would
+    have asked (a key's passphrase, whether to trust a host met for the first time) fails here
+    with words that say neither. The words matched are OpenSSH's own (LC_ALL=C)."""
+    text = f"{r.stderr or ''}\n{r.stdout or ''}"
+    target, host = ssh_target(url)
+    if "REMOTE HOST IDENTIFICATION HAS CHANGED" in text:
+        return f"{host or 'The host'} shows another key than the one this machine has for it: find out why before changing ~/.ssh/known_hosts"
+    if "Host key verification failed" in text:
+        return (f"This machine has never connected to {host or 'that host'}, and the page cannot answer ssh's question about its key: "
+                f"run ssh -T {target or 'git@<host>'} once in a terminal and accept it")
+    if "Permission denied (publickey" in text:
+        return (f"ssh could use no key for {host or 'that host'}. The page runs git without a prompt, so a key with a passphrase needs an SSH agent that holds it (ssh-add), "
+                "named by IdentityAgent in ~/.ssh/config or by SSH_AUTH_SOCK where Claude Code was started. A public repository can be given by its https address instead")
+    return ""
+
+
+def advised(message: str, r: subprocess.CompletedProcess, url: object) -> str:
+    """An error's words, followed by what to do about it when that is known."""
+    a = advice(r, url)
+    return f"{message}. {a}" if a else message
 
 
 def address_problem(url: object) -> str:
@@ -157,7 +199,7 @@ def fetch(vault: Path, doc: str) -> str:
     if not remote(vault, doc):
         return ""
     r = run(vault, doc, "fetch", "--quiet", "--prune", REMOTE, timeout=FETCH_S)
-    return "" if r.returncode == 0 else f"the remote could not be reached ({said(r)})"
+    return "" if r.returncode == 0 else advised(f"the remote could not be reached ({said(r)})", r, remote(vault, doc))
 
 
 def state(vault: Path, doc: str, fetching: bool = False) -> dict:
@@ -266,7 +308,7 @@ def push(vault: Path, doc: str, message: object, traces: list[dict]) -> Answer:
         return 409, {"error": f"{doc} has nothing to send yet"}
     r = run(vault, doc, "push", "--quiet", "--set-upstream", REMOTE, "HEAD", timeout=PUSH_S)
     if r.returncode != 0:
-        return 502, {"error": f"recorded, but not sent ({said(r)})", **state(vault, doc)}
+        return 502, {"error": advised(f"recorded, but not sent ({said(r)})", r, remote(vault, doc)), **state(vault, doc)}
     return 200, state(vault, doc, fetching=True)
 
 
@@ -332,7 +374,7 @@ def clone(vault: Path, name: str, url: object) -> Answer:
     if r.returncode != 0:
         shutil.rmtree(folder, ignore_errors=True)
         shutil.rmtree(g.parent, ignore_errors=True)
-        return 502, {"error": f"the repository could not be cloned ({said(r)}): nothing was made"}
+        return 502, {"error": advised(f"the repository could not be cloned ({said(r)}): nothing was made", r, url)}
     # the folder holds no .git: the git data is named each time
     link = folder / ".git"
     if link.is_file():
