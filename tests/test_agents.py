@@ -647,7 +647,8 @@ class TaskTest(Served):
         tid, _ = self.asked(agent="remote", delay=2.0)
         task = self.wait()
         self.assertEqual(task.state, "failed")
-        self.assertIn("remote did not answer within 1 seconds", task.error)
+        # with where its limit is set: the default is short for a model on a slow machine
+        self.assertEqual(task.error, "remote did not answer within 1 seconds. To give it longer, set thread_seconds in its entry of the agents' setup file (at most 3600)")
         import time
         time.sleep(1.3)
         self.untouched()
@@ -805,7 +806,7 @@ class HarnessThreadTest(Served):
 
     def test_out_of_time_the_harness_is_ended(self):
         self.set("late", sleep=30)
-        task = self.failed("reader", "reader did not answer within 2 seconds")
+        task = self.failed("reader", "reader did not answer within 2 seconds. To give it longer, set thread_seconds in its entry")
         self.assertFalse(alive(self.harness.runs[0]["pid"]))
 
     def test_cancelled_the_harness_is_ended_and_nothing_is_written(self):
@@ -1054,7 +1055,7 @@ class ProcessTest(Served):
         self.set("boom", exit=1)
         self.nothing_saved("ended with an error (code 1): boom")
         self.set(GOOD["answer"], sleep=30)
-        self.nothing_saved("web did not answer within 2 seconds")
+        self.nothing_saved("web did not answer within 2 seconds. To give it longer, set process_seconds in its entry")
 
     def test_cancelled_nothing_is_saved_and_one_task_per_item(self):
         self.set(GOOD["answer"], sleep=30)

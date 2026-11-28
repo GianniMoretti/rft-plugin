@@ -1801,7 +1801,7 @@ class Vault:
                 raise rft_agents.AgentError(got["error"])
 
         try:
-            task = runner.tasks.start(item_key(key, nth), agent.name, item["title"] or item["url"], agent.limits["process"], work)
+            task = runner.tasks.start(item_key(key, nth), agent.name, item["title"] or item["url"], agent.limits["process"], work, kind="process")
         except rft_agents.Busy as err:
             return 409, {"error": str(err)}
         return 200, {"asked": True, "agent": agent.name, "item": {**item, "task": task.describe()}}

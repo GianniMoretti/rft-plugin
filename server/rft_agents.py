@@ -58,6 +58,13 @@ LIMITS = {"thread": 120, "process": 600}
 MAX_LIMIT = 3600
 #: the connected Claude Code chat, in the picker: no entry of the file may take its name
 CHAT = "chat"
+
+
+def out_of_time(name: str, seconds: int, task: str = "thread") -> str:
+    """What is said of an agent that ran out of time, with where its limit is set: a model on a
+    slow machine, or a long paper, needs longer than the default, and only the setup's file says so."""
+    return (f"{name} did not answer within {seconds} seconds. To give it longer, set {task}_seconds "
+            f"in its entry of the agents' setup file (at most {MAX_LIMIT})")
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}\Z")
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 LOOPBACK = ("localhost", "127.0.0.1", "::1")
@@ -448,7 +455,7 @@ def call_model(agent: Agent, prompt: str, run: Run, env=None) -> str:
     except (OSError, http.client.HTTPException) as err:
         run.check()
         if isinstance(err, (TimeoutError, socket.timeout)):
-            raise AgentError(f"{agent.name} did not answer within {seconds} seconds") from None
+            raise AgentError(out_of_time(agent.name, seconds)) from None
         if isinstance(err, ConnectionRefusedError):
             raise AgentError(f"{agent.name} cannot be reached at {at}: nothing answers there (is it running?)") from None
         if isinstance(err, socket.gaierror):
@@ -481,7 +488,7 @@ def call_model(agent: Agent, prompt: str, run: Run, env=None) -> str:
     return text
 
 
-def run_harness(agent: Agent, prompt: str, run: Run, cwd: Path | None, seconds: int, more_env=None) -> str:
+def run_harness(agent: Agent, prompt: str, run: Run, cwd: Path | None, seconds: int, more_env=None, task: str = "thread") -> str:
     """The harness's answer to one prompt: what it prints, run once in `cwd`. It is run with the
     command its grant allows, the locked one below the full grant, and never when it has none. The
     prompt is put where the command says {prompt}, or given on its input. Stopping the run ends the
@@ -519,7 +526,7 @@ def run_harness(agent: Agent, prompt: str, run: Run, cwd: Path | None, seconds: 
         end()
         proc.communicate()
         run.check()
-        raise AgentError(f"{agent.name} did not answer within {seconds} seconds") from None
+        raise AgentError(out_of_time(agent.name, seconds, task)) from None
     finally:
         if proc.poll() is None:
             end()
@@ -721,16 +728,17 @@ class Tasks:
         self._lock = threading.Lock()
         self._tasks: dict[str, Task] = {}
 
-    def start(self, key: str, agent: str, what: str, limit: int, work, on_end=None) -> Task:
+    def start(self, key: str, agent: str, what: str, limit: int, work, on_end=None, kind: str = "thread") -> Task:
         """Runs `work(run)` in the background. It returns once the answer is written (after
         run.commit()), or raises: AgentError with why. `on_end(state)` is called when it is over,
-        however it ended, with the state it ends in. Busy when a task on `key` is still running."""
+        however it ended, with the state it ends in. Busy when a task on `key` is still running.
+        `kind`: thread or process, for the words of a run that took longer than `limit`."""
         with self._lock:
             had = self._tasks.get(key)
             if had and had.state == "running":
                 raise Busy(f"{had.agent} is already answering {what}")
             task = self._tasks[key] = Task(key, agent, what, limit)
-        timer = threading.Timer(limit, lambda: task.run.stop(f"{agent} did not answer within {limit} seconds"))
+        timer = threading.Timer(limit, lambda: task.run.stop(out_of_time(agent, limit, kind)))
         timer.daemon = True
 
         def go():
@@ -833,7 +841,7 @@ class Runner:
         """The agent's answer to a prompt, as text. A harness is run in `cwd`, the vault."""
         if agent.kind == "model":
             return call_model(agent, prompt, run, self.env)
-        return run_harness(agent, prompt, run, cwd, agent.limits[task], self.harness_env)
+        return run_harness(agent, prompt, run, cwd, agent.limits[task], self.harness_env, task)
 
 
 # ------------------------------------------------------------------ changing the setup from the page
