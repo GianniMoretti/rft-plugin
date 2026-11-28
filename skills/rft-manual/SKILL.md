@@ -1,6 +1,6 @@
 ---
 name: rft-manual
-description: Operating manual of the Reasoning Flow Tree: experiment (E..), direction (D..), reference (R..) and theory (T..) notes recording a research project's reasoning, grouped into concepts (lines of research) with their code repositories. Use in a project with .rft/config.json whenever an experiment is planned, launched (on a machine paired with the experiment queue: rft_queue; pairing it: rft_machine) or finished (a queued job ended), an experiment's results are meant for a paper, thesis or docs (ask whether to give it a notebook: rft_set_notebook), an idea or question comes up (even a rejected one), a paper or review is read, a new field comes up (offer a literature search first), a definition or method is written down, an idea is dropped or moved, a branch belongs under another note (move it), a new line of research opens (propose a concept, ask for its code), work starts on an experiment whose concept links code, Claude is asked to answer a tree-view comment or suggestion, a note is locked, a note's priority comes up (suggest one, never set it), a result is final (suggest verifying it, never set verified), a verified note's claim may no longer hold (review), snippets or documents come up (stubs and placements from verified notes, the user writes and picks), or the user asks about the tree, its concepts, its code or what was tried (start from rft_map).
+description: Manual of the Reasoning Flow Tree (rft) plugin, for a project with .rft/config.json: how experiment, direction, reference and theory notes are created, updated and linked. A short core indexing its parts (concepts and code, literature, map, artifacts, notebooks, planning, queue, writing, comments, inbox, grilling): read only the part needed.
 ---
 
 # Reasoning Flow Tree (rft)
@@ -8,8 +8,36 @@ description: Operating manual of the Reasoning Flow Tree: experiment (E..), dire
 The project's reasoning lives in an Obsidian-compatible vault (by default `vault/`, see
 `.rft/config.json`, which may sit in a folder above the session's or link to a tree kept
 elsewhere; the session rules give the vault's path): **one markdown note per experiment,
-direction, reference and theory note**, linked parent → children as a tree. The notes are the source of truth; the index, the canvas and the
-children / up / down fields are derived from their `parent:` field by the rft tools.
+direction, reference and theory note**, linked parent → children as a tree. The notes are the
+source of truth; the index, the canvas and the children / up / down fields are derived from their
+`parent:` field by the rft tools. Concepts group the notes into lines of research, each with the
+code repositories its work runs on (`concepts-code.md`).
+
+## The manual's parts
+
+This file is the core: what the notes are, and when to create and update them. Every other
+subject has a part of its own, a file beside this one (in this skill's base directory, which the
+session's rules name too). Read a part with the Read tool before working on its subject, and only
+the parts the work at hand needs:
+
+| part | read it when | its tools |
+|---|---|---|
+| `concepts-code.md` | a line of research opens, a concept is proposed, renamed or split; code is linked to a concept; before planning, launching or analysing an experiment whose concept links code | `rft_concepts`, `rft_set_concept`, `rft_set_repos`, `rft_code`, `rft_set_code` |
+| `literature.md` | the work turns to a field the tree does not cover; a literature search is asked for (`/rft-literature`); papers are saved in the vault | `rft_collect_papers` |
+| `map.md` | answering what was tried or what holds now; writing summaries and digests (`/rft-summarize`); a result overturns another; choosing what to do next; moving a branch (`/rft-rebalance`); a status note | `rft_map`, `rft_search`, `rft_graph`, `rft_set_summary`, `rft_set_digest`, `rft_supersede`, `rft_next`, `rft_move_node` |
+| `artifacts.md` | a concept's page of results is written or updated (`/rft-artifact`) | `rft_artifact`, `rft_set_artifact` |
+| `notebooks.md` | an experiment's results are meant to last, or it has a notebook; a notebook is written, run, or differs from its note; a figure is drawn | `rft_set_notebook`, `rft_run_notebook` |
+| `planning.md` | a priority, a deadline, a meeting, a start date or an estimate comes up | `rft_suggest_priority`, `rft_suggest_dates`, `rft_add_deadline`, `rft_add_meeting`, `rft_suggest_deadline` |
+| `queue.md` | this machine is paired with the experiment queue, or the user asks to pair it; a run is queued, ended or failed; a script is written for the queue | `rft_machine`, `rft_queue`, `rft_jobs`, `rft_job` |
+| `writing.md` | a result is final (suggest verifying it), or a verified note's claim may no longer hold; snippets or documents come up | `rft_manuscript`, `rft_set_snippet`, `rft_set_document` |
+| `slides.md` | a slide deck is asked for or written | |
+| `comments.md` | a note is locked; a comment or suggestion of the tree view is to be answered; a note has footnotes or highlights | `rft_comments`, `rft_comment`, `rft_suggest` |
+| `inbox.md` | the user saves something to read later, asks what waits there, or to process or discuss an item | `rft_inbox` |
+| `grilling.md` | a grilling is asked for (`/rft-grill-me`) or you offer one | |
+
+This file's own tools: `rft_add_node`, `rft_set_status`, `rft_set_tags`, `rft_tags`, `rft_set_refs`,
+`rft_set_type`, `rft_tree`, `rft_sync`, `rft_validate`, `rft_handoff`. A tool that is not in the
+prompt loads through ToolSearch by its name; its description says how to call it.
 
 ## Node types
 
@@ -62,455 +90,12 @@ topical tags**: what it is about, so the tree view can filter by them (`ablation
 `cluster`, `radius`).
 
 - Lowercase kebab-case: `radial-rule`, not `Radial rule` or `radial_rule` (the tools convert).
-- **Reuse the vocabulary**: call `rft_tags` first and pick existing tags when they fit; invent
-  a new one only for a genuinely new topic. Prefer a few broad tags over many narrow ones.
+- **Reuse the vocabulary**: the session's rules list the tags in use, most used first
+  (`rft_tags` gives them all, with counts); pick existing tags when they fit and invent a new
+  one only for a genuinely new topic. Prefer a few broad tags over many narrow ones.
 - Pass them as `tags` to `rft_add_node`; change them later with `rft_set_tags` (it replaces the
   topical tags and keeps the project, type and status ones).
 - Do not retro-tag existing notes unless the user asks.
-
-## Concepts
-
-Concepts split the tree into **lines of research**. A note with `concept: "<name>"` (and an
-optional `concept_summary: "<one line>"`) in its frontmatter starts a concept: it and its whole
-subtree belong to it, until a descendant starts a sub-concept. Concepts nest; notes with no
-concept above them belong to the project itself; a concept on the root note covers the whole tree
-and takes the project's place at the top of the concept tree. Concepts are explicit, never inferred:
-
-- **Propose, then apply.** When a direction opens a new line of research (not a single
-  experiment), propose a concept to the user: the note it starts at, a short name and a
-  one-line summary. Call `rft_set_concept` only after they confirm. Never set, rename or remove
-  a concept silently.
-- **Names** are short and readable, in words as in a heading: `Strong augmentation`, not
-  `strong-augmentation` and not the title of one experiment. No `^ # | [ ]`. Avoid reusing a
-  name.
-- Start a concept at the direction that opened the line, usually; nest at most two or three
-  levels, and leave shared setup (the starting question, baselines everyone builds on) in the
-  project root when it is not a line of its own.
-- `rft_concepts` shows the concept tree; `rft_set_concept(id, name, summary?)` sets or renames
-  one, and `name: null` removes it. `/rft-concepts suggest` asks you to propose a full split:
-  answer with a short table (start note, name, summary, what stays in the root) and wait for
-  the user's yes before applying anything.
-- **Ask for the code.** Once a new concept is set, ask the user whether code for that line of
-  research already exists on this machine, and where (see Code below).
-
-## Code
-
-A concept can link the **code repositories** its work runs on: folders on this machine, in
-`concept_repos:` on the note that starts it (on the root note, the code of the whole project).
-
-```yaml
-concept: "Schedule-free training"
-concept_summary: "Training without a stopping rule"
-concept_repos: ["/home/me/code/sfree", "../code/train-utils"]
-```
-
-- **Priority.** A note works with its concept's own repos first, then with those its concept
-  inherits from the concepts above it, nearest first. A sub-concept's code is the most specific;
-  its parent's is context.
-- **Linking.** When a concept is created, ask whether code for it already exists and where. Link
-  it with `rft_set_repos(id, repos)` using the path the user gives (absolute, `~/…`, or relative
-  to the tree's folder, the one holding `.rft/`); never guess a path. An empty list removes the
-  link. Its answer gives each repo's git state, whether sessions started in the repo reach this
-  tree (if not, it says which `.rft/config.json` link would do it: ask before writing it into the
-  repo), and the notes that now need a Code section.
-- **After linking, read the code** as it is now, and give every experiment and direction of the
-  concept (sub-concepts included) a `## Code` section with `rft_set_code`. Ideas `discussed` or
-  `moved` need none.
-- **The `## Code` section** says how the note relates to the code: entry points, files,
-  functions and classes, configs, what has to change, where outputs go. A direction gets a short
-  pointer (where the idea would land in the code). It opens with one line per repo, written by
-  the plugin, never by hand:
-  `` - `../code/sfree` @ 3f2a1c9d0e (main) · checked 2026-11-06 ``: the commit the references
-  were checked against. `rft_set_code(id, text?, reproduce?)` writes the section and records
-  each repo's current commit; `text` or `reproduce` left out keeps what the section holds.
-- **The current state comes first.** Plan and propose changes from the code as it is now (the
-  current commit and the uncommitted changes), not from the commit an older note recorded.
-- **Before working on an experiment** (planning it, launching it, analysing its results) whose
-  concept links code, call `rft_code(id)`: it lists, per repo, the commit the note was checked
-  against, the commits since and the files changed (uncommitted changes included). Read the
-  changes that touch what the note refers to (`git -C <repo> diff <commit> -- <files>`), update
-  the references, and call `rft_set_code` to record the current commits. `rft_add_node` writes
-  the section at creation, stamped: pass its description as `sections.Code` once you have read
-  the code, or fill it right after with `rft_set_code`.
-- **Results live in the experiment's note.** Each repo keeps its outputs its own way (logs,
-  CSVs, checkpoints, tracker exports): read them where the repo puts them, process them (seeds
-  aggregated, tables, the figures that matter) and write the numbers in **Result**, so the note
-  can be discussed without the repo. Then record how to reproduce them with `rft_set_code`'s
-  `reproduce`: the commit the run used (and whether the tree had uncommitted changes), the
-  command and config, where the raw outputs are, and how they were processed into Result (the
-  script or command). The Reproduce part keeps the commit of the run even when the references
-  are checked again later.
-- `rft_validate` warns about repos that are missing or not under git, `concept_repos` on a note
-  that starts no concept, and notes whose Code section is missing or names repos the concept no
-  longer links.
-
-## Literature
-
-The tree should start from what is already known, not from scratch.
-
-- **A new field: ask first.** When the work turns to a field, method or question the tree does
-  not cover yet (no reference or concept about it), ask the user whether to run a thorough
-  literature search before planning experiments. Do not start the search unasked: it takes
-  time.
-- **A new concept: offer a search.** When you propose a concept, offer a literature search for
-  it; once agreed, its literature note goes under the concept's start note.
-- **`/rft-literature <topic, note id or concept>`** asks for the search directly. Search with the
-  tools you have (web search, deep research, arXiv); read each source before writing about it;
-  write the whole search as **one literature note** under the note or concept it is about:
-  `rft_add_node` with `type: reference`, `tags: ["literature"]`, title `Literature on <topic>`,
-  and sections **Search** (what, with which tools, when), **Papers** (one `### <year> <first
-  author> — <title>` entry per key paper, usually 4 to 10: a link that can be checked, what it
-  claims and how, key results as reported, what it means for the project), **Synthesis** and
-  **Relevance**. Not a note per paper: a paper gets a reference note of its own only once the
-  user chooses it. Then call `rft_collect_papers` with the note's id, give a short synthesis
-  (known, open, setups to start from) and list the directions it suggests and the papers worth
-  a note of their own: add them only once the user chooses. The tree shows literature notes in
-  a colour of their own (cyan; `▤` in the pane).
-- **Papers in the vault.** `rft_collect_papers(ids?)` downloads, in the background, the PDFs of
-  reference notes whose **Source** has an arXiv id or link, or a PDF link on an open-access
-  host (OpenReview, PMLR, ACL Anthology, NeurIPS and CVF proceedings, JMLR, bioRxiv...), into
-  `papers/<concept>/<year> <first author> <title>.pdf`, and links each from its note with
-  `pdf:` (in a literature note, one PDF per `###` entry, linked by a `PDF:` line in the entry). Run again after concepts change: saved PDFs move to their concept's folder. It never
-  downloads from paywalled publishers; for those, the note keeps its DOI.
-- **Experiments start from a paper.** A proposed experiment says which reference's setup it
-  starts from (baseline, data, protocol) and links it in `refs` (rule 5 below). If there is
-  none, say so: it is a sign a search is missing.
-- Never invent a citation, an author, a year or a result.
-
-## The project map
-
-A large tree is a knowledge base: read it in layers, not file by file.
-
-1. **`rft_map`**: the project map, each concept with its state and counts, and the experiments
-   in progress. A tree of more than 60 notes starts each session from it.
-2. **`rft_map <concept>`**: the concept's digest (state, key results, dead ends, open questions),
-   its sub-concepts, and its notes one per line with their summaries.
-3. **The note's file**, only for the detail you need.
-
-To answer a question, search instead of reading: **`rft_search`** answers with each matching
-note's summary, where it sits and, when it adds something, the line that matched, and puts first
-the concepts whose digest matches; **`rft_graph <id>`** gives a note's neighbours (parent,
-children, the notes beside it, what it builds on, what cites it, where it was before a move), or
-with `mode: path` how the reasoning reached it from the top. Do not grep the vault: a Grep, Glob
-or shell search of it gets a reminder until one of these tools has been used in the session.
-
-**Have we tried this?** `rft_add_node` answers with the notes already in the tree that are close
-to the new one (title and summary). If one of them already answers it, or a dead end ruled it
-out, say so to the user before running anything.
-
-What keeps the layers useful:
-
-- **Every note has a one-line `summary:`** that you write: what the note is about and, once
-  known, what it found, with the key number ("Mixup on CIFAR-100 1k: +2.1±0.4 top-1, gap closes
-  at 10k"); for a dropped direction, why. Give it to `rft_add_node`; update it when the result
-  arrives (`rft_set_status` with `summary`) or with `rft_set_summary`. Never put an expected
-  result in it.
-- **Each concept can have a digest** in the vault's `map/` folder, written with
-  `rft_set_digest(concept, state, text)`: the state in one or two sentences, then
-  `## Key results`, `## Dead ends`, `## Open questions`, each point with note ids. Write it from
-  the notes, never from memory. It is stamped with the state of the concept's notes (ids,
-  statuses, titles, summaries); when they change, `rft_map` and `rft_validate` say it is out of
-  date. Rewrite it after a piece of work that changes the concept, or when you have read its
-  notes and it is missing or out of date.
-- **`/rft-summarize [concept]`** writes the missing summaries and digests of an existing tree,
-  concept by concept (a one-off job on a large tree).
-- **A concept grown past 40 notes of its own** is more than one digest can stand for:
-  `rft_validate` says so; propose a split into sub-concepts at the notes that open its sub-lines.
-
-## Concept artifacts
-
-A concept can have an **artifact**: one HTML page of the results of its own experiments
-(`vault/artifacts/<id> <name>.html`), which the tree view shows in the note drawer when the user
-clicks the concept (its name on a region or badge, its node in the concept view, the concept path
-in a note's header). Where the digest is a note for you, the artifact is a page for the user: the
-key results as tables and small charts, what failed, what is still running.
-
-- **`rft_artifact <concept>`** first: where the page is and whether it is up to date, each
-  experiment with a result (in full when it is new or changed since the page was written; `full`
-  for all), the experiments without one, the sub-concepts (whose own artifacts the view links:
-  leave them off this page), and how to write the page.
-- **`rft_set_artifact`** writes it: `html` for the whole page, `edits` (`old_str` → `new_str`,
-  each found on the page once, all or none) to change part of it. It is stamped with a key per
-  experiment with a result (status, title, summary, superseding note, Result), so the plugin
-  says which results changed, are new, or left since: `rft_set_status`, `rft_map`, `rft_next`
-  and `rft_validate` say when it is out of date. An experiment has a result once it is done, or
-  once its Result says something while it runs or after; a planned one has none.
-- **When**: in a vault with artifacts, at the end of a task that recorded results, update the
-  artifact of each concept that got them, once per concept, with edits; a concept with results
-  and no artifact gets one then too. `/rft-artifact [concept]` asks for one, or for every one
-  missing or out of date.
-- **The page** is prose and layout, HTML with its own `<style>`. **Its charts and tables come from
-  notebooks**: an experiment's notebook, or the concept's for comparisons across its experiments
-  (see Experiment notebooks), saves `FIGURES` and `TABLES`, placed by name (below). Never draw a
-  chart of results by hand: a chart or table the page needs that no notebook makes, ask the user
-  whether to make it in a notebook; if not, leave the chart out and type a short table from the
-  notes' own numbers. The view loads nothing from elsewhere (no CDN, no fetch); it gives each SVG
-  figure a button that downloads it as a PDF, and each table one that copies it as a LaTeX
-  `table` float. Its base
-  style follows the view's light and dark themes: `var(--fg)`, `--muted`, `--bg`, `--panel`,
-  `--line`, `--accent`, `--good`, `--bad`, and `--c1` … `--c6` for series. Link every note id,
-  `<a href="#E05">E05</a>` (or `data-note="E05"` on any element): the view opens the note and
-  marks the link with its status, superseded results struck through.
-- **A notebook's figures and tables** (its `FIGURES` and `TABLES`, saved by its run) go on the
-  page by the names `rft_artifact` lists: `<img src="../figures/E08_training_loss.svg">` and
-  `<rft-table src="E08_accuracy_by_seed"></rft-table>`. The plugin fills an `<rft-table>` with
-  the table when the page is written, and again whenever the notebook's run writes it anew; write
-  their numbers nowhere else on the page, and say what they show.
-- **Only numbers that are in the notes**, with their spread over seeds; a superseded result is
-  cited with the note that replaced it. `rft_set_artifact` names the results left off the page,
-  links to no note, superseded results cited alone, and files the view would block.
-- **Never write the files by hand** (Edit, Write and shell writes there are refused): only
-  `rft_set_artifact` stamps them. Reading them is fine.
-
-## Experiment notebooks
-
-An experiment in a concept with code can have a **notebook** that makes the numbers of its Result,
-so no one types them, a reader can rerun them, and the concept's artifact rests on numbers that
-were reproduced. **It is the user's choice, per experiment.** An exploratory run (does it work, a
-quick check, development) gets none, and you do not ask. When an experiment's results are meant
-to last (figures or tables for a paper, a thesis or the docs, a result to verify or to cite in a
-snippet), ask the user once whether to give it a notebook for reproducibility. If they decline,
-write `notebook: no` in its frontmatter and do not ask again. Never write one unasked. It is a marimo notebook in the concept's first repo (`notebooks/<id>_<title>.py`),
-linked from the vault (`vault/notebooks/<id>.py`) and the note (`notebook:`); it runs in the
-repo's own uv environment, from the repo's root.
-
-- **Write it once the user wants one** (best while the experiment is planned), with `rft_set_notebook(id, cells)`: plain Python, one
-  string per cell (a markdown cell as `mo.md("...")`; `mo` is imported for you); or `file`, a
-  notebook already in the repo. Its first cell (written for you) gives `RUNS`: the experiment's
-  runs in the queue that ended well, oldest first, each its record with `out` (its output folder,
-  `$RFT_OUT`), `label` and `commit`; read each run's outputs from `out`. After an expensive run,
-  rebuild from its saved outputs, never retrain; a short experiment may run from scratch. Set:
-  - `RESULTS`: a dict of the numbers the note reports, rounded as it reports them
-    (`{"gap_1k": 4.1, "gap_1k_sd": 0.6}`);
-  - `FIGURES`: `{name: matplotlib figure or SVG text}`, saved as `figures/<id>_<name>.svg`;
-  - `TABLES`: `{name: DataFrame, list of row dicts, or dict of columns}`, saved as
-    `tables/<id>_<name>.html` (the name is its caption).
-- **When its jobs end**, on a machine paired with the experiment queue, the queue's runner runs
-  it (a job of its own, `notebook`, no GPU; with no queue, run it with `rft_run_notebook` once
-  its runs end, which does the same) and, at no model turn: writes `RESULTS` in the note's Result as a table between two `rft-results`
-  comment lines, with the notebook, commit and runs they come from; saves `RESULTS`
-  (`results/<id>.json`), the figures and the tables; fills the tables into the artifacts that
-  name them; and stamps the note (`reproduced:`). The session then says the numbers are in the
-  Result: read it, write what they mean around the table (and the summary), and set the status.
-  Never type the numbers yourself, and never read the runs' or the cells' outputs into the chat.
-- **Run it now** with `rft_run_notebook(id)`: a Result with no table and no number yet gets the
-  table (recorded); else the numbers are checked against it: ok, differs or failed, in a few
-  lines. On differs, find out which side is wrong: fix the notebook, or, if its numbers are right
-  (new runs, a fixed bug), run it with `record: true`, which rewrites the table and puts the
-  artifact out of date. On failed, read the end of the traceback and fix the notebook or what it
-  reads.
-- **A concept's notebook**, on the note that starts it (`rft_set_notebook <its id>`), makes the
-  figures and tables that compare the concept's experiments: its first cell (written for you)
-  gives `EXPERIMENTS`, each of its experiments' `RESULTS` by id, read from what their notebooks
-  saved (an experiment joins it once its notebook has run). It sets `FIGURES` and `TABLES` (saved
-  as `figures/<concept id>_<name>.svg`, `tables/<concept id>_<name>.html`) and runs again whenever
-  one of its experiments' notebooks records new numbers, so the artifact's comparisons follow
-  them at no model turn. Write one when the artifact needs a comparison across experiments; never
-  draw it on the page.
-- **Shared plotting code** (the style, the palette, helpers) goes in one module in the repo's
-  `notebooks/` folder, which is first on every notebook's `sys.path` (e.g. `notebooks/figures.py`),
-  and each notebook imports it: write it once per repo, not in every notebook.
-- **Change it** with Edit: it is plain Python.
-- **Never write `reproduced:` or the Result's table**: only a notebook's run writes them (your
-  edits of either are refused).
-- `rft_artifact` lists the results no notebook reproduced, and what each notebook saved.
-
-## State of knowledge
-
-The map says what holds now, not only what was done.
-
-- **A result that overturns another** (a corrected number, a bug found in the run, a
-  better-controlled rerun that changes the conclusion) marks the old note:
-  `rft_supersede(id, by, why)` writes `superseded_by:` and a dated History line. The map, search
-  and graph then show it as `[superseded by …]`; never quote or build on such a result without
-  saying it was overturned. Then rewrite the concept's digest so its key results are the ones
-  that hold. `rft_supersede(id)` without `by` clears the mark.
-- **What is still open**: `rft_next [concept]` (and `/rft-next` for the user) lists the user's
-  priorities first (the open notes they made urgent, high or medium), then, by concept, the
-  experiments running, those planned and never run, the directions with nothing tried under them
-  (the higher priorities first, then the oldest, with their age) and the open questions of the
-  digests, and last the suggested priorities still waiting for the user. Call it when asked what
-  to do next and before proposing new work: pick up an open thread before opening a new one, and
-  what the user made urgent or high before the rest.
-
-## Priorities
-
-A note's priority (`priority:` in its frontmatter: `urgent`, `high`, `medium` or `low`) is the
-user's alone. They set it in the tree view (the kanban, or the note's drawer); a new note has
-none. Among the open notes (idea, planned, running) at most 1 is urgent, 5 high and 10 medium;
-low has no limit, and a note that is done, dropped, discussed or moved does not count.
-
-- **Never set, change or remove `priority:`** yourself. Edit, Write and shell writes that change
-  it are refused; no rft tool writes it.
-- **Suggest one** when you have a clear reason: it unblocks other work, the user said it matters,
-  it is cheap and decisive, or it matters less than its priority says. `rft_suggest_priority {id,
-  priority, why}` writes `suggested_priority:` and a one-line `suggested_priority_why:`, or pass
-  `suggested_priority` and `priority_why` to `rft_add_node` for a new note of work to do. The user
-  accepts it (it becomes the priority) or dismisses it in the tree view. Do not suggest one for
-  every note: leave it out when you have no reason.
-- When a priority is full, a suggestion of it can only be accepted once the user lowers one of the
-  notes that hold it; the tool's answer names them, so tell the user when it matters.
-- `rft_validate` warns about a priority that is none of the four and about a limit exceeded by
-  hand edits.
-
-## Deadlines and dates
-
-Deadlines of any kind (a submission, a rebuttal, a meeting, a talk, a thesis chapter) are
-**milestones**: one note each in the vault's `milestones/` folder, outside the reasoning tree,
-with `due:` and the notes that must be done first (`needs:`). Experiments carry the plan of their
-run: `start:` (a day) and `est:` (whole days or weeks: `3d`, `2w`); any note can have a `due:` of
-its own. A due date is a day, a local time, or a time in a zone:
-`2026-11-13`, `2026-11-13 14:00`, `2026-11-13 23:59 AoE` (or `UTC`, `+01:00`).
-
-- **The dates are the user's.** Never write `due:`, `start:` or `est:`, on a note or a milestone:
-  Edit, Write and shell writes that change them are refused. The user sets them in the tree view's
-  Calendar (dragging a run, + Deadline) or the note's drawer.
-- **Suggest a start or an estimate** when you can say why (a deadline needs the run done by then,
-  it waits for another run, the GPUs are taken until then, the code shows how long a run takes):
-  `rft_suggest_dates {id, start, est, why}`. The user accepts or dismisses it.
-- **A deadline the user gives you** ("supervisor meeting Friday at 14:00, I need E12 by then"):
-  `rft_add_deadline {title, due, needs}`. The plugin asks the user to confirm it in a dialog you
-  cannot answer; if they decline, leave it.
-- **Paper submissions**: only when the user names a venue or asks which deadlines fit, find the
-  venue's official dates page and read it now (web search, fetch), never from memory: dates move
-  every year, and extensions happen. Suggest one milestone per date (abstract, paper,
-  supplementary) with `rft_suggest_deadline {title, due, source, why, needs}`, with the time and
-  zone the page states (most are 23:59 AoE). It waits, dashed, in the Calendar until the user
-  accepts or dismisses it.
-- Write `gpus:` on an experiment that takes more than one GPU (from its command and config), and
-  `after:` (wikilinks) on one that waits for another run. With `gpus:` in `.rft/config.json`, the
-  plugin reports the days the planned and running experiments need more GPUs than there are.
-- In a vault that uses dates, `rft_set_status` records `started:` the day a run starts and `finished:` the day it is done:
-  the calendar's runs, and real durations to set against the estimates.
-- **Planning** is backwards from each deadline, in whole days: what a deadline needs must end by
-  its due day, so a note's latest start is the due day less its estimate (less those of the notes
-  that come after it). Slack is the days between its earliest start (today, its `start:`, the end
-  of the notes it waits for) and that latest start. A deadline is **at risk** at 0 days of slack or
-  less, or when a note it needs was dropped, superseded or is missing. `rft_next` lists the
-  deadlines first, nearest first, with what puts each at risk; session start names the ones of the
-  next 14 days at risk. When one is at risk, say so and propose what would save it (a suggested
-  start, a smaller run, a priority suggestion), without changing the dates.
-- The vault's `rft.ics` holds the deadlines and the planned runs (never the suggestions), for any
-  calendar app to import; `rft_sync` keeps it current.
-
-## The experiment queue
-
-There is no queue until this machine is paired with it. Until then there is no `rft_queue`, no
-runner and no monitor: run an experiment as the user asks, and never set a queue up on your own.
-
-**Pairing** (only when the user asks to set up the queue, or `/rft-machine add` asked you): the
-plugin checks the machine itself (`rft_machine {action: "probe"}`, or the check `/rft-machine add`
-handed you): its NVIDIA GPUs, the disks for the runs' outputs (the most room first), conda and
-uv. Do not inspect the machine by hand for it. A machine with no NVIDIA GPU cannot be paired: say
-so, and the queue stays off. Otherwise ask the user, in one AskUserQuestion with two questions,
-where the runs' outputs go (the suggested folder first) and which GPUs to keep out of the queue
-for their own work (none by default), then `rft_machine {action: "add", runs_dir, keep_out}`.
-It answers what is on and the queue's rules; the queue tools load from the next turn. On a
-machine already paired it changes nothing and says so. `rft_machine {action: "status"}` says how
-it stands. Only the machine the session runs on can be paired for now.
-
-**Once it is on, every run of an experiment's code goes through the queue** (with `gpus: 0` for
-one that needs no GPU), never into the background with Bash (`&`, nohup, screen, tmux), nor in the
-foreground beyond a check of a few seconds: a job is a command, the folder it runs in and how many
-GPUs it takes, for one experiment. A **runner** (a
-process of its own, apart from any session) starts each job once enough GPUs are free and records
-how it ended, so a run outlives the session that queued it. Watching it costs no turn: the user
-follows the GPUs, the queue and the history in the tree view's monitor (the icon at the top left,
-or `/rft-jobs`), where they also reorder, pause, cancel and retry jobs, and keep GPUs out of it.
-
-- **Queue a run** with `rft_queue {exp, cmd, cwd, gpus, label}` once its experiment note exists
-  (`rft_add_node`, status planned). `gpus` defaults to the note's `gpus:`, else 1; 0 runs it with
-  no GPU (it never waits). `label` tells the experiment's runs apart ("seed 2", "lr 3e-4"). The
-  answer says its place in line and why it waits. Put it first in line (`top`) only when the user
-  asks.
-- **The command** runs as `bash -c <cmd>` in `cwd`, in a session of its own, with
-  `CUDA_VISIBLE_DEVICES` set to its GPUs (numbered as nvidia-smi numbers them), `RFT_JOB`,
-  `RFT_EXPERIMENT` and `RFT_OUT`. It has the session's environment only, not your shell's: activate its conda
-  or venv in the command (`source <conda root>/bin/activate env && python train.py ...`; the
-  conda root and its envs are in `rft_machine status`) or give the interpreter's full path. Check the command once by hand (a dry run, `--help`) before queueing
-  a long run. Its log goes to `<vault>/.queue/logs/<job>.log`.
-- **Its outputs** go to `$RFT_OUT`, a folder of its own: `<root>/<repo>/<exp>/<job>` under the
-  outputs' root chosen when the machine was paired (`<repo>` the name of the job's repo folder),
-  else `<repo>/runs/<exp>/<job>` (kept out of git). Have the
-  command write there (`--out "$RFT_OUT"`); the notebook finds it as `out` in `RUNS`.
-- **How far it is**: the monitor and `rft_jobs` show, for each running job, its stage, one tqdm
-  bar (label, n/total, %, time left, postfix) and its last line, read from what it writes. To say
-  how far a job is, read `rft_jobs`, not its log. A script you write or change for the queue
-  follows "Writing a job the monitor can read", below.
-- **The run record**: when a job starts, the runner records the code it runs (repo, commit,
-  branch; uncommitted changes saved whole as `code.patch` in its output folder); when it ends,
-  a failed one's traceback, and whether the repo's code moved while it ran. Each output folder
-  holds its record (`rft-run.json`). `rft_jobs <job>` shows them; a run can be made again from
-  its commit, its patch and its command.
-- **Order** is strict: the first waiting job that needs GPUs takes them once enough are free, and
-  nothing behind it starts first. A GPU with a process of someone else's on it, or more than
-  1000 MiB of memory taken, counts as busy.
-- **Do not poll.** The plugin sets the experiment running when its job starts and tells the user
-  when one ends. Read `rft_jobs` when the user asks, or when the session starts with "Jobs that
-  ended, their result not recorded yet". Where the notebook wrote the numbers, they are in the
-  Result already: read it and say what they mean. Otherwise `rft_jobs <job>` says how it ended (a
-  failed one with the end of its traceback; `log: 40` for more of its output); then record the
-  real result, or the failure and its cause; a failed run may deserve a fix and `rft_queue` again,
-  after the user agrees.
-- **Change the queue** only when the user asks (the order is theirs), with `rft_job {action}`:
-  `move` one waiting job to `"top"`, to `"end"`, or before another waiting job (`before: "q3"`),
-  answered with the new waiting order in one line (no `rft_jobs` after it); `cancel` one (it
-  leaves the experiment's status to you); `retry` one that ended (first in line again); `pause`
-  the queue (no new job starts; the running ones go on) and `resume` it. "Run E17 before E16":
-  find their jobs (the session's list, or `rft_jobs` once), then one call,
-  `{action: "move", id: "q4", before: "q3"}`.
-- `rft_next` lists what runs and waits, and the results to record.
-- The queue lives in `<vault>/.queue/` (`machine.json`, the machine it is paired with;
-  `queue.json`; the history in `history.jsonl`), out of git; edit none of them by hand.
-
-### Writing a job the monitor can read
-
-The monitor and `rft_jobs` read three things a job writes: its tqdm bars, its lines of text, and
-`$RFT_PROGRESS`. When you write or change a script that runs through the queue:
-
-1. **A tqdm bar on each loop longer than a minute**, with a fixed `desc` and a `total`:
-   `tqdm(loader, desc="train", total=len(loader))`. The monitor shows one bar per job: the
-   outermost still running (the epochs, not the batches inside them).
-2. **Numbers that change go in the postfix, never in the label**:
-   `bar.set_postfix(loss=f"{loss:.4f}")`, not `bar.set_description(f"train loss {loss:.4f}")`.
-   The monitor shows the postfix after the bar.
-3. **Inner loops** get `leave=False`. Leave `mininterval` alone: the runner sets 10 s
-   (`TQDM_MININTERVAL`), so a bar redraws every 10 s and logs stay small.
-4. **Stages**: a job of several steps appends one line per step to `$RFT_PROGRESS`, a JSON
-   object `{"stage": "train", "i": 2, "n": 3}` (or a plain line of text). From bash:
-   `echo '{"stage": "probe patchpos", "i": 2, "n": 5}' >> "$RFT_PROGRESS"`. The monitor shows
-   "Stage 2/3: train" above the bar.
-5. **Lines of text**: one per event, starting with the time (`2026-11-16 12:00:05 epoch 7: val
-   acc 0.912`), written as they happen (`print(..., flush=True)`, or `PYTHONUNBUFFERED=1`). The
-   last one shows under the bar. Nothing per batch.
-6. **Results go to `$RFT_OUT`**, never into the log: no arrays, tables or per-sample prints.
-7. **Failures raise**: let the exception end the job with its traceback (the runner keeps its
-   end, and `rft_jobs` shows it) and a non-zero exit; never catch it and only print.
-
-`examples/job_progress.py` in the plugin's folder does all of this in 50 lines; start from it.
-Code the user wrote that does not follow it still works: the monitor then shows less.
-
-## Restructuring the tree
-
-A note's parent is where the reasoning came from; a concept is the line of research it belongs
-to. Over time the two drift apart: a branch grows out of one note but belongs to another line.
-
-- **Move a branch** with `rft_move_node(id, parent, why)`, after the user agrees. The subtree
-  moves with it, and the note keeps its past parents in `origin:` plus a dated line under
-  `## History`, so the path that led to it stays readable (the tree view's **Came from** draws
-  it).
-- **`/rft-rebalance [concept or id]`** gives you a short list of candidates the plugin found:
-  notes whose title, summary, tags and references sit closer to another concept than to their
-  own, each with its fit to both and the nearest note in the other concept, then one line each for
-  the weak ones (only slightly closer, or naming another concept in the title; most stay). Judge only those
-  (the fit is a hint from shared words, not a verdict); check a candidate with `rft_map
-  <concept>` or `rft_graph <id>` and open its file only when in doubt. With `--full` you review
-  the whole tree, or one part of it, instead. Start from the map (`rft_map`, `rft_map <concept>`): the summaries say what
-  each note is; open a note's file only when its summary leaves a move in doubt. Answer
-  with a short numbered table (note, parent now, new parent, why), say what you would leave as
-  it is, and wait: apply only the moves the user confirms, each with its `why`, then run
-  `rft_validate`. When in doubt, leave a note where the reasoning produced it. Propose a new
-  concept separately, never as part of a move.
 
 ## When to create and update nodes
 
@@ -520,10 +105,10 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
    from (baseline, data, protocol). Do this *before* starting the run, not after.
    In a concept with code, call `rft_code` first and plan from the code as it is now; the note's
    `## Code` section says how the run uses the code. On a machine paired with the experiment
-   queue, every run is then queued with `rft_queue` (see The experiment queue), not started in the
+   queue, every run is then queued with `rft_queue` (`queue.md`), not started in the
    background: the plugin sets the note running when its job starts. If its results are meant for
-   a paper, a thesis or the docs, ask whether to give it a notebook (`rft_set_notebook`, see
-   Experiment notebooks); not for an exploratory run.
+   a paper, a thesis or the docs, ask whether to give it a notebook (`rft_set_notebook`,
+   `notebooks.md`); not for an exploratory run.
 2. **When it finishes or gives a partial result** (for a queued run: the user is told when its
    job ends, and the session start lists the jobs whose result is not recorded yet): when its
    notebook's run wrote the numbers in **Result**, write what they mean around the table, what
@@ -535,6 +120,8 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
 3. **When a new idea or question comes up** (from a result, the user, a discussion), even if it
    is rejected at once: `rft_add_node` with `type: direction` and `parent` = the note it comes
    from, and its topical `tags`. A rejected idea gets status `discussed`.
+   A direction opened with no experiment planned under it: offer a grilling (`grilling.md`),
+   never start one unasked. In a grilling, ideas wait for its proposal.
 4. **When a paper, method or literature review is read**: `rft_add_node` with
    `type: reference`, `parent` = the note that led to it, and its topical `tags`. Fill
    **Source** with a link that can be checked (DOI, arXiv id or URL), **Summary**, **Method**,
@@ -565,159 +152,27 @@ to. Over time the two drift apart: a branch grows out of one note but belongs to
    vault is the map, the result files are the record.
 10. The vault is part of the repository: commit it with the work it describes.
 
-## Tools
-
-| tool | use |
-|---|---|
-| `rft_add_node` | create a note (next free id, sanitised title, template sections, linked under its parent) |
-| `rft_set_status` | change a status, optionally appending real results or the reason, and updating the summary |
-| `rft_set_summary` | set the one-line summary of one or more notes |
-| `rft_map` | the project map, or one concept's digest and notes with their summaries |
-| `rft_set_digest` | write a concept's digest (state, key results, dead ends, open questions) |
-| `rft_artifact` | what a concept's artifact is written from: its results, what changed since, how to write the page |
-| `rft_set_artifact` | write a concept's artifact, whole (html) or with edits, stamped with the results it was written from |
-| `rft_supersede` | mark a note whose result a newer one overturns (`superseded_by:`), or clear the mark |
-| `rft_manuscript` | snippets (state, basis, the documents using each) and documents (each copy's state), the verified notes still to write; a snippet in full, with what its notes saved; a document's outline |
-| `rft_set_snippet` | a new snippet, a building block resting on verified notes (a stub while locked); or, unlocked, a snippet's text or edits |
-| `rft_set_document` | a placement the user agreed to: a copy of a snippet placed in a document after a copy or a heading, moved, or removed |
-| `rft_next` | the deadlines (nearest first, what puts them at risk) and GPU clashes, the user's priorities, then what is still open by concept: running, planned, unexplored directions, open questions; the queue's jobs and the results to record |
-| `rft_suggest_priority` | suggest a priority for a note, with why; the user accepts or dismisses it (never set `priority:` yourself) |
-| `rft_suggest_dates` | suggest an experiment's start and/or estimate, with why; the user accepts or dismisses it (never set `start:`, `est:` or `due:` yourself) |
-| `rft_add_deadline` | add a deadline the user gave you (title, due, needs); they confirm it in a dialog |
-| `rft_suggest_deadline` | suggest a paper submission read now from the venue's official dates page (`source`), with why |
-| `rft_move_node` | move a note and its subtree under another parent, keeping its origin, after the user agrees |
-| `rft_set_refs` | replace the reference notes a note builds on (`refs:`) |
-| `rft_search` | search every note (titles, summaries, tags, concepts, text), best first with each summary, matching concepts first; filters by type, status, concept, tag |
-| `rft_graph` | a note's neighbours (parent, children, siblings, refs, cited by, origin), or the path from the top to it |
-| `rft_collect_papers` | download the open-access PDFs of reference notes into `papers/<concept>/`, in the background |
-| `rft_set_tags` | replace a note's topical tags |
-| `rft_set_type` | change the type of a note made with the wrong one (new id, file moved, links renamed) |
-| `rft_tags` | the topical tags in use, with counts: check before inventing one |
-| `rft_set_concept` | set, rename or remove (name null) the concept a note starts, after the user confirms |
-| `rft_concepts` | the concept tree: names, start notes, counts, statuses, linked code |
-| `rft_set_repos` | link code repos to a concept (or, on the root note, to the project); an empty list removes them |
-| `rft_code` | a note's code context: its repos by priority, the commit it was checked against, what changed since |
-| `rft_set_code` | write or update a note's `## Code` section (description, Reproduce), recording each repo's current commit |
-| `rft_set_notebook` | give an experiment its marimo notebook, when the user wants one (best while it is planned): plain cells written to its concept's repo (a first cell gives `RUNS`), or a file already there; linked from the vault and the note |
-| `rft_run_notebook` | run the notebook now in its repo's uv environment: `RESULTS` written in the Result's table (recorded, or `record: true`) or checked against it (ok, differs, failed); `FIGURES` and `TABLES` saved; stamps `reproduced:` |
-| `rft_tree` | the current tree, or the subtree of one node (`root`, `depth`) |
-| `rft_validate` | errors (bad ids, statuses, titles, missing parents, broken links) and warnings |
-| `rft_sync` | regenerate children / up / down, the tree in `00 Index.md`, the canvas |
-| `rft_comments` | a note's comments and suggestions (open ones in full, the history in short), or the notes with open threads |
-| `rft_comment` | reply in a thread (`applied: true` closes a suggestion you made in an unlocked note), or start a comment on a `quote` |
-| `rft_suggest` | propose new text for a `quote`, or the replacement an open suggestion asks for; the user accepts it |
-| `rft_machine` | pair this machine with the experiment queue, only when the user asks: `probe` (what the plugin reads of it, no model), `add` (runs_dir and keep_out, both asked of the user first; turns the queue on), `status` |
-| `rft_queue` | queue a run of an experiment on this machine's GPUs (exp, cmd, cwd, gpus, label); it starts once its GPUs are free, in the user's order. Only once the machine is paired |
-| `rft_jobs` | the queue in a few lines: GPUs, jobs running and waiting, the last ones that ended, results to record; one job with its run record (code, outputs, error) and `log` lines of its output |
-| `rft_job` | change the queue, only when the user asks: `move` a waiting job (answers the new order), `cancel`, `retry`, `pause`, `resume` |
+## Working on the notes
 
 Before proposing an experiment or an idea, `rft_search` whether the tree already has it; to
 answer "what did we try on X", look at the map and search first, and read only the notes that
 match.
 
 Editing note bodies (What, Why, Result, ...) with the ordinary file tools is fine. After editing
-notes by hand — above all a `parent:` field — run `rft_sync`, then `rft_validate`, and fix every
-error. Never edit `up:` / `down:` by hand, nor the list under `## The tree` in the index.
+notes by hand — above all a `parent:` field — run `rft_sync`: it answers with the tree's check
+(no `rft_validate` after it); fix every error. Never edit `up:` / `down:` by hand, nor the list
+under `## The tree` in the index.
 
 A note made with the wrong type is fixed with `rft_set_type`, never renamed by hand: its id, its
 folder and every link to it change together.
 
-## Verified notes
+## Handoffs
 
-- **`verified`** says the user checked what a note claims: an experiment's Result, a theory note's
-  Statement and Explanation, a reference's Source and Key results, a direction's Idea. Only the
-  user verifies a note, in the tree view, which locks it and stamps it (`verified: <date>
-  <fingerprint>` of those sections). Only verified notes become snippets.
-- **Suggest it** when a result is final: `rft_set_status {id, status: "verified", note: what was
-  checked and how}` writes `suggested_verified:`, which the user accepts or dismisses. It is
-  refused, with what is missing, unless the note is done (or in review), not superseded, and: an
-  experiment with a notebook reproduced (`reproduced: … ok`); a direction with a verified note
-  under it. Edits that write `status: verified` or `verified:` are refused.
-- **Review** (↺): a verified note goes there by itself, unlocked, with a History line, when what it
-  claims changes (an accepted suggestion, an edit), when it is superseded, or when its notebook's
-  run differs or fails. Set one there yourself with `rft_set_status {id, status: "review", note:
-  why}` when you find its claim may no longer hold (the session asks the user first, as the note is
-  locked). A verified note's other status changes are the user's. `rft_next` lists the notes in
-  review and your suggestions waiting.
-
-## Snippets and documents
-
-Verified notes become writing at two levels. Without them (the user starts them with
-`/rft-manuscript` or the tree view's Manuscript tab) the tools wait behind ToolSearch and none of
-this applies.
-
-- **Snippets** (`<vault>/snippets/S<nn>.tex`) are the building blocks: atomic LaTeX, written once and
-  reused, so a definition reads the same in every document. Each opens with
-  `% rft-snippet S04 · result · CutMix at 1k images` and `% basis: E05, E02`. Kinds: definition,
-  theorem, lemma, proposition, corollary, proof, method, result, related-work, motivation,
-  discussion, figure, table.
-- **Documents** (`<vault>/documents/<name>/main.tex`) are built with them. A snippet enters a document
-  as a copy of its text between `% rft-begin S04 <fingerprint>` and `% rft-end S04`, which the user
-  may adapt to the narrative; a document has text of its own too. When a snippet changes, its copies
-  go to review (the user takes the new text or keeps theirs); a copy that differs from its snippet
-  is "adapted". Never rewrite a copy to follow its snippet yourself.
-- **A snippet rests on notes**: its `% basis:` line, and the notes its macros and citations name.
-  Never type a number, figure or table of the tree: `\rftnum{E05}{acc.1k}` prints a number of
-  `results/E05.json` (the notebook's RESULTS, by path), `\rftfig[width=…]{E08}{loss}` its figure,
-  `\rfttable{E08}{by_seed}` its table (the snippet gives the `table`, caption and label).
-  `\cite{R07}` cites a reference note; a paper of a literature note is cited by its own key, from
-  the ```` ```bibtex ```` block of its entry. When you fill a reference's Source, add its BibTeX in
-  such a block: `refs.bib` is made from them.
-- **Locked by default**, both levels: the user writes. You:
-  - propose snippets only from verified notes, and where to place them. When `rft_manuscript` or
-    `rft_next` lists verified notes no snippet rests on, offer two tables, snippets (kind, title,
-    basis, what it would say) and placements (which snippet, which document, after which copy or
-    heading, why there), and do only what the user picks: stubs with `rft_set_snippet {kind, title,
-    basis, outline}` (the outline says the claim, the numbers and the macros that give them, the
-    caveats; the body is left to the user), copies with `rft_set_document {name, place, after}`;
-  - move or remove a copy only when asked (`rft_set_document {name, move | remove, after}`);
-  - comment and suggest when asked, with `rft_comment` and `rft_suggest` and the snippet's id or the
-    document's name, as on a note; never write their text (Edit, Write and shell writes to them are
-    refused).
-- **Unlocked** (by the user's padlocks: all snippets or one, all documents or one): write a snippet
-  with `rft_set_snippet {id, text}` or `{id, edits}` (its basis checked, it is stamped; its copies go
-  to review), and edit an unlocked document's own text with Edit, keeping its copies' marker lines.
-- **Review**: a snippet whose basis note changed since its stamp, went to review, was superseded or
-  dropped is in review (`rft_manuscript` says why): point it out and suggest how its text should
-  follow; the user marks it **Reviewed**. A copy whose snippet changed is the user's to answer.
-- The registries, each document's `.blocks.json` and the generated files (`rft.sty`,
-  `rft-numbers.tex`, `refs.bib`, `.build/`) are never edited by hand. The server compiles a document
-  or a snippet alone when the user asks; `rft_validate` names a basis that is no note, a macro that
-  names nothing saved, an unknown citation, a cited reference with no BibTeX, a copy of no snippet
-  and a `\ref{S02}` in a document that holds no copy of S02.
-
-## Locked notes, comments and suggestions
-
-- **A locked note** (`locked: true` in its frontmatter; the user sets it with the padlock in the
-  tree view) is the user's: never change its text. Edit, Write and shell commands that write to
-  it are refused, and so are `rft_set_status` with a note and `rft_set_code` on it. Propose each
-  change with `rft_suggest {id, quote, replacement}`, one per passage; the user accepts or rejects
-  it in the tree view, and an accepted one is written into the note. Its status, tags and derived
-  fields still change through the rft tools. Never unlock a note: that is the user's alone.
-  `rft_move_node` and `rft_supersede` write a line in its History, so on a locked note the plugin
-  asks the user whether to unlock it; if they keep it locked the call fails and nothing changes:
-  do not retry it, and do not work around it (e.g. by moving its children instead).
-- **The discussion of a note** is kept beside it, in `<vault>/.comments/<id>.json`, written by
-  the tree view and the rft tools only (never by hand). A thread is on a part of the text, its
-  quote (the note's markdown as written), found again after edits from the text around it:
-  - a **comment** discusses that part before any edit;
-  - a **suggestion** has new text for it, or says in words what should change (an instruction,
-    with no replacement yet).
-- **Answer a thread only when the user asks**: the tree view's **Ask Claude** sends you the thread
-  as a prompt (when it cannot answer it in a subagent). Answer in the thread, not in the chat:
-  - a comment: read what the question needs, reply with `rft_comment {id, thread, text}`, and do
-    not edit the note; propose a change with `rft_suggest` if one is needed;
-  - a suggestion on a locked note: write the new text with `rft_suggest {id, thread,
-    replacement, text}`; the user accepts it;
-  - a suggestion on a note that is not locked: make the change in the note yourself, then close the
-    thread with `rft_comment {id, thread, applied: true, text: what you changed}`;
-  - unclear or wrong: reply with `rft_comment` and change nothing.
-- **Quotes** are exact text of the note below its frontmatter, markdown included, occurring once
-  in it: quote more of the text around it when a phrase repeats.
-- **Footnotes** are part of the note, as Obsidian writes them: a mark `[^1]` and its text on a line
-  `[^1]: …` at the end (indented lines continue it), or inline `^[…]`. The tree view shows them in
-  the margin. Keep them when you edit a note.
-- **Highlights** `==text==` are the user's, as Obsidian writes them: keep them when you edit a note.
+A long session costs more with every request; a new one starts from the rules and the tree. To
+carry work over, bring the notes up to date, then `rft_handoff {done, next, unrecorded}` (2,000
+characters in all, notes by id): the next session in the folder, or this one after `/clear`,
+gets it in its rules. `unrecorded` is what neither a note nor a commit holds; the plugin adds
+the repositories with uncommitted changes. `/rft-handoff` asks for one.
 
 ## Note layout
 
@@ -740,14 +195,6 @@ Statement, Builds on, Explanation, Open questions, Status — then **History** o
 A locked note has `locked: true`; footnote texts (`[^1]: …`) come after the sections.
 In a concept with code, experiments and directions also have a **Code** section, before Result
 (experiments) or Status (directions).
-
-## Status notes (optional)
-
-The tree records how the reasoning went; a status note records what it adds up to. Keep them in
-`<vault>/status/`, one dated file each (`Claims and status, YYYY-MM-DD.md`), linked from
-`00 Index.md`: claims grouped by strength (proved, consistent, weak, cannot claim), each linked
-to the experiments that support it, then next steps. Every next step that is a new idea also
-gets a direction node.
 
 ## Viewing
 

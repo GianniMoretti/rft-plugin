@@ -173,7 +173,9 @@
   }
 
   async function copyLatex(table, b) {
-    const text = window.RftLatex.tableFloat(tableData(table))
+    // a table whose notebook typeset it (data-latex) is copied as that, the others as read from their cells
+    const own = table.getAttribute('data-latex')
+    const text = own && own.trim() ? window.RftLatex.floatAround(captionOf(table), own) : window.RftLatex.tableFloat(tableData(table))
     try {
       await navigator.clipboard.writeText(text)
       flash(b, 'Copied')

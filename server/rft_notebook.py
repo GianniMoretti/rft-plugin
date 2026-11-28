@@ -15,18 +15,25 @@ it: the repo's root (the folder of its pyproject.toml) as working folder and the
 folder first on sys.path; it answers the notebook's RESULTS, the repo's commit, and the end of the
 traceback when a cell fails; and FIGURES (each an SVG: a matplotlib figure, or SVG text) and
 TABLES (each a DataFrame, a list of rows as dicts, or a dict of columns), as SVG text and as
-columns and rows. The editors (`Editors`) are one `marimo edit` per repo, on 127.0.0.1
+columns and rows; and LATEX ({a table's name: the tabular the notebook typeset for it}), the LaTeX
+that table is copied and \\input as, in place of the plain one made from its columns and rows. The editors (`Editors`) are one `marimo edit` per repo, on 127.0.0.1
 with a key of their own, started when the tree view first opens a notebook of that repo and
 stopped with the server; each serves under notebook/<name>/ and the page reaches it through the
 server's own port (rft_server passes those requests on), the only one a browser on another
 machine, through an SSH tunnel, may reach. Standard library only: marimo itself runs in the repo's environment
 (`uv run --with marimo`), so the repos need not list it.
+
+Before a run, and before an editor starts, the project's figure style (rft_style.py beside this
+file, with the project's tokens from .rft/config.json "style" written in) is put beside the
+notebook as rft_style.py, which its cells import (docs/design/figures.md); the run applies it
+before the notebook's cells, for notebooks written before it.
 """
 import argparse
 import importlib.util
 import json
 import math
 import os
+import re
 import secrets
 import shutil
 import signal
@@ -48,6 +55,55 @@ EDITOR_PATH = "notebook"  # an editor's addresses on the server: notebook/<its n
 
 class NotebookError(Exception):
     pass
+
+
+STYLE_FILE = "rft_style.py"
+STYLE_KEYS = ("text", "muted", "axis", "grid", "neutral", "fill", "accent", "contrast", "baseline",
+              "categorical", "ramp", "font", "headingFont", "background")
+
+
+def project_style(vault: Path) -> dict:
+    """The project's figure tokens: `style` in the .rft/config.json whose vault is `vault` (the
+    nearest one above it), {} when there is none."""
+    vault = Path(vault).resolve()
+    for d in (vault.parent, *vault.parent.parents):
+        cfg = d / ".rft" / "config.json"
+        if not cfg.is_file():
+            continue
+        try:
+            raw = json.loads(cfg.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(raw, dict) or (d / str(raw.get("vault") or "vault")).resolve() != vault:
+            continue
+        style = raw.get("style")
+        return style if isinstance(style, dict) else {}
+    return {}
+
+
+def style_source(tokens: dict | None) -> str:
+    """rft_style.py with the project's tokens written in (only the known ones, as text or lists of
+    text: the module checks each and keeps its default for one that is none)."""
+    src = (Path(__file__).resolve().parent / STYLE_FILE).read_text(encoding="utf-8")
+    keep = {}
+    for k, v in (tokens or {}).items():
+        if k in STYLE_KEYS and (isinstance(v, str) or (isinstance(v, list) and all(isinstance(x, str) for x in v))):
+            keep[k] = v
+    line = f"PROJECT: dict = {json.dumps(keep, ensure_ascii=False)}  # rft: the project's tokens (.rft/config.json \"style\")"
+    return re.sub(r"^PROJECT: dict = .*$", lambda _m: line, src, count=1, flags=re.M)
+
+
+def ensure_style(folder: Path, tokens: dict | None) -> bool:
+    """The figure style beside a notebook (`folder`/rft_style.py), written when it is missing or
+    differs. False when it could not be written (the run goes on, with matplotlib's defaults)."""
+    path = Path(folder) / STYLE_FILE
+    try:
+        text = style_source(tokens)
+        if not path.is_file() or path.read_text(encoding="utf-8") != text:
+            path.write_text(text, encoding="utf-8")
+        return True
+    except OSError:
+        return False
 
 
 def project_root(path: Path) -> Path | None:
@@ -138,12 +194,14 @@ def stop(proc: subprocess.Popen, grace: float = 3.0) -> None:
             pass
 
 
-def run(path: Path, timeout: float, uv: str = "uv") -> dict:
-    """Runs the notebook in its repo's uv environment: whether it ran, its RESULTS, the commit, the error's end."""
+def run(path: Path, timeout: float, uv: str = "uv", style: dict | None = None) -> dict:
+    """Runs the notebook in its repo's uv environment: whether it ran, its RESULTS, the commit, the
+    error's end. The project's figure style (`style`, its tokens) is put beside it first."""
     try:
         real, root = resolve(path)
     except NotebookError as e:
         return {"ok": False, "error": str(e)}
+    ensure_style(real.parent, style)
     out: dict = {"file": str(real)}
     out["commit"], out["dirty"] = git_state(root)
     exe = shutil.which(uv)
@@ -170,7 +228,7 @@ def run(path: Path, timeout: float, uv: str = "uv") -> dict:
         except ValueError:
             return {**out, "ok": False, "error": "the run's answer was not JSON"}
         out["results"] = said.get("results")
-        for k in ("figures", "pdfs", "tables", "notes"):
+        for k in ("figures", "pdfs", "tables", "latex", "notes"):
             if said.get(k):
                 out[k] = said[k]
         return {**out, "ok": True}
@@ -191,6 +249,7 @@ def exec_notebook(path: str) -> int:
         if app is None or not callable(getattr(app, "run", None)):
             print(f"{file} is not a marimo notebook: it defines no app", file=sys.stderr)
             return 2
+        apply_style()
         _, defs = app.run()
     except BaseException:  # noqa: BLE001 — a cell's error, whatever it is, is the answer
         traceback.print_exc()
@@ -204,10 +263,23 @@ def exec_notebook(path: str) -> int:
     # a matplotlib figure is also kept as PDF, for the manuscript's LaTeX (an SVG given as text has none)
     pdfs = {str(k): pdf for k, v in (get("FIGURES") or {}).items() if str(k) in figures and (pdf := pdf_of(v)) is not None} \
         if isinstance(get("FIGURES"), dict) else {}
-    answer = {"results": jsonable(get("RESULTS")), "figures": figures, "pdfs": pdfs, "tables": tables, "notes": notes}
+    # a table's own LaTeX, when the notebook typesets it itself (colours, grouped headers): text, for a table it made
+    latex = {str(k): v for k, v in (get("LATEX") or {}).items() if str(k) in tables and isinstance(v, str) and v.strip()} \
+        if isinstance(get("LATEX"), dict) else {}
+    answer = {"results": jsonable(get("RESULTS")), "figures": figures, "pdfs": pdfs, "tables": tables, "latex": latex, "notes": notes}
     sys.stdout.flush()
     print("\n" + MARK + json.dumps(answer, allow_nan=False), flush=True)
     return 0
+
+
+def apply_style() -> None:
+    """The project's figure style, applied before the cells run (beside the notebook, first on
+    sys.path), for a notebook that does not import it itself; nothing when it is not there."""
+    try:
+        import rft_style  # noqa: PLC0415 - the notebook's own folder, put there by ensure_style
+        rft_style.use()
+    except Exception:  # noqa: BLE001 - a style is never worth a failed run
+        pass
 
 
 def svg_of(name, v, notes: list[str]) -> str | None:
@@ -285,16 +357,17 @@ def apply_run(vault: Path, exp: str, timeout: float, record: bool = False, runs:
     if not rel:
         return {"ok": False, "state": "failed", "error": f"{exp} has no notebook (notebook: in its note)"}
     date = date or time.strftime("%Y-%m-%d")
+    style = project_style(vault)
     if rft_results.field(path.read_text(encoding="utf-8"), "type") != "experiment":
         # a concept's notebook, on the note that starts it: its comparisons, for its artifact
-        return rft_results.apply_concept(vault, exp, run(vault / rel, timeout, uv), date)
-    got = rft_results.apply(vault, exp, run(vault / rel, timeout, uv), date, record=record, runs=runs)
+        return rft_results.apply_concept(vault, exp, run(vault / rel, timeout, uv, style), date)
+    got = rft_results.apply(vault, exp, run(vault / rel, timeout, uv, style), date, record=record, runs=runs)
     if chain and got.get("state") == "ok" and got.get("saved"):
         # the experiment's numbers are new or confirmed: the notebooks of its concepts run again
         got["concepts"] = []
         for cid in rft_results.concept_notebooks(vault, exp):
             crel = rft_results.field(rft_results.note_path(vault, cid).read_text(encoding="utf-8"), "notebook")
-            c = rft_results.apply_concept(vault, cid, run(vault / crel, timeout, uv), date)
+            c = rft_results.apply_concept(vault, cid, run(vault / crel, timeout, uv, style), date)
             got["concepts"].append({k: c[k] for k in ("state", "saved", "error", "seconds") if k in c} | {"id": cid})
     return got
 
@@ -324,10 +397,12 @@ class Editors:
         self.lock = threading.Lock()
         self.running: dict[Path, tuple[subprocess.Popen, int, str, str]] = {}  # repo → process, port, key, name
 
-    def open(self, path: Path) -> str:
+    def open(self, path: Path, style: dict | None = None) -> str:
         """The address of the notebook in its repo's editor, relative to the server's own (the page's),
-        the editor started first if need be: a new one, at a new address, when the last one stopped."""
+        the editor started first if need be: a new one, at a new address, when the last one stopped.
+        The project's figure style (`style`, its tokens) is put beside the notebook first."""
         real, root = resolve(path)
+        ensure_style(real.parent, style)
         with self.lock:
             got = self.running.get(root)
             if got and got[0].poll() is not None:

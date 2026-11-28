@@ -6,8 +6,9 @@
 // HTML comment holding JSON: `<!-- rft-artifact {"concept","name","updated","basis"} -->`.
 
 import type { Concept, Io, Loaded, RftNode, Tree } from './vault'
-import { ARTIFACTS_DIR, ARTIFACT_HEAD, ID_RE, MARK, ROOT_CONCEPT, codeRepos, conceptOrder, conceptPath, isAbsolute, join, load, ownNotes, resolveConcept, resolvePath, resultOf } from './vault'
+import { ARTIFACTS_DIR, ARTIFACT_HEAD, ID_RE, MARK, ROOT_CONCEPT, codeRepos, conceptOrder, conceptPath, isAbsolute, join, load, ownNotes, resolveConcept, resolveId, resolvePath, resultOf } from './vault'
 import { notebookMark, resultsBlockOf } from './notebooks'
+import { ARTIFACT_LIMIT, ceiling, clip, fitList } from './fit'
 
 export { ARTIFACTS_DIR, resultOf } from './vault'
 
@@ -61,16 +62,17 @@ const cellText = (v: unknown) => {
  * caption, a table with its caption and what it holds (its rows, a few at most), so the page is
  * written from this, not from opening the files.
  */
+const MAX_SAVED_LINE = 500
 function savedLines(kept: Saved): string[] {
   const out = kept.figures.map(f => {
     const caption = kept.captions[f] ?? f.split('/').pop()!.replace(/\.svg$/, '')
-    return `  <img src="../${f}" alt="${caption.replace(/"/g, '&quot;')}"> (figure: ${caption})`
+    return clip(`  <img src="../${f}" alt="${caption.replace(/"/g, '&quot;')}"> (figure: ${caption})`, MAX_SAVED_LINE)
   })
   for (const t of kept.tables) {
     const c = kept.contents[t]
     const rows = (c?.rows ?? []).slice(0, 8).map(r => r.map(cellText).join(' | '))
     const more = (c?.rows?.length ?? 0) - rows.length + (c?.more_rows ?? 0)
-    out.push(`  <rft-table src="${t}"></rft-table>${c ? ` (table: ${c.caption ?? t}; ${(c.columns ?? []).map(cellText).join(' | ')}; ${rows.join('; ')}${more > 0 ? `; … ${more} more rows` : ''})` : ''}`)
+    out.push(clip(`  <rft-table src="${t}"></rft-table>${c ? ` (table: ${c.caption ?? t}; ${(c.columns ?? []).map(cellText).join(' | ')}; ${rows.join('; ')}${more > 0 ? `; … ${more} more rows` : ''})` : ''}`, MAX_SAVED_LINE))
   }
   return out
 }
@@ -266,7 +268,7 @@ function edited(html: string, edits: ArtifactEdit[]): string {
     if (!from) throw new ArtifactError(`edit ${i + 1}: old_str is empty`)
     if (to === null) throw new ArtifactError(`edit ${i + 1}: new_str is missing (an empty one deletes old_str)`)
     const n = countOf(out, from)
-    if (!n) throw new ArtifactError(`edit ${i + 1}: ${quoteShort(from)} is not on the page (rft_artifact gives its path: Read it for the exact text)`)
+    if (!n) throw new ArtifactError(`edit ${i + 1}: ${quoteShort(from)} is not on the page (rft_artifact with section gives a part of the page as it is written)`)
     if (n > 1) throw new ArtifactError(`edit ${i + 1}: ${quoteShort(from)} is on the page ${n} times: give more of the text around it`)
     out = out.replace(from, () => to)
   })
@@ -329,6 +331,9 @@ export function artifactLine(loaded: Loaded, a: Artifact): string {
   return `${a.path}, updated ${a.updated || '?'}, ${s.stale ? `out of date: ${describeState(s)}` : 'up to date'}`
 }
 
+/** The most values of a notebook's RESULTS on their one line; the note holds the rest. */
+const MAX_RESULTS = 30
+
 /** A Result as rft_artifact shows it: its table of RESULTS (written by the notebook) as one line, the rest as written. */
 export function compactResult(text: string): string {
   const result = resultOf(text)
@@ -336,57 +341,175 @@ export function compactResult(text: string): string {
   if (!block) return result
   const rows = block.split('\n').map(l => /^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|$/.exec(l)).filter((m): m is RegExpExecArray => !!m && m[1] !== 'RESULTS' && !/^-+$/.test(m[1]!))
   const source = /^\*(From .*)\*$/m.exec(block)?.[1]
-  const line = `RESULTS, written by its notebook: ${rows.map(m => `${m[1]} ${m[2]}`).join(' · ')}${source ? ` (${source.replace(/\.$/, '')})` : ''}`
+  const more = rows.length - MAX_RESULTS
+  const line = `RESULTS, written by its notebook: ${rows.slice(0, MAX_RESULTS).map(m => `${m[1]} ${m[2]}`).join(' · ')}${more > 0 ? ` · … ${more} more in the note` : ''}${source ? ` (${source.replace(/\.$/, '')})` : ''}`
   return result.replace(block, line).trim()
 }
 
-/** What a concept's artifact is written from: each result (in full when new, changed, or asked for), the experiments without one, the sub-concepts. */
-export async function artifactReport(io: Io, loaded: Loaded, ref: string, opts: { full?: boolean } = {}): Promise<string> {
+// ---------------------------------------------------------------- the page in parts
+
+/** A part of the page: from a heading to the next one of its level or above. */
+type Part = { level: number; title: string; from: number; to: number }
+
+const HEADING_RE = /<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1\s*>/gi
+const plain = (html: string) => unescapeHtml(html.replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim()
+const kilo = (n: number) => (n < 1000 ? `${n}` : `${(n / 1000).toFixed(1)}k`)
+
+/** The page's parts by its headings, in order; a part holds the parts under its heading. */
+export function pageParts(html: string): Part[] {
+  const heads = [...html.matchAll(HEADING_RE)].map(m => ({ level: Number(m[1]), title: plain(m[2]!), from: m.index! }))
+  return heads.map((h, i) => ({ ...h, to: heads.slice(i + 1).find(k => k.level <= h.level)?.from ?? html.length }))
+}
+
+const MAX_OUTLINE = 1500
+
+/** The page's outline: its headings, numbered, each with the size of its part. */
+function outline(a: Artifact): string[] {
+  const parts = pageParts(a.html)
+  if (!parts.length) return []
+  const top = Math.min(...parts.map(p => p.level))
+  const fitted = fitList(parts.map((p, i) => `${'  '.repeat(p.level - top)}${i + 1}. ${p.title || '(no text)'} (${kilo(p.to - p.from)})`), MAX_OUTLINE, 40)
+  return [
+    '', `On the page now (${kilo(a.html.length)} characters), its parts by heading, each with its size:`,
+    ...fitted.lines, ...(fitted.left ? [`… ${fitted.left} more`] : []),
+    'rft_artifact with section (a number or a heading above) gives that part as it is written, for an edit\'s old_str: no need to read the file.',
+  ]
+}
+
+/** A page up to this share of the answer's limit is given whole: asking for a part of it would cost a call more than the page does. */
+const WHOLE_PAGE = 1 / 3
+
+/** The page as the report gives it: whole while it is short, else its outline. */
+function pageNow(a: Artifact, limit: number): { lines: string[]; whole: string | null } {
+  const whole = a.html.trimEnd()
+  if (!whole.trim() || whole.length > Math.floor(limit * WHOLE_PAGE)) return { lines: outline(a), whole: null }
+  return { lines: ['', `On the page now (${kilo(whole.length)} characters), whole and as it is written, for an edit's old_str: no need to read the file.`], whole }
+}
+
+/** One part of the page as it is written, by its number in the outline or its heading. */
+function partReport(a: Artifact, ref: string, limit: number): string {
+  const parts = pageParts(a.html)
+  if (!parts.length) throw new ArtifactError(`the page has no headings to take a part by: Read ${a.path} in the vault`)
+  const want = ref.trim()
+  const low = want.toLowerCase()
+  const numbered = /^\d+$/.test(want) ? parts[Number(want) - 1] : undefined
+  const exact = parts.filter(p => p.title.toLowerCase() === low)
+  const found = numbered ? [numbered] : exact.length ? exact : parts.filter(p => p.title.toLowerCase().includes(low))
+  const named = (list: Part[]) => clip(list.map(p => `${parts.indexOf(p) + 1}. ${p.title}`).join('; '), 1200)
+  if (!found.length) throw new ArtifactError(`no part of the page is headed "${want}". Its headings: ${named(parts)}`)
+  if (found.length > 1) throw new ArtifactError(`"${want}" heads ${found.length} parts of the page; give the number of one: ${named(found)}`)
+  const p = found[0]!
+  const text = a.html.slice(p.from, p.to).trimEnd()
+  const head = `Part ${parts.indexOf(p) + 1} of ${a.path}, "${p.title}", ${text.length} characters, as it is written:`
+  const room = limit - head.length - 300
+  if (text.length <= room) return `${head}\n${text}`
+  // the file's first line is the artifact's header, so the page's line k is the file's line k + 1
+  const line = a.html.slice(0, p.from + room).split('\n').length + 1
+  return `${head}\n${text.slice(0, room)}\n… cut here, at this answer's limit of ${limit} characters: ${text.length - room} more of this part. A part under it, by its own heading, is shorter; or Read ${a.path} (in the vault) from line ${line}.`
+}
+
+/** The most characters of a list of names on one line of rft_artifact's answer. */
+const MAX_NAMES = 700
+
+/**
+ * What a concept's artifact is written from, in at most `limit` characters: where the page is and
+ * its outline, the results that are new or changed in full (every one before there is a page, or
+ * with `full`), the others by id, the experiments without a result, the sub-concepts, and how to
+ * write the page. `notes`: only these results, in full. `section`: one part of the page as written.
+ * The results in full that do not fit are named, to ask for with `notes`.
+ */
+export async function artifactReport(io: Io, loaded: Loaded, ref: string, opts: { full?: boolean; notes?: string[]; section?: string; limit?: number } = {}): Promise<string> {
   const { tree } = loaded
   const c = resolveConcept(tree, ref)
   if (!c) throw new ArtifactError(`"${ref}" is not a concept (rft_concepts lists them)`)
+  const limit = opts.limit ?? ARTIFACT_LIMIT
   const a = (await readArtifacts(io, loaded))[c.id]
+  if (opts.section?.trim()) {
+    if (!a) throw new ArtifactError(`"${c.name}" has no artifact yet, so no page to take a part of`)
+    return partReport(a, opts.section, limit)
+  }
   const state = a ? artifactState(loaded, a) : null
-  const out = [`# ${conceptPath(tree.concepts ?? {}, c.id).map(id => tree.concepts![id]!.name).join(' › ')}${c.root ? ` (from ${c.root})` : ''} · ${a ? `artifact: ${artifactLine(loaded, a)}` : `No artifact yet: rft_set_artifact writes ${join(ARTIFACTS_DIR, fileName(c))}`}`]
-  if (c.summary) out.push(c.summary)
   const results = withResults(tree, c.id)
   const fresh = new Set([...(state?.changed ?? []), ...(state?.added ?? [])])
   // in a concept with code, each result says whether its notebook reproduced it
   const coded = codeRepos(tree.concepts, c.id).length > 0
-  out.push('', `Experiments with a result (${results.length}):`)
+  const asked = opts.notes?.length ? opts.notes.map(r => resolveId(tree, r) ?? r) : null
+  if (asked) {
+    const none = asked.filter(id => !results.some(n => n.id === id))
+    if (none.length) throw new ArtifactError(`${none.join(', ')}: not ${none.length > 1 ? 'experiments' : 'an experiment'} with a result of "${c.name}" (rft_artifact without notes names them)`)
+  }
+  const inFull = results.filter(n => (asked ? asked.includes(n.id) : !a || opts.full || fresh.has(n.id)))
+  const others = results.filter(n => !inFull.includes(n))
+
+  // each result given in full: its line, its Result, what its notebook saved for the page (placed by name, not copied)
   let saved = 0
-  for (const n of results) {
+  const blocks: { n: RftNode; text: string }[] = []
+  for (const n of inFull) {
     const head = `${MARK[n.status] ?? '-'} ${n.name}${n.supersededBy ? ` [superseded by ${n.supersededBy}]` : ''}${n.summary ? ` — ${n.summary}` : ''}${coded ? ` · ${notebookMark(n)}` : ''}`
     const mark = state?.changed.includes(n.id) ? ' [changed]' : state?.added.includes(n.id) ? ' [new]' : ''
-    // what its notebook saved for the page, by name: placed, not copied
     const kept = await savedOf(io, loaded.config.vault, n.id)
     const parts = kept ? savedLines(kept) : []
     if (parts.length) saved++
-    const keptLine = parts.length ? `Saved by its notebook:\n${parts.join('\n')}` : ''
-    if (!a || opts.full || fresh.has(n.id)) out.push(`## ${head}${mark}`, compactResult(loaded.texts[n.id] ?? '') || '(no Result written: it is done)', ...(keptLine ? [keptLine] : []), '')
-    else out.push(`- ${head}`, ...(keptLine ? [keptLine] : []))
+    blocks.push({ n, text: [`## ${head}${mark}`, compactResult(loaded.texts[n.id] ?? '') || '(no Result written: it is done)', ...(parts.length ? [`Saved by its notebook:\n${parts.join('\n')}`] : [])].join('\n') })
   }
-  if (!results.length) out.push('(none yet: nothing to put on the page)')
-  if (coded) {
-    // the concept's own notebook: the figures and tables that compare its experiments
-    // kept under the id of the note that starts the concept (the project's: the root note)
-    const start = c.root ?? null
-    const kept = start && tree.nodes[start]?.notebook ? await savedOf(io, loaded.config.vault, start) : null
-    const parts = kept ? savedLines(kept) : []
-    if (parts.length) { out.push('', `Saved by the concept's notebook (its comparisons):`, ...parts); saved++ }
-    else if (start && tree.nodes[start]?.notebook) out.push('', `The concept's notebook saved no figure or table yet: rft_run_notebook ${start} runs it.`)
-    else if (start && results.length > 1) out.push('', `No concept notebook. If the page needs figures or tables comparing these experiments, ask the user whether to make them in one (rft_set_notebook ${start}: it reads EXPERIMENTS, each experiment's RESULTS, and sets FIGURES and TABLES); never draw them on the page.`)
+
+  const path = conceptPath(tree.concepts ?? {}, c.id).map(id => tree.concepts![id]!.name).join(' › ')
+  const now = a && !asked ? pageNow(a, limit) : null
+  const top = asked
+    ? [`# ${path} · ${inFull.length} of its results, as asked`]
+    : [
+      `# ${path}${c.root ? ` (from ${c.root})` : ''} · ${a ? `artifact: ${artifactLine(loaded, a)}` : `No artifact yet: rft_set_artifact writes ${join(ARTIFACTS_DIR, fileName(c))}`}`,
+      ...(c.summary ? [c.summary] : []),
+      ...(now?.lines ?? []),
+    ]
+  const mid = asked ? [] : ['', `Experiments with a result (${results.length}):`]
+  const tail: string[] = []
+  if (!asked) {
+    if (!results.length) tail.push('(none yet: nothing to put on the page)')
+    // the results the page was written from and that did not change: on it already, so by id alone
+    if (others.length) tail.push(`Unchanged since the page was written (${others.length}), on it already: ${clip(others.map(n => `${n.id}${n.supersededBy ? ` [superseded by ${n.supersededBy}]` : ''}`).join(', '), MAX_NAMES)}. rft_artifact with notes gives any of them in full.`)
+    if (coded) {
+      // the concept's own notebook: the figures and tables that compare its experiments
+      // kept under the id of the note that starts the concept (the project's: the root note)
+      const start = c.root ?? null
+      const kept = start && tree.nodes[start]?.notebook ? await savedOf(io, loaded.config.vault, start) : null
+      const parts = kept ? savedLines(kept) : []
+      if (parts.length) { tail.push('', `Saved by the concept's notebook (its comparisons):`, ...parts); saved++ }
+      else if (start && tree.nodes[start]?.notebook) tail.push('', `The concept's notebook saved no figure or table yet: rft_run_notebook ${start} runs it.`)
+      else if (start && results.length > 1) tail.push('', `No concept notebook. If the page needs figures or tables comparing these experiments, ask the user whether to make them in one (rft_set_notebook ${start}: it reads EXPERIMENTS, each experiment's RESULTS, and sets FIGURES and TABLES); never draw them on the page.`)
+    }
+    const unproven = coded ? results.filter(n => !n.supersededBy && n.notebook && n.reproduced?.state !== 'ok') : []
+    if (unproven.length) tail.push('', `Not reproduced by a notebook (${unproven.length}): ${clip(unproven.map(n => `${n.id} (${notebookMark(n)})`).join(', '), MAX_NAMES)}. Run them with rft_run_notebook before their numbers go on the page, or say on the page that they are not reproduced. The view marks each linked experiment with its notebook's last run.`)
+    if (state?.removed.length) tail.push('', `No longer here (moved or deleted): ${clip(state.removed.join(', '), MAX_NAMES)}: take them off the page.`)
+    const without = ownNotes(tree, c.id).filter(n => n.type === 'experiment' && !n.hasResult)
+    if (without.length) tail.push('', `Without a result yet (${without.length}): ${clip(without.map(n => `${MARK[n.status] ?? '-'} ${n.name}`).join(', '), MAX_NAMES)}`)
+    if (c.children.length) tail.push('', `Sub-concepts (the view links their artifacts; leave them off this page): ${clip(c.children.map(k => `${tree.concepts![k]!.name} (${k})`).join(', '), MAX_NAMES)}`)
+    if (saved) tail.push('', 'Put a notebook\'s figures and tables on the page as named above: an <rft-table> is filled with the table when the page is written, and again whenever the notebook\'s run writes it anew. Write the page from what this says of them (each figure\'s caption, each table\'s rows), not by opening the files; open a notebook only to change what it makes. Write their numbers nowhere else on the page; say what they show.')
+    tail.push('', pageRules(coded))
   }
-  const unproven = coded ? results.filter(n => !n.supersededBy && n.notebook && n.reproduced?.state !== 'ok') : []
-  if (unproven.length) out.push('', `Not reproduced by a notebook (${unproven.length}): ${unproven.map(n => `${n.id} (${notebookMark(n)})`).join(', ')}. Run them with rft_run_notebook before their numbers go on the page, or say on the page that they are not reproduced. The view marks each linked experiment with its notebook's last run.`)
-  if (state?.removed.length) out.push('', `No longer here (moved or deleted): ${state.removed.join(', ')}: take them off the page.`)
-  const without = ownNotes(tree, c.id).filter(n => n.type === 'experiment' && !n.hasResult)
-  if (without.length) out.push('', `Without a result yet (${without.length}): ${without.map(n => `${MARK[n.status] ?? '-'} ${n.name}`).join(', ')}`)
-  if (c.children.length) out.push('', `Sub-concepts (the view links their artifacts; leave them off this page): ${c.children.map(k => `${tree.concepts![k]!.name} (${k})`).join(', ')}`)
-  if (a && !opts.full && results.length > fresh.size) out.push('', 'The unchanged results are one line each: rft_artifact with full: true gives them in full.')
-  if (saved) out.push('', 'Put a notebook\'s figures and tables on the page as named above: an <rft-table> is filled with the table when the page is written, and again whenever the notebook\'s run writes it anew. Write the page from what this says of them (each figure\'s caption, each table\'s rows), not by opening the files; open a notebook only to change what it makes. Write their numbers nowhere else on the page; say what they show.')
-  out.push('', pageRules(coded))
-  return out.join('\n').replace(/\n{3,}/g, '\n\n')
+
+  // the results in full, in order, while they fit in what the rest leaves; the others are named, to ask for
+  const HELD_NOTE = 400
+  let room = limit - top.join('\n').length - (now?.whole?.length ?? 0) - mid.join('\n').length - tail.join('\n').length - HELD_NOTE
+  const shown: string[] = []
+  const held: RftNode[] = []
+  for (const b of blocks) {
+    if (b.text.length + 2 <= room) { shown.push(b.text, ''); room -= b.text.length + 2 } else held.push(b.n)
+  }
+  if (!shown.length && held.length) {
+    // not one fits: the first as far as the room goes, its note holding the rest
+    const b = blocks[0]!
+    const keep = Math.max(room, Math.floor(limit / 4))
+    shown.push(b.text.slice(0, keep).trimEnd(), `… cut here, at this answer's limit: ${b.text.length - keep} more characters of this Result, in its note (${b.n.path}).`, '')
+    held.shift()
+  }
+  if (held.length) shown.push(`Not given here, over this answer's limit of ${limit} characters (${held.length}): ${clip(held.map(n => n.id).join(', '), MAX_NAMES)}. rft_artifact with notes: [${held.slice(0, 3).map(n => `"${n.id}"`).join(', ')}${held.length > 3 ? ', …' : ''}] gives them, as many as fit in one answer.`, '')
+  // blank lines are closed up everywhere but in the page, which stays as it is written
+  const close = (lines: string[]) => lines.join('\n').replace(/\n{3,}/g, '\n\n')
+  const text = now?.whole
+    ? `${close(top)}\n${now.whole}\n${close([...mid, ...shown, ...tail])}`
+    : close([...top, ...mid, ...shown, ...tail])
+  return ceiling('rft_artifact', text.trimEnd(), limit)
 }
 
 // ---------------------------------------------------------------- the tree says when they go out of date

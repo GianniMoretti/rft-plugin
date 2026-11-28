@@ -5,7 +5,7 @@
 import { LockedChange, isLocked, locate as locateThread, readComments, renameComments } from './comments'
 import type { PageAssets } from './page'
 import { staticPage } from './page'
-import type { CodeRepo, Concept, Config, Io, Loaded, NodeType, RftNode, Tree } from './vault'
+import type { CodeRepo, Concept, Config, Io, Loaded, NodeType, RftNode, Tree, Validation } from './vault'
 import {
   CANVAS, CODE, CONFIG_PATH, ID_RE, INDEX, LEGEND, MARK, MERMAID, NODE_TYPES, ROOT_CONCEPT, STATUSES, SUBDIR,
   TEMPLATES, TYPES, bodyOf, codeRepos, codeSection, compactTree, conceptOrder, conceptPath, counts, countsLine,
@@ -21,6 +21,7 @@ import type { Feature } from './tools'
 import { featuresInUse } from './tools'
 import { checkSuggestion, fullText } from './priority'
 import { suggestVerified, toReview } from './verify'
+import { PARTS } from './manual'
 
 /** Why Claude may not change a locked note's text, and what it does instead. */
 export const lockedText = (n: { id: string; name: string }, instead = `propose the change with rft_suggest {id: "${n.id}", quote: the exact text to replace, replacement}`) =>
@@ -145,28 +146,59 @@ function refNames(tree: Tree, refs: string[]): string[] {
   return out
 }
 
+/** `#2`: the second note of the list of one rft_add_node call, named by a later one as its parent or among its refs. */
+const placeOf = (ref: string | null | undefined): number | null => {
+  const m = /^#(\d+)$/.exec((ref ?? '').trim())
+  return m ? Number(m[1]) : null
+}
+
+type Checked = { title: string; status: string; parent: string | null; refs: string[]; summary?: string; suggestion: ReturnType<typeof checkSuggestion> | null }
+
 /**
- * `env`: how to reach the code; with it, an experiment or direction in a concept that links code
- * gets a `## Code` section with each repo's current commit (`sections.Code` is its description).
+ * Everything a new note is refused for, checked before anything is written. `earlier`: how many
+ * notes of the same call come before it; a parent or ref that names one of them (`#k`) is not in
+ * the tree yet, so it is checked by its place alone.
  */
-export async function addNode(io: Io, loaded: Loaded, input: AddInput, env?: CodeEnv): Promise<RftNode & { report: string }> {
-  const { tree, config } = loaded
+function checkAdd(tree: Tree, input: AddInput, earlier = 0): Checked {
   if (!isNodeType(input.type)) throw new RftError(`type must be ${orList(NODE_TYPES.map(t => `"${t}"`))}`)
   const title = sanitiseTitle(input.title ?? '')
   if (!title) throw new RftError('the title is empty once the characters that break links are removed')
   const status = input.status ?? TYPES[input.type].status
   if (!(STATUSES as readonly string[]).includes(status)) throw new RftError(`status must be one of ${STATUSES.join(', ')}`)
   if (status === 'verified' || status === 'review') throw new RftError(`a new note is never ${status}: only the user verifies a note once its claim is checked (suggest it later with rft_set_status verified)`)
-  const isEmpty = Object.keys(tree.nodes).length === 0
+  const inList = (ref: string, what: string) => {
+    const k = placeOf(ref)
+    if (k === null) return false
+    if (k < 1 || k > earlier) throw new RftError(`${what} "${ref}" names no earlier note of this call (a note of the list can name only the ones before it, #1 being the first)`)
+    return true
+  }
+  const isEmpty = Object.keys(tree.nodes).length === 0 && earlier === 0
   let parent: string | null = null
   if (input.parent) {
-    parent = resolveId(tree, input.parent)
-    if (!parent) throw new RftError(`parent "${input.parent}" is not a note of the tree (give its id, e.g. D03)`)
+    if (!inList(input.parent, 'parent')) {
+      parent = resolveId(tree, input.parent)
+      if (!parent) throw new RftError(`parent "${input.parent}" is not a note of the tree (give its id, e.g. D03)`)
+    }
   } else if (!isEmpty) {
     throw new RftError('parent is required: every note but the root D00 comes from a parent note')
   } else if (input.type !== 'direction') {
     throw new RftError('the root of the tree must be a direction (D00, the starting question)')
   }
+  const refs = refNames(tree, (input.refs ?? []).filter(r => !inList(r, 'reference')))
+  const summary = input.summary?.trim() ? cleanSummary(input.summary) : undefined
+  const suggestion = input.suggestedPriority !== undefined ? checkSuggestion(input.suggestedPriority, input.priorityWhy) : null
+  return { title, status, parent, refs, summary, suggestion }
+}
+
+export type Added = RftNode & { report: string }
+
+/**
+ * `env`: how to reach the code; with it, an experiment or direction in a concept that links code
+ * gets a `## Code` section with each repo's current commit (`sections.Code` is its description).
+ */
+export async function addNode(io: Io, loaded: Loaded, input: AddInput, env?: CodeEnv): Promise<Added> {
+  const { tree, config } = loaded
+  const { title, status, parent, refs, summary, suggestion } = checkAdd(tree, input)
   // another session on the same tree may have added notes since `loaded` was read
   const id = await freshId(io, loaded, input.type)
   const name = `${id} ${title}`
@@ -185,9 +217,6 @@ export async function addNode(io: Io, loaded: Loaded, input: AddInput, env?: Cod
       ? ` The ${CODE} section holds your description, checked against these commits.`
       : ' Read the code as it is now (the current commit and uncommitted changes) and write how this note relates to it with rft_set_code.')
   }
-  const refs = refNames(tree, input.refs ?? [])
-  const summary = input.summary?.trim() ? cleanSummary(input.summary) : undefined
-  const suggestion = input.suggestedPriority !== undefined ? checkSuggestion(input.suggestedPriority, input.priorityWhy) : null
   const text = noteText(id, { ...input, sections, title, status, refs, summary, suggestedPriority: suggestion?.priority, suggestedWhy: suggestion?.why }, config.project, parentName)
   await io.write(join(config.vault, path), text)
   const prefix = TYPES[input.type].prefix
@@ -208,6 +237,67 @@ export async function addNode(io: Io, loaded: Loaded, input: AddInput, env?: Cod
     report: `Created ${path}${parent ? ` under ${parentName}` : ' as the root'} (status ${status}). Updated ${report.changed.length} derived file(s).${codeSaid}${summary ? '' : ' It has no summary: give it one line with rft_set_summary.'}` +
       (suggestion ? ` It has no priority: your suggestion (${suggestion.priority}) waits for the user to accept or dismiss it in the tree view.${fullText(fresh.tree, node, suggestion.priority)}` : ''),
   }
+}
+
+/** How many notes one rft_add_node call adds at most. */
+export const MAX_ADD = 20
+
+/**
+ * Several notes in one call, in order. A later one names an earlier one as its parent (or among
+ * its refs) by its place in the list, `#1` being the first. Every note is checked before the first
+ * is written, so a refused list writes nothing.
+ */
+export async function addNodes(io: Io, loaded: Loaded, inputs: AddInput[], env?: CodeEnv): Promise<Added[]> {
+  if (!inputs.length) throw new RftError('notes is empty: give at least one note')
+  if (inputs.length > MAX_ADD) throw new RftError(`at most ${MAX_ADD} notes in one call (this one has ${inputs.length})`)
+  if (inputs.length > 1) {
+    inputs.forEach((input, k) => {
+      try {
+        checkAdd(loaded.tree, input, k)
+      } catch (err) {
+        throw new RftError(`note ${k + 1} of ${inputs.length}${input.title ? ` ("${input.title}")` : ''}: ${err instanceof Error ? err.message : String(err)}. Nothing was added.`)
+      }
+    })
+  }
+  const made: Added[] = []
+  const real = (ref: string) => {
+    const k = placeOf(ref)
+    return k !== null && made[k - 1] ? made[k - 1]!.id : ref
+  }
+  for (const input of inputs) {
+    try {
+      made.push(await addNode(io, loaded, { ...input, parent: input.parent ? real(input.parent) : null, refs: input.refs?.map(real) }, env))
+    } catch (err) {
+      // past the checks only the disk or the code's repository fails: say what exists by now
+      if (!made.length) throw err
+      throw new RftError(`${err instanceof Error ? err.message : String(err)}. Added before it: ${made.map(n => n.id).join(', ')}; note ${made.length + 1} and the ones after it were not.`)
+    }
+  }
+  return made
+}
+
+const MAX_CHECK_LINES = 8
+
+/**
+ * The vault's check at the end of an answer that wrote notes, so no rft_validate follows it: every
+ * error, the warnings that name the notes just written (`ids`), and how many others there are.
+ * After a sync (`ids` null) no note is the call's own: the warnings are all listed.
+ */
+export function checkLine(v: Validation, ids: string[] | null): string {
+  const cut = (lines: string[]) => lines.length > MAX_CHECK_LINES
+    ? [...lines.slice(0, MAX_CHECK_LINES).map(x => `- ${x}`), `… ${lines.length - MAX_CHECK_LINES} more (rft_validate lists them)`]
+    : lines.map(x => `- ${x}`)
+  const names = new RegExp(`(^|[^A-Za-z0-9])(${(ids ?? []).join('|')})(?![0-9])`)
+  const own = ids === null ? v.warnings : ids.length ? v.warnings.filter(w => names.test(w)) : []
+  const others = v.warnings.length - own.length
+  const rest = others ? `${others} warning(s) on other notes (rft_validate lists them)` : ''
+  if (v.errors.length) return [`Check: FAILED, ${v.errors.length} error(s)${rest ? `; ${rest}` : ''}.`, ...cut(v.errors)].join('\n')
+  const head = ids === null
+    ? 'Check: OK, the tree is valid (no rft_validate needed)'
+    : 'Check: OK, the tree is valid and its derived files are in sync (no rft_sync or rft_validate needed)'
+  if (!own.length) return `${head}${rest ? `; ${rest}` : ''}.`
+  const whose = ids === null ? '' : ` on ${ids.length > 1 ? 'these notes' : ids[0]}`
+  return [`${head}. ${own.length} warning(s)${whose}${rest ? `; ${rest}` : ''}:`, ...cut(own)].join('\n')
 }
 
 /** The ids of the notes in a folder of the vault, as it is on disk now. */
@@ -443,7 +533,7 @@ export type Git = (dir: string, args: string[]) => Promise<{ ok: boolean; out: s
 export type CodeEnv = { root: string; git: Git; home?: string; date: string }
 
 export type RepoState =
-  | { kind: 'git'; commit: string | null; branch: string; dirty: number }
+  | { kind: 'git'; commit: string | null; branch: string; dirty: number; untracked?: number }
   | { kind: 'plain' }
   | { kind: 'missing' }
   | { kind: 'error'; why: string }
@@ -455,31 +545,35 @@ const MAX_STAT = 40
 
 const firstLine = (s: string) => s.trim().split('\n')[0] ?? ''
 
-/** A repo's state now: its branch, commit and uncommitted changes to tracked files. */
-export async function repoState(io: Io, env: CodeEnv, path: string): Promise<RepoState> {
+/** A repo's state now: its branch, commit and uncommitted changes to tracked files; with `untracked`, the files git does not track too. */
+export async function repoState(io: Io, env: CodeEnv, path: string, opts: { untracked?: boolean } = {}): Promise<RepoState> {
   const abs = repoAbs(env.root, path, env.home)
   if (!(await io.exists(abs))) return { kind: 'missing' }
   // told by the folders, not by git's message, which is in the user's language
   if (!(await isInGit(io, abs))) return { kind: 'plain' }
-  const r = await env.git(abs, ['status', '--porcelain=v2', '--branch', '--untracked-files=no'])
+  const r = await env.git(abs, ['status', '--porcelain=v2', '--branch', `--untracked-files=${opts.untracked ? 'normal' : 'no'}`])
   if (!r.ok) return { kind: 'error', why: firstLine(r.err) || 'git failed' }
   let commit: string | null = null
   let branch = ''
   let dirty = 0
+  let untracked = 0
   for (const line of r.out.split('\n')) {
     const oid = /^# branch\.oid (\S+)/.exec(line)
     const head = /^# branch\.head (\S+)/.exec(line)
     if (oid) commit = /^[0-9a-f]{7,}$/.test(oid[1]!) ? oid[1]!.slice(0, COMMIT_LEN) : null
     else if (head) branch = head[1] === '(detached)' ? 'detached HEAD' : head[1]!
+    else if (line.startsWith('? ')) untracked++
     else if (line.trim() && !line.startsWith('#')) dirty++
   }
-  return { kind: 'git', commit, branch: branch || 'detached HEAD', dirty }
+  return { kind: 'git', commit, branch: branch || 'detached HEAD', dirty, ...(untracked ? { untracked } : {}) }
 }
 
 export function stateText(st: RepoState): string {
   switch (st.kind) {
-    case 'git':
-      return `${st.branch} @ ${st.commit ?? '(no commits yet)'}, ${st.dirty ? `uncommitted changes in ${st.dirty} file(s)` : 'clean'}`
+    case 'git': {
+      const changes = [st.dirty ? `uncommitted changes in ${st.dirty} file(s)` : '', st.untracked ? `${st.untracked} untracked file(s)` : ''].filter(Boolean)
+      return `${st.branch} @ ${st.commit ?? '(no commits yet)'}, ${changes.join(', ') || 'clean'}`
+    }
     case 'plain': return 'not under git (no commit can be recorded)'
     case 'missing': return 'not found'
     case 'error': return `git failed (${st.why})`
@@ -720,6 +814,27 @@ export function treeReport(loaded: Loaded, opts: { root?: string; depth?: number
 
 const MAX_LINES = 160
 
+/** The most characters of the rules given to the tags in use. */
+const MAX_TAGS = 400
+
+/**
+ * The end of the rule on tags: the topical tags in use, most used first, as many as fit, so a new
+ * note reuses them with no call to rft_tags.
+ */
+function tagsInUse(tree: Tree): string {
+  const all = tagCounts(tree)
+  if (!all.length) return ', e.g. `ablation`, `optimisation`)'
+  const shown: string[] = []
+  let used = 0
+  for (const t of all) {
+    if (used + t.tag.length + 2 > MAX_TAGS) break
+    shown.push(t.tag)
+    used += t.tag.length + 2
+  }
+  const rest = all.length - shown.length
+  return `), reusing the ones in use before inventing new ones: ${shown.join(', ')}${rest ? ` (rft_tags lists the ${rest} others)` : ''}`
+}
+
 /**
  * What the session is told of the code: the project's repos when there are no concepts (the
  * grouped tree names each concept's), and the concepts whose code the session's folder is in.
@@ -753,7 +868,7 @@ export const NOTEBOOK_ASK = `- Notebooks are the user's choice, per experiment: 
 const hasCode = (tree: Tree) => Object.values(tree.concepts ?? {}).some(c => (c.repos ?? []).length > 0)
 
 /** The rule of a session on a machine paired with the experiment queue: every run goes through it. */
-export const QUEUE_RULE = `- This machine is paired with the experiment queue: every run of an experiment's code goes through rft_queue (gpus: 0 for one that needs no GPU), never into the background with Bash (\`&\`, nohup, screen, tmux) nor in the foreground beyond a check of a few seconds, so the user and you see every run and what it holds. The queue runs jobs on this machine's GPUs in the user's order (they reorder, pause, cancel and retry in the tree view). The plugin sets an experiment running when its job starts and tells the user when one ends: never poll rft_jobs to wait for a job (each call is a turn); read it when the user asks, or when the session starts with a result to record, then write the real result (or the failure, from its error) in the note. A job's command runs as \`bash -c\` in its folder with the session's environment only: activate its conda or venv in the command, or give the interpreter's full path. Each job gets \`$RFT_OUT\`, an output folder of its own: have the command write its outputs there. Scripts you write for the queue follow the manual's "Writing a job the monitor can read": a tqdm bar with a fixed desc and a total on each long loop, changing numbers in set_postfix (never in the desc), inner loops leave=False, stages appended to \`$RFT_PROGRESS\` (\`{"stage": "train", "i": 2, "n": 3}\`), timestamped lines, results to \`$RFT_OUT\`; the monitor and rft_jobs show how far each running job is from them. The runner records the commit and uncommitted changes it ran, and a failed job's traceback: rft_jobs <id> shows them, so its log is rarely needed. rft_job (move one job: top, end, or before another; cancel; retry; pause or resume the queue) only when the user asks; a move answers the new order, so no rft_jobs after it.`
+export const QUEUE_RULE = `- This machine is paired with the experiment queue: every run of an experiment's code goes through rft_queue (gpus: 0 for one that needs no GPU), never into the background with Bash (\`&\`, nohup, screen, tmux) nor in the foreground beyond a check of a few seconds, so the user and you see every run and what it holds. The queue's order is the user's: rft_job changes it only when they ask. The plugin sets an experiment running when its job starts and tells the user when one ends: never poll rft_jobs to wait for a job (each call is a turn); read it when the user asks, or when the session starts with a result to record, then write the real result (or the failure, from its error) in the note. Scripts you write for the queue follow the manual's "Writing a job the monitor can read" (queue.md): a tqdm bar with a fixed desc and a total on each long loop, changing numbers in set_postfix (never in the desc), inner loops leave=False, stages appended to \`$RFT_PROGRESS\` (\`{"stage": "train", "i": 2, "n": 3}\`), timestamped lines, results to \`$RFT_OUT\` (the job's own output folder); the monitor and rft_jobs show how far each running job is from them.`
 
 /**
  * `vault`: where the notes are as the session sees them, when the tree is not in its folder;
@@ -766,20 +881,21 @@ export const QUEUE_RULE = `- This machine is paired with the experiment queue: e
  */
 function featureRules(vault: string, features: ReadonlySet<Feature>): string {
   const full: Record<Feature, string> = {
-    priorities: `- Priorities (\`priority:\` urgent, high, medium or low; at most 1 urgent, 5 high and 10 medium among the open notes) are the user's alone: never write \`priority:\` (Edit, Write and shell writes that change it are refused), and a new note gets none. When you have a clear reason (it unblocks other work, the user said it matters, it is cheap and decisive), suggest one: rft_suggest_priority {id, priority, why}, or rft_add_node's suggested_priority and priority_why; the user accepts or dismisses it in the tree view. Work on what the user made urgent or high first.`,
-    dates: `- Dates are the user's too: deadlines (milestones in \`${vault}/milestones/\`, outside the tree: \`due:\` and the notes they \`needs:\`), a note's own \`due:\`, an experiment's \`start:\` and \`est:\` (3d, 2w). Never write them (edits that change them are refused). Suggest a start or an estimate with rft_suggest_dates {id, start, est, why}; add a deadline the user gives you with rft_add_deadline (they confirm it); suggest a paper submission only when the user names a venue or asks, with rft_suggest_deadline and the venue's official dates page read now, not from memory. Write \`gpus:\` on an experiment that takes more than one GPU and \`after:\` on one that waits for another run; rft_set_status records the days a run started and finished. rft_next lists the deadlines first, with what puts them at risk.`,
+    priorities: `- Priorities (\`priority:\` urgent, high, medium or low) are the user's alone: never write \`priority:\` (edits that change it are refused), and a new note gets none. With a clear reason (it unblocks other work, the user said it matters, it is cheap and decisive), suggest one: rft_suggest_priority, or rft_add_node's suggested_priority; the user accepts or dismisses it in the tree view. Work on what the user made urgent or high first.`,
+    dates: `- Dates are the user's too: deadlines (milestones in \`${vault}/milestones/\`, outside the tree), meetings (\`${vault}/meetings/\`), a note's \`due:\`, an experiment's \`start:\` and \`est:\`. Never write them (edits that change them are refused). A start or an estimate you can give a reason for: rft_suggest_dates. A deadline the user gives you: rft_add_deadline; a meeting, once or recurring: rft_add_meeting (they confirm each). A paper submission, only when the user names a venue or asks: rft_suggest_deadline. Write \`gpus:\` on an experiment that takes more than one GPU and \`after:\` on one that waits for another run; rft_set_status records the days a run started and finished. rft_next lists the deadlines first, with what puts them at risk.`,
     verify: `- A verified note (\`status: verified\`, ✔) is a claim the user checked: only they verify a note, in the tree view, which locks it; only verified notes become snippets. When a result is final (its notebook reproduced it, a proof is complete, a paper read against its summary), suggest it: rft_set_status {id, status: "verified", note: what was checked and how}. A verified note whose claim changes or is overturned goes to review (↺, unlocked) by itself; set one to review yourself (rft_set_status review, note: why) when you find its claim may no longer hold. Build on verified notes first.`,
     locks: `- A note with \`locked: true\` in its frontmatter is the user's: never change its text (Edit, Write and shell writes to it are refused, and so are rft_set_status notes and rft_set_code on it). Propose each change with rft_suggest {id, quote, replacement}; the user accepts or rejects it in the tree view. Its status, tags and derived fields still change through the rft tools. Moving it (rft_move_node) or marking it superseded (rft_supersede) writes a line in its History, so the plugin first asks the user whether to unlock it; if they keep it locked the call fails: do not retry it.`,
-    artifacts: `- Each concept has an artifact (\`${vault}/artifacts/\`): one HTML page of the results of its own experiments, which the tree view opens when the concept is clicked. At the end of a task that recorded results (a Result written, an experiment done, a result superseded), update the artifact of each concept that got them, once per concept: rft_artifact <concept> says what changed, then rft_set_artifact with edits (html for a new page); a concept with results and no artifact gets one then too. Only numbers that are in the notes; link every note id (<a href="#E05">E05</a>). Its charts and tables come only from notebooks' FIGURES and TABLES, placed by the names rft_artifact lists (<img src="../figures/…">, <rft-table src="…"></rft-table>, filled in for you): never drawn or typed by hand; a comparison across experiments comes from the concept's notebook. Write the files only with rft_set_artifact, which stamps them with the results they were written from.`,
-    notebooks: `- An experiment in a concept with code has a marimo notebook that makes the numbers of its Result (\`notebook:\`, a link in \`${vault}/notebooks/\` to the file in its concept's repo): from its runs' saved outputs after an expensive run, from scratch for a short one. It is the user's choice, per experiment (the rule on notebooks below): write it with rft_set_notebook once they want one (plain cells: the tool writes marimo's format, with a first cell giving RUNS, the experiment's runs in the experiment queue that ended well, each with \`out\`, its output folder); it runs in the repo's uv environment from the repo's root. Set RESULTS (the numbers the note reports, rounded as it reports them), and FIGURES and TABLES for the concept's artifact. ${features.has('queue') ? 'When the experiment\'s last job ends, the queue\'s runner runs it,' : 'Once its runs are over, run it with rft_run_notebook: it'} writes RESULTS in the note's Result as a table, saves the figures and tables, and stamps the note: never type those numbers yourself, nor read the runs' or the cells' outputs; read the Result, write what the numbers mean around the table, and set the status. rft_run_notebook runs it now: recorded or ok; differs (fix the notebook, or record: true if its numbers are right); failed (the end of the traceback). A concept's notebook, on its start note (rft_set_notebook <its id>), compares its experiments from EXPERIMENTS (their saved RESULTS) and sets the FIGURES and TABLES its artifact shows; it runs again after each of them. Plotting style and helpers shared by a repo's notebooks go in one module in its notebooks/ folder (on their sys.path), which each imports. Change a notebook with Edit (plain Python). The user opens it beside the note in the tree view.`,
-    manuscript: `- Two levels turn verified notes into writing. Snippets (\`${vault}/snippets/\`, S..) are the building blocks: atomic LaTeX resting on notes (its \`% basis:\` line, and the notes its \\rftnum, \\rftfig, \\rfttable and \\cite name), written once and reused. Documents (\`${vault}/documents/<name>/\`) are built with them: each holds copies of snippets (adapted to its narrative as the user likes) and text of its own; a copy goes to review when its snippet changes, never rewritten by itself. rft_manuscript shows both and the verified notes still to write. Both are the user's while locked (the default): propose snippets only from verified notes, and placements, as tables first, and do only what the user picks: stubs with rft_set_snippet (outline: the claim, the numbers and the macros that give them, the caveats), copies with rft_set_document; then comment and suggest when asked (rft_comment, rft_suggest with the snippet's id or the document's name), never write their text. Unlocked, write a snippet with rft_set_snippet. Never type a number, figure or table a macro gives; when you fill a reference's Source, add its BibTeX in a \`\`\`bibtex block (refs.bib is made from them). A snippet in review rests on a note that changed: say so, and suggest how its text should follow.`,
+    artifacts: `- Each concept has an artifact (\`${vault}/artifacts/\`): one HTML page of the results of its own experiments, which the tree view opens when the concept is clicked. At the end of a task that recorded results (a Result written, an experiment done, a result superseded), update the artifact of each concept that got them, once per concept: rft_artifact <concept> says what changed and how the page is written, then rft_set_artifact with edits (html for a new page); a concept with results and no artifact gets one then too. Write the files only with rft_set_artifact, which stamps them with the results they were written from.`,
+    notebooks: `- An experiment in a concept with code can have a marimo notebook that makes the numbers of its Result (\`notebook:\`, a link in \`${vault}/notebooks/\` to the file in its concept's repo). It is the user's choice, per experiment (the rule on notebooks below); rft_set_notebook writes it, and says what its cells set. ${features.has('queue') ? 'When the experiment\'s last job ends, the queue\'s runner runs it:' : 'Once its runs are over, run it with rft_run_notebook:'} its RESULTS go in the note's Result as a table, its figures and tables are saved, and the note is stamped. Never type those numbers yourself, nor read the runs' or the cells' outputs: read the Result, write what the numbers mean around the table, and set the status. rft_run_notebook runs one now, as a check. A concept's notebook, on its start note, compares its experiments and makes the figures and tables its artifact shows; it runs again after each of them. Helpers shared by a repo's notebooks go in one module in its notebooks/ folder, which each imports. Change a notebook with Edit (plain Python); the user opens it beside the note in the tree view.`,
+    manuscript: `- Two levels turn verified notes into writing: snippets (\`${vault}/snippets/\`, S..: atomic LaTeX resting on notes, reused) and documents (\`${vault}/documents/<name>/\`: plain LaTeX the user shares, holding copies of snippets written out and text of their own). rft_manuscript shows both and the verified notes still to write. Both are the user's while locked (the default): propose snippets only from verified notes, and placements, as tables first, and do only what the user picks (stubs with rft_set_snippet, copies with rft_set_document); then comment and suggest when asked (rft_comment, rft_suggest with the snippet's id or the document's name), never write their text. In a snippet, never type a number, figure or table a macro gives; in a document, never a macro nor a note's or snippet's id. When you fill a reference's Source, add its BibTeX in a \`\`\`bibtex block. A snippet in review rests on a note that changed: say so, and suggest how its text should follow.`,
     comments: `- The user discusses notes in the tree view: comments and suggestions on a part of a note's text (rft_comments lists them). Answer a thread only when the user asks you to: the tree view's Ask Claude sends it to you, and you answer in the thread with rft_comment or rft_suggest, not in the chat.`,
     queue: QUEUE_RULE,
+    handoff: '- A handoff (rft_handoff) carries the work to the next session in this folder, which costs far less than a long session going on. Write one when the user asks (/rft-handoff) or says they stop with work under way, then tell them that /clear, or a new session, goes on from it.',
   }
-  const out = (['priorities', 'dates', 'verify', 'locks', 'comments', 'artifacts', 'notebooks', 'queue', 'manuscript'] as const).filter(f => features.has(f)).map(f => full[f])
+  const out = (['priorities', 'dates', 'verify', 'locks', 'comments', 'artifacts', 'notebooks', 'queue', 'manuscript', 'handoff'] as const).filter(f => features.has(f)).map(f => full[f])
   const absent = [
     features.has('priorities') ? '' : 'priorities (\`priority:\`)',
-    features.has('dates') ? '' : `dates (\`due:\`, \`start:\`, \`est:\`, deadlines in \`${vault}/milestones/\`)`,
+    features.has('dates') ? '' : `dates (\`due:\`, \`start:\`, \`est:\`, deadlines in \`${vault}/milestones/\`, meetings in \`${vault}/meetings/\`)`,
     features.has('locks') ? '' : 'the text of a note with \`locked: true\`',
     features.has('verify') ? '' : 'verifying a note (\`status: verified\`: rft_set_status verified only suggests it)',
   ].filter(Boolean)
@@ -787,7 +903,7 @@ function featureRules(vault: string, features: ReadonlySet<Feature>): string {
   return out.map(l => `${l}\n`).join('')
 }
 
-export function rulesText(tree: Tree, config: Config, vault = config.vault, where: { cwd?: string; root?: string; home?: string } = {}, map?: string, features: ReadonlySet<Feature> = new Set()): string {
+export function rulesText(tree: Tree, config: Config, vault = config.vault, where: { cwd?: string; root?: string; home?: string; manual?: string } = {}, map?: string, features: ReadonlySet<Feature> = new Set()): string {
   let lines = (map ?? groupedTree(tree)).split('\n')
   if (lines.length > MAX_LINES) lines = [...lines.slice(0, MAX_LINES), `… ${lines.length - MAX_LINES} more (${map ? 'rft_map' : 'rft_tree'} shows them)`]
   return `# Reasoning Flow Tree (rft) is active in this project
@@ -806,17 +922,17 @@ ${featureRules(vault, features)}- Before launching an experiment (a training run
 - A paper, method or literature review that was read: rft_add_node with type reference, parent = the note that led to it. A literature search is ONE note tagged literature, its papers listed in it; a single paper gets a note of its own only when the user chooses. Fill Source with a link that can be checked (DOI, arXiv id or URL), Summary, Method, Key results as the source reports them (and where), and your reading under Relevance. Only sources actually read: never invent a citation, or a result the source does not report. Status planned = to read, running = reading, done = summarised, dropped = not relevant.
 - A definition, method, taxonomy, proof or argument of the project's own: rft_add_node with type theory, parent = the note it builds on most, every other note it builds on linked under Builds on. Status idea = draft, running = being worked out, done = settled, dropped = refuted.
 - Experiments and directions name what they build on: refs (rft_add_node's refs, or rft_set_refs) links the reference notes (R..) behind them, above all the paper(s) whose setup an experiment starts from (baseline, data, protocol). A paper that is not in the tree yet becomes a reference note first.
-- Give every new note 1-3 short topical tags (lowercase kebab-case, e.g. \`ablation\`, \`optimisation\`), reusing the ones rft_tags lists before inventing new ones; rft_set_tags changes them. Do not retro-tag old notes unless asked.
+- Give every new note 1-3 short topical tags (lowercase kebab-case${tagsInUse(tree)}; rft_set_tags changes them. Do not retro-tag old notes unless asked.
 - Statuses: ${STATUSES.join(', ')}. Marks: ${LEGEND}.
-- The tools assign ids (never reused) and strip ^ # | [ ] from titles. After editing notes by hand, run rft_sync (children / up / down, 00 Index.md, the canvas) and rft_validate.
+- The tools assign ids (never reused) and strip ^ # | [ ] from titles. After editing notes by hand, run rft_sync (children / up / down, 00 Index.md, the canvas): it answers with the tree's check.
 - A note made with the wrong type: rft_set_type (the next id of the new type, the file moved, every link renamed), never a rename by hand.
 - Concepts group the tree into lines of research: a note with \`concept:\` starts one, its subtree inherits it until a sub-concept starts. When a direction opens a new line of research, PROPOSE a short concept name to the user; apply it with rft_set_concept only after they confirm, never silently. rft_concepts shows the concept tree.
 - A branch that sits under the wrong line of research: propose moving it, and once the user agrees use rft_move_node (the subtree follows, the note keeps its origin and a History line). Never move a note by editing its parent: by hand.
-- To find what was tried, measured or read on a subject, use rft_search (titles, summaries, tags, concepts and text, best first, with the concepts whose digest matches) before reading note files one by one; check it before proposing an experiment that may already exist. rft_add_node also lists the close notes already in the tree: if one already answers or ruled out the new one, tell the user.
+- Before proposing an experiment or a direction, check with rft_search that the tree does not hold it already. rft_add_node also lists the close notes already in the tree: if one already answers or ruled out the new one, tell the user.
 - Code: a concept can link the code repositories its work runs on (\`concept_repos:\` on its starting note; on the root note, the whole project's). Its notes work with its own repos first, then those of the concepts above it. When you create a concept, ask the user whether code for it already exists and where; link it with rft_set_repos (never guess a path), then read the code and give the concept's experiments and directions a ## Code section with rft_set_code.
 - The ## Code section of an experiment or direction says how it relates to the code: entry points, files, functions, configs, what has to change (a short pointer for a direction). Write it from the code as it is now (the current commit and uncommitted changes), not as an older note saw it; rft_set_code records the commit it was checked against. Before working on such an experiment (planning, launching, analysing), call rft_code: it lists what changed since that commit; read the changes and update the references with rft_set_code.
 - Results go in the experiment's own note. An experiment with a notebook (\`notebook:\`) gets them from its run, in the Result as a table with the notebook, commit and runs they come from; you write what they mean, and in rft_set_code's reproduce only what that line does not say (config, data). Without a notebook (most experiments): read the run's outputs, process them (seeds aggregated, tables), write the numbers in Result, and record how to reproduce them (the commit of the run, the command and config, where the raw outputs are, how they were processed) with rft_set_code's reproduce.
-${hasCode(tree) ? NOTEBOOK_ASK : ''}- The rft-manual skill is the full manual; rft_map shows the project map, rft_tree the whole tree.
+${hasCode(tree) ? NOTEBOOK_ASK : ''}- The manual is in parts${where.manual ? `, in ${where.manual}/` : ''}: SKILL.md (the rft-manual skill) is its core, and ${PARTS.slice(0, -1).join(', ')} and ${PARTS[PARTS.length - 1]} (.md) take one subject each. Read only the part the work needs, with Read. rft_map shows the project map, rft_tree the whole tree.
 ${codeContext(tree, where)}
 ${map ? 'The project map at the start of this session (each concept with its state; rft_map <concept> for its notes)' : `The tree at the start of this session${Object.keys(tree.concepts ?? {}).length > 1 ? ', by concept (← parent, when not the line above)' : ''}`}:
 ${lines.join('\n')}`
@@ -836,6 +952,6 @@ export async function exportHtml(io: Io, loaded: Loaded, assets: PageAssets): Pr
       return { ...t, at: at ? [at.start, at.end] : null, exact: Boolean(at?.exact) }
     })
   }
-  await io.write(path, staticPage(assets, tree, texts, config.project, signature.length.toString(36), comments, { milestones: loaded.milestones, gpus: config.gpus }, await embeddedArtifacts(io, loaded)))
+  await io.write(path, staticPage(assets, tree, texts, config.project, signature.length.toString(36), comments, { milestones: loaded.milestones, meetings: loaded.meetings, gpus: config.gpus }, await embeddedArtifacts(io, loaded)))
   return path
 }

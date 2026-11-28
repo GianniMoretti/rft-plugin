@@ -2,7 +2,11 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- on a phone: the page under the notch and the home bar (app.css keeps clear of them), and the keyboard
+     shrinks the page rather than covering it, so a field and its buttons stay above it -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<!-- the phone browser's own bar in the page's colour (theme.js sets it to the theme in use) -->
+<meta name="theme-color" content="#ffffff">
 <title>Reasoning tree</title>
 <!-- the tab's symbol: a root note (a direction) and two notes under it (an experiment, a reference), in the tree's colours -->
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 8C16 16 7 15 7 24M16 8C16 16 25 15 25 24' fill='none' stroke='%238b93a3' stroke-width='2.6' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='7.5' r='5' fill='%239775fa'/%3E%3Ccircle cx='7' cy='24.5' r='5' fill='%2320c997'/%3E%3Ccircle cx='25' cy='24.5' r='5' fill='%23f06595'/%3E%3C/svg%3E">
@@ -39,7 +43,14 @@
     <button data-show="manuscript" id="show-manuscript" aria-pressed="false" aria-label="Manuscript" title="Manuscript: LaTeX snippets resting on verified notes, assembled into documents, and their PDF">
       <!-- a page resting on a verified note (ringed, as in the tree) -->
       <svg class="page-ico" viewBox="0 0 32 32" aria-hidden="true"><path class="ln" d="M8 3h10l7 7v6M14 29H8a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3M18 3v7h7"/><path class="ln text" d="M10 15h8M10 20h5"/><circle class="tone direction s-done" cx="23" cy="24" r="4.2"/><circle class="tone direction ring" cx="23" cy="24" r="6.6"/></svg></button>
+    <button data-show="slides" id="show-slides" aria-pressed="false" aria-label="Slides" title="Slides: decks for meetings and talks, edited as text, presented full screen, printed as a PDF">
+      <!-- a slide on a stand, a chart on it in the tree's colours -->
+      <svg class="page-ico" viewBox="0 0 32 32" aria-hidden="true"><rect class="ln" x="3" y="4" width="26" height="17" rx="2.5"/><path class="ln" d="M16 21v3.5M10.5 29.5l5.5-5 5.5 5"/><rect class="tone experiment s-done" x="8" y="13" width="4" height="4.5" rx="1"/><rect class="tone direction s-done" x="14" y="10.5" width="4" height="7" rx="1"/><rect class="tone reference s-done" x="20" y="8" width="4" height="9.5" rx="1"/></svg></button>
   </div>
+  <!-- the controls a phone keeps behind ⋯ (web/phone.js): on a wider screen this wrapper draws no box of its own,
+       so they sit in the bar as before -->
+  <div id="bar-more" aria-label="View options">
+  <div class="bar-more-head"><strong id="bar-more-title"></strong><span id="bar-more-counts" class="muted"></span></div>
   <div class="group tree-only" role="group" aria-label="View">
     <!-- each toggle shows the symbol of its state (or of what a click does); its tooltip names it -->
     <button id="layout" class="cycle icon-btn" title="Layout: Top-down (click: Left-right)" aria-label="Layout: Top-down (click: Left-right)">
@@ -68,17 +79,27 @@
       <svg data-v="arrows" class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 11.2L18 6M15.4 9.9L18 6l-4.7-.6" stroke="#f783ac"/><path d="M6.5 12.8L18 18M13.3 18.6L18 18l-2.6-3.9" stroke="#3bc9db"/><circle cx="4.5" cy="12" r="2.6" fill="currentColor" stroke="none"/></svg>
     </button>
   </div>
-  <div class="group tree-only">
+  <div class="group tree-only" role="group" aria-label="Came from">
     <button id="origins-toggle" class="icon-btn" aria-pressed="false" aria-label="Came from" title="Came from: dashed links from where each moved note came from">
       <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="17" r="2.6" fill="currentColor" stroke="none"/><path d="M7 14.5C9 7 15 5 18.5 7.5" stroke-dasharray="2.4 2.4"/><circle cx="19" cy="9" r="2.6" fill="currentColor" stroke="none"/></svg>
     </button>
   </div>
-  <div class="group">
+  <div class="group" role="group" aria-label="Filters">
     <button id="filters-toggle" aria-expanded="false" aria-controls="filters">Filters</button>
     <span id="filter-status" class="filter-status" hidden><span id="filter-count"></span> · <button id="filters-clear" class="linkish">Clear</button></span>
   </div>
-  <input id="search" type="search" placeholder="Search notes (Enter: next)" autocomplete="off" spellcheck="false">
+  <!-- a standing way into the agents' setup (web/agents.js), shown to the page that may write it -->
+  <div class="group" id="agents-entry" role="group" aria-label="Agents" hidden>
+    <button id="agents-open" type="button" title="Agents: add, change or remove the models and harnesses of your own that answer threads and process inbox items">Agents…</button>
+  </div>
+  <div class="group bar-theme" role="group" aria-label="Theme">
   <button id="theme" title="Switch theme" aria-label="Switch theme"><svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg><svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button>
+  </div>
+  </div>
+  <input id="search" type="search" enterkeyhint="search" placeholder="Search notes (Enter: next)" aria-label="Search notes" autocomplete="off" spellcheck="false">
+  <button id="bar-more-toggle" class="icon-btn" type="button" aria-expanded="false" aria-controls="bar-more" aria-label="More: view, text size, filters, theme" title="More: view, text size, filters, theme">
+    <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.8" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.8" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.8" fill="currentColor" stroke="none"/></svg>
+  </button>
 </header>
 <nav id="crumbs" hidden aria-label="Concept focus"></nav>
 <main>
@@ -103,13 +124,17 @@
       <span class="muted jobs-file" title="The queue and its history live in the vault's .queue/ folder; each job's output in .queue/logs/">.queue/</span>
     </div>
   </section>
-  <!-- the bottom-left corner: the scratchpad's button with the legend's faint ? beside it, and under them
-       whichever is open; the open scratchpad takes the legend's place -->
+  <!-- the bottom-left corner: the scratchpad's and the inbox's buttons with the legend's faint ? beside
+       them, and under them whichever is open; the open scratchpad or inbox takes the legend's place -->
   <div id="corner">
   <div class="corner-btns">
   <button id="pad-toggle" class="icon-btn" hidden aria-expanded="false" aria-controls="pad" title="Scratchpad: quick notes and to-dos" aria-label="Scratchpad: quick notes and to-dos">
     <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h14a1 1 0 0 1 1 1v10l-6 6H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 20v-5a1 1 0 0 1 1-1h5"/><path d="M8 8h8M8 11.5h5"/></svg>
     <span id="pad-badge" class="pad-badge" hidden></span>
+  </button>
+  <button id="inbox-toggle" class="icon-btn" hidden aria-expanded="false" aria-controls="inbox" title="Inbox: links saved to read later" aria-label="Inbox: links saved to read later">
+    <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13l2.5-8h11L20 13v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"/><path d="M4 13h4.5a3.5 3.5 0 0 0 7 0H20"/></svg>
+    <span id="inbox-badge" class="pad-badge" hidden></span>
   </button>
   <button id="legend-toggle" class="legend-mark" aria-expanded="false" aria-controls="legend" title="Legend: what the colours, glows and shapes mean" aria-label="Legend">?</button>
   </div>
@@ -127,6 +152,52 @@
       <button id="pad-keep" type="button" class="primary" hidden title="Save your text over the newer one">Keep mine</button>
       <button id="pad-take" type="button" hidden title="Drop your text and take the newer one">Take theirs</button>
       <span class="pad-file muted" title="In the vault's top folder, beside 00 Index.md: plain markdown that Obsidian shows too, and not a note of the tree">Scratchpad.md</span>
+    </div>
+  </section>
+  <section id="inbox" hidden aria-label="Inbox">
+    <div class="pad-head">
+      <strong>Inbox</strong>
+      <span id="inbox-count" class="muted"></span>
+      <span class="seg" role="group" aria-label="Order of the items">
+        <button type="button" data-inbox-order="priority" title="Order by reading priority: urgent first, the items without one last; newest first within each">Priority</button><button type="button" data-inbox-order="date" title="Order by date: the newest first, by the day each item was added">Date</button>
+      </span>
+      <button id="inbox-close" type="button" title="Close (Esc)" aria-label="Close the inbox">✕</button>
+    </div>
+    <form id="inbox-add" autocomplete="off">
+      <input id="inbox-link" type="text" inputmode="url" enterkeyhint="done" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="2000" disabled
+        placeholder="Paste a link, an arXiv id or a DOI" aria-label="A link to save: a URL, an arXiv id or a DOI">
+      <div class="inbox-add-row">
+        <input id="inbox-why" type="text" enterkeyhint="done" maxlength="500" disabled placeholder="Why (optional)" aria-label="Why it is saved (optional)">
+        <button id="inbox-save" type="submit" class="primary" disabled title="Save the link to read later (Enter)">Add</button>
+      </div>
+      <p id="inbox-add-msg" role="status" hidden></p>
+    </form>
+    <ul id="inbox-list" aria-label="The items in the inbox"></ul>
+    <p id="inbox-empty" class="muted" hidden>Nothing saved to read later.</p>
+    <div class="pad-foot">
+      <span id="inbox-msg" role="status"></span>
+      <span class="pad-file muted" title="In the vault's top folder, beside Scratchpad.md: plain markdown that Obsidian shows too, and not a note of the tree">Inbox.md</span>
+    </div>
+  </section>
+  <!-- an inbox item's reading note (web/reading.js), opened from its row: in the inbox's place, wider -->
+  <section id="reading" hidden aria-label="Reading note">
+    <div class="pad-head">
+      <button id="reading-close" type="button" title="Back to the inbox (Esc)" aria-label="Close the reading note: back to the inbox">‹ Inbox</button>
+      <a id="reading-title" target="_blank" rel="noopener noreferrer"></a>
+      <span id="reading-count" class="muted"></span>
+      <button id="reading-quote" type="button" aria-pressed="false" disabled title="Paste as quote: the text you copied goes in as a quote (lines after >). With lines selected, they become the quote">Paste as quote</button>
+    </div>
+    <textarea id="reading-text" aria-label="Your part of the reading note, in markdown" readonly
+      placeholder="Quotes from it and lines of your own, saved as you type.&#10;&#10;> a quote is a line after >&#10;&#10;Claude does not see this until you mark the item as read."></textarea>
+    <details id="reading-imp" hidden>
+      <summary id="reading-imp-head">Claude's impression</summary>
+      <pre id="reading-imp-text"></pre>
+    </details>
+    <div class="pad-foot">
+      <span id="reading-msg" role="status"></span>
+      <button id="reading-keep" type="button" class="primary" hidden title="Save your text over the newer one">Keep mine</button>
+      <button id="reading-take" type="button" hidden title="Drop your text and take the newer one">Take theirs</button>
+      <span id="reading-file" class="pad-file muted" title="In the vault's Reading notes folder: plain markdown that Obsidian shows too, and not a note of the tree. Your part is under its My reading heading"></span>
     </div>
   </section>
   <aside id="legend" class="closed" aria-label="Legend and filter">
@@ -154,7 +225,7 @@
   </aside>
   </div>
   <aside id="filters" hidden aria-label="Filters">
-    <div class="fhead"><strong>Filters</strong><button id="filters-close" title="Close">✕</button></div>
+    <div class="fhead"><strong>Filters</strong><button id="filters-close" title="Close" aria-label="Close the filters">✕</button></div>
     <section>
       <div class="ftitle">In the tree, notes that do not match are</div>
       <label><input type="radio" name="fmode" value="dim"> dimmed (the tree keeps its shape)</label>
@@ -200,16 +271,17 @@
   <section id="manuscript" hidden aria-label="The manuscript">
     <div class="ms-bar">
       <span class="seg ms-levels ms-needs" role="group" aria-label="Level">
-        <button type="button" data-ms-level="snippets" aria-pressed="true" title="The building blocks: each resting on notes of the tree, written once, reused in documents">Snippets</button><button type="button" data-ms-level="documents" aria-pressed="false" title="What is built with them: documents holding copies of snippets, and text of their own">Documents</button>
+        <button type="button" class="ms-ib" data-ms-level="snippets" aria-pressed="true" aria-label="Snippets" title="The building blocks: each resting on notes of the tree, written once, reused in documents"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h4a2 2 0 1 1 4 0h4v4a2 2 0 1 1 0 4v4H5z"/></svg><span class="lbl">Snippets</span></button><button type="button" class="ms-ib" data-ms-level="documents" aria-pressed="false" aria-label="Documents" title="What is built with them: documents holding copies of snippets, and text of their own"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h7l4 4v11H9z"/><path d="M16 3v4h4"/><path d="M5.5 7v14H16"/></svg><span class="lbl">Documents</span></button>
       </span>
-      <button id="ms-new" class="ms-snippets-only" type="button" title="A new snippet, resting on notes of the tree">+ Snippet</button>
+      <button id="ms-new" class="ms-ib ms-snippets-only" type="button" aria-label="New snippet" title="A new snippet, resting on notes of the tree"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span class="lbl">Snippet</span></button>
       <label class="ms-docs-only">Document <select id="ms-doc" aria-label="Document"></select></label>
-      <button id="ms-new-doc" class="ms-docs-only" type="button" title="A new document: a paper (article) or a thesis chapter (report)">+ Document</button>
+      <button id="ms-new-doc" class="ms-ib ms-docs-only" type="button" aria-label="New document" title="A new document, made from a template: a paper, a thesis chapter, or a kit you load"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span class="lbl">Document</span></button>
       <button id="ms-lock" class="icon-btn cycle ms-needs" type="button" aria-pressed="true" aria-label="Lock">
         <svg class="ico lock-open" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.6-1.7"/></svg>
         <svg class="ico lock-closed on" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
       </button>
-      <button id="ms-compile" class="primary ms-needs" type="button">Compile</button>
+      <button id="ms-compile" class="primary ms-ib ms-needs" type="button" aria-label="Compile"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.5 5.5v13l10.5-6.5z" fill="currentColor"/></svg><span class="lbl">Compile</span></button>
+      <span class="seg phone-panes ms-needs" role="group" aria-label="Pane" data-for="ms-body"><button type="button" class="ms-ib" data-pane="list" aria-pressed="true" aria-label="List" title="List"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"/></svg><span class="lbl">List</span></button><button type="button" class="ms-ib" data-pane="text" aria-pressed="false" aria-label="LaTeX" title="LaTeX"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4C7 4 6.5 5 6.5 7v2c0 1.5-.8 3-2.5 3 1.7 0 2.5 1.5 2.5 3v2c0 2 .5 3 2.5 3"/><path d="M15 4c2 0 2.5 1 2.5 3v2c0 1.5.8 3 2.5 3-1.7 0-2.5 1.5-2.5 3v2c0 2-.5 3-2.5 3"/></svg><span class="lbl">LaTeX</span></button><button type="button" class="ms-ib" data-pane="pdf" aria-pressed="false" aria-label="PDF" title="PDF"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 16h6"/></svg><span class="lbl">PDF</span></button></span>
       <span id="ms-status" class="muted" role="status"></span>
     </div>
     <form id="ms-new-form" class="ms-new-form" hidden>
@@ -221,9 +293,12 @@
     </form>
     <form id="ms-doc-form" class="ms-doc-form" hidden aria-label="A new document">
       <div class="ms-doc-row">
-        <span class="seg ms-doc-kinds" role="radiogroup" aria-label="Kind">
-          <button type="button" data-doc-kind="article" role="radio" aria-checked="true" title="An article: \section headings, a title, a bibliography">Paper</button><button type="button" data-doc-kind="report" role="radio" aria-checked="false" title="A report with a \chapter: a chapter of a thesis, compiled on its own">Thesis chapter</button>
-        </span>
+        <label class="ms-doc-name">Template <select id="ms-doc-template" aria-label="Template" title="What the document starts from: its files are copied in as they are, and the document keeps no tie to the template"></select></label>
+        <button id="ms-doc-load-zip" type="button" title="Load a template from a zip on this machine (a conference's kit, a thesis class): it is kept in the vault's templates/ and offered from then on">Load a zip…</button>
+        <button id="ms-doc-load-folder" type="button" title="Load a template from a folder on this machine: it is kept in the vault's templates/ and offered from then on">Load a folder…</button>
+        <button id="ms-doc-clone" type="button" title="Make the document from a repository instead of a template: its files as they are there, with their history, connected to it for Pull and Push">From a repository…</button>
+        <input id="ms-template-zip" type="file" accept=".zip,application/zip" hidden aria-label="A template's zip">
+        <input id="ms-template-folder" type="file" webkitdirectory hidden aria-label="A template's folder">
         <input id="ms-doc-title" type="text" autocomplete="off" placeholder="Title, e.g. Strong augmentation on small data" aria-label="Title">
       </div>
       <div class="ms-doc-row">
@@ -238,24 +313,67 @@
       <p>Both are yours to write: Claude proposes snippets from verified notes and where to place them, comments and suggests, and writes only where you unlock it.</p>
       <button id="ms-start" type="button" class="primary">Start, with a first document</button>
     </div>
-    <div id="ms-body" class="ms-body" hidden>
+    <div id="ms-body" class="ms-body" data-pane="list" hidden>
       <nav id="ms-list" class="ms-list" aria-label="Snippets"></nav>
       <div class="ms-editor">
         <div id="ms-head" class="ms-head"></div>
         <div id="ms-cm" class="ms-cm"></div>
+        <!-- an image or a PDF of a document, shown where the editor is -->
+        <div id="ms-view" class="ms-view" hidden></div>
+        <input id="ms-upload" type="file" multiple hidden aria-label="Files to upload into the document">
         <div id="ms-threads" class="ms-threads" hidden></div>
       </div>
       <div class="ms-pdf">
         <div id="ms-errors" class="ms-errors" hidden></div>
         <p id="ms-pdf-note" class="muted ms-pdf-note">No PDF yet: Compile.</p>
         <iframe id="ms-pdf-frame" title="The document's PDF" hidden></iframe>
+        <!-- where a browser shows no PDF in a frame (Chrome on Android), its pages drawn by pdf.js -->
+        <div id="ms-pdf-pages" class="ms-pdf-pages" role="document" aria-label="The document's PDF" tabindex="0" hidden></div>
       </div>
     </div>
   </section>
-  <section id="calendar" hidden aria-label="The deadlines and the runs">
+  <section id="slides" hidden aria-label="The slide decks">
+    <div class="sl-bar">
+      <button id="sl-new" type="button" title="A new deck: for a meeting's occurrence, a deadline (a talk), or nothing yet">+ Deck</button>
+      <strong id="sl-name" class="sl-name sl-needs"></strong>
+      <button id="sl-lock" class="icon-btn cycle sl-needs" type="button" aria-pressed="true" aria-label="Lock">
+        <svg class="ico lock-open" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.6-1.7"/></svg>
+        <svg class="ico lock-closed on" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+      </button>
+      <span id="sl-status" class="muted sl-needs" role="status"></span>
+      <span class="ms-spacer"></span>
+      <button id="sl-pdf" class="sl-needs" type="button" title="The deck as a PDF, one 16:9 page a slide, the speaker notes left out: Save as PDF in the print dialog">PDF</button>
+      <span class="seg phone-panes sl-needs" role="group" aria-label="Pane" data-for="sl-body"><button type="button" data-pane="list" aria-pressed="true">Decks</button><button type="button" data-pane="text" aria-pressed="false">Text</button><button type="button" data-pane="pdf" aria-pressed="false">Slide</button></span>
+      <button id="sl-present" class="primary sl-needs" type="button" title="Full screen from the slide in view: → or space next, ← back, Esc out">Present</button>
+    </div>
+    <form id="sl-new-form" class="ms-new-form" hidden aria-label="A new deck">
+      <select id="sl-new-for" aria-label="What it is for"></select>
+      <input id="sl-new-title" type="text" autocomplete="off" placeholder="Title, e.g. Weekly wrap-up" aria-label="Title" required>
+      <button type="submit" class="primary">Create</button><button id="sl-new-cancel" type="button" title="Esc">Cancel</button>
+    </form>
+    <div id="sl-empty" class="ms-empty" hidden>
+      <p>No decks yet. A <b>deck</b> is a Markdown file in the vault (<code>decks/</code>): its slides separated by a line <code>---</code>, as Obsidian's Slides read them, with the notes' links, math and figures. It can be for a meeting (this week's wrap-up with your supervisors), a talk, or nothing yet; the Calendar shows it on that day.</p>
+      <p>Decks are yours to write: Claude proposes an outline, and writes one only once you unlock it.</p>
+      <button id="sl-start" type="button" class="primary">Start a deck</button>
+    </div>
+    <div id="sl-body" class="sl-body" data-pane="list" hidden>
+      <nav id="sl-list" class="ms-list sl-list" aria-label="Decks"></nav>
+      <div class="ms-editor">
+        <div id="sl-problems" class="ms-errors" hidden></div>
+        <div id="sl-cm" class="ms-cm sl-cm"></div>
+      </div>
+      <div class="sl-side">
+        <div id="sl-tools" class="sl-tools" role="toolbar" aria-label="Slide tools" hidden></div>
+        <div id="sl-preview" class="sl-stage" aria-label="The slide the cursor is in"></div>
+        <div id="sl-notes" class="sl-notes" hidden title="Speaker notes: not on the slide, nor in the PDF"></div>
+        <div id="sl-thumbs" class="sl-thumbs" aria-label="The slides"></div>
+      </div>
+    </div>
+  </section>
+  <section id="calendar" hidden aria-label="The deadlines, the meetings and the runs">
     <div class="cal-bar">
       <span class="seg" role="group" aria-label="Calendar">
-        <button data-cal-mode="timeline" title="One row per experiment: its run as a bar, the deadlines as lines, the GPUs below">Timeline</button><button data-cal-mode="month" title="The month: the deadlines on their days, the runs across them">Month</button>
+        <button data-cal-mode="timeline" title="One row per experiment: its run as a bar, the deadlines as lines, the GPUs below">Timeline</button><button data-cal-mode="month" title="The month: the deadlines and the meetings on their days, the runs across them">Month</button>
       </span>
       <span class="seg" role="group" aria-label="Move">
         <button id="cal-prev" title="Earlier" aria-label="Earlier">‹</button><button id="cal-today" title="Go to today">Today</button><button id="cal-next" title="Later" aria-label="Later">›</button>
@@ -264,8 +382,9 @@
       <span class="seg cal-timeline-only" role="group" aria-label="Zoom">
         <button id="cal-zoom-out" title="Narrower days" aria-label="Narrower days">−</button><button id="cal-zoom-in" title="Wider days" aria-label="Wider days">+</button>
       </span>
-      <button id="cal-add" class="cal-edit" title="Add a deadline: a submission, a meeting, a talk">+ Deadline</button>
-      <a id="cal-ics" class="cal-ics" download="rft.ics" title="The deadlines and the planned runs as a calendar file, for any calendar app (the suggestions left out)">.ics</a>
+      <button id="cal-add" class="cal-edit" title="Add a deadline: a submission, a talk, a thesis chapter">+ Deadline</button>
+      <button id="cal-mt-add" class="cal-edit" title="Add a meeting, once or recurring">+ Meeting</button>
+      <a id="cal-ics" class="cal-ics" download="rft.ics" title="The deadlines, the meetings and the planned runs as a calendar file, for any calendar app (the suggestions left out)">.ics</a>
       <span id="cal-gpus" class="cal-gpus muted"></span>
     </div>
     <form id="cal-adder" class="cal-adder" hidden>
@@ -280,7 +399,21 @@
       <button type="submit" class="primary">Add</button>
       <button type="button" id="cal-add-cancel">Cancel</button>
     </form>
-    <div id="cal-deadlines" class="cal-deadlines" aria-label="The deadlines"></div>
+    <form id="cal-mt-adder" class="cal-adder" hidden>
+      <input id="cal-mt-title" type="text" autocomplete="off" placeholder="Meeting" aria-label="The meeting" required>
+      <input id="cal-mt-day" type="date" aria-label="The (first) day" required>
+      <input id="cal-mt-time" type="time" aria-label="The time (none: all day)" title="The time (none: all day)">
+      <select id="cal-mt-zone" aria-label="The time zone" title="The time's zone: local, or another's">
+        <option value="">local time</option><option value="UTC">UTC</option><option value="AoE">AoE</option>
+      </select>
+      <label class="cal-mt-for">for <input id="cal-mt-duration" type="text" size="6" autocomplete="off" value="1h" placeholder="1h" aria-label="How long (1h, 45m, 1h30m)" title="How long: 1h, 45m, 1h30m"></label>
+      <span id="cal-mt-repeat"></span>
+      <label id="cal-mt-until-label" hidden>until <input id="cal-mt-until" type="date" aria-label="The last day it may fall on (none: no end)" title="The last day it may fall on (none: no end)"></label>
+      <input id="cal-mt-needs" type="text" autocomplete="off" placeholder="Needs by the next one (e.g. E03)" aria-label="The notes it needs done by its next occurrence" list="cal-ids">
+      <button type="submit" class="primary">Add</button>
+      <button type="button" id="cal-mt-cancel">Cancel</button>
+    </form>
+    <div id="cal-deadlines" class="cal-deadlines" aria-label="The deadlines and the meetings ahead"></div>
     <div id="cal-body" class="cal-body"></div>
   </section>
   <aside id="drawer" hidden>
@@ -331,7 +464,7 @@
         <button id="drawer-notebook" class="icon-btn" hidden aria-pressed="false" aria-label="Notebook" title="The experiment's notebook, beside the note: the code that rebuilds its Result">
           <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M10 8.5v7l5.5-3.5z" fill="currentColor" stroke="none"/></svg>
         </button>
-        <button id="drawer-close" title="Close">✕</button>
+        <button id="drawer-close" title="Close" aria-label="Close the note">✕</button>
       </span>
     </div>
     <div id="drawer-priority" class="drawer-priority" hidden></div>
@@ -402,6 +535,7 @@
       <label id="composer-repl-label" for="composer-repl" class="muted">Replace with (markdown). Leave it as it is to say in words what should change.</label>
       <textarea id="composer-repl" rows="3"></textarea>
       <textarea id="composer-text" rows="3"></textarea>
+      <div id="composer-agent" hidden></div>
       <div class="editor-bar">
         <button id="composer-post" type="submit" class="primary" title="Ctrl+Enter">Post</button>
         <button id="composer-ask" type="button" title="Post it and ask Claude to answer it, in the background: the answer comes into the thread">Post and ask Claude</button>
@@ -446,6 +580,10 @@
     aria-label="Width of the note" title="Drag to resize the note (double-click: back to the default width)"></div>
 </main>
 <div id="tooltip" hidden></div>
+<!-- a deck presented, full screen (web/decks.js) -->
+<div id="sl-show" class="sl-show" hidden><div class="sl-show-stage"></div><span class="sl-show-n"></span><button type="button" class="sl-show-close" title="Esc" aria-label="Stop presenting">×</button></div>
+<!-- a deck as it is printed to a PDF: filled only while it prints -->
+<div id="sl-print" class="sl-print"></div>
 <script src="vendor/d3.v7.9.0.min.js" data-rft-inline></script>
 <script src="vendor/katex.v0.16.22.min.js" data-rft-inline></script>
 <script src="filters.js" data-rft-inline></script>
@@ -455,10 +593,18 @@
 <script src="concepts.js" data-rft-inline></script>
 <script src="markdown.js" data-rft-inline></script>
 <script src="scratchpad.js" data-rft-inline></script>
+<script src="agents.js"></script>
+<script src="reading.js"></script>
+<script src="inbox.js"></script>
 <script src="queue.js"></script>
 <script src="vendor/codemirror.v5.65.16.min.js"></script>
 <script src="manuscript.js"></script>
+<script src="slides.js"></script>
+<script src="slide-edit.js"></script>
+<script src="slide-tools.js"></script>
+<script src="decks.js"></script>
 <script src="artifacts.js" data-rft-inline></script>
 <script src="app.js" data-rft-inline></script>
+<script src="phone.js" data-rft-inline></script>
 </body>
 </html>

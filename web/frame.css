@@ -32,6 +32,9 @@ th, td { border-bottom: 1px solid var(--line); padding: 4px 10px; text-align: le
 th { font-weight: 600; border-bottom-width: 2px; }
 td.num, th.num { text-align: right; }
 img, svg { max-width: 100%; height: auto; }
+/* a notebook's figure has a transparent background, drawn for a light page: in the dark theme it
+   sits on a light card, as a slide does */
+img[data-rft-src] { background: light-dark(transparent, #ffffff); border-radius: 8px; padding: 6px; box-sizing: border-box; }
 figure { margin: 0.8em 0; }
 figcaption { color: var(--muted); font-size: 0.9em; }
 blockquote { margin: 0.6em 0; padding: 0.1em 0.9em; border-left: 3px solid var(--line); color: var(--muted); }

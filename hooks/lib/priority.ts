@@ -2,7 +2,7 @@
 // view (its kanban and the note drawer); among the open notes (idea, planned, running) at most 1
 // is urgent, 5 high and 10 medium. A new note has none. Claude only suggests one
 // (`suggested_priority:` with `suggested_priority_why:`), which the user accepts or dismisses
-// there; its own writes that change `priority:` are refused (register.tsx).
+// there; its own writes that change `priority:` are refused (guards.ts).
 
 import type { Io, Loaded, Priority, RftNode, Tree } from './vault'
 import { OPEN_STATUSES, PRIORITIES, PRIORITY_LIMITS, compareNames, front, isPriority, join, load, orList, resolveId, setField, unquote } from './vault'

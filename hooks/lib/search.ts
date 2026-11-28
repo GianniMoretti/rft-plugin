@@ -8,6 +8,7 @@
 import type { Digest } from './map'
 import type { Loaded, RftNode } from './vault'
 import { MARK, bodyOf, conceptPath, withoutChildren } from './vault'
+import { ANSWER_LIMIT, fitList } from './fit'
 
 const STOP = new Set(('a an and are as at be by for from has have in is it its of on or that the this to was were ' +
   'what when which with not no but if then than into over under via we our you your').split(' '))
@@ -176,17 +177,25 @@ export function searchReport(loaded: Loaded, query: string, filter: SearchFilter
   if (hits.length) {
     out.push(`${hits.length} note(s) for ${shown}, best first:`)
     const terms = [...new Set(words(query))]
-    for (const h of hits) out.push(`- ${hitLine(loaded, h, terms)}`)
+    // the matches in what is left of the answer's limit: a long list has its lines cut short, then its last matches
+    const lines = hits.flatMap(h => `- ${hitLine(loaded, h, terms)}`.split('\n'))
+    const fitted = fitList(lines, Math.max(1500, ANSWER_LIMIT - out.join('\n').length - 500))
+    out.push(...fitted.lines)
+    if (fitted.left) out.push(`… ${fitted.left} more line(s) of matches, over this answer's limit of ${ANSWER_LIMIT} characters: a smaller limit, or type, status, concept or tag, narrows the search.`)
+    if (fitted.width) out.push(`The lines above are cut at ${fitted.width} characters to keep this answer under its limit: fewer matches come whole.`)
   }
   out.push(`${concepts.length ? 'rft_map <concept> for a concept\'s digest and notes; ' : ''}rft_graph <id> for a note's neighbours; a note's file only for the detail.`)
   return out.join('\n')
 }
 
-/** Notes already in the tree close to a new one (its title and summary), to ask "have we tried this?". */
-export function similarNotes(loaded: Loaded, id: string, limit = 3): string {
+/**
+ * Notes already in the tree close to a new one (its title and summary), to ask "have we tried
+ * this?". `skip`: the other notes made by the same call, which are not earlier work.
+ */
+export function similarNotes(loaded: Loaded, id: string, limit = 3, skip: Iterable<string> = []): string {
   const n = loaded.tree.nodes[id]
   if (!n || n.type === 'reference') return ''
-  const near = new Set([id, n.parent ?? ''])
+  const near = new Set([id, n.parent ?? '', ...skip])
   const hits = search(loaded, `${n.title} ${n.summary ?? ''}`, {}, limit + near.size)
     .filter(h => !near.has(h.id) && h.coverage >= 0.5 && loaded.tree.nodes[h.id]!.type !== 'reference')
     .slice(0, limit)

@@ -5,6 +5,7 @@
 
 import type { Concept, Io, Loaded, RftNode, Tree } from './vault'
 import { artifactLine, artifactMarks } from './artifacts'
+import { ANSWER_LIMIT, clip, fitList } from './fit'
 import { LEGEND, MARK, ROOT_CONCEPT, bodyOf, conceptOrder, conceptPath, counts, countsLine, fnv1a, front, join, load, ownNotes, resolveConcept, resolveId, setField, statusSummary, unquote, unquoteJson } from './vault'
 
 export const MAP_DIR = 'map'
@@ -13,6 +14,9 @@ export const SMALL_TREE = 60
 export const MAX_SUMMARY = 240
 /** More notes of its own than one digest can stand for: the concept should be split. */
 export const DIGEST_MAX = 40
+/** In an answer fitted to its limit: the room kept for the lines that say what was cut, and the least the list of notes gets. */
+const FIT_NOTE = 400
+const MIN_NOTES = 1500
 
 class MapError extends Error {}
 
@@ -132,8 +136,11 @@ function digestMark(tree: Tree, c: Concept, d: Digest | undefined): string {
   return isStale(tree, d) ? ` [digest out of date, ${d.updated}]` : ''
 }
 
+/** The width of a note in progress in the session's rules: its mark, name, parent and the start of its summary. */
+export const RULES_ACTIVE_WIDTH = 120
+
 /** The project map: each concept with its state, nested as the concepts are, then what is in progress. */
-export function projectMap(loaded: Loaded, digests: Record<string, Digest>, opts: { maxActive?: number; artifacts?: Marks } = {}): string {
+export function projectMap(loaded: Loaded, digests: Record<string, Digest>, opts: { maxActive?: number; artifacts?: Marks; activeWidth?: number } = {}): string {
   const { tree } = loaded
   const concepts = tree.concepts ?? {}
   const out: string[] = []
@@ -150,14 +157,18 @@ export function projectMap(loaded: Loaded, digests: Record<string, Digest>, opts
   const max = opts.maxActive ?? 15
   if (active.length) {
     out.push('', `In progress (${active.length}):`)
-    for (const n of active.slice(0, max)) out.push(noteLine(n, null))
+    // in the session's rules, sent with every request, each is one short line; rft_map gives them whole
+    for (const n of active.slice(0, max)) out.push(opts.activeWidth ? clip(noteLine(n, null), opts.activeWidth) : noteLine(n, null))
     if (active.length > max) out.push(`… ${active.length - max} more (rft_search status running / planned)`)
   }
   return out.join('\n')
 }
 
-/** One concept: its digest, its sub-concepts, its notes with their summaries. */
-export function conceptMap(loaded: Loaded, digests: Record<string, Digest>, c: Concept, marks?: Marks): string {
+/**
+ * One concept: its digest, its sub-concepts, its notes with their summaries, in at most `limit`
+ * characters: in a concept with many notes the summaries are cut short, then the list.
+ */
+export function conceptMap(loaded: Loaded, digests: Record<string, Digest>, c: Concept, marks?: Marks, limit = ANSWER_LIMIT): string {
   const { tree } = loaded
   const d = digests[c.id]
   const notes = ownNotes(tree, c.id)
@@ -175,13 +186,19 @@ export function conceptMap(loaded: Loaded, digests: Record<string, Digest>, c: C
     }
   }
   out.push('', `Notes (${LEGEND}):`)
-  let prev: string | null = null
-  for (const n of notes) { out.push(noteLine(n, prev)); prev = n.id }
+  const foot: string[] = []
   const missing = notes.filter(n => !n.summary).length
-  if (missing) out.push('', `${missing} note(s) here have no summary: rft_set_summary.`)
-  if (!d && notes.length >= 3) out.push('No digest yet: once you have read these notes, write one with rft_set_digest.')
-  else if (isStale(tree, d)) out.push('The digest is out of date (its notes changed): rewrite it with rft_set_digest once you have read what changed.')
-  return out.join('\n')
+  if (missing) foot.push('', `${missing} note(s) here have no summary: rft_set_summary.`)
+  if (!d && notes.length >= 3) foot.push('No digest yet: once you have read these notes, write one with rft_set_digest.')
+  else if (isStale(tree, d)) foot.push('The digest is out of date (its notes changed): rewrite it with rft_set_digest once you have read what changed.')
+  let prev: string | null = null
+  const lines = notes.map(n => { const line = noteLine(n, prev); prev = n.id; return line })
+  // the notes in what the digest and the rest leave of the limit
+  const fitted = fitList(lines, Math.max(MIN_NOTES, limit - out.join('\n').length - foot.join('\n').length - FIT_NOTE))
+  out.push(...fitted.lines)
+  if (fitted.left) out.push(`… ${fitted.left} more note(s), over this answer's limit of ${limit} characters: rft_tree with root gives a branch of this concept, rft_search with concept finds a note in it.`)
+  if (fitted.width) out.push(`The lines above are cut at ${fitted.width} characters to keep this answer under its limit: rft_search gives a note's summary whole.${notes.length > DIGEST_MAX ? ` This concept has ${notes.length} notes of its own, more than a digest stands for (${DIGEST_MAX}): propose to the user to split it (rft_set_concept).` : ''}`)
+  return [...out, ...foot].join('\n')
 }
 
 export async function mapReport(io: Io, loaded: Loaded, ref?: string): Promise<string> {
@@ -192,7 +209,14 @@ export async function mapReport(io: Io, loaded: Loaded, ref?: string): Promise<s
     if (!c) throw new MapError(`"${ref}" is not a concept (rft_concepts lists them)`)
     return conceptMap(loaded, digests, c, artifacts)
   }
-  return `${loaded.config.project}: ${countsLine(counts(loaded.tree))}. Marks: ${LEGEND}.\n${projectMap(loaded, digests, { artifacts })}\n\nrft_map <concept> gives a concept's digest and its notes with their summaries; open a note's file only for its detail.`
+  const head = `${loaded.config.project}: ${countsLine(counts(loaded.tree))}. Marks: ${LEGEND}.`
+  const foot = "rft_map <concept> gives a concept's digest and its notes with their summaries; open a note's file only for its detail."
+  const fitted = fitList(projectMap(loaded, digests, { artifacts }).split('\n'), ANSWER_LIMIT - head.length - foot.length - FIT_NOTE)
+  const cut = [
+    ...(fitted.left ? [`… ${fitted.left} more line(s), over this answer's limit of ${ANSWER_LIMIT} characters: rft_map <concept> gives one concept.`] : []),
+    ...(fitted.width ? [`The lines above are cut at ${fitted.width} characters to keep this answer under its limit: rft_map <concept> gives a concept's state whole.`] : []),
+  ]
+  return [head, ...fitted.lines, ...cut, '', foot].join('\n')
 }
 
 // ---------------------------------------------------------------- checks

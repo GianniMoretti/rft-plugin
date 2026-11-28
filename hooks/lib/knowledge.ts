@@ -8,6 +8,7 @@ import { LockedChange, isLocked } from './comments'
 import type { Digest } from './map'
 import { readDigests, resolveConcept } from './map'
 import { scheduleReport } from './schedule'
+import { ANSWER_LIMIT, fitList } from './fit'
 import { artifactMarks, describeState } from './artifacts'
 import type { Io, Loaded, RftNode } from './vault'
 import { manuscriptNext } from './manuscript'
@@ -90,7 +91,7 @@ const orderOf = (notes: RftNode[]) => (notes.some(n => n.priority) ? 'by priorit
 const capped = (items: string[], max: number) => (items.length > max ? [...items.slice(0, max), `  … ${items.length - max} more`] : items)
 
 /** What is still open, concept by concept: unexplored directions, planned experiments, open questions. */
-export async function nextReport(io: Io, loaded: Loaded, today: string, ref?: string, max = 8): Promise<string> {
+export async function nextReport(io: Io, loaded: Loaded, today: string, ref?: string, max = 8, limit = ANSWER_LIMIT): Promise<string> {
   const { tree } = loaded
   const concepts = tree.concepts ?? {}
   const scope = ref?.trim() ? resolveConcept(tree, ref) : null
@@ -152,5 +153,12 @@ export async function nextReport(io: Io, loaded: Loaded, today: string, ref?: st
     const none = `Nothing open${scope ? ` in ${scope.name}` : ''}: no unexplored direction, no planned experiment, no open question in the digests.`
     return sched.head.length ? `${sched.head.join('\n')}\n${none}${tail.join('\n')}` : `${none}${tail.join('\n')}`
   }
-  return `${total} open item(s)${scope ? ` in ${scope.name}` : ''}, by concept (age in days since the note was made):\n\n${[...sched.head, ...head, ...out, ...tail].join('\n')}`
+  // the concepts' lists in what the deadlines, the priorities and the tail leave of the limit
+  const around = [...sched.head, ...head, ...tail].join('\n').length
+  const fitted = fitList(out, Math.max(1500, limit - around - 500))
+  const cut = [
+    ...(fitted.left ? [`… ${fitted.left} more line(s), over this answer's limit of ${limit} characters: rft_next with a concept gives its open work alone.`] : []),
+    ...(fitted.width ? [`The lines above are cut at ${fitted.width} characters to keep this answer under its limit: rft_next with a concept gives them whole.`] : []),
+  ]
+  return `${total} open item(s)${scope ? ` in ${scope.name}` : ''}, by concept (age in days since the note was made):\n\n${[...sched.head, ...head, ...fitted.lines, ...cut, ...tail].join('\n')}`
 }

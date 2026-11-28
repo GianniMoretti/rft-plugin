@@ -28,6 +28,13 @@ could be done, and when it is done. A package builds only on the ones before it.
 | 0.26.0 | /rft-update (done) | – |
 | 1.0.0 | One release with everything, measured (done) | 0.21.0–0.26.0 |
 | 1.1.0 | Alex's PR #6 merged, notebooks on request | 1.0.0 |
+| 1.2.0 | Slides (built, not released) | 1.1.0 |
+| 1.3.0 | Manuscript as a local Overleaf (built, not released) | 1.1.0 |
+| 1.3.1 | Inbox and reading notes (built, not released) | 1.1.0 |
+| 1.3.2 | Phone layout (built, not released) | 1.1.0 |
+| 1.3.3 | Figure style (first step built, not released) | 1.1.0 |
+| 1.3.4 | Grilling (built, not released) | 1.3.1 |
+| 2.0.0 | Agents (step one built, not released) | 1.2.0–1.3.3 |
 
 ---
 
@@ -364,6 +371,105 @@ from the start. A deferred tool shows only its name until the model loads it wit
 - Measured on the replica vault against 1.0.0: session start +1% (45,355 against 44,892 input
   tokens), a recall question +1%. Checked headless: an experiment for a paper gets the question,
   an exploratory one none. 387 plugin tests and 196 server tests pass (8 need uv).
+
+---
+
+## 1.2.0 — Slides (built, not released)
+
+Slide decks for meetings and talks, written by the user and kept outside the tree.
+
+- **A deck is text.** One Markdown file per deck in `vault/decks/`, readable in Obsidian and
+  diffable; the same renderer draws the editor, Present and the PDF. Layouts (title, section,
+  two columns, figure, default) place content in slots. PDF export only, no .pptx.
+- **The Slides tab**, with decks tied to the Calendar's meetings and deadlines. A deck is
+  locked by default: Claude proposes an outline, the user writes the deck or unlocks it.
+- **Tools on the slide** (desktop): select, move, resize, add and style boxes and lines, edit
+  text in place, detach content from its slot, several at once. Every action is an edit of the
+  deck's Markdown and nothing else.
+- **Still open**: tree data in slides (numbers, figures and tables by reference, flagged when
+  out of date), an outline tool and `/rft-slides`, reorder, a presenter window, themes.
+- Done when the open points above are built or moved to a later package, and the user has
+  rebuilt one real slide of theirs with the tools.
+
+## 1.3.0 — Manuscript as a local Overleaf (built, not released)
+
+The Documents view of the Manuscript tab becomes a local Overleaf.
+
+- **A document is a folder** of plain LaTeX files with one main file, a file list and uploads,
+  compiled with the engine and bibliography tool it needs. It starts from a template loaded
+  from a zip or a folder and kept in `vault/templates/`.
+- **No trace of the tree in its files.** A copy of a snippet sits between two marker lines that
+  say only its kind and title; everything else is in a tracking file outside the folder. Copies
+  are highlighted and listed, and a copy or a number whose source changed is flagged for review.
+- **Each document is its own git repository**, connected to GitHub and through it to Overleaf,
+  with Pull and Push that only the user presses. A commit is scanned first and refused if it
+  holds a trace.
+- **Reuse**: Duplicate, Bring a document into a folder of another (a paper as a thesis
+  chapter), Add a template's files.
+- Checked with two real kits (the ICML 2027 style, the AAU PhD collection thesis).
+- Done when a real round trip through Overleaf (push, edit there, pull) has been made by hand.
+
+## 1.3.1 to 1.3.4 — Smaller features (built, not released)
+
+- **1.3.1, Inbox and reading notes.** A panel of links saved to read later, outside the tree,
+  each with a reading priority. Process has Claude read an item and save its impression and a
+  three-line brief; the user keeps quotes and lines of their own in a reading note that is
+  closed to Claude until they mark the item as read. The mark starts a discussion in the chat,
+  and the user picks the outcome (reference, literature entry, direction, discard or later).
+  Next possible step, not built: a PDF viewer with highlighting.
+- **1.3.2, Phone layout.** The tree view at 700px and below (checked on Android Chrome):
+  bottom tabs, full-screen sheets with a working Back, touch-sized targets, PDFs drawn with
+  pdf.js. The desktop layout is unchanged; `tests/test_phone.py` audits the page. Still open:
+  landscape, an installable app.
+- **1.3.3, Figure style.** `rft_style.py` beside every notebook applies the project's tokens
+  (`.rft/config.json`, `style`) in every run; the same tokens colour artifacts and slides.
+  Still open: a render per medium, a figure lint at save time, a preview before placing.
+- **1.3.4, Grilling.** `/rft-grill-me <question, note id or concept>`: Claude questions the user
+  about one direction, in rounds, each question with a recommended answer, until seven subjects
+  are settled (the question, its place in the tree, literature, preliminary experiments, order,
+  milestone, referee). Only the grilled direction is written while it runs; the rest is one
+  table at the end, of which only the confirmed rows are written. A search it plans is a
+  literature note at `planned`, which `/rft-literature` then fills. Still open: a Grill button
+  in the note's drawer; the five scenarios of `bench/grilling.py` run on each release.
+
+## 2.0.0 — Agents
+
+rft stops being Claude Code only. The user sets up agents: models (text in, text out, such as
+a local Qwen through Ollama, or DeepSeek, GLM, ChatGPT over the same endpoint format) and
+harnesses (Claude Code, Codex), and picks which one does a task. The plugin keeps working as it
+does today for someone who sets nothing up.
+
+- **Step one: the app launches agents (built).** The server started from a terminal stays up
+  on its own. Asking on a comment thread (a reply, or a replacement to accept or reject) and Process
+  on an inbox item run the picked agent headless instead of answering that no chat is
+  connected. The agent returns text and the app writes it, signed with the agent's name.
+- **Grants.** Each agent has a grant the user gives it: text only (the default), read the
+  project, or change the project. A model never gets a tool; a harness without the full grant
+  is launched with its own file-writing and shell tools switched off, or refused. No rule rests
+  on model names.
+- **Setup** in one file per user, outside the vault; keys by the name of an environment
+  variable. A default agent per task, and a picker that lists only the agents whose grant
+  allows the task and shows whether each runs on this machine or sends text to a named host.
+- **Step two: other harnesses and the tree.** Managing the tree (Add child, Move, Verify, the
+  tools) stays with Claude Code in step one. Step two first answers whether another harness
+  (Codex) can be given the rules and the guards against direct edits that Claude Code's hooks
+  give; if so, the tree's operations are also served as a standalone tool server that the app
+  starts, and the page's own actions work with no chat connected.
+- **Built in step one**: `server/rft_agents.py` (the setup, the model call, the harness run,
+  the tasks), the answer written by the server case for case as the plugin writes it
+  (`tests/fixtures/agents/`), the picker (`web/agents.js`), ready-made entries for Claude Code
+  (its locked run tried for real: it reads, it cannot write) and for Codex (from its
+  documentation, never run). Not yet done: a thread answered by a real local model, and a paper
+  processed through a real headless harness, by the user.
+- **The setup from the page (built)**: a dialog adds, changes and removes a model or a
+  ready-made harness, lists the models an endpoint has, and writes the user's setup file,
+  keeping every other line of it.
+- **Later, not in 2.0.0 unless decided**: chats and chat history in the page.
+- Done when: tests with a fake model and a fake harness show the vault's exact change for a
+  good answer, a malformed one, an unreachable agent and a cancelled task, and that a text only
+  agent is never offered Process; a thread has been answered by a real local model and a paper
+  processed through a headless harness; step two is built or closed with its reason; 1.2.0 to
+  1.3.3 are done or their open points moved to a later package.
 
 ## Backlog
 

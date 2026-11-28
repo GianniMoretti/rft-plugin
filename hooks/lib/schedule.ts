@@ -1,15 +1,16 @@
 // Deadlines and the schedule, as Claude's tools see them. Dates are the user's: `due:` on any
 // note and on a milestone, `start:` and `est:` on an experiment; they set them in the tree view's
 // Calendar or the note's drawer, and Claude's own writes that change them are refused
-// (register.tsx). Claude suggests a start and an estimate (rft_suggest_dates), suggests a paper
+// (guards.ts). Claude suggests a start and an estimate (rft_suggest_dates), suggests a paper
 // submission read from its official dates page (rft_suggest_deadline, a milestone with status
-// `suggested`), and adds a deadline the user gives it once they confirm (rft_add_deadline). The
-// planning itself is web/schedule.js, shared with the tree view.
+// `suggested`), and adds a deadline or a meeting the user gives it once they confirm
+// (rft_add_deadline, rft_add_meeting). The planning itself is web/schedule.js, shared with the
+// tree view.
 
-import type { DeadlinePlan, GpuLoad, Milestone } from './dates'
+import type { DeadlinePlan, GpuLoad, Meeting, Milestone } from './dates'
 import { S } from './dates'
 import type { Io, Loaded, RftNode, Tree } from './vault'
-import { MILESTONES, MILESTONE_RE, compareNames, front, join, load, readConfig, resolveId, sanitiseTitle, setField, unquote, writeConfig } from './vault'
+import { MEETINGS, MEETING_RE, MILESTONES, MILESTONE_RE, compareNames, front, join, load, readConfig, resolveId, sanitiseTitle, setField, unquote, writeConfig } from './vault'
 
 export class ScheduleError extends Error {}
 
@@ -19,9 +20,9 @@ export const parseDue = S.parseDue
 export const parseEst = S.parseEst
 export const utcOf = S.utcOf
 
-/** Each deadline planned backwards from its due day, nearest first (web/schedule.js). */
-export const plan = (tree: Tree, milestones: Milestone[], today: string): DeadlinePlan[] =>
-  S.plan(Object.values(tree.nodes), milestones, today)
+/** Each deadline planned backwards from its due day, nearest first (web/schedule.js); a meeting with needs at its next occurrence. */
+export const plan = (tree: Tree, milestones: Milestone[], today: string, meetings: Meeting[] = []): DeadlinePlan[] =>
+  S.plan(Object.values(tree.nodes), milestones, today, meetings)
 
 /** The days the planned and running experiments need more GPUs than `capacity`, and the runs with no end planned. */
 export const gpuLoad = (tree: Tree, capacity: number | undefined, today: string): GpuLoad =>
@@ -29,22 +30,24 @@ export const gpuLoad = (tree: Tree, capacity: number | undefined, today: string)
 
 /** The vault's calendar file (`rft.ics`), made at `stamp` (ISO). */
 export const icsCalendar = (l: Loaded, stamp: string): string =>
-  S.ics({ project: l.config.project, nodes: Object.values(l.tree.nodes), milestones: l.milestones, stamp }).text
+  S.ics({ project: l.config.project, nodes: Object.values(l.tree.nodes), milestones: l.milestones, meetings: l.meetings ?? [], stamp }).text
 
 // ---------------------------------------------------------------- the user's dates
 
 /** The fields that are the user's alone. */
 export const DATE_FIELDS = ['due', 'start', 'est'] as const
+/** A meeting's, the user's too. */
+export const MEETING_FIELDS = ['when', 'duration', 'every', 'until', 'skip', 'moved'] as const
 
-/** Whether `after` gives a note or a milestone other dates than `before` does (a field added, changed or removed). */
-export function changesDates(before: string, after: string): boolean {
+/** Whether `after` gives a note or a milestone other dates than `before` does (a field added, changed or removed); a meeting's when `meeting`. */
+export function changesDates(before: string, after: string, meeting = false): boolean {
   const a = front(before), b = front(after)
-  return DATE_FIELDS.some(k => unquote(a[k]) !== unquote(b[k]))
+  return (meeting ? MEETING_FIELDS : DATE_FIELDS).some(k => unquote(a[k]) !== unquote(b[k]))
 }
 
 /** Why Claude's edit of a date is refused, and what to do instead. */
 export const datesText = (n: { id: string } | null) =>
-  `Dates are the user's: they set due:, start: and est: in the tree view (the Calendar, or the note's drawer), and your edits that change them are refused. To propose dates, call rft_suggest_dates {${n ? `id: "${n.id}"` : 'id'}, start, est, why}; for a deadline the user gives you, rft_add_deadline (they confirm it); for a paper submission, rft_suggest_deadline with its official dates page.`
+  `Dates are the user's: they set due:, start: and est: in the tree view (the Calendar, or the note's drawer), and your edits that change them are refused. To propose dates, call rft_suggest_dates {${n ? `id: "${n.id}"` : 'id'}, start, est, why}; for a deadline or a meeting the user gives you, rft_add_deadline or rft_add_meeting (they confirm it); for a paper submission, rft_suggest_deadline with its official dates page.`
 
 const oneLine = (why: unknown) => {
   const one = typeof why === 'string' ? why.trim().replace(/\s+/g, ' ') : ''
@@ -101,14 +104,19 @@ export function checkDeadline(loaded: Loaded, input: DeadlineInput): { title: st
   if (!title) throw new ScheduleError('give the deadline a title (title)')
   const due = typeof input.due === 'string' ? S.parseDue(input.due) : null
   if (!due) throw new ScheduleError(`due must be a date: ${S.DUE_EXAMPLES.replace(/, (?=[^,]*$)/, ' or ')} (AoE, UTC or ±HH:MM after the time)`)
-  const refs = Array.isArray(input.needs) ? input.needs : input.needs === undefined || input.needs === null ? [] : [input.needs]
+  return { title, due: S.formatDue(due), needs: checkNeeds(loaded, input.needs) }
+}
+
+/** The notes a deadline or a meeting needs, by id or name, each once. */
+function checkNeeds(loaded: Loaded, value: unknown): RftNode[] {
+  const refs = Array.isArray(value) ? value : value === undefined || value === null ? [] : [value]
   const needs: RftNode[] = []
   for (const r of refs) {
     const id = resolveId(loaded.tree, String(r))
     if (!id) throw new ScheduleError(`needs: "${String(r)}" is not a note of the tree`)
     if (!needs.some(n => n.id === id)) needs.push(loaded.tree.nodes[id]!)
   }
-  return { title, due: S.formatDue(due), needs }
+  return needs
 }
 
 /** The next free milestone id: after the config's last one and every milestone on disk. */
@@ -164,11 +172,89 @@ export async function suggestDeadline(io: Io, loaded: Loaded, input: DeadlineInp
   return `Suggested ${name}, due ${d.due}, from ${source}. The user accepts or dismisses it in the tree view's Calendar; until then it is not planned for.`
 }
 
+// ---------------------------------------------------------------- meetings
+
+export type MeetingInput = { title: unknown; when: unknown; duration?: unknown; every?: unknown; until?: unknown; needs?: unknown }
+export type MeetingDraft = { title: string; when: string; duration?: string; every?: string; until?: string; needs: RftNode[] }
+
+/** A meeting's title, when, length, rule, last day and needs, checked and written as the vault keeps them. */
+export function checkMeeting(loaded: Loaded, input: MeetingInput): MeetingDraft {
+  const title = sanitiseTitle(typeof input.title === 'string' ? input.title : '')
+  if (!title) throw new ScheduleError('give the meeting a title (title)')
+  const start = typeof input.when === 'string' ? S.parseDue(input.when) : null
+  if (!start) throw new ScheduleError(`when must be its (first) day and time: 2026-11-24 14:00 (a day alone for one all day; AoE, UTC or ±HH:MM after the time)`)
+  const given = (v: unknown) => v !== undefined && v !== null && v !== ''
+  const out: MeetingDraft = { title, when: S.formatDue(start), needs: checkNeeds(loaded, input.needs) }
+  if (given(input.duration)) {
+    const min = S.parseDuration(typeof input.duration === 'number' ? input.duration : String(input.duration))
+    if (!min) throw new ScheduleError(`duration must be a length: 1h, 45m, 1h30m (not ${JSON.stringify(input.duration)})`)
+    out.duration = S.formatDuration(min)
+  }
+  if (given(input.every)) {
+    const rule = S.parseEvery(String(input.every))
+    if (!rule) throw new ScheduleError(`every must say how often it comes back: day, week, 2 weeks, month (the same date), month on the first Tuesday (second … fifth, last), not ${JSON.stringify(input.every)}`)
+    out.every = S.formatEvery(rule)
+  }
+  if (given(input.until)) {
+    if (!out.every) throw new ScheduleError('until is the last day of a meeting that comes back: give every too, or leave until out')
+    const until = S.parseDay(String(input.until))
+    if (!until) throw new ScheduleError(`until must be a day: 2027-06-30, not ${JSON.stringify(input.until)}`)
+    if (until < start.day) throw new ScheduleError(`until (${until}) is before its first day (${start.day})`)
+    out.until = until
+  }
+  return out
+}
+
+/** How a meeting goes, in words: `2026-11-24 14:00, 1h, every week until 2027-06-30`. */
+const meetingWords = (d: MeetingDraft) =>
+  [d.when, d.duration, d.every ? `every ${d.every}${d.until ? ` until ${d.until}` : ''}` : 'once'].filter(Boolean).join(', ')
+
+/** The question the user answers before a meeting Claude was given is added. */
+export const meetingQuestion = (d: MeetingDraft) =>
+  `Add the meeting "${d.title}": ${meetingWords(d)}${d.needs.length ? `, needing ${S.andList(d.needs.map(n => n.id))} by the next one` : ''}?`
+
+/** The next free meeting id: after the config's last one and every meeting on disk. */
+function nextMeetingId(loaded: Loaded): string {
+  let max = loaded.config.lastId.G ?? 0
+  for (const m of loaded.meetings ?? []) {
+    const x = MEETING_RE.exec(m.id)
+    if (x) max = Math.max(max, Number(x[1]))
+  }
+  return `G${String(max + 1).padStart(2, '0')}`
+}
+
+/** A meeting's file. */
+export function meetingText(id: string, d: MeetingDraft): string {
+  const fields = [`id: ${id}`, 'type: meeting', `when: ${d.when}`]
+  if (d.duration) fields.push(`duration: ${d.duration}`)
+  if (d.every) fields.push(`every: ${d.every}`)
+  if (d.until) fields.push(`until: ${d.until}`)
+  if (d.needs.length) fields.push(`needs: [${d.needs.map(n => `"[[${n.name}]]"`).join(', ')}]`)
+  return `---\n${fields.join('\n')}\n---\n\n# ${id} · ${d.title}\n`
+}
+
+/** Adds a meeting the user gave, once they have confirmed it. */
+export async function addMeeting(io: Io, loaded: Loaded, d: MeetingDraft): Promise<string> {
+  const id = nextMeetingId(loaded)
+  const name = `${id} ${d.title}`
+  await io.write(join(loaded.config.vault, MEETINGS, `${name}.md`), meetingText(id, d))
+  const config = (await readConfig(io)) ?? loaded.config
+  config.lastId = { ...config.lastId, G: Number(id.slice(1)) }
+  await writeConfig(io, config)
+  Object.assign(loaded, await load(io, config))
+  return `Added ${name}: ${meetingWords(d)}${d.needs.length ? `, needing ${S.andList(d.needs.map(n => n.id))} by the next one` : ''}. The user changes it in the tree view's Calendar (an occurrence skipped or moved there too).`
+}
+
+/** The meetings of the next `days` days, from today, one line each. */
+export function meetingsAhead(loaded: Loaded, today: string, days = 7): string[] {
+  return S.upcoming(loaded.meetings ?? [], today, S.addDays(today, days)).map(x => S.meetingLine(x.meeting, x.occ, today))
+}
+
 // ---------------------------------------------------------------- reports
 
 /** The deadlines still ahead (or missed with work left), nearest first, one line each; GPU clashes after them. */
 export function scheduleReport(loaded: Loaded, today: string): { head: string[]; tail: string[] } {
-  const plans = plan(loaded.tree, loaded.milestones, today).filter(p => p.daysLeft >= 0 || p.atRisk)
+  const plans = plan(loaded.tree, loaded.milestones, today, loaded.meetings).filter(p => p.daysLeft >= 0 || p.atRisk)
   const head: string[] = []
   if (plans.length) head.push(`## Deadlines (${plans.length}, nearest first)`, ...plans.map(p => `  ${S.deadlineLine(p)}`))
   const cap = loaded.config.gpus
@@ -178,6 +264,8 @@ export function scheduleReport(loaded: Loaded, today: string): { head: string[];
     ...load.noEnd.map(id => `GPUs: ${id} is running with no end planned (est:), so its GPUs count as taken through today`),
   ]
   if (gpus.length) head.push(...(plans.length ? [] : ['## GPUs']), ...gpus)
+  const meetings = meetingsAhead(loaded, today)
+  if (meetings.length) head.push(...(head.length ? [''] : []), `## Meetings (the next 7 days)`, ...meetings.map(l => `  ${l}`))
   if (head.length) head.push('')
   const tail: string[] = []
   const waiting = loaded.milestones.filter(m => m.status === 'suggested').map(m => m.name)
@@ -189,6 +277,6 @@ export function scheduleReport(loaded: Loaded, today: string): { head: string[];
 
 /** The line session start adds: the deadlines of the next 14 days that are at risk; '' when none. */
 export function deadlinesLine(loaded: Loaded, today: string): string {
-  const risky = plan(loaded.tree, loaded.milestones, today).filter(p => p.atRisk && p.daysLeft <= 14)
+  const risky = plan(loaded.tree, loaded.milestones, today, loaded.meetings).filter(p => p.atRisk && p.daysLeft <= 14)
   return risky.length ? `Deadlines: ${risky.map(p => `${p.name} ${S.when(p.daysLeft)}, at risk`).join('; ')} (rft_next says why)` : ''
 }

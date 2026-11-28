@@ -45,7 +45,8 @@
   /**
    * A renderer for the page: `tex(src, display)` gives a formula's HTML, `image(src, alt, size)` a
    * local image's (size: [_, width, height?] or undefined), `link(target)` the id a wikilink
-   * leads to, or null.
+   * leads to, or null. A slide's renderer also gives `headings` (the deepest heading kept as its
+   * own level, 2 in a note) and `ordered` (numbered lists, `1.`, which a note shows as text).
    */
   function make(o) {
     let notes = { count: 0, byLabel: new Map() } // the footnotes of the note being rendered
@@ -104,7 +105,9 @@
     function render(src) {
       notes = { count: 0, byLabel: new Map() }
       const out = []
-      let list = 0, inCode = false, table = false
+      const lists = [] // the lists open, innermost last: ul or ol
+      const maxHeading = Math.max(1, Math.min(6, o.headings || 2))
+      let inCode = false, table = false
       let para = [] // the lines of a paragraph: { text, s }
       let math = null // a $$ block opened on a line of its own, until its closing $$: { lines, s }
       let def = null // the footnote definition read, while indented lines continue it
@@ -115,7 +118,7 @@
         if (para.length) out.push(`<p>${para.map((l, i) => run(l.text.replace(/\s+$/, ''), l.s) + (i < para.length - 1 ? (/ {2}$/.test(l.text) ? '<br>' : ' ') : '')).join('')}</p>`)
         para = []
       }
-      const close = () => { flush(); while (list > 0) { out.push('</ul>'); list-- } if (table) { out.push('</table>'); table = false } }
+      const close = () => { flush(); while (lists.length) out.push(`</${lists.pop()}>`); if (table) { out.push('</table>'); table = false } }
       const mathBlock = (lines, s, e) => `<div class="math-block src" data-s="${s}" data-e="${e}" data-whole>${o.tex(lines.join('\n'), true)}</div>`
       let at = 0
       for (const raw of src.split('\n')) {
@@ -151,14 +154,16 @@
           continue
         }
         const h = /^(#{1,6})\s+(.*)$/.exec(raw)
-        const li = /^(\s*)[-*]\s+(.*)$/.exec(raw)
-        if (h) { close(); const l = Math.min(h[1].length, 2); out.push(`<h${l}>${run(h[2], s0 + raw.length - h[2].length)}</h${l}>`) }
+        const li = /^(\s*)[-*]\s+(.*)$/.exec(raw) || (o.ordered ? /^(\s*)\d{1,9}[.)]\s+(.*)$/.exec(raw) : null)
+        if (h) { close(); const l = Math.min(h[1].length, maxHeading); out.push(`<h${l}>${run(h[2], s0 + raw.length - h[2].length)}</h${l}>`) }
         else if (li) {
           flush()
           if (table) { out.push('</table>'); table = false }
+          const tag = /^\s*[-*]/.test(raw) ? 'ul' : 'ol'
           const depth = Math.floor(li[1].replace(/\t/g, '    ').length / 2) + 1
-          while (list < depth) { out.push('<ul>'); list++ }
-          while (list > depth) { out.push('</ul>'); list-- }
+          while (lists.length > depth) out.push(`</${lists.pop()}>`)
+          if (lists.length === depth && lists[depth - 1] !== tag) out.push(`</${lists.pop()}>`)
+          while (lists.length < depth) { out.push(`<${tag}>`); lists.push(tag) }
           out.push(`<li>${run(li[2], s0 + raw.length - li[2].length)}</li>`)
         } else if (/^\|.*\|\s*$/.test(raw)) {
           if (/^\|[\s:|-]+\|\s*$/.test(raw)) continue
@@ -171,10 +176,10 @@
           })
           out.push('<tr>' + tds.join('') + '</tr>')
         } else if (raw.trim() === '') close()
-        else if (list && /^\s+\S/.test(raw) && out[out.length - 1].endsWith('</li>')) {
+        else if (lists.length && /^\s+\S/.test(raw) && out[out.length - 1].endsWith('</li>')) {
           // an indented line continues the list item above
           out[out.length - 1] = out[out.length - 1].slice(0, -5) + ' ' + run(raw.trim(), s0 + raw.length - raw.trimStart().length) + '</li>'
-        } else { if (list || table) close(); para.push({ text: raw, s: s0 }) }
+        } else { if (lists.length || table) close(); para.push({ text: raw, s: s0 }) }
       }
       close()
       if (inCode) out.push('</pre>')

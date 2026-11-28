@@ -1,5 +1,5 @@
-"""A job the experiment queue's monitor reads well (the manual and the README: "Writing a job the
-monitor can read"). It shows, from what it writes:
+"""A job the experiment queue's monitor reads well (the manual, and the guide's "Writing a job the
+monitor can read": https://alex-pv01.github.io/rft-guide/using/queue/#writing-a-job-the-monitor-can-read). It shows, from what it writes:
 
     Stage 2/3: train
     train  ███████░░░  7/10 · 70% · 00:12 left · loss=0.1429

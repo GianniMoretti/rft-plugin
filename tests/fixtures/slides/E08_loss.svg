@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500" width="800" height="500" font-family="Inter, Arial, sans-serif" font-size="18">
+  <rect width="800" height="500" fill="#ffffff"/>
+  <g stroke="#E2E8F0" stroke-width="1">
+    <line x1="80" y1="120" x2="760" y2="120"/><line x1="80" y1="200" x2="760" y2="200"/>
+    <line x1="80" y1="280" x2="760" y2="280"/><line x1="80" y1="360" x2="760" y2="360"/>
+  </g>
+  <g stroke="#90A1B9" stroke-width="1.5"><line x1="80" y1="40" x2="80" y2="430"/><line x1="80" y1="430" x2="760" y2="430"/></g>
+  <path d="M80,90 C250,300 450,345 760,360" fill="none" stroke="#A3ADBD" stroke-width="3"/>
+  <path d="M80,60 C300,150 420,330 560,350 S700,362 760,364" fill="none" stroke="#8B5CF6" stroke-width="3"/>
+  <circle cx="560" cy="350" r="5" fill="#8B5CF6"/>
+  <g fill="#0F172B">
+    <text x="420" y="478" text-anchor="middle">epoch</text>
+    <text x="28" y="235" text-anchor="middle" transform="rotate(-90 28 235)">validation loss</text>
+    <text x="250" y="150" fill="#8B5CF6">1k images</text>
+    <text x="150" y="290" fill="#62748E">10k images</text>
+  </g>
+</svg>

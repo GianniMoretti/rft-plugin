@@ -4,10 +4,11 @@ type: direction
 status: done
 date: 2026-03-15
 parent: "[[E07 RandAugment magnitude sweep with long training]]"
-children: ["[[E05 Mixup and CutMix at 1k images]]"]
+children: ["[[E05 Mixup and CutMix at 1k images]]", "[[R03 Zhang 2017 mixup, combinations of pairs of examples]]", "[[R04 Yun 2019 CutMix, labels mixed by patch area]]"]
 up: "[[E07 RandAugment magnitude sweep with long training]]"
-down: ["[[E05 Mixup and CutMix at 1k images]]"]
+down: ["[[E05 Mixup and CutMix at 1k images]]", "[[R03 Zhang 2017 mixup, combinations of pairs of examples]]", "[[R04 Yun 2019 CutMix, labels mixed by patch area]]"]
 tags: [small-data-regularisation, direction, mixup, done]
+refs: ["[[R03 Zhang 2017 mixup, combinations of pairs of examples]]", "[[R04 Yun 2019 CutMix, labels mixed by patch area]]"]
 concept: "Mix-based augmentation"
 concept_summary: "Mixup and CutMix as the augmentation"
 ---
@@ -25,3 +26,5 @@ Tested in E05.
 
 ## Children in the tree
 - [[E05 Mixup and CutMix at 1k images]]
+- [[R03 Zhang 2017 mixup, combinations of pairs of examples]]
+- [[R04 Yun 2019 CutMix, labels mixed by patch area]]

@@ -1,0 +1,54 @@
+[
+  {
+    "name": "planned-experiment",
+    "what": "A direction at planned with one experiment already planned under it (D05, E06): the grilling refines what is there and adds no second experiment.",
+    "sessions": [[
+      "/rft-grill-me D05",
+      "Yes to every recommended answer. Where you gave no recommendation, decide yourself and say what you decided. Three constraints: E06 is the only experiment I want under this direction, so plan no other run; no literature search is needed; there is no milestone or deadline. Referee: before any new run, E02's baseline number at 1k images must be reproduced from its saved outputs.",
+      "Yes to all. Stop here and show me the proposal now, with what is settled.",
+      "I confirm every row. Apply them, then finish."
+    ]]
+  },
+  {
+    "name": "new-question",
+    "what": "A question the tree does not cover: its note is created only once round one agreed where it goes, a planned literature note comes before any experiment, and nothing else is written before the proposal is confirmed.",
+    "sessions": [[
+      "/rft-grill-me \"does strong augmentation also replace early stopping on audio spectrograms?\"",
+      "Yes to every recommended answer, including the wording, the parent and the concept you recommend (if you recommend a new concept, I agree to it). Where you gave no recommendation, decide yourself and say so. I want exactly one literature search before any experiment, and no experiment planned until it is read. There is no milestone or deadline. Referee: a published number on a public audio benchmark reproduced with the authors' code before any change of ours.",
+      "Yes to all. Stop here and show me the proposal now, with what is settled.",
+      "I confirm every row. Apply them, then finish."
+    ]]
+  },
+  {
+    "name": "already-answered",
+    "what": "A direction the tree already answers (D06, dropped): round one says what the tree holds and asks whether to stop; no file of the vault changes.",
+    "sessions": [[
+      "/rft-grill-me D06",
+      "Stop here."
+    ]]
+  },
+  {
+    "name": "locked",
+    "what": "A locked note (D09, locked by the user): it is left as it is, and the grilling is about a new direction under it.",
+    "setup": [{ "file": "vault/directions/D09 Self-supervised pretraining on the same images.md", "after": "status: idea", "insert": "locked: true" }],
+    "sessions": [[
+      "/rft-grill-me D09",
+      "Yes to every recommended answer. Where you gave no recommendation, decide yourself and say what you decided. The new direction asks: does self-supervised pretraining on the same 1k images beat E02's baseline by at least two points of test accuracy? One experiment, no literature search, no milestone or deadline. Referee: E02's baseline number reproduced from its saved outputs before any new run.",
+      "Yes to all. Stop here and show me the proposal now, with what is settled.",
+      "I confirm every row. Apply them, then finish."
+    ]]
+  },
+  {
+    "name": "cut-and-resumed",
+    "what": "A grilling cut after its first answers (D09), then asked for again in a new session: the note holds what was answered, and the new session does not ask for it again.",
+    "sessions": [
+      [
+        "/rft-grill-me D09",
+        "Yes to every recommended answer on the hypothesis, the result that would change my mind and the scope: write them down now. Leave every other question open. I have to go: do not ask anything else, I will come back to this."
+      ],
+      [
+        "/rft-grill-me D09"
+      ]
+    ]
+  }
+]

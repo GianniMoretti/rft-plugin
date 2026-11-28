@@ -1,0 +1,24 @@
+{
+ "copies": [
+  {
+   "snippet": "S01",
+   "state": "placed"
+  },
+  {
+   "snippet": "S04",
+   "state": "review"
+  },
+  {
+   "snippet": "S03",
+   "state": "placed"
+  },
+  {
+   "snippet": "S02",
+   "state": "adapted"
+  },
+  {
+   "snippet": "S07",
+   "state": "gone"
+  }
+ ]
+}

@@ -77,6 +77,10 @@ describe('the notebook file', () => {
     expect(notebookSource('x', ['a = 1\n\nb = 2'])).toContain('    a = 1\n\n    b = 2\n')
     expect(src.trimEnd().endsWith('if __name__ == "__main__":\n    app.run()')).toBe(true)
     expect(src).not.toContain('RUNS')
+    // the project's figure style, before the cells, its helpers as rs
+    expect(src).toContain('@app.cell(hide_code=True)\ndef _():\n    # the project\'s figure style')
+    expect(src).toContain('    import rft_style as rs\n\n    rs.use()\n    return (rs,)\n')
+    expect(src.indexOf('import rft_style as rs')).toBeLessThan(src.indexOf('import json\n'))
   })
 
   test("a new notebook reads RUNS, the experiment's runs in the queue, with names of its own so the cells may import json too", () => {
@@ -330,6 +334,30 @@ describe('where the notebooks show', () => {
     expect(A.reproducedText({ date: '2026-11-14', state: 'failed' })).toBe('Last run 2026-11-14 · failed')
     expect(A.reproducedText(null)).toBe('Not run yet')
   })
+
+  test("the editor's address carries the page's theme, and its stylesheet the page's tokens", () => {
+    const A = (globalThis as unknown as { RftArtifacts: { notebookSrc: (url: string, theme: string) => string; notebookStyle: (tokens: Record<string, string>) => string; NOTEBOOK_VARS: Record<string, string> } }).RftArtifacts
+    expect(A.notebookSrc('notebook/ab12/?access_token=k&file=notebooks%2FE02.py', 'dark')).toBe('notebook/ab12/?access_token=k&file=notebooks%2FE02.py&theme=dark')
+    expect(A.notebookSrc('notebook/ab12/', 'light')).toBe('notebook/ab12/?theme=light')
+    // anything but dark is light: marimo's own default would be the reader's system
+    expect(A.notebookSrc('notebook/ab12/', '')).toBe('notebook/ab12/?theme=light')
+    const css = A.notebookStyle({ bg: ' light-dark(#fbfbfd, #0f1115)', accent: 'light-dark(#7048e8, #9775fa)', fg: '#1f2328', panel: '#fff', muted: '#656d76', line: '#d8dde4' })
+    expect(css).toContain('--rft-bg: light-dark(#fbfbfd, #0f1115);')
+    expect(css).toContain('--rft-accent: light-dark(#7048e8, #9775fa);')
+    // marimo's own variables, on the selectors it sets them on, a widget's shadow root too
+    expect(css).toContain(':root, body, .marimo, .marimo:is(.dark *) {')
+    expect(css).toContain('--background: var(--rft-bg);')
+    expect(css).toContain('--primary: var(--rft-accent);')
+    expect(css).toContain('--marimo-text-font: ui-sans-serif')
+    for (const [k, v] of Object.entries(A.NOTEBOOK_VARS)) expect(css).toContain(`${k}: ${v};`)
+    // a figure with no background of its own: a light card in the dark theme
+    expect(css).toContain('.output img { background: light-dark(transparent, #ffffff)')
+    // a token is a value and nothing else; one that is missing is left to marimo
+    const odd = A.notebookStyle({ bg: 'red; } body { display: none', fg: '' })
+    expect(odd).toContain('--rft-bg: red  body  display: none;')
+    expect(odd).not.toContain('--rft-fg:')
+    expect(odd.split('}').length).toBe(css.split('}').length)
+  })
 })
 
 describe('the notebook tools in a session', () => {
@@ -469,6 +497,9 @@ describe('the notebook tools in a session', () => {
     await clock.advance(5000)
     expect(prompts).toHaveLength(2)
     expect(prompts[1]).toContain('The user asked for notebooks for E03 ')
+    // the prompt cites the manual's part by its file, for one Read
+    expect(prompts[1]).toMatch(/\(read the manual's \S*skills\/rft-manual\/notebooks\.md first\)/)
+    expect(prompts[0]).toMatch(/\(read the manual's \S*skills\/rft-manual\/notebooks\.md and the manual's \S*skills\/rft-manual\/artifacts\.md first\)/)
     expect(String((await run('notebooks --write E02')).text)).toContain('E02 already has a notebook')
     expect(String((await run('notebooks --write Nope')).text)).toContain('is neither a concept nor an experiment id')
   })

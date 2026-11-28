@@ -423,7 +423,7 @@ describe('in a session', () => {
       expect({ call, deny: (res as { deny?: string }).deny }).toEqual({ call, deny: expect.stringContaining("Dates are the user's") })
     }
     const res = await $.tool.call({ tool: 'Edit', file_path: `${CWD}/${path(E03)}`, old_string: 'est: 3d', new_string: 'est: 2d' } as never)
-    expect((res as { deny?: string }).deny).toBe(`Dates are the user's: they set due:, start: and est: in the tree view (the Calendar, or the note's drawer), and your edits that change them are refused. To propose dates, call rft_suggest_dates {id: "E03", start, est, why}; for a deadline the user gives you, rft_add_deadline (they confirm it); for a paper submission, rft_suggest_deadline with its official dates page.`)
+    expect((res as { deny?: string }).deny).toBe(`Dates are the user's: they set due:, start: and est: in the tree view (the Calendar, or the note's drawer), and your edits that change them are refused. To propose dates, call rft_suggest_dates {id: "E03", start, est, why}; for a deadline or a meeting the user gives you, rft_add_deadline or rft_add_meeting (they confirm it); for a paper submission, rft_suggest_deadline with its official dates page.`)
     expect(ran).toEqual([])
     await $.tool.call({ tool: 'Edit', file_path: `${CWD}/${path(E03)}`, old_string: 'est: 3d\n', new_string: 'est: 3d\ngpus: 2\n' } as never)
     await $.tool.call({ tool: 'Edit', file_path: `${CWD}/${path(M01)}`, old_string: links(E03), new_string: links(E03, E02) } as never)

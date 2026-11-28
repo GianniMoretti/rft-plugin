@@ -1,17 +1,20 @@
 // Snippets and documents as plain data (docs/design/manuscript.md): two levels, each a folder of
 // the vault. `snippets/`: the building blocks, `S<nn>.tex` each with its two header lines, and their
 // registry (snippets.json: the lock, the next id, each snippet's stamp of its notes). `documents/`:
-// what is built with them, `<name>/main.tex` each, holding copies of snippets between marker lines
-// (each with the fingerprint of the snippet's content it was taken from), and their registry
-// (documents.json: the lock). What a snippet rests on, the states, the report and the writing are
-// manuscript.ts; the comments read a snippet or a document from here (comments.ts).
+// what is built with them, a folder `<name>/` each (its main.tex and what it takes in), and their
+// registry (documents.json: the lock). A document's files are plain LaTeX that names nothing of
+// the tree (docs/adr/0003-a-document-holds-no-trace.md): its copies are found from their marker
+// lines and its tracking file (copies.ts, tracking.ts), and written out when placed (writeout.ts).
+// What a snippet rests on, the states, the report and the writing are manuscript.ts; the comments
+// read a snippet or a document from here (comments.ts).
 //
 //   % rft-snippet S04 · result · CutMix at 1k images      (a snippet's first two lines)
 //   % basis: E05, E02
 //
-//   % rft-begin S04 3f2a1c9d                              (a copy in a document)
-//   …
-//   % rft-end S04
+// The first design kept a copy between `% rft-begin S04 3f2a1c9d` and `% rft-end S04`, with the
+// snippets' text as taken in the document's .blocks.json: `parseBlocks`, `blockText` and
+// `blocksRel` read and write that still, for the first layout's migration and for convert.ts,
+// which brings such a document to clean source.
 
 import type { Io } from './vault'
 import { DOCUMENTS_DIR, MANUSCRIPT_REGISTRY, SNIPPETS_DIR, fnv1a, join } from './vault'
@@ -19,10 +22,13 @@ import { DOCUMENTS_DIR, MANUSCRIPT_REGISTRY, SNIPPETS_DIR, fnv1a, join } from '.
 export { DOCUMENTS_DIR, SNIPPETS_DIR }
 export const SNIPPETS_REGISTRY = MANUSCRIPT_REGISTRY
 export const DOCUMENTS_REGISTRY = `${DOCUMENTS_DIR}/documents.json`
-/** The files the plugin writes, relative to the vault: never by hand, Claude's or the user's. */
-export const GENERATED = [SNIPPETS_REGISTRY, DOCUMENTS_REGISTRY, ...['rft.sty', 'rft-numbers.tex', 'refs.bib', '.build'].map(f => `${DOCUMENTS_DIR}/${f}`)]
-/** Each document's record of the snippets' text its copies were taken from. */
+/** The files the plugin writes, relative to the vault: never by hand, Claude's or the user's (`.rft`: each document's tracking file and what is kept beside it). */
+export const GENERATED = [SNIPPETS_REGISTRY, DOCUMENTS_REGISTRY, ...['rft.sty', 'rft-numbers.tex', 'refs.bib', '.build', '.rft'].map(f => `${DOCUMENTS_DIR}/${f}`)]
+/** The first design's record, in a document's folder, of the snippets' text its copies were taken from. */
 export const BLOCKS_FILE = '.blocks.json'
+
+/** What a tool of the snippets and documents refuses with: its message is the answer. */
+export class ManuscriptError extends Error {}
 
 export const SNIPPET_RE = /^S(\d+)$/
 export const isSnippetId = (id: string) => SNIPPET_RE.test(id.trim().toUpperCase())
@@ -169,7 +175,7 @@ const END_RE = /^%\s*rft-end\s+(S\d+)\s*$/
 /** A copy of a snippet in a document: its id, the stamp it was taken with, its lines (the markers' indexes) and its text. */
 export type Block = { id: string; stamp: string; begin: number; end: number; content: string }
 
-/** The copies a document's text holds, in order; a begin marker with no end is no copy. */
+/** The copies a text of the first design holds, in order; a begin marker with no end is no copy. */
 export function parseBlocks(text: string): Block[] {
   const lines = text.replace(/\r\n/g, '\n').split('\n')
   const out: Block[] = []
@@ -184,16 +190,18 @@ export function parseBlocks(text: string): Block[] {
   return out
 }
 
-/** A copy as a document holds it: `stamp`, the fingerprint of the snippet's content it answers to. */
+/** A copy as a document of the first design held it: `stamp`, the fingerprint of the snippet's content it answers to. */
 export const blockText = (id: string, stamp: string, content: string) => `% rft-begin ${id} ${stamp}\n${content}\n% rft-end ${id}`
+
+/** Whether documents/<name>/ is a document: a folder the plugin made one (it has a tracking file), or one from before a main file could have any name (it has a main.tex). */
+export const isDocument = async (io: Io, vault: string, name: string) =>
+  DOC_NAME.test(name) && ((await io.exists(join(vault, DOCUMENTS_DIR, '.rft', name, 'tracking.json'))) || (await io.exists(join(vault, documentRel(name)))))
 
 /** The documents, by name. */
 export async function listDocuments(io: Io, vault: string): Promise<string[]> {
   const dir = join(vault, DOCUMENTS_DIR)
   if (!(await io.exists(dir))) return []
   const out: string[] = []
-  for (const f of await io.list(dir)) {
-    if (f.kind === 'dir' && DOC_NAME.test(f.name) && (await io.exists(join(vault, documentRel(f.name))))) out.push(f.name)
-  }
+  for (const f of await io.list(dir)) if (f.kind === 'dir' && (await isDocument(io, vault, f.name))) out.push(f.name)
   return out.sort()
 }

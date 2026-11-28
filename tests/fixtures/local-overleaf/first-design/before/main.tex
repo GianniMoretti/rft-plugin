@@ -1,0 +1,68 @@
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx,booktabs}
+\usepackage[numbers]{natbib}
+\usepackage{rft}
+\usepackage{hyperref}
+
+\title{CutMix in the low-data regime}
+\author{A. Author}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We study CutMix when only a thousand labelled images are available. It reaches \rftnum{E05}{acc.1k}\% top-1
+accuracy over \rftnum{E05}{runs} runs.
+\end{abstract}
+
+\section{Introduction}
+
+% Your text, and copies of snippets between % rft-begin and % rft-end lines: adapt a copy to the
+% narrative as you like; when its snippet changes, the copy is flagged for review.
+
+Mixing augmentations such as CutMix~\cite{R07} and mixup~\cite{zhang2018mixup} are standard; see
+Definition~\ref{S01}, Lemma~\ref{S07} and Figure~\ref{S03}.
+
+% rft-begin S01 2a248ff2
+\begin{definition}[CutMix]\label{S01}
+Given two labelled images $(x_A, y_A)$ and $(x_B, y_B)$, CutMix~\cite{R07} forms
+$\tilde{x} = M \odot x_A + (1 - M) \odot x_B$ and $\tilde{y} = \lambda y_A + (1 - \lambda) y_B$,
+where $M$ is a binary box mask and $\lambda$ is the fraction of $x_A$ that it keeps.
+\end{definition}
+% rft-end S01
+
+\section{Method}
+
+% rft-begin S04 df889d41
+We train a ResNet-50 for 200 epochs with SGD, a cosine schedule and a batch size of 256. CutMix is
+applied to every batch with $\lambda \sim \mathrm{Beta}(1, 1)$.
+% rft-end S04
+
+% rft-begin S03 913f49be
+\begin{figure}[t]
+  \centering
+  \rftfig[width=.8\linewidth]{E08}{loss}
+  \caption{Training loss}\label{S03}
+\end{figure}
+% rft-end S03
+
+\section{Results}
+
+% rft-begin S02 ac5a9b18
+\paragraph{CutMix at 1k images.}
+In our setting, CutMix reaches \rftnum{E05}{acc.1k}\% top-1 accuracy with 1k labelled images. % was: against the full set
+% rft-end S02
+
+% rft-begin S07 0badf00d
+\begin{lemma}[Mixing bound]\label{S07}
+The mixed label $\tilde{y}$ lies in the convex hull of $y_A$ and $y_B$.
+\end{lemma}
+% rft-end S07
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+\end{document}

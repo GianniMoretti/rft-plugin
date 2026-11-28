@@ -3,7 +3,7 @@
 
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { fingerprint, mapGaps, mapReport, mapWarnings, readDigests, resolveConcept, setDigest, setSummaries } from '../hooks/lib/map'
+import { RULES_ACTIVE_WIDTH, fingerprint, mapGaps, mapReport, mapWarnings, projectMap, readDigests, resolveConcept, setDigest, setSummaries } from '../hooks/lib/map'
 import { addNode, rulesText, setConcept, setStatus } from '../hooks/lib/ops'
 import { front, load, readConfig, unquoteJson } from '../hooks/lib/vault'
 import { CWD, D01, MemoryFs, demoFiles, world } from './fixture'
@@ -89,6 +89,21 @@ describe('map', () => {
     expect(concept).toContain('D01 A better variant ← E01 — Try a better variant')
     expect(concept).not.toContain('E01 First check')
     await expect(mapReport(io, l, 'Nope')).rejects.toThrow('not a concept')
+  })
+
+  test('in the session rules a note in progress is one short line; rft_map gives it whole', async () => {
+    const { io, l } = await setup()
+    const long = `Variant run over 3 seeds, ${'then what each seed gave, at length, '.repeat(5)}end`
+    await setSummaries(io, l, { E02: long })
+    await setStatus(io, l, 'E02', 'running')
+    const digests = await readDigests(io, l)
+    expect(projectMap(l, digests)).toContain(`E02 Variant run ← D01 — ${long}`)
+    expect(await mapReport(io, l)).toContain(`E02 Variant run ← D01 — ${long}`)
+    const line = projectMap(l, digests, { activeWidth: RULES_ACTIVE_WIDTH }).split('\n').find(x => x.includes('E02 Variant run'))!
+    expect(line.length).toBeLessThanOrEqual(RULES_ACTIVE_WIDTH)
+    expect(line.length).toBeGreaterThan(RULES_ACTIVE_WIDTH - 10)
+    expect(line.endsWith('…')).toBe(true)
+    expect(line).toContain('E02 Variant run ← D01 — Variant run over 3 seeds')
   })
 
   test('validation on a new vault warns per note; gaps count what /rft-summarize has to write', async () => {

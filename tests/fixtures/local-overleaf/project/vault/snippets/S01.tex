@@ -1,0 +1,7 @@
+% rft-snippet S01 · definition · CutMix
+% basis: T02, R07
+\begin{definition}[CutMix]\label{S01}
+Given two labelled images $(x_A, y_A)$ and $(x_B, y_B)$, CutMix~\cite{R07} forms
+$\tilde{x} = M \odot x_A + (1 - M) \odot x_B$ and $\tilde{y} = \lambda y_A + (1 - \lambda) y_B$,
+where $M$ is a binary box mask and $\lambda$ is the fraction of $x_A$ that it keeps.
+\end{definition}

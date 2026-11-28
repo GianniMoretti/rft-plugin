@@ -9,6 +9,7 @@ import type { Io } from './vault'
 import { join } from './vault'
 import type { QueueView } from './queue'
 import { QUEUE_DIR, gpuLine } from './queue'
+import { cite } from './manual'
 
 export const MACHINE_FILE = `${QUEUE_DIR}/machine.json`
 
@@ -115,9 +116,9 @@ export function probeText(p: Probe): string {
 }
 
 /** The request /rft-machine add hands to Claude: the check above, two questions, one call. */
-export function machinePrompt(p: Probe): string {
+export function machinePrompt(p: Probe, manual?: string): string {
   const disks = p.disks.slice(0, 4).map(d => `${d.path} (${bytes(d.free)} free)`)
-  return `Pair this machine with the experiment queue (rft-manual skill, "The experiment queue"). The plugin checked it already, so do not inspect the machine yourself:\n${probeText(p)}\n\n` +
+  return `Pair this machine with the experiment queue (${cite(manual, 'queue')} says how). The plugin checked it already, so do not inspect the machine yourself:\n${probeText(p)}\n\n` +
     `Ask me, in one AskUserQuestion with two questions: (1) where the runs' outputs go: ${p.runs_dir ? `${p.runs_dir} first, as recommended` : 'one of the disks'}${disks.length ? `, then ${disks.filter(d => !d.startsWith(`${p.runs_dir} `)).join(', ') || 'no other disk'}` : ''}; ` +
     `(2) which GPUs to keep out of the queue for my own work: none (recommended) or ${p.gpus.map(g => `GPU ${g.index}`).join(', ')} (multiSelect). ` +
     'Then call rft_machine with action "add", runs_dir and keep_out (the GPU indices, or none), and tell me in two lines what is on.'

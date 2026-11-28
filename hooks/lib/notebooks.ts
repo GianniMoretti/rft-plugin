@@ -108,8 +108,19 @@ export const experimentsCell = (concept: string, resultsDir: string) =>
   `EXPERIMENTS = {_r["exp"]: _r["results"] for _r in (_json.loads(_p.read_text()) for _p in sorted(_pathlib.Path(${JSON.stringify(resultsDir)}).glob("E*.json"))) if ${JSON.stringify(concept)} in (_r.get("concepts") or []) and isinstance(_r.get("results"), dict)}`
 
 /**
+ * The cell that applies the project's figure style (notebooks/rft_style.py, which the run and the
+ * editor put beside the notebook with the project's tokens; docs/design/figures.md) and gives its
+ * helpers as `rs`. A cell that draws with them reads `rs`, so it runs after this one.
+ */
+export const styleCell =
+  '# the project\'s figure style (rft_style.py beside this notebook, written by rft from its tokens):\n' +
+  '# rs.figure(), rs.band(), rs.baseline(), rs.reference(), rs.highlight(), rs.label_lines(), rs.title(), rs.legend_below(), rs.ramp()\n' +
+  'import rft_style as rs\n\nrs.use()'
+
+/**
  * The marimo notebook made of `cells` (plain Python, one string per cell): `mo` first, a title
- * cell, the RUNS cell (an experiment's) or the EXPERIMENTS cell (a concept's) when given, then each
+ * cell, the RUNS cell (an experiment's) or the EXPERIMENTS cell (a concept's) when given, the
+ * figure style's cell (`rs`), then each
  * cell as a function with no arguments, which marimo reads its inputs and outputs from itself; it
  * runs as a script too.
  */
@@ -123,6 +134,7 @@ export function notebookSource(title: string, cells: string[], runs?: { exp: str
     cellBlock(intro, '@app.cell(hide_code=True)'),
     ...(runs ? [cellBlock(runsCell(runs.exp, runs.root), '@app.cell(hide_code=True)')] : []),
     ...(concept ? [cellBlock(experimentsCell(concept.id, concept.resultsDir), '@app.cell(hide_code=True)')] : []),
+    `@app.cell(hide_code=True)\ndef _():\n${indented(styleCell)}\n    return (rs,)`,
     ...cells.map(c => cellBlock(c)),
     'if __name__ == "__main__":\n    app.run()',
   ].join('\n\n\n') + '\n'

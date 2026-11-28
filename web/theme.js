@@ -14,6 +14,9 @@
   function apply() {
     const theme = chosen || (system.matches ? 'dark' : 'light')
     root.dataset.theme = theme
+    // a phone browser's own bar takes the page's bar colour (--panel in app.css)
+    const bar = document.querySelector('meta[name="theme-color"]')
+    if (bar) bar.content = theme === 'dark' ? '#171a21' : '#ffffff'
     const button = document.getElementById('theme')
     if (!button) return
     const label = `Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`

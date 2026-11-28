@@ -89,6 +89,31 @@ class ApplyTest(unittest.TestCase):
     def text(self):
         return self.path.read_text()
 
+    def test_a_table_the_notebook_typeset_keeps_its_own_latex(self):
+        self.write("")
+        tex = "% needs: \\usepackage[table]{xcolor}\n\\begin{tabular}{lc}\nA & \\cellcolor[HTML]{ABC5E0}$+$2.1 \\\\\n\\end{tabular}\n"
+        rft_results.apply(self.vault, "E02", outcome(latex={"Gap by size": tex, "No such table": "x"}), "2026-11-16")
+        table = (self.vault / "tables" / "E02_gap_by_size.html").read_text()
+        # on the table for the view's LaTeX button: one attribute, its quotes, ampersands and newlines escaped
+        self.assertTrue(table.startswith('<table data-latex="% needs: \\usepackage[table]{xcolor}&#10;\\begin{tabular}{lc}&#10;A &amp; \\cellcolor'))
+        self.assertIn("<tr><td>1000</td><td>4.1</td></tr>", table)
+        import html as _html
+        attr = table[len('<table data-latex="'):table.index('">\n<caption>')]
+        self.assertEqual(_html.unescape(attr), tex.strip())
+        # and as the manuscript's \\rfttable, in place of the plain tabular
+        self.assertEqual((self.vault / "tables" / "E02_gap_by_size.tex").read_text(), tex)
+
+    def test_a_whole_float_is_kept_for_the_button_and_its_tabular_for_the_manuscript(self):
+        self.write("")
+        head = "% needs graphicx\n\\providecolor{better1}{HTML}{DDEBF2}\n"
+        tabular = "\\begin{tabular}{lc}\nA & \\cellcolor{better1}+2.1 \\\\\n\\end{tabular}"
+        tex = head + "\\begin{table*}[t]\n\\caption{Its own}\n\\resizebox{\\linewidth}{!}{%\n" + tabular + "}\n\\end{table*}\n"
+        rft_results.apply(self.vault, "E02", outcome(latex={"Gap by size": tex}), "2026-11-16")
+        import html as _html
+        table = (self.vault / "tables" / "E02_gap_by_size.html").read_text()
+        self.assertEqual(_html.unescape(table[len('<table data-latex="'):table.index('">\n<caption>')]), tex.strip())
+        self.assertEqual((self.vault / "tables" / "E02_gap_by_size.tex").read_text(), head + tabular + "\n")
+
     def test_an_empty_result_gets_the_table_and_the_run_is_saved_and_stamped(self):
         self.write("")
         got = rft_results.apply(self.vault, "E02", outcome(), "2026-11-16")
@@ -339,7 +364,7 @@ class BackfillTest(unittest.TestCase):
             ran, said = [], []
             real = rft_notebook.run
 
-            def fake(path, timeout, uv="uv"):
+            def fake(path, timeout, uv="uv", style=None):
                 ran.append(Path(path).name)
                 if Path(path).name == "E03.py":
                     return {"ok": False, "error": "Traceback (most recent call last):\nFileNotFoundError: runs/E03"}

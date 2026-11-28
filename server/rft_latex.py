@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""The LaTeX of snippets and documents (docs/design/manuscript.md): the files the plugin generates
-in vault/documents/, a document compiled to PDF, and a snippet compiled alone. Standard library only.
+"""The LaTeX of snippets and documents (docs/design/manuscript.md,
+docs/adr/0003-a-document-holds-no-trace.md): a document compiled to PDF from its folder alone, a
+snippet compiled alone, and the files the plugin generates for that. Standard library only.
 
 - **rft.sty**: the macros a snippet takes the tree's numbers, figures and tables with, so none is
   typed by hand: \\rftnum{E05}{acc.1k} (a number of results/E05.json, the notebook's RESULTS as it
@@ -11,12 +12,18 @@ in vault/documents/, a document compiled to PDF, and a snippet compiled alone. S
 - **refs.bib**: the reference notes' BibTeX: each ```bibtex block of a note as written (a literature
   note holds one per paper, cited by its own key), and a single-paper note also under its id
   (\\cite{R07}); a reference with no block gets a @misc from its title and its first link.
-- **compile**: `latexmk -pdf` in documents/<name>/, its output in documents/.build/<name>/, with
-  documents/ and the vault on TEXINPUTS (so `rft.sty`, `figures/…` and `tables/…` are found) and
-  shell escape off; stopped after TIMEOUT_S. A document holds copies of its snippets, so it needs
-  nothing else. The answer: the PDF, the errors (file and line) and rft's warnings.
-- **a snippet alone**: snippets/<id>.tex in a minimal article (the preamble documents start with),
-  compiled in documents/.build/_snippets/, so a building block can be read on its own.
+- **compile**: latexmk in documents/<name>/ on its main file (the file with \\begin{document},
+  whatever its name: rft_manuscript.main_of), with the document's engine (pdfLaTeX, XeLaTeX or
+  LuaLaTeX, kept in its tracking file; latexmk itself picks bibtex or biber, and runs bibtex once
+  per chapter when the document has a bibliography per chapter), its output in
+  documents/.build/<name>/ (the document's subfolders made there too, for \\include), shell escape
+  off; stopped after TIMEOUT_S. A document is plain LaTeX that holds all it needs, so nothing of
+  the vault or of the plugin is on its path and nothing is generated for it: what compiles here
+  compiles in Overleaf. The answer: the PDF, the errors (file and line) and the warnings.
+- **a snippet alone**: snippets/<id>.tex, which keeps its macros, in a minimal article, compiled in
+  documents/.build/_snippets/ with documents/ and the vault on TEXINPUTS (so `rft.sty`,
+  `figures/…` and `tables/…` are found), so a building block can be read on its own. The three
+  generated files above are for this only.
 
     python3 rft_latex.py generate --vault V
     python3 rft_latex.py compile --vault V --doc paper
@@ -36,6 +43,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import rft_manuscript  # noqa: E402
 from rft_results import field, number_text, split_note, tex_text, write_atomic  # noqa: E402
 
 DOCUMENTS = "documents"
@@ -171,36 +179,67 @@ RFT_WARNING_RE = re.compile(r"Package rft Warning: (.*?)(?: on input line (\d+))
 CITE_RE = re.compile(r"LaTeX Warning: (Citation|Reference) [`'](.+?)' .*?undefined on input line (\d+)")
 
 
-def where(file: str, ms: Path, doc: str) -> dict:
-    """A file the log names, as the page shows it: a snippet's id, or the document's main.tex."""
+def where(file: str, ms: Path, doc: str, base: str = "") -> dict:
+    """A file the log names, as the page shows it: a snippet's id, or a file of the document
+    (relative to the vault, and `in`: its path inside the document; `base`: the main file's
+    folder there, which the log's paths start from)."""
     m = re.search(r"(?:^|/)snippets/(S\d+)\.tex$", file)
     if m:
         return {"file": f"snippets/{m.group(1)}.tex", "snippet": m.group(1)}
-    if file.endswith("main.tex"):
-        return {"file": f"{DOCUMENTS}/{doc}/main.tex"}
+    rel = file[2:] if file.startswith("./") else file
+    if doc != "_snippets" and not os.path.isabs(rel):
+        rel = os.path.normpath(os.path.join(base, rel)).replace(os.sep, "/")
+        return {"file": f"{DOCUMENTS}/{doc}/{rel}", "in": rel}
     return {"file": file.replace(str(ms.parent) + "/", "")}
 
 
-def read_log(log: str, ms: Path, doc: str) -> tuple[list[dict], list[str]]:
-    """The errors of a log (file, line, message, the lines after it) and rft's and the citations' warnings."""
+# the environments a snippet's kind opens, with the heading each prints
+THEOREMS = {"theorem": "Theorem", "lemma": "Lemma", "proposition": "Proposition", "corollary": "Corollary", "definition": "Definition"}
+UNDEFINED_ENV = re.compile(r"LaTeX Error: Environment (\w+) undefined")
+
+
+ENGINE_NAMES = {"pdflatex": "pdfLaTeX", "xelatex": "XeLaTeX", "lualatex": "LuaLaTeX"}
+ENGINE_FLAG = {"pdflatex": "-pdf", "xelatex": "-xelatex", "lualatex": "-lualatex"}
+# what a log says when the document asks for another engine, or for shell escape
+NEEDS_UNICODE_ENGINE = re.compile(r"requires either XeTeX or LuaTeX|requires XeTeX or LuaTeX|must be (?:run|compiled) (?:with|under) (?:XeLaTeX|XeTeX|LuaLaTeX|LuaTeX)|"
+                                  r"(?:fontspec|polyglossia|unicode-math) Error:.*(?:XeTeX|LuaTeX)", re.I)
+NEEDS_SHELL_ESCAPE = re.compile(r"-shell-escape|shell[- ]escape (?:is )?(?:not enabled|disabled|required)|\\write18 (?:is )?(?:not enabled|disabled)", re.I)
+
+
+def read_log(log: str, ms: Path, doc: str, main: str = "main.tex", engine: str = "pdflatex") -> tuple[list[dict], list[str]]:
+    """The errors of a log (file, line, message, the lines after it) and rft's and the citations'
+    warnings. An environment of a snippet's kind that the document does not declare is named
+    (`declare`), so the page can offer to add its \\newtheorem line. A document that asks for
+    another engine gets a first error that says so and names the setting (`engine`: the one to
+    choose); one that asks for shell escape, a first error saying it is off."""
     errors, warnings = [], []
     lines = log.splitlines()
+    base = os.path.dirname(main)
+    said = lambda message, **more: {"file": f"{DOCUMENTS}/{doc}/{main}", "in": main, "line": None, "message": message, "context": "", **more}  # noqa: E731
+    first = []
+    if doc != "_snippets" and engine == "pdflatex" and NEEDS_UNICODE_ENGINE.search(log):
+        first.append(said("This document needs XeLaTeX or LuaLaTeX, and its engine is pdfLaTeX: change the engine (Engine, in the document's head) and compile again", engine="xelatex"))
+    if NEEDS_SHELL_ESCAPE.search(log):
+        first.append(said("This document asks for shell escape (a package such as minted runs a program while compiling): shell escape is off here and stays off, so it does not compile"))
     for i, line in enumerate(lines):
         m = ERROR_RE.match(line)
         if m and m.group(3).strip().startswith("==> Fatal error occurred"):
             continue  # TeX's last word after an error, not one of its own
         if m:
             context = " ".join(x.strip() for x in lines[i + 1:i + 3] if x.strip() and not x.startswith("!"))
-            errors.append({**where(m.group(1), ms, doc), "line": int(m.group(2)), "message": m.group(3).strip(), "context": context[:200]})
+            errors.append({**where(m.group(1), ms, doc, base), "line": int(m.group(2)), "message": m.group(3).strip(), "context": context[:200]})
+            env = UNDEFINED_ENV.search(m.group(3))
+            if env and env.group(1) in THEOREMS and doc != "_snippets":
+                errors[-1]["declare"] = env.group(1)
         elif line.startswith("! ") and not errors:
-            errors.append({"file": f"{DOCUMENTS}/{doc}/main.tex", "line": None, "message": line[2:].strip(), "context": ""})
+            errors.append({"file": f"{DOCUMENTS}/{doc}/{main}", "line": None, "message": line[2:].strip(), "context": ""})
         w = RFT_WARNING_RE.search(line)
         if w:
             warnings.append(w.group(1).replace("(rft)", "").strip())
         c = CITE_RE.search(line)
         if c:
             warnings.append(f"{c.group(1)} {c.group(2)} undefined")
-    return errors, list(dict.fromkeys(warnings))
+    return first + errors, list(dict.fromkeys(warnings))
 
 
 def stop(proc: subprocess.Popen) -> None:
@@ -214,16 +253,25 @@ def stop(proc: subprocess.Popen) -> None:
             pass
 
 
-def _latexmk(vault: Path, src: Path, out: Path, doc: str, timeout: float) -> dict:
-    """latexmk on `src` (its folder the working one), its output in `out`, after rft's files are generated."""
+def _latexmk(vault: Path, src: Path, out: Path, doc: str, timeout: float, engine: str = "pdflatex", main: str | None = None) -> dict:
+    """latexmk on `src` (its folder the working one), its output in `out`, with `engine`. A
+    snippet alone (`doc` _snippets) gets rft's generated files and the vault on its path; a
+    document gets neither: it compiles from its folder alone. `main`: the main file's path inside
+    the document, when it is not in the document's top folder."""
     if not shutil.which("latexmk"):
         return {"ok": False, "error": "latexmk is not on PATH: install a TeX distribution (TeX Live, with latexmk) to compile"}
     ms = documents_dir(vault)
-    generate(vault)
     out.mkdir(parents=True, exist_ok=True)
-    env = {**os.environ, "TEXINPUTS": f"{ms}{os.pathsep}{vault}{os.pathsep}", "BIBINPUTS": f"{ms}{os.pathsep}",
-           "shell_escape": "f", "max_print_line": "1000"}
-    cmd = ["latexmk", "-pdf", "-interaction=nonstopmode", "-halt-on-error", "-file-line-error", f"-outdir={out}", src.name]
+    env = {**os.environ, "shell_escape": "f", "max_print_line": "1000"}
+    if doc == "_snippets":
+        generate(vault)
+        env.update(TEXINPUTS=f"{ms}{os.pathsep}{vault}{os.pathsep}", BIBINPUTS=f"{ms}{os.pathsep}")
+    else:
+        # \include writes each file's .aux beside where the file is: the document's subfolders, in the output
+        for d in src.parent.rglob("*"):
+            if d.is_dir() and not d.is_symlink() and not any(part.startswith(".") for part in d.relative_to(src.parent).parts):
+                (out / d.relative_to(src.parent)).mkdir(parents=True, exist_ok=True)
+    cmd = ["latexmk", ENGINE_FLAG.get(engine, "-pdf"), "-interaction=nonstopmode", "-halt-on-error", "-file-line-error", f"-outdir={out}", src.name]
     t = time.monotonic()
     proc = subprocess.Popen(cmd, cwd=src.parent, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL, start_new_session=True)
@@ -235,7 +283,7 @@ def _latexmk(vault: Path, src: Path, out: Path, doc: str, timeout: float) -> dic
     seconds = round(time.monotonic() - t, 1)
     log_path = out / f"{src.stem}.log"
     log = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
-    errors, warnings = read_log(log, ms, doc)
+    errors, warnings = read_log(log, ms, doc, main or src.name, engine)
     pdf = out / f"{src.stem}.pdf"
     ok = proc.returncode == 0 and pdf.exists()
     answer = {"ok": ok, "seconds": seconds, "errors": errors, "warnings": warnings}
@@ -246,13 +294,47 @@ def _latexmk(vault: Path, src: Path, out: Path, doc: str, timeout: float) -> dic
     return answer
 
 
+def settings(vault: Path, doc: str) -> dict:
+    """What a document compiles with: its main file (rft_manuscript.main_of), the files the user
+    is asked to pick it from when several have \\begin{document} (`asked`), and its engine."""
+    files, _ = rft_manuscript.document_texts(vault, doc)
+    tracking = rft_manuscript.read_tracking(vault, doc)
+    main, asked = rft_manuscript.main_of(files, tracking["main"])
+    return {"main": main, "asked": asked, "engine": tracking["engine"]}
+
+
+def main_file(vault: Path, doc: str) -> str:
+    """A document's main file, by its path inside the document."""
+    return settings(vault, doc)["main"]
+
+
+def build_dir(vault: Path, doc: str, main: str) -> Path:
+    """Where a document's compile leaves its output: documents/.build/<doc>/, and under it the
+    main file's folder when the main file is not in the document's top folder."""
+    return documents_dir(vault) / ".build" / doc / os.path.dirname(main)
+
+
+def pdf_path(vault: Path, doc: str) -> Path:
+    """The PDF a document's compile leaves."""
+    main = main_file(vault, doc)
+    return build_dir(vault, doc, main) / f"{Path(main).stem}.pdf"
+
+
 def compile_doc(vault: Path, doc: str, timeout: float = TIMEOUT_S) -> dict:
-    """Compiles documents/<doc>/main.tex to documents/.build/<doc>/main.pdf."""
+    """Compiles a document's main file to documents/.build/<doc>/<main>.pdf, from its folder
+    alone, with its engine. Refused, with the reason, while the user has not said which of several
+    files with \\begin{document} is the main one."""
     vault = Path(vault).resolve()
-    src = documents_dir(vault) / doc / "main.tex"
-    if not DOC_RE.match(doc) or not src.is_file():
+    if not rft_manuscript.is_document(vault, doc):
         return {"ok": False, "error": f"no document {doc}"}
-    return _latexmk(vault, src, documents_dir(vault) / ".build" / doc, doc, timeout)
+    st = settings(vault, doc)
+    if st["asked"]:
+        return {"ok": False, "error": f"{doc} has several files with \\begin{{document}} ({', '.join(st['asked'])}): choose its main file first (Main file, in the document's head)"}
+    src = documents_dir(vault) / doc / st["main"]
+    if not st["main"] or not src.is_file():
+        return {"ok": False, "error": f"{doc} has no .tex file to compile: its main file is the one with \\begin{{document}}"}
+    r = _latexmk(vault, src, build_dir(vault, doc, st["main"]), doc, timeout, st["engine"], st["main"])
+    return {**r, "engine": st["engine"], "main": st["main"]}
 
 
 SNIPPET_ID = re.compile(r"^S\d+$")

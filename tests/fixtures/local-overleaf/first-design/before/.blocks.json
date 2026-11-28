@@ -1,0 +1,6 @@
+{
+  "S01": "\\begin{definition}[CutMix]\\label{S01}\nGiven two labelled images $(x_A, y_A)$ and $(x_B, y_B)$, CutMix~\\cite{R07} forms\n$\\tilde{x} = M \\odot x_A + (1 - M) \\odot x_B$ and $\\tilde{y} = \\lambda y_A + (1 - \\lambda) y_B$,\nwhere $M$ is a binary box mask and $\\lambda$ is the fraction of $x_A$ that it keeps.\n\\end{definition}",
+  "S04": "We train a ResNet-50 for 200 epochs with SGD, a cosine schedule and a batch size of 256. CutMix is\napplied to every batch with $\\lambda \\sim \\mathrm{Beta}(1, 1)$.",
+  "S03": "\\begin{figure}[t]\n  \\centering\n  \\rftfig[width=.8\\linewidth]{E08}{loss}\n  \\caption{Training loss}\\label{S03}\n\\end{figure}",
+  "S02": "\\paragraph{CutMix at 1k images.}\nWith 1k labelled images, CutMix reaches \\rftnum{E05}{acc.1k}\\% top-1 accuracy, against \\rftnum{E05}{acc.full}\\% when trained on the\nfull set."
+}

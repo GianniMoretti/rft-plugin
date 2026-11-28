@@ -20,7 +20,7 @@ describe('activation', () => {
     const w = world(on, {})
     on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.commands).toEqual(['rft', 'rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-next', 'rft-machine', 'rft-jobs', 'rft-summarize', 'rft-manuscript', 'rft-artifact', 'rft-update', 'rft-view'])
+    expect(w.commands).toEqual(['rft', 'rft-init', 'rft-concepts', 'rft-literature', 'rft-grill-me', 'rft-rebalance', 'rft-next', 'rft-machine', 'rft-jobs', 'rft-summarize', 'rft-manuscript', 'rft-artifact', 'rft-update', 'rft-view', 'rft-inbox', 'rft-handoff'])
     expect(w.tools).toEqual([])
     expect(w.opened).toEqual([])
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
@@ -37,7 +37,7 @@ describe('activation', () => {
     const w = world(on, demoFiles())
     on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'base', scope: 'shared' as const }] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.tools).toEqual(['rft_add_node', 'rft_set_repos', 'rft_code', 'rft_set_code', 'rft_set_notebook', 'rft_run_notebook', 'rft_set_status', 'rft_suggest_priority', 'rft_suggest_dates', 'rft_add_deadline', 'rft_suggest_deadline', 'rft_set_summary', 'rft_map', 'rft_supersede', 'rft_next', 'rft_set_digest', 'rft_artifact', 'rft_manuscript', 'rft_set_snippet', 'rft_set_document', 'rft_set_artifact', 'rft_move_node', 'rft_set_refs', 'rft_search', 'rft_graph', 'rft_collect_papers', 'rft_set_tags', 'rft_set_type', 'rft_set_concept', 'rft_concepts', 'rft_tags', 'rft_tree', 'rft_validate', 'rft_sync', 'rft_comments', 'rft_comment', 'rft_suggest', 'rft_machine'])
+    expect(w.tools).toEqual(['rft_add_node', 'rft_set_repos', 'rft_code', 'rft_set_code', 'rft_set_notebook', 'rft_run_notebook', 'rft_set_status', 'rft_suggest_priority', 'rft_suggest_dates', 'rft_add_deadline', 'rft_add_meeting', 'rft_suggest_deadline', 'rft_set_summary', 'rft_map', 'rft_supersede', 'rft_next', 'rft_set_digest', 'rft_artifact', 'rft_manuscript', 'rft_set_snippet', 'rft_set_document', 'rft_set_artifact', 'rft_move_node', 'rft_set_refs', 'rft_search', 'rft_graph', 'rft_collect_papers', 'rft_set_tags', 'rft_set_type', 'rft_set_concept', 'rft_concepts', 'rft_tags', 'rft_inbox', 'rft_handoff', 'rft_tree', 'rft_validate', 'rft_sync', 'rft_comments', 'rft_comment', 'rft_suggest', 'rft_machine'])
     expect(w.opened).toEqual(['rft-tree'])
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
     const rules = res.sections.find(s => s.id === 'rft:rules')
@@ -51,8 +51,8 @@ describe('activation', () => {
     const w = world(on, demoFiles(), { refuse: ['rft'] })
     on('prompt.compose', () => ({ sections: [] }))
     await $.session.start({ cwd: CWD, source: 'startup' } as never)
-    expect(w.commands).toEqual(['rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-next', 'rft-machine', 'rft-jobs', 'rft-summarize', 'rft-manuscript', 'rft-artifact', 'rft-update', 'rft-view'])
-    expect(w.tools).toHaveLength(38)
+    expect(w.commands).toEqual(['rft-init', 'rft-concepts', 'rft-literature', 'rft-grill-me', 'rft-rebalance', 'rft-next', 'rft-machine', 'rft-jobs', 'rft-summarize', 'rft-manuscript', 'rft-artifact', 'rft-update', 'rft-view', 'rft-inbox', 'rft-handoff'])
+    expect(w.tools).toHaveLength(41)
     expect(w.opened).toEqual(['rft-tree'])
     expect(w.toasts.join()).toContain('/rft')
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
@@ -61,7 +61,7 @@ describe('activation', () => {
 
   test('no command takes the name of the plugin skill', async () => {
     // a plugin skill named <x> is the command /rft:<x>; the engine refuses a command of the same name
-    expect(['rft', 'rft-init', 'rft-concepts', 'rft-literature', 'rft-rebalance', 'rft-next', 'rft-machine', 'rft-jobs', 'rft-summarize', 'rft-manuscript', 'rft-artifact', 'rft-update', 'rft-view']).not.toContain(SKILL)
+    expect(['rft', 'rft-init', 'rft-concepts', 'rft-literature', 'rft-grill-me', 'rft-rebalance', 'rft-next', 'rft-machine', 'rft-jobs', 'rft-summarize', 'rft-manuscript', 'rft-artifact', 'rft-update', 'rft-view', 'rft-inbox', 'rft-handoff']).not.toContain(SKILL)
   })
 
   test('autoOpen off keeps the pane closed', { options: { autoOpen: false } }, async ($, on) => {
@@ -97,6 +97,44 @@ describe('tools', () => {
     expect(check.text).toMatch(/^OK: no errors/)
     const bad = await $.tool.call({ tool: 'mcp__rft__rft_add_node', type: 'direction', title: 'Orphan', parent: 'X9' } as never)
     expect(bad.isError).toBe(true)
+  })
+
+  test('rft_add_node: the answer ends with the check; a list adds every note in one call, sharing the fields given beside it', async ($, on) => {
+    mock.clock(on)
+    const w = world(on, demoFiles())
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const one = await $.tool.call({ tool: 'mcp__rft__rft_add_node', type: 'direction', title: 'A question', parent: 'E02', idea: 'Why.', summary: 'Why it holds' } as never)
+    expect(one.isError).toBeUndefined()
+    expect(one.text!.split('\n').pop()).toMatch(/^Check: OK, the tree is valid and its derived files are in sync \(no rft_sync or rft_validate needed\)/)
+    const many = await $.tool.call({
+      tool: 'mcp__rft__rft_add_node', type: 'experiment', parent: '#1', status: 'planned', tags: ['seeds'],
+      notes: [
+        { type: 'direction', title: 'Sweep the seeds', parent: 'D02', status: 'idea', idea: 'Three seeds.', summary: 'Seeds 0 to 2' },
+        { title: 'Seed 0', what: 'Seed 0.', summary: 'Seed 0 of the sweep' },
+        { title: 'Seed 1', what: 'Seed 1.', summary: 'Seed 1 of the sweep' },
+        { title: 'Seed 2', what: 'Seed 2.', summary: 'Seed 2 of the sweep', tags: ['last'] },
+      ],
+    } as never)
+    expect(many.isError).toBeUndefined()
+    expect(many.text).toContain('Id: D03')
+    for (const id of ['E03', 'E04', 'E05']) expect(many.text).toContain(`Id: ${id}`)
+    expect(w.fs.read('vault/experiments/E04 Seed 1.md')).toContain('parent: "[[D03 Sweep the seeds]]"')
+    expect(w.fs.read('vault/experiments/E04 Seed 1.md')).toContain('tags: [demo, experiment, seeds, planned]')
+    expect(w.fs.read('vault/experiments/E05 Seed 2.md')).toContain('tags: [demo, experiment, last, planned]')
+    expect(w.fs.read('vault/experiments/E03 Seed 0.md')).toContain('Seed 0.')
+    // the notes of one call are not each other's earlier work
+    expect(many.text).not.toContain('have we tried this?')
+    expect(many.text!.split('\n').pop()).toMatch(/^Check: OK/)
+    const check = await $.tool.call({ tool: 'mcp__rft__rft_validate' } as never)
+    expect(check.text).toMatch(/^OK: no errors/)
+    const sync = await $.tool.call({ tool: 'mcp__rft__rft_sync' } as never)
+    // a sync answers with the tree's check, so no rft_validate follows it
+    expect(sync.text).toMatch(/^Everything was already in sync\.\nCheck: OK, the tree is valid \(no rft_validate needed\)\. 1 warning\(s\):\n- \d+ note\(s\) have no one-line summary/)
+    // one refused note, nothing written
+    const refused = await $.tool.call({ tool: 'mcp__rft__rft_add_node', notes: [{ type: 'direction', title: 'Fine', parent: 'D01' }, { type: 'direction', title: 'Lost', parent: 'X9' }] } as never)
+    expect(refused.isError).toBe(true)
+    expect(refused.text).toContain('note 2 of 2 ("Lost")')
+    expect(w.fs.exists('vault/directions/D04 Fine.md')).toBe(false)
   })
 })
 
@@ -152,11 +190,139 @@ describe('concepts', () => {
     expect(prompts[0]).toContain('ONE literature note, not a note per paper')
     expect(prompts[0]).toContain('tags ["literature"]')
     expect(prompts[0]).toContain('never invent a citation')
+    // what it found and did not read goes to the inbox, with a why naming the search
+    // every paper of the search reaches the inbox: the entries of the note, and those found but not read
+    expect(prompts[0]).toContain('Then save every paper the note lists as an entry in the inbox with rft_inbox (its link, its title, and a why that names this search and its note')
+    expect(prompts[0]).toContain('that you did not read are neither written about nor dropped: save each in the inbox too')
+    expect(prompts[0]).toContain('a why that names this search')
     await run('label smoothing')
     await clock.advance(5000)
     expect(prompts[1]).toContain('"label smoothing"')
     expect(prompts[1]).toContain('ask me where to put it')
     expect(w.fs.read(`vault/directions/${D01}.md`)).toBe(demoFiles()[`vault/directions/${D01}.md`])
+  })
+
+  test('/rft-literature on a literature note at planned fills that note; on any other note it adds one', async ($, on) => {
+    const clock = mock.clock(on)
+    const w = world(on, demoFiles())
+    const prompts: string[] = []
+    on('prompt.submit', (_$, e) => { prompts.push(String(e.text)); return { text: e.text } as never })
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const io = w.fs.io()
+    const planned = await addNode(io, await loadActive(io), { type: 'reference', title: 'Literature on variants', parent: 'D01', date: '2026-02-01', tags: ['literature'], status: 'planned', sections: { Search: 'Does the variant hold on video?' } })
+    const done = await addNode(io, await loadActive(io), { type: 'reference', title: 'Literature on baselines', parent: 'D01', date: '2026-02-01', tags: ['literature'], status: 'done' })
+    const paper = await addNode(io, await loadActive(io), { type: 'reference', title: 'One paper', parent: 'D01', date: '2026-02-01', status: 'planned' })
+    const run = (args: string) => $.command.run({ command: 'rft-literature', args, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } } as never)
+    expect((await run(planned.id)).text).toContain('no second literature note is added')
+    await clock.advance(5000)
+    expect(prompts[0]).toContain(`Run the literature search that ${planned.id} Literature on variants planned`)
+    expect(prompts[0]).toContain('fill it and add no other note')
+    expect(prompts[0]).toContain('rft_set_status done')
+    expect(prompts[0]).toContain('never invent a citation')
+    expect(prompts[0]).toContain('save every paper the note lists as an entry in the inbox')
+    expect(prompts[0]).not.toContain('rft_add_node')
+    // a literature note that is done, a planned reference of one paper, a direction: a new search under it, as before
+    for (const id of [done.id, paper.id, 'D01']) {
+      await run(id)
+      await clock.advance(5000)
+      expect(prompts[prompts.length - 1]).toContain('Write the whole search as ONE literature note')
+      expect(prompts[prompts.length - 1]).toContain('Place it under')
+    }
+    expect(prompts).toHaveLength(4)
+  })
+
+  test('/rft-grill-me alone prints its usage and the directions to grill, at no model turn', async ($, on) => {
+    const clock = mock.clock(on)
+    world(on, demoFiles())
+    const prompts: string[] = []
+    on('prompt.submit', (_$, e) => { prompts.push(String(e.text)); return { text: e.text } as never })
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const res = await $.command.run({ command: 'rft-grill-me', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } } as never)
+    expect(res.text).toContain('Usage: /rft-grill-me <question, note id or concept>')
+    expect(res.text).toContain(`${D01} (idea; under it: E02 running)`)
+    await clock.advance(5000)
+    expect(prompts).toEqual([])
+  })
+
+  test('/rft-grill-me asks for the grilling the note calls for, and changes no note itself', async ($, on) => {
+    const clock = mock.clock(on)
+    const w = world(on, demoFiles())
+    const prompts: string[] = []
+    on('prompt.submit', (_$, e) => { prompts.push(String(e.text)); return { text: e.text } as never })
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const run = async (args: string) => {
+      const res = await $.command.run({ command: 'rft-grill-me', args, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } } as never)
+      await clock.advance(5000)
+      return { said: String(res.text), prompt: prompts[prompts.length - 1]! }
+    }
+    const path = `vault/directions/${D01}.md`
+    const start = w.fs.read(path)
+    const vault = () => JSON.stringify([...w.fs.files].filter(([k]) => k.startsWith('vault/')).map(([k, v]) => [k, v.text]))
+
+    // a direction at idea with a run under it: grilled in place, the run refined and not doubled
+    const before = vault()
+    const inPlace = await run('D01')
+    expect(inPlace.said).toContain(`Claude will grill you on ${D01}`)
+    expect(inPlace.said).toContain('only the rows you confirm are written')
+    expect(inPlace.prompt).toContain(`Grill me on ${D01}. The grilled direction is this note (idea).`)
+    expect(inPlace.prompt).toContain('Already under it: E02 (running)')
+    expect(inPlace.prompt).toContain('add no second note for the same run or search')
+    expect(inPlace.prompt).toContain('skills/rft-manual/grilling.md')
+    expect(inPlace.prompt).toContain('write only the grilled direction')
+    expect(inPlace.prompt).toContain('Write no code and queue nothing')
+    expect(vault()).toBe(before)
+
+    // an earlier grilling wrote on it: resumed from what the note answers
+    w.fs.write(path, start.replace('## Children in the tree', '## Hypothesis\nThe variant gains two points.\n\n## Open questions\n- Which dataset?\n\n## Children in the tree'))
+    const resumed = await run('d01')
+    expect(resumed.said).toContain('go on with the grilling')
+    expect(resumed.prompt).toContain('already has its Hypothesis and Open questions')
+    expect(resumed.prompt).toContain('do not ask it again')
+
+    // dropped: the tree holds an answer, and nothing is written until the user says reopen
+    w.fs.write(path, start.replace(/^status: idea$/m, 'status: dropped'))
+    const answered = await run('D01')
+    expect(answered.said).toContain(`${D01} is dropped`)
+    expect(answered.prompt).toContain('Write nothing until I answer')
+    expect(answered.prompt).not.toContain('The grilled direction is this note')
+
+    // locked by the user, or verified: left as it is
+    w.fs.write(path, start.replace(/^status: idea$/m, 'status: idea\nlocked: true'))
+    const locked = await run('D01')
+    expect(locked.said).toContain('stays as it is')
+    expect(locked.prompt).toContain(`${D01} is locked: do not edit it`)
+    w.fs.write(path, start.replace(/^status: idea$/m, 'status: verified'))
+    expect((await run('D01')).prompt).toContain(`${D01} is verified: do not edit it`)
+
+    // an experiment: the direction that comes out of it
+    w.fs.write(path, start)
+    const other = await run('E02')
+    expect(other.said).toContain('is not a direction')
+    expect(other.prompt).toContain(`${E02} is an experiment, not a direction`)
+
+    // anything that is no note and no concept is a question, with or without its quotes
+    const asked = await run('"does the variant transfer to video?"')
+    expect(asked.said).toContain('adds its note only once you agreed where it goes')
+    expect(asked.prompt).toContain('a question that is not a note of the tree yet: "does the variant transfer to video?"')
+    expect(asked.prompt).toContain('only then create the grilled direction')
+    expect(prompts).toHaveLength(7)
+  })
+
+  test('/rft-grill-me <concept> asks which of its open questions to grill', async ($, on) => {
+    const clock = mock.clock(on)
+    const files = demoFiles()
+    const path = `vault/directions/${D01}.md`
+    files[path] = files[path]!.replace(/^(status: .*)$/m, '$1\nconcept: "Better variants"\nconcept_summary: "Variants of the thing"')
+    world(on, files)
+    const prompts: string[] = []
+    on('prompt.submit', (_$, e) => { prompts.push(String(e.text)); return { text: e.text } as never })
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    const res = await $.command.run({ command: 'rft-grill-me', args: 'better variants', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } } as never)
+    expect(res.text).toContain('list the open questions of "Better variants"')
+    await clock.advance(5000)
+    expect(prompts[0]).toContain(`the concept "Better variants", which starts at ${D01}`)
+    expect(prompts[0]).toContain('ask me which one to grill')
+    expect(prompts[0]).toContain('write nothing')
   })
 
   test('/rft-rebalance asks Claude for moves to confirm, optionally in one part of the tree, and moves nothing', async ($, on) => {
@@ -218,6 +384,7 @@ describe('commands', () => {
     expect(html).not.toContain('data-rft-inline')
     expect(html).toContain('<style>body { color: red }</style>')
     expect(html).toContain('<script>/* theme */</script>')
+    expect(html).toContain('<script>/* phone */</script>')
     expect(html).toContain('"$&"')
     expect(html).toContain('"<\\/script>"')
     expect(html).toContain('window.RFT_DATA = {"tree":{"project":"demo"')
@@ -559,6 +726,25 @@ describe('web view', () => {
     expect(JSON.parse(w.fs.read('vault/snippets/snippets.json')).snippets.S01.reviewed).toMatch(/^\d{4}-\d{2}-\d{2}$/)
   })
 
+  test('the Manuscript tab\'s New document reaches the session with its template: a kit of the vault copied in as it is', async ($, on) => {
+    mock.clock(on)
+    const kit = { 'paper.tex': '\\documentclass{article}\n\\usepackage{kit}\n\\begin{document}\nSample.\n\\end{document}\n', 'kit.sty': '% the style\n', 'template.json': '{"engine": "xelatex"}' }
+    const w = world(on, { ...demoFiles(), ...Object.fromEntries(Object.entries(kit).map(([f, text]) => [`vault/templates/kit/${f}`, text])) })
+    const srv = fakeServer(on)
+    await $.session.start({ cwd: CWD, source: 'startup' } as never)
+    await $.command.run(RUN(''))
+    srv.print(`RFT_MANUSCRIPT ${JSON.stringify({ action: 'document', name: 'camera-ready', template: 'kit' })}\n`)
+    await until(() => w.fs.exists('vault/documents/.rft/camera-ready/tracking.json'))
+    expect(w.fs.read('vault/documents/camera-ready/paper.tex')).toBe(kit['paper.tex'])
+    expect(w.fs.read('vault/documents/camera-ready/kit.sty')).toBe(kit['kit.sty'])
+    expect(w.fs.exists('vault/documents/camera-ready/template.json')).toBe(false)
+    expect(JSON.parse(w.fs.read('vault/documents/.rft/camera-ready/tracking.json'))).toMatchObject({ main: 'paper.tex', template: 'kit', engine: 'xelatex' })
+    // what an older page sends still makes a report
+    srv.print(`RFT_MANUSCRIPT ${JSON.stringify({ action: 'document', name: 'chapter', kind: 'report' })}\n`)
+    await until(() => w.fs.exists('vault/documents/.rft/chapter/tracking.json'))
+    expect(w.fs.read('vault/documents/chapter/main.tex')).toContain('\\documentclass[11pt]{report}')
+  })
+
   test('/rft outside an RFT project starts nothing', async ($, on) => {
     mock.clock(on)
     world(on, {})
@@ -640,7 +826,7 @@ describe('linked trees', () => {
     const srv = fakeServer(on)
     on('prompt.compose', () => ({ sections: [] }))
     await $.session.start({ cwd: REPO, source: 'startup' } as never)
-    expect(w.tools).toHaveLength(38)
+    expect(w.tools).toHaveLength(41)
     const res = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] })
     expect(res.sections.find(s => s.id === 'rft:rules')?.text).toContain(`notes in \`${TREE}/vault/\``)
     expect((await $.tool.call({ tool: 'mcp__rft__rft_tree' } as never)).text).toContain(`theory notes in ${TREE}/vault/.`)
@@ -675,7 +861,7 @@ describe('linked trees', () => {
     mock.clock(on)
     const w = world(on, linked(), { cwd: `${TREE}/analysis` })
     await $.session.start({ cwd: `${TREE}/analysis`, source: 'startup' } as never)
-    expect(w.tools).toHaveLength(38)
+    expect(w.tools).toHaveLength(41)
     const tree = await $.tool.call({ tool: 'mcp__rft__rft_tree' } as never)
     expect(tree.text).toMatch(/^demo: 2 directions, 2 experiments/)
   })

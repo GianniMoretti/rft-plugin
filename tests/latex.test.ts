@@ -15,6 +15,7 @@ type Api = {
   columnSpec: (rows: Table['rows']) => string
   label: (caption: string) => string
   tableFloat: (table: Table) => string
+  floatAround: (caption: string, tabular: string) => string
   isNumber: (text: string) => boolean
 }
 
@@ -94,5 +95,19 @@ describe('artifact tables as LaTeX', () => {
     expect(X.label('Résumé of the semantic and geometric radars across every backbone we ran')).toBe('tab:resume-of-the-semantic-and-geometric')
     // no header row: no midrule
     expect(X.tableFloat({ caption: 'x', rows: [row(['a', '1'])] })).not.toContain('\\midrule')
+  })
+
+  test('a table its notebook typeset is copied as that tabular, in a float with its caption', () => {
+    const tabular = '% needs: \\usepackage[table]{xcolor}\n\\begin{tabular}{lc}\n\\toprule\nA & \\cellcolor[HTML]{ABC5E0}$+$2.1 \\\\\n\\bottomrule\n\\end{tabular}\n'
+    expect(X.floatAround('Scores, 50% & more', tabular)).toBe([
+      '\\begin{table}[t]', '\\centering', '\\caption{Scores, 50\\% \\& more}', '\\label{tab:scores-50-more}',
+      '% needs: \\usepackage[table]{xcolor}', '\\begin{tabular}{lc}', '\\toprule', 'A & \\cellcolor[HTML]{ABC5E0}$+$2.1 \\\\', '\\bottomrule', '\\end{tabular}',
+      '\\end{table}',
+    ].join('\n'))
+  })
+
+  test('LaTeX that is a float already is copied as it is', () => {
+    const float = '% needs graphicx\n\\providecolor{better1}{HTML}{DDEBF2}\n\\begin{table*}[t]\n\\centering\n\\caption{Its own}\n\\resizebox{\\linewidth}{!}{%\n\\begin{tabular}{lc}\nA & \\cellcolor{better1}+2.1 \\\\\n\\end{tabular}}\n\\end{table*}'
+    expect(X.floatAround('Scores', '\n' + float + '\n')).toBe(float)
   })
 })

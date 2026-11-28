@@ -37,20 +37,6 @@ HAS_TEX = bool(shutil.which("latexmk") and shutil.which("pdftotext"))
 
 # a snippet that takes E08's numbers and table by name, and a document as /rft-manuscript writes it
 # (documentTemplate in hooks/lib/manuscript.ts) holding a copy of it
-DOCUMENT = r"""\documentclass[11pt]{article}
-\usepackage[utf8]{inputenc}
-\usepackage[T1]{fontenc}
-\usepackage{amsmath,amssymb,amsthm}
-\usepackage{graphicx,booktabs}
-\usepackage[numbers]{natbib}
-\usepackage{rft}
-\usepackage{hyperref}
-\title{demo}
-\begin{document}
-\maketitle
-%(copy)s
-\end{document}
-"""
 SNIPPET = r"""% rft-snippet S01 · result · A schedule with no stopping rule
 % basis: E08
 \paragraph{A schedule with no stopping rule}
@@ -203,6 +189,8 @@ class PipelineTest(unittest.TestCase):
             self.assertIn(f"<td>{rft_results.number_text(a)}</td>", page)
         self.assertTrue(page.startswith("<!-- rft-artifact "))
         self.assertIn("<svg", (self.vault / "figures" / "E08_training_loss.svg").read_text())
+        # the project's figure style put beside the notebooks by the run, for their cells to import
+        self.assertIn("PROJECT: dict = {}", (self.toy / "notebooks" / "rft_style.py").read_text())
         # and the concept's comparisons, its notebook run after E08's, at no model turn either
         self.assertEqual(saved["concepts"][0], "D04")
         self.assertIn(f"<tr><td>E08</td><td>{rft_results.number_text(saved['results']['acc_mean'])}</td>", page)
@@ -215,11 +203,7 @@ class PipelineTest(unittest.TestCase):
         if HAS_TEX:
             (self.vault / "snippets").mkdir()
             (self.vault / "snippets" / "S01.tex").write_text(SNIPPET)
-            content = rft_manuscript.content_of(SNIPPET)
-            copy = f"% rft-begin S01 {rft_manuscript.content_fingerprint(content)}\n{content}\n% rft-end S01"
-            (self.vault / "documents" / "paper").mkdir(parents=True)
-            (self.vault / "documents" / "paper" / "main.tex").write_text(DOCUMENT % {"copy": copy})
-            built = rft_latex.compile_doc(self.vault, "paper")
+            built = rft_latex.compile_snippet(self.vault, "S01")
             self.assertTrue(built["ok"], built)
             self.assertEqual(built["warnings"], [])
             pdf = subprocess.run(["pdftotext", built["pdf"], "-"], capture_output=True, text=True, check=True).stdout

@@ -22,8 +22,12 @@ import unittest
 from pathlib import Path
 from urllib.parse import quote
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import procs  # noqa: E402
+import rft_decks  # noqa: E402
 import rft_manuscript  # noqa: E402
+import rft_style  # noqa: E402
 import rft_server  # noqa: E402
 
 WEB = Path(__file__).resolve().parents[1] / "web"
@@ -64,7 +68,10 @@ class ServerTest(unittest.TestCase):
             if cls.answer:
                 cls.answer(request)
 
-        handler = rft_server.make_handler(rft_server.Vault(vault, "demo"), WEB, KEY, ask)
+        cls.v = rft_server.Vault(vault, "demo")
+        cls.v.arxiv_pause = 0
+        cls.v.arxiv_meta = None  # no test reaches arXiv: one that adds an arXiv item puts its own here
+        handler = rft_server.make_handler(cls.v, WEB, KEY, ask)
         cls.server = rft_server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
         cls.port = cls.server.server_address[1]
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
@@ -303,6 +310,7 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.get("/theme.js")[0], 200)
         self.assertEqual(self.get("/markdown.js")[0], 200)
         self.assertEqual(self.get("/scratchpad.js")[0], 200)
+        self.assertEqual(self.get("/inbox.js")[0], 200)
         self.assertEqual(self.get("/vendor/jspdf.v4.2.1.umd.min.js")[0], 200)
         self.assertEqual(self.get("/vendor/svg2pdf.v2.9.0.umd.min.js")[0], 200)
         self.assertEqual(self.get("/vendor/d3.v7.9.0.min.js")[0], 200)
@@ -494,6 +502,592 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.pad({"text": "pwned", "force": True})[0], 422)
         self.assertEqual((self.root / "secret.md").read_bytes(), secret)
         self.assertTrue(p.is_symlink())
+
+    # ------------------------------------------------------------ the inbox
+    def fresh_inbox(self, data: bytes | None = None):
+        """The vault's inbox as a test wants it (none by default), removed afterwards."""
+        p = self.vault / "Inbox.md"
+        p.unlink(missing_ok=True)
+        self.addCleanup(p.unlink, missing_ok=True)
+        if data is not None:
+            p.write_bytes(data)
+        return p
+
+    def test_inbox_read_as_the_fixture_says(self):
+        fixture = Path(__file__).resolve().parent / "fixtures" / "inbox"
+        want = json.loads((fixture / "expected.json").read_text(encoding="utf-8"))["items"]
+        before = (fixture / "Inbox.md").read_bytes()
+        self.fresh_inbox()
+        tree = json.loads(self.get("/api/tree")[2])
+        p = self.fresh_inbox(before)
+        status, ctype, body = self.get("/api/inbox")
+        self.assertEqual((status, ctype.split(";")[0]), (200, "application/json"))
+        self.assertEqual(json.loads(body), {"name": "Inbox.md", "items": want, "notes": {}, "waiting": []})
+        self.assertEqual(p.read_bytes(), before)  # read, never rewritten
+        # not a note: the tree, and its version, stay as they were
+        self.assertEqual(json.loads(self.get("/api/tree")[2]), tree)
+
+    def test_inbox_empty_without_a_file_and_never_through_a_link(self):
+        p = self.fresh_inbox()
+        self.assertEqual(json.loads(self.get("/api/inbox")[2]), {"name": "Inbox.md", "items": [], "notes": {}, "waiting": []})
+        self.assertFalse(p.exists())
+        os.symlink(self.root / "secret.md", p)
+        status, _, body = self.get("/api/inbox")
+        self.assertEqual(status, 422)
+        self.assertNotIn(b"secret", body.replace(b"Inbox.md", b""))
+        p.unlink()
+        p.write_bytes(b"\xff\xfe not utf-8\n- https://e.org/x\n")
+        self.assertEqual([i["key"] for i in json.loads(self.get("/api/inbox")[2])["items"]], ["https://e.org/x"])
+
+    def add_inbox(self, link, why=None, **kw):
+        return self.write("POST", "/api/inbox", {"link": link} if why is None else {"link": link, "why": why}, **kw)
+
+    def arxiv(self, answer):
+        """arXiv as a test has it: `answer(id)` gives the paper's title or raises. The ids asked for."""
+        asked = []
+
+        def meta(aid, *a):
+            asked.append(aid)
+            return {"title": answer(aid), "author": "", "year": ""}
+
+        self.v.arxiv_meta = meta
+        self.addCleanup(setattr, self.v, "arxiv_meta", None)
+        return asked
+
+    def until(self, done, what, seconds=3.0):
+        end = time.monotonic() + seconds
+        while not done():
+            self.assertLess(time.monotonic(), end, what)
+            time.sleep(0.01)
+
+    def test_inbox_add_writes_one_line_and_makes_the_file(self):
+        p = self.fresh_inbox()
+        asked = len(self.asked)
+        today = time.strftime("%Y-%m-%d")
+        status, got = self.add_inbox("  https://Example.org/blog/post/#top ", "for the related work")
+        self.assertEqual(status, 200, got)
+        item = {"key": "https://example.org/blog/post", "url": "https://Example.org/blog/post/#top", "title": "", "why": "for the related work",
+                "priority": "", "added": today, "read": "", "duplicate": False, "brief": None}
+        self.assertEqual(got, {"name": "Inbox.md", "item": item, "items": [item], "notes": {}, "waiting": []})
+        self.assertEqual(p.read_bytes(), f"# Inbox\n\n- https://Example.org/blog/post/#top \u2014 for the related work \u00b7 added {today}\n".encode())
+        self.assertEqual(json.loads(self.get("/api/inbox")[2])["items"], [item])
+        # into the fixture: one line more, after the open list's last line, the rest byte for byte
+        fixture = (Path(__file__).resolve().parent / "fixtures" / "inbox" / "Inbox.md").read_bytes()
+        p.write_bytes(fixture)
+        os.chmod(p, 0o640)
+        status, got = self.add_inbox("doi:10.1000/XYZ.1")
+        self.assertEqual((status, got["item"]["key"], len(got["items"])), (200, "doi:10.1000/xyz.1", 9))
+        before, after = fixture.decode().split("\n"), p.read_text(encoding="utf-8").split("\n")
+        at = before.index("- see also the list in Scratchpad") + 1
+        self.assertEqual(after, before[:at] + [f"- https://doi.org/10.1000/XYZ.1 \u00b7 added {today}"] + before[at:])
+        self.assertEqual(p.stat().st_mode & 0o777, 0o640)
+        self.assertEqual([f.name for f in self.vault.iterdir() if "rft-tmp" in f.name], [])
+        # with CRLF endings the new line has them too
+        p.write_bytes(b"# Inbox\r\n\r\n- https://a.org/x\r\n")
+        self.assertEqual(self.add_inbox("https://b.org/y")[0], 200)
+        self.assertEqual(p.read_bytes(), f"# Inbox\r\n\r\n- https://a.org/x\r\n- https://b.org/y \u00b7 added {today}\r\n".encode())
+        # the server did it alone: nothing was asked of a session (a view served from a terminal has none)
+        self.assertEqual(len(self.asked), asked)
+
+    def test_inbox_add_knows_a_link_in_any_of_its_forms(self):
+        p = self.fresh_inbox()
+        asked = self.arxiv(lambda aid: 1 / 0)  # arXiv does not answer: the items stay untitled
+        same = [["https://arxiv.org/abs/2406.01234", "https://arxiv.org/pdf/2406.01234v3.pdf", "2406.01234v2", "arXiv:2406.01234", "http://export.arxiv.org/abs/2406.01234v1",
+                 "[Mixup](https://arxiv.org/html/2406.01234)", "<arxiv:2406.01234>"],
+                ["https://doi.org/10.1109/CVPR.2022.01553", "doi:10.1109/cvpr.2022.01553", "10.1109/CVPR.2022.01553", "http://dx.doi.org/10.1109/CVPR.2022.01553"],
+                ["https://example.org/a/b/", "https://EXAMPLE.org/a/b", "https://example.org/a/b#part", "https://example.org/a/b/#part"]]
+        for forms in same:
+            status, got = self.add_inbox(forms[0])
+            self.assertEqual(status, 200, got)
+            now = p.read_bytes()
+            for form in forms[1:]:
+                status, got = self.add_inbox(form, "again")
+                self.assertEqual((status, got["duplicate"]["in"]), (409, "inbox"), form)
+                self.assertEqual(got["error"], f"already in the inbox, added {time.strftime('%Y-%m-%d')}")
+            self.assertEqual(p.read_bytes(), now)
+        # not the same: another query, another path, http and https
+        for other in ("https://example.org/a/b?page=2", "https://example.org/a", "http://example.org/a/b"):
+            self.assertEqual(self.add_inbox(other)[0], 200, other)
+        self.assertEqual(len(json.loads(self.get("/api/inbox")[2])["items"]), 6)
+        self.until(lambda: asked == ["2406.01234"], "arXiv is asked once, for the arXiv item alone")
+
+    def test_inbox_add_reports_what_a_link_duplicates(self):
+        fixture = (Path(__file__).resolve().parent / "fixtures" / "inbox" / "Inbox.md").read_bytes()
+        p = self.fresh_inbox(fixture)
+        refs = self.vault / "references"
+        refs.mkdir()
+        self.addCleanup(shutil.rmtree, refs)
+        (refs / "R01 Mixup paper.md").write_text(
+            note("R01", "reference", "done", "D00 Root question", "Mixup paper") + "\n## Source\n\nZhang et al., arXiv:1710.09412v2 (ICLR 2018)\n\n## Summary\n\nSee https://example.org/elsewhere\n")
+        for link, where, error in (
+            ("https://arxiv.org/abs/2311.09876v4", "inbox", "already in the inbox"),
+            ("10.1109/cvpr.2022.01553", "inbox", "already in the inbox, added 2026-11-02"),
+            ("arXiv:2111.06377", "processed", "already processed on 2026-11-10 (R03)"),
+            ("https://example.org/blog/old-post/", "processed", "already processed on 2026-11-12 (discarded: superseded by R07)"),
+            ("https://arxiv.org/pdf/1710.09412", "tree", "already in the tree: R01 is a reference of it"),
+        ):
+            status, got = self.add_inbox(link)
+            self.assertEqual((status, got["error"], got["duplicate"]["in"]), (409, error, where), link)
+        self.assertEqual(self.add_inbox("https://arxiv.org/pdf/1710.09412")[1]["duplicate"], {"in": "tree", "id": "R01"})
+        self.assertEqual(p.read_bytes(), fixture)
+        # a link the reference names outside its Source is not what it is a note of
+        self.arxiv(lambda aid: 1 / 0)
+        self.assertEqual(self.add_inbox("https://example.org/elsewhere")[0], 200)
+
+    def test_inbox_arxiv_title_comes_after_and_only_from_arxiv(self):
+        p = self.fresh_inbox(b"# Inbox\n\n- https://example.org/first\n")
+        asked = self.arxiv(lambda aid: {"2406.01234": "Mixup at  scale:\n a [second] look"}[aid])
+        status, got = self.add_inbox("arXiv:2406.01234v2", "from the talk")
+        self.assertEqual((status, got["item"]["title"]), (200, ""))  # the answer does not wait for arXiv
+        today = time.strftime("%Y-%m-%d")
+        want = f"# Inbox\n\n- https://example.org/first\n- [Mixup at scale: a (second) look](https://arxiv.org/abs/2406.01234) \u2014 from the talk \u00b7 added {today}\n"
+        self.until(lambda: p.read_text(encoding="utf-8") == want, "the title is written on the item's line")
+        self.assertEqual(asked, ["2406.01234"])
+        # arXiv has no such paper, or does not answer: the item stays as it was added
+        status, got = self.add_inbox("https://arxiv.org/abs/2501.99999")
+        self.assertEqual(status, 200)
+        self.until(lambda: asked == ["2406.01234", "2501.99999"], "arXiv is asked")
+        time.sleep(0.05)
+        self.assertEqual(p.read_text(encoding="utf-8"), want + f"- https://arxiv.org/abs/2501.99999 \u00b7 added {today}\n")
+        # nothing is asked for a link that is not arXiv's, for one pasted with its title, or for a duplicate
+        for link in ("https://openreview.net/forum?id=abc", "doi:10.1000/x", "[A title](https://arxiv.org/abs/2502.00001)", "2406.01234"):
+            self.add_inbox(link)
+        time.sleep(0.05)
+        self.assertEqual(asked, ["2406.01234", "2501.99999"])
+        # an item the user took out before the answer came is not put back
+        self.v.arxiv_meta = lambda aid, *a: (p.write_text("# Inbox\n"), {"title": "Late"})[1]
+        self.assertEqual(self.add_inbox("2503.00001")[0], 200)
+        self.until(lambda: p.read_text() == "# Inbox\n", "the item was removed")
+        time.sleep(0.05)
+        self.assertEqual(p.read_text(), "# Inbox\n")
+
+    def test_inbox_add_is_a_write_of_the_page_and_of_a_link(self):
+        p = self.fresh_inbox(b"# Inbox\n")
+        self.assertEqual(self.add_inbox("https://example.org/x", key=None)[0], 403)
+        self.assertEqual(self.add_inbox("https://example.org/x", key="wrong")[0], 403)
+        self.assertEqual(self.add_inbox("https://example.org/x", origin="http://evil.example")[0], 403)
+        for payload in ({}, {"link": 3}, {"link": "https://example.org/x", "why": ["a"]}, {"link": "https://example.org/" + "x" * 2000}, {"link": "https://example.org/x", "why": "y" * 501}):
+            self.assertEqual(self.write("POST", "/api/inbox", payload)[0], 400, str(payload)[:60])
+        for link in ("", "   ", "not a link", "ftp://example.org/x", "https://example.org/x and more", "see 2406.01234"):
+            status, got = self.add_inbox(link)
+            self.assertEqual((status, got["error"]), (400, "not a link: paste a URL, an arXiv id or a DOI"), link)
+        status, got = self.add_inbox("https://example.org/x", "urgent")  # the page's why is a why: a reading priority is set in its own place
+        self.assertEqual((status, "reading priority" in got["error"]), (400, True))
+        self.assertEqual(p.read_bytes(), b"# Inbox\n")
+        # a why in several lines is one line of the file
+        self.assertEqual(self.add_inbox("https://example.org/x", " for\nD04,  maybe ")[1]["item"]["why"], "for D04, maybe")
+        # neither through a link nor into a file that is not text
+        p.unlink()
+        os.symlink(self.root / "secret.md", p)
+        self.assertEqual(self.add_inbox("https://example.org/y")[0], 422)
+        self.assertNotIn("example.org", (self.root / "secret.md").read_text())
+        p.unlink()
+        p.write_bytes(b"\xff\xfe not utf-8\n")
+        self.assertEqual(self.add_inbox("https://example.org/y")[0], 422)
+        self.assertEqual(p.read_bytes(), b"\xff\xfe not utf-8\n")
+
+    def change_inbox(self, action, key, value=None, nth=None, **kw):
+        payload = {"action": action, "key": key}
+        if value is not None:
+            payload[action] = value
+        if nth is not None:
+            payload["nth"] = nth
+        return self.write("POST", "/api/inbox", payload, **kw)
+
+    def test_inbox_reading_priority_is_one_plain_word_in_the_items_line(self):
+        fixture = (Path(__file__).resolve().parent / "fixtures" / "inbox" / "Inbox.md").read_bytes()
+        p = self.fresh_inbox(fixture)
+        before = fixture.decode().split("\n")
+        notes = {f: f.read_bytes() for f in self.root.rglob("*.md") if f != p}
+        blog = "https://lilianweng.github.io/posts/2021-05-31-contrastive"
+        at = before.index(f"- {blog}/")
+        status, got = self.change_inbox("priority", blog, "urgent")
+        self.assertEqual((status, got["item"]["priority"], got["name"]), (200, "urgent", "Inbox.md"))
+        self.assertEqual(p.read_text().split("\n"), before[:at] + [f"- {blog}/ \u00b7 urgent"] + before[at + 1:])
+        self.assertNotIn("#urgent", p.read_text())
+        self.assertEqual(got["items"], json.loads(self.get("/api/inbox")[2])["items"])
+        # no limit to how many are urgent: every item of the inbox, one after the other
+        seen = {}
+        for item in got["items"]:
+            n = seen[item["key"]] = seen.get(item["key"], -1) + 1
+            status, got = self.change_inbox("priority", item["key"], "urgent", nth=n)
+            self.assertEqual((status, got["item"]["priority"]), (200, "urgent"), item["key"])
+        self.assertEqual({i["priority"] for i in got["items"]}, {"urgent"})
+        # and taken away again
+        status, got = self.change_inbox("priority", blog, "")
+        self.assertEqual((status, got["item"]["priority"]), (200, ""))
+        self.assertIn(f"\n- {blog}/\n", p.read_text())
+        # nothing of it reaches a note: the tree's files are as they were
+        self.assertEqual({f: f.read_bytes() for f in self.root.rglob("*.md") if f != p}, notes)
+        now = p.read_bytes()
+        for value in ("soon", "URGENT!", "high low"):
+            status, got = self.change_inbox("priority", blog, value)
+            self.assertEqual((status, "reading priority" in got["error"]), (400, True), value)
+        self.assertEqual(p.read_bytes(), now)
+
+    def test_inbox_why_is_edited_and_the_second_of_two_is_reached(self):
+        p = self.fresh_inbox(b"# Inbox\r\n\r\n- https://a.org/x - old \xc2\xb7 high \xc2\xb7 added 2026-11-01\r\n  - briefed 2026-11-20: claims x\r\n- https://a.org/x/\r\n")
+        status, got = self.change_inbox("why", "https://a.org/x", " for\nD04 ")
+        self.assertEqual((status, got["item"]["why"], got["item"]["priority"], got["item"]["added"]), (200, "for D04", "high", "2026-11-01"))
+        status, got = self.change_inbox("why", "https://a.org/x", "again", nth=1)
+        self.assertEqual((status, got["item"]["why"], [i["why"] for i in got["items"]]), (200, "again", ["for D04", "again"]))
+        self.assertEqual(p.read_bytes().decode(), "# Inbox\r\n\r\n- https://a.org/x \u2014 for D04 \u00b7 high \u00b7 added 2026-11-01\r\n  - briefed 2026-11-20: claims x\r\n- https://a.org/x/ \u2014 again\r\n")
+        self.assertEqual(self.change_inbox("why", "https://a.org/x", "")[1]["item"]["why"], "")
+        now = p.read_bytes()
+        status, got = self.change_inbox("why", "https://a.org/x", "urgent")
+        self.assertEqual((status, "reading priority" in got["error"]), (400, True))
+        for action, key, value, nth in (("why", "https://a.org/x", "x", 2), ("priority", "https://b.org/none", "low", None), ("discard", "https://b.org/none", None, None)):
+            status, got = self.change_inbox(action, key, value, nth)
+            self.assertEqual((status, got["error"]), (409, "that item is no longer in the inbox"), (action, key))
+        self.assertEqual(p.read_bytes(), now)
+
+    def test_inbox_discard_keeps_the_item_whole_and_its_link_pasted_again_brings_it_back(self):
+        today = time.strftime("%Y-%m-%d")
+        item = "- [A title](https://arxiv.org/abs/2406.01234v2) \u2014 why \u00b7 high\n  - briefed 2026-11-20: claims x\n"
+        brief = {"date": "2026-11-20", "lines": ["claims x"]}
+        p = self.fresh_inbox(("# Inbox\n\n" + item + "- https://b.org/y\n").encode())
+        status, got = self.change_inbox("discard", "arxiv:2406.01234")
+        self.assertEqual((status, got["discarded"]), (200, {"key": "arxiv:2406.01234", "url": "https://arxiv.org/abs/2406.01234", "title": "A title", "why": "why", "priority": "high",
+                                                           "added": "", "read": "", "brief": brief, "discarded": today, "reason": ""}))
+        self.assertEqual([i["key"] for i in got["items"]], ["https://b.org/y"])
+        # its lines as they were typed, and one more that says when (docs/adr/0007)
+        self.assertEqual(p.read_text(), f"# Inbox\n\n- https://b.org/y\n\n## Discarded\n\n{item}  - discarded {today}\n")
+        self.assertEqual(json.loads(self.get("/api/inbox")[2])["items"], got["items"])  # the page lists what waits, not what was discarded
+        self.assertEqual(self.change_inbox("discard", "arxiv:2406.01234")[0], 409)
+        # the link pasted again, in any of its forms, is the user's act: the item is back as it was, at the end of the list
+        status, got = self.add_inbox("https://arxiv.org/pdf/2406.01234", "another why")
+        self.assertEqual((status, got["restored"], got["item"]["why"], got["item"]["priority"], got["item"]["brief"]), (200, {"discarded": today, "reason": ""}, "why", "high", brief))
+        self.assertEqual([i["key"] for i in got["items"]], ["https://b.org/y", "arxiv:2406.01234"])
+        self.assertEqual(p.read_text(), f"# Inbox\n\n- https://b.org/y\n{item}\n## Discarded\n")
+        # a discard of before this change is a line under Processed, and still says where the link is
+        p.write_text(p.read_text() + "\n## Processed\n\n- 2026-11-12 https://c.org/z \u2014 discarded: superseded by R07\n")
+        status, got = self.add_inbox("https://c.org/z")
+        self.assertEqual((status, got["error"]), (409, "already processed on 2026-11-12 (discarded: superseded by R07)"))
+        # both discarded: nothing waits, both are kept, and the processed line is as it was
+        for key in ("https://b.org/y", "arxiv:2406.01234"):
+            self.assertEqual(self.change_inbox("discard", key)[0], 200)
+        self.assertEqual(json.loads(self.get("/api/inbox")[2])["items"], [])
+        self.assertEqual(p.read_text(), f"# Inbox\n\n## Discarded\n\n- https://b.org/y\n  - discarded {today}\n{item}  - discarded {today}\n\n"
+                                        "## Processed\n\n- 2026-11-12 https://c.org/z \u2014 discarded: superseded by R07\n")
+
+    def test_inbox_change_is_a_write_of_the_page(self):
+        p = self.fresh_inbox(b"- https://a.org/x\n")
+        for kw in ({"key": None}, {"key": "wrong"}, {"origin": "http://evil.example"}):
+            self.assertEqual(self.write("POST", "/api/inbox", {"action": "discard", "key": "https://a.org/x"}, **kw)[0], 403)
+        k = "https://a.org/x"
+        for payload in ({"action": "priority", "key": k}, {"action": "why", "key": k}, {"action": "priority", "key": k, "priority": 3},
+                        {"action": "priority", "key": k, "priority": None}, {"action": "why", "key": k, "why": "y" * 501},
+                        {"action": "discard"}, {"action": "discard", "key": ""}, {"action": "discard", "key": 3}, {"action": "discard", "key": "x" * 2001},
+                        {"action": "discard", "key": k, "nth": -1}, {"action": "discard", "key": k, "nth": True}, {"action": "discard", "key": k, "nth": "0"},
+                        {"action": "discard", "key": k, "nth": 0.0}, {"action": "brief", "key": k}, {"action": 3, "key": k}, {"action": ["discard"], "key": k},
+                        {"action": "process"}, {"action": "process", "key": ""}, {"action": "process", "key": 3}, {"action": "process", "key": k, "nth": -1},
+                        {"action": "process", "key": k, "nth": "0"}, {"action": "process", "key": k, "nth": True}, {"action": "process", "key": "x" * 2001}):
+            self.assertEqual(self.write("POST", "/api/inbox", payload)[0], 400, str(payload)[:70])
+        self.assertEqual(p.read_bytes(), b"- https://a.org/x\n")
+        # not through a link out of the vault
+        p.unlink()
+        out = self.root / "outside.md"
+        out.write_text("- https://a.org/x\n")
+        self.addCleanup(out.unlink)
+        os.symlink(out, p)
+        self.assertEqual(self.change_inbox("discard", k)[0], 422)
+        self.assertEqual(out.read_text(), "- https://a.org/x\n")
+
+    def test_inbox_process_is_asked_of_the_session_and_writes_nothing(self):
+        text = b"- [A title](https://arxiv.org/abs/2406.01234) \xe2\x80\x94 why \xc2\xb7 high\n  - briefed 2026-11-20: claims x\n- https://b.org/y\n- 2406.01234 \xe2\x80\x94 again\n"
+        p = self.fresh_inbox(text)
+        asked = len(self.asked)
+        status, got = self.change_inbox("process", "arxiv:2406.01234", nth=1)
+        self.assertEqual((status, got["asked"], got["item"]["why"]), (200, True, "again"))
+        status, got = self.change_inbox("process", "https://b.org/y")
+        self.assertEqual((status, got["item"]["key"]), (200, "https://b.org/y"))
+        self.assertEqual(self.asked[asked:], [("RFT_PROCESS", {"key": "arxiv:2406.01234", "nth": 1}), ("RFT_PROCESS", {"key": "https://b.org/y", "nth": 0})])
+        # an item that is no longer there: said, and the session is not asked
+        for key, nth in (("https://b.org/gone", None), ("arxiv:2406.01234", 2), ("https://b.org/y", 1)):
+            status, got = self.change_inbox("process", key, nth=nth)
+            self.assertEqual((status, got), (409, {"error": "that item is no longer in the inbox"}))
+        self.assertEqual(len(self.asked), asked + 2)
+        self.assertEqual(p.read_bytes(), text)
+        # a write of the page, as the others
+        for kw in ({"key": None}, {"key": "wrong"}, {"origin": "http://evil.example"}):
+            self.assertEqual(self.write("POST", "/api/inbox", {"action": "process", "key": "https://b.org/y"}, **kw)[0], 403)
+        self.assertEqual(len(self.asked), asked + 2)
+
+    def test_inbox_process_with_no_chat_is_refused_at_once_and_nothing_waits(self):
+        # scenario B: the view served from a terminal (rft_serve.py), with no chat on the tree
+        text = b"- https://a.org/x \xe2\x80\x94 why\n"
+        p = self.fresh_inbox(text)
+        relay = rft_server.Relay()
+        type(self).answer = staticmethod(lambda request: relay.ask("RFT_PROCESS", request))
+        self.addCleanup(setattr, type(self), "answer", None)
+        start = time.monotonic()
+        status, got = self.change_inbox("process", "https://a.org/x")
+        self.assertEqual((status, got), (503, {"error": rft_server.NO_SESSION}))
+        self.assertLess(time.monotonic() - start, 1)
+        self.assertEqual(relay._pending, [])  # no chat that comes later finds it
+        self.assertEqual(p.read_bytes(), text)
+        self.assertEqual([i["brief"] for i in json.loads(self.get("/api/inbox")[2])["items"]], [None])
+        # a session that went away while it was asked
+        def broken(request):
+            raise BrokenPipeError()
+        type(self).answer = staticmethod(broken)
+        status, got = self.change_inbox("process", "https://a.org/x")
+        self.assertEqual((status, got), (503, {"error": "the Claude Code session that ran /rft is gone"}))
+        self.assertEqual(p.read_bytes(), text)
+
+    # ------------------------------------------------------------ reading notes
+    IMP = "### Claims\n\nc\n\n### How\n\nh\n\n### Key results\n\nk\n\n### Bearing on\n\nb\n\n### Left open\n\no"
+    MIXUP = "- [Mixup at scale](https://arxiv.org/abs/2406.01234) \u2014 why \u00b7 high \u00b7 added 2026-11-16\n"
+
+    def fresh_reading(self, inbox: str, notes: dict[str, str] | None = None):
+        """The vault's inbox and its reading notes as a test wants them, removed afterwards."""
+        folder = self.vault / "Reading notes"
+        shutil.rmtree(folder, ignore_errors=True)
+        self.addCleanup(shutil.rmtree, folder, True)
+        p = self.fresh_inbox(inbox.encode())
+        for name, text in (notes or {}).items():
+            (folder / name).parent.mkdir(parents=True, exist_ok=True)
+            (folder / name).write_bytes(text.encode())
+        return p, folder
+
+    def reading(self, key):
+        status, _, body = self.get("/api/reading?key=" + quote(key, safe=""))
+        return status, json.loads(body)
+
+    def write_reading(self, payload, **kw):
+        return self.write("PUT", "/api/reading", payload, **kw)
+
+    def test_reading_note_made_on_the_first_write_with_something_in_it(self):
+        p, folder = self.fresh_reading(self.MIXUP + "- https://b.org/y\n")
+        key, f = "arxiv:2406.01234", folder / "arxiv-2406.01234.md"
+        tree = json.loads(self.get("/api/tree")[2])
+        status, got = self.reading(key)
+        self.assertEqual((status, got["text"], got["version"], got["impression"], got["name"], got["item"]["title"]),
+                         (200, "", None, None, "Reading notes/arxiv-2406.01234.md", "Mixup at scale"))
+        # opened and closed, or saved empty: no file, no folder
+        self.assertEqual(self.write_reading({"key": key, "text": " \n\n", "version": None}), (200, {"key": key, "name": "Reading notes/arxiv-2406.01234.md", "version": None}))
+        self.assertFalse(folder.exists())
+        self.assertEqual(json.loads(self.get("/api/inbox")[2])["notes"], {})
+        # the first quote makes it: the head, then the part
+        status, res = self.write_reading({"key": key, "text": "> a quote\n\nmine", "version": None})
+        self.assertEqual(status, 200)
+        self.assertEqual(f.read_text(), "# Mixup at scale\n<https://arxiv.org/abs/2406.01234>\n\n## My reading\n\n> a quote\n\nmine\n")
+        status, got = self.reading(key)
+        self.assertEqual((got["text"], got["version"]), ("> a quote\n\nmine", res["version"]))
+        self.assertEqual(json.loads(self.get("/api/inbox")[2])["notes"], {key: {"mine": True, "impression": False}})
+        # an item with no title is headed by what the list calls it
+        self.assertEqual(self.write_reading({"key": "https://b.org/y", "text": "x", "version": None})[0], 200)
+        self.assertEqual((folder / "b.org-y.md").read_text(), "# b.org/y\n<https://b.org/y>\n\n## My reading\n\nx\n")
+        # not a note: the tree, and its version, stay as they were; the inbox's file too
+        self.assertEqual(json.loads(self.get("/api/tree")[2]), tree)
+        self.assertEqual(p.read_text(), self.MIXUP + "- https://b.org/y\n")
+        self.assertEqual([x.name for x in folder.iterdir() if x.name.endswith(".rft-tmp")], [])
+        # a reading note is an inbox item's
+        self.assertEqual(self.reading("https://b.org/none"), (409, {"error": "that item is no longer in the inbox"}))
+        self.assertEqual(self.write_reading({"key": "https://b.org/none", "text": "x", "version": None})[0], 409)
+        self.assertFalse((folder / "b.org-none.md").exists())
+
+    def test_reading_note_the_users_part_alone_is_written_and_versioned(self):
+        head = "# Mixup at scale\n<https://arxiv.org/abs/2406.01234>\n"
+        note = f"{head}\n## My reading\n\n> a quote\n\n## Claude's impression (2026-11-24)\n\n{self.IMP}\n"
+        _, folder = self.fresh_reading(self.MIXUP, {"arxiv-2406.01234.md": note})
+        key, f = "arxiv:2406.01234", folder / "arxiv-2406.01234.md"
+        status, got = self.reading(key)
+        self.assertEqual((got["text"], got["impression"]), ("> a quote", {"date": "2026-11-24", "text": self.IMP}))
+        # Claude saves another impression while the user types: no change to the user's part, so no conflict
+        other = self.IMP.replace("c\n", "another reading\n")
+        f.write_text(note.replace(self.IMP, other).replace("2026-11-24", "2026-11-25"))
+        status, res = self.write_reading({"key": key, "text": "> a quote\n> more of it\n", "version": got["version"]})
+        self.assertEqual(status, 200)
+        self.assertEqual(f.read_text(), f"{head}\n## My reading\n\n> a quote\n> more of it\n\n## Claude's impression (2026-11-25)\n\n{other}\n")
+        # the user's part changed elsewhere (Obsidian): refused, with the part as it is now
+        f.write_text(f.read_text().replace("> more of it", "> more of it, from Obsidian"))
+        status, now = self.write_reading({"key": key, "text": "mine", "version": res["version"]})
+        self.assertEqual((status, now["text"]), (409, "> a quote\n> more of it, from Obsidian"))
+        self.assertEqual(self.write_reading({"key": key, "text": "mine", "version": now["version"]})[0], 200)
+        self.assertEqual(self.write_reading({"key": key, "text": "forced", "force": True})[0], 200)
+        self.assertEqual(f.read_text(), f"{head}\n## My reading\n\nforced\n\n## Claude's impression (2026-11-25)\n\n{other}\n")
+        # the same text again: the file is not written
+        before = f.stat().st_mtime_ns
+        self.assertEqual(self.write_reading({"key": key, "text": "forced\n", "force": True})[0], 200)
+        self.assertEqual(f.stat().st_mtime_ns, before)
+        # a line that would read as the heading of Claude's part
+        status, res = self.write_reading({"key": key, "text": "x\n## Claude's impression\ny", "force": True})
+        self.assertEqual((status, "heading of Claude's part" in res["error"]), (400, True))
+        # CRLF is kept
+        f.write_bytes(note.replace("\n", "\r\n").encode())
+        self.assertEqual(self.write_reading({"key": key, "text": "one\r\ntwo", "force": True})[0], 200)
+        self.assertEqual(f.read_bytes(), note.replace("> a quote", "one\ntwo").replace("\n", "\r\n").encode())
+
+    def test_reading_note_is_a_write_of_the_page_and_never_through_a_link(self):
+        _, folder = self.fresh_reading(self.MIXUP)
+        key = "arxiv:2406.01234"
+        for kw in ({"key": None}, {"key": "wrong"}, {"origin": "http://evil.example"}):
+            self.assertEqual(self.write_reading({"key": key, "text": "x", "version": None}, **kw)[0], 403)
+        for payload in ({"text": "x", "version": None}, {"key": "", "text": "x", "version": None}, {"key": key, "version": None}, {"key": key, "text": 3, "version": None},
+                        {"key": key, "text": "x"}, {"key": key, "text": "x", "version": 3}, {"key": "x" * 2001, "text": "x", "version": None}):
+            self.assertEqual(self.write_reading(payload)[0], 400, str(payload)[:60])
+        self.assertFalse(folder.exists())
+        # the file, then the folder, as a link out of the vault: neither read nor written
+        out = self.root / "outside-note.md"
+        out.write_text("# T\n<https://arxiv.org/abs/2406.01234>\n\n## My reading\n\nsecret\n")
+        self.addCleanup(out.unlink)
+        folder.mkdir()
+        os.symlink(out, folder / "arxiv-2406.01234.md")
+        status, got = self.reading(key)
+        self.assertEqual((status, "secret" in json.dumps(got)), (422, False))
+        self.assertEqual(self.write_reading({"key": key, "text": "x", "force": True})[0], 422)
+        self.assertNotIn("secret", self.get("/api/inbox")[2].decode())
+        shutil.rmtree(folder)
+        outside = self.root / "outside-notes"
+        outside.mkdir()
+        self.addCleanup(shutil.rmtree, outside, True)
+        os.symlink(outside, folder)
+        self.addCleanup(lambda: folder.is_symlink() and folder.unlink())
+        self.assertEqual(self.write_reading({"key": key, "text": "x", "force": True})[0], 422)
+        self.assertEqual(list(outside.iterdir()), [])
+        self.assertEqual(out.read_text().count("secret"), 1)
+        folder.unlink()
+
+    def test_inbox_read_mark_is_saved_and_starts_the_discussion(self):
+        today = time.strftime("%Y-%m-%d")
+        p, _ = self.fresh_reading(self.MIXUP + "- https://b.org/y\n")
+        self.session(lambda request: None)
+        key = "arxiv:2406.01234"
+        status, got = self.write("POST", "/api/inbox", {"action": "read", "key": key, "read": True})
+        self.assertEqual((status, got["item"]["read"], got["asked"], got["waiting"]), (200, today, True, []))
+        self.assertEqual(p.read_text(), self.MIXUP.rstrip("\n") + f" \u00b7 read {today}\n- https://b.org/y\n")
+        self.assertEqual(self.asked, [("RFT_DISCUSS", {"key": key, "nth": 0})])
+        # Discuss asks again; an item that is not marked, or gone, is not asked
+        self.assertEqual(self.change_inbox("discuss", key)[0], 200)
+        self.assertEqual(self.change_inbox("discuss", "https://b.org/y"), (409, {"error": "that item is not marked as read"}))
+        self.assertEqual(self.change_inbox("discuss", "https://b.org/gone")[0], 409)
+        self.assertEqual(len(self.asked), 2)
+        # taken off: the line as it was, and nothing asked
+        status, got = self.write("POST", "/api/inbox", {"action": "read", "key": key, "read": False})
+        self.assertEqual((status, got["item"]["read"], "asked" in got), (200, "", False))
+        self.assertEqual(p.read_text(), self.MIXUP + "- https://b.org/y\n")
+        self.assertEqual(len(self.asked), 2)
+        # a mark typed by hand keeps its day when the page sets it again
+        p.write_text(self.MIXUP.rstrip("\n") + " \u00b7 read 2026-11-01\n")
+        self.assertEqual(self.write("POST", "/api/inbox", {"action": "read", "key": key, "read": True})[1]["item"]["read"], "2026-11-01")
+        # a write of the page, with a value that is a yes or a no
+        for kw in ({"key": None}, {"origin": "http://evil.example"}):
+            self.assertEqual(self.write("POST", "/api/inbox", {"action": "read", "key": key, "read": False}, **kw)[0], 403)
+        for payload in ({"action": "read", "key": key}, {"action": "read", "key": key, "read": "yes"}, {"action": "read", "key": key, "read": 1},
+                        {"action": "read", "read": True}, {"action": "discuss"}, {"action": "discuss", "key": key, "nth": -1}, {"action": "discard", "key": key, "confirm": "yes"}):
+            self.assertEqual(self.write("POST", "/api/inbox", payload)[0], 400, str(payload))
+        self.assertIn("read 2026-11-01", p.read_text())
+
+    def test_inbox_read_mark_with_no_chat_is_saved_and_the_item_waits(self):
+        today = time.strftime("%Y-%m-%d")
+        p, _ = self.fresh_reading(self.MIXUP + "- https://b.org/y\n")
+        relay = rft_server.Relay()
+        self.session(lambda request: relay.ask("RFT_DISCUSS", request))
+        key = "arxiv:2406.01234"
+        start = time.monotonic()
+        status, got = self.write("POST", "/api/inbox", {"action": "read", "key": key, "read": True})
+        self.assertLess(time.monotonic() - start, 1)
+        self.assertEqual((status, got["item"]["read"], got["asked"], got["waiting"]), (200, today, False, [key]))
+        self.assertIn(f"read {today}", p.read_text())
+        self.assertEqual(relay._pending, [])  # never queued: no chat that comes later finds it
+        self.assertEqual(json.loads(self.get("/api/inbox")[2])["waiting"], [key])
+        # Discuss with still no chat: refused at once, and it still waits
+        self.assertEqual(self.change_inbox("discuss", key), (503, {"error": rft_server.NO_SESSION}))
+        self.assertEqual(json.loads(self.get("/api/inbox")[2])["waiting"], [key])
+        # a chat is there: asked, and it waits no more
+        self.session(lambda request: None)
+        self.assertEqual(self.change_inbox("discuss", key)[0], 200)
+        self.assertEqual(self.asked, [("RFT_DISCUSS", {"key": key, "nth": 0})])
+        self.assertEqual(json.loads(self.get("/api/inbox")[2])["waiting"], [])
+        # the mark taken off, or the item gone, ends the wait too
+        self.session(lambda request: relay.ask("RFT_DISCUSS", request))
+        self.write("POST", "/api/inbox", {"action": "read", "key": "https://b.org/y", "read": True})
+        self.assertEqual(json.loads(self.get("/api/inbox")[2])["waiting"], ["https://b.org/y"])
+        self.write("POST", "/api/inbox", {"action": "read", "key": "https://b.org/y", "read": False})
+        self.assertEqual(json.loads(self.get("/api/inbox")[2])["waiting"], [])
+
+    def test_inbox_discard_keeps_the_reading_note_whatever_it_holds(self):
+        today = time.strftime("%Y-%m-%d")
+        head = "# Mixup at scale\n<https://arxiv.org/abs/2406.01234>\n"
+        inbox = self.MIXUP + "- https://b.org/y\n- 2406.01234 \u2014 again\n"
+        mine = f"{head}\n## My reading\n\n> a quote\n"
+        imp = f"# b.org/y\n<https://b.org/y>\n\n## My reading\n\n## Claude's impression (2026-11-24)\n\n{self.IMP}\n"
+        p, folder = self.fresh_reading(inbox, {"arxiv-2406.01234.md": mine, "b.org-y.md": imp})
+        key, f, kept = "arxiv:2406.01234", folder / "arxiv-2406.01234.md", folder / "Discarded" / "arxiv-2406.01234.md"
+        files = lambda: sorted(x.relative_to(folder).as_posix() for x in folder.rglob("*") if x.is_file())  # noqa: E731
+        # nothing is asked, whatever the note holds; it stays while the link typed twice is still in the inbox
+        status, got = self.change_inbox("discard", key)
+        self.assertEqual((status, got["discarded"]["discarded"], [i["key"] for i in got["items"]], files()), (200, today, ["https://b.org/y", key], ["arxiv-2406.01234.md", "b.org-y.md"]))
+        # the last item of the link: the note moves to the kept ones, byte for byte (a page from before this still sends confirm)
+        status, got = self.write("POST", "/api/inbox", {"action": "discard", "key": key, "confirm": True})
+        self.assertEqual((status, kept.read_text(), got["notes"], files()), (200, mine, {"https://b.org/y": {"mine": False, "impression": True}}, ["Discarded/arxiv-2406.01234.md", "b.org-y.md"]))
+        # the reading note of a discarded item is not the page's to show or to write
+        self.assertEqual(self.reading(key)[0], 409)
+        self.assertEqual(self.write_reading({"key": key, "text": "x", "version": None})[0], 409)
+        self.assertEqual(kept.read_text(), mine)
+        # a note with an impression alone is kept as well
+        self.assertEqual(self.change_inbox("discard", "https://b.org/y")[0], 200)
+        self.assertEqual(files(), ["Discarded/arxiv-2406.01234.md", "Discarded/b.org-y.md"])
+        # the link pasted again: the latest item of the link is back, and its note beside the others.
+        # It is as it was: an item with no title is not given one (arXiv is not asked)
+        asked = self.arxiv(lambda aid: "A title looked up")
+        status, got = self.add_inbox("2406.01234")
+        self.assertEqual((got["item"]["title"], asked), ("", []))
+        self.assertEqual((status, got["item"]["why"], got["notes"], f.read_text(), files()), (200, "again", {key: {"mine": True, "impression": False}}, mine, ["Discarded/b.org-y.md", "arxiv-2406.01234.md"]))
+        # discarded again while a kept note has its name: it takes the next name, and none is written over
+        kept.write_text(head + "\n## My reading\n\nan older one\n")
+        self.assertEqual(self.change_inbox("discard", key)[0], 200)
+        self.assertEqual(files(), ["Discarded/arxiv-2406.01234-2.md", "Discarded/arxiv-2406.01234.md", "Discarded/b.org-y.md"])
+        self.assertEqual(((folder / "Discarded" / "arxiv-2406.01234-2.md").read_text(), kept.read_text()), (mine, head + "\n## My reading\n\nan older one\n"))
+        # brought back: the latest kept note of the item returns, the older one stays kept
+        self.assertEqual(self.add_inbox("2406.01234")[0], 200)
+        self.assertEqual((f.read_text(), files()), (mine, ["Discarded/arxiv-2406.01234.md", "Discarded/b.org-y.md", "arxiv-2406.01234.md"]))
+        self.assertEqual(p.read_text().count(f"  - discarded {today}\n"), 2)
+
+    def test_reading_note_cases_step_by_step_the_users_side(self):
+        """Cases A, B and C of tests/fixtures/reading-note (scenarios.json; SCENARIOS.md says them in
+        words): every step of the user's, run against the files the step before it left, answers
+        what the fixture says and leaves the files it says, and no other. Claude's steps are run by
+        tests/reading.test.ts against the same file."""
+        today = time.strftime("%Y-%m-%d")
+        scenarios = json.loads((Path(__file__).resolve().parent / "fixtures" / "reading-note" / "scenarios.json").read_text(encoding="utf-8"))
+        self.assertEqual(list(scenarios), ["A", "B", "C"])
+        ran = 0
+        for name, scenario in scenarios.items():
+            states: list[dict] = []  # the files after each step
+            for n, step in enumerate(scenario["steps"]):
+                before = dict(states[step["after"]] if "after" in step else states[-1] if states else {})
+                after = {**before, **{path: None if text is None else text.replace("{today}", today) for path, text in (step.get("files") or {}).items()}}
+                after = {path: text for path, text in after.items() if text is not None}
+                states.append(after)
+                if "page" not in step:
+                    continue
+                # the page's files alone: the notes of the tree are Claude's to write
+                def vault_of(files):
+                    return {path: text for path, text in files.items() if path == "Inbox.md" or path.startswith("Reading notes/")}
+                p, folder = self.fresh_reading(before["Inbox.md"], {path[len("Reading notes/"):]: text for path, text in vault_of(before).items() if path != "Inbox.md"})
+                if step.get("chat") is False:
+                    relay = rft_server.Relay()
+                    self.session(lambda request, relay=relay: relay.ask("RFT_DISCUSS", request))
+                else:
+                    self.session(lambda request: None)
+                call = step["page"]
+                body = dict(call["body"])
+                if body.get("version") == "@read":  # the version the page read when it opened the note
+                    body["version"] = self.reading(body["key"])[1]["version"]
+                status, got = self.write(call["method"], call["path"], body)
+                self.assertEqual(status, step["status"], f"{name}{n}: {got}")
+                for k, v in (step.get("answer") or {}).items():
+                    self.assertEqual(got[k], json.loads(json.dumps(v).replace("{today}", today)), f"{name}{n}: {k}")
+                if "chat" in step:
+                    self.assertEqual(self.asked, [("RFT_DISCUSS", {"key": body["key"], "nth": 0})], f"{name}{n}")
+                now = {"Inbox.md": p.read_text(encoding="utf-8")}
+                if folder.exists():
+                    now.update({f"Reading notes/{f.relative_to(folder).as_posix()}": f.read_text(encoding="utf-8") for f in folder.rglob("*") if f.is_file()})
+                self.assertEqual(now, vault_of(after), f"{name}{n}")
+                ran += 1
+        self.assertEqual(ran, 7)
 
     # ------------------------------------------------------------ comments, suggestions, lock
 
@@ -861,6 +1455,89 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(re.search(r"const DUE_RE = /(.*)/i\n", js).group(1), rft_server.DUE_RE.pattern)
         self.assertEqual(tuple(re.findall(r"'(\w+)'", re.search(r"const MILESTONE_STATUSES = \[(.*?)\]", js).group(1))), rft_server.MILESTONE_STATUSES)
 
+    # ------------------------------------------------------------ meetings
+
+    def meeting(self, payload, **kw):
+        return self.write("POST", "/api/meeting", payload, **kw)
+
+    def meetings_dir(self):
+        d = self.vault / "meetings"
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        return d
+
+    def test_tree_has_the_meetings(self):
+        d = self.meetings_dir()
+        d.mkdir()
+        (d / "G01 Supervisor meeting.md").write_text('---\nid: G01\ntype: meeting\nwhen: 2026-11-10 14:00\nduration: 1h\nevery: week\nuntil: 2027-06-29\n'
+                                                     'skip: [2026-12-22, "2026-12-29"]\nmoved: ["2026-12-01 → 2026-12-02 10:00"]\n'
+                                                     'needs: ["[[E01 First run]]", "[[E99 Gone]]"]\n---\n\n# G01 · Supervisor meeting\n')
+        (d / "G02 Talk.md").write_text("---\nid: G02\ntype: meeting\nwhen: 2026-12-03 10:30 AoE\n---\n\n# G02 · Talk\n")
+        tree = json.loads(self.get("/api/tree")[2])
+        self.assertEqual(tree["meetings"], [
+            {"id": "G01", "name": "G01 Supervisor meeting", "title": "Supervisor meeting", "path": "meetings/G01 Supervisor meeting.md",
+             "when": "2026-11-10 14:00", "duration": "1h", "every": "week", "until": "2027-06-29", "skip": ["2026-12-22", "2026-12-29"],
+             "moved": ["2026-12-01 → 2026-12-02 10:00"], "needs": ["E01"], "missing": ["E99 Gone"]},
+            {"id": "G02", "name": "G02 Talk", "title": "Talk", "path": "meetings/G02 Talk.md", "when": "2026-12-03 10:30 AoE",
+             "skip": [], "moved": [], "needs": [], "missing": []},
+        ])
+
+    def test_meeting_added_changed_and_deleted(self):
+        d = self.meetings_dir()
+        status, res = self.meeting({"title": " Supervisor: meeting ", "when": "2026-11-10 14:00", "duration": "1h", "every": "week", "needs": ["E01"]})
+        self.assertEqual((status, res), (201, {"id": "G01", "name": "G01 Supervisor meeting"}))
+        p = d / "G01 Supervisor meeting.md"
+        self.assertEqual(p.read_text(), '---\nid: G01\ntype: meeting\nwhen: 2026-11-10 14:00\nduration: 1h\nevery: week\nneeds: ["[[E01 First run]]"]\n'
+                                        '---\n\n# G01 · Supervisor meeting\n')
+        # an occurrence skipped and one moved (the lists whole, as the page works them out), the last day: each in its place
+        self.assertEqual(self.meeting({"id": "G01", "skip": ["2026-12-29", "2026-12-22", "2026-12-22"], "moved": ["2026-12-01 → 2026-12-02 10:00"],
+                                       "until": "2027-06-29"}), (200, {"id": "G01"}))
+        self.assertEqual(p.read_text(), '---\nid: G01\ntype: meeting\nwhen: 2026-11-10 14:00\nduration: 1h\nevery: week\nuntil: 2027-06-29\n'
+                                        'skip: [2026-12-22, 2026-12-29]\nmoved: ["2026-12-01 → 2026-12-02 10:00"]\nneeds: ["[[E01 First run]]"]\n'
+                                        '---\n\n# G01 · Supervisor meeting\n')
+        # changed in place; null and an empty list take a line away
+        self.meeting({"id": "G01", "when": "2026-11-10 15:00", "every": "2 weeks", "duration": None, "skip": [], "moved": [], "needs": []})
+        self.assertEqual(p.read_text(), "---\nid: G01\ntype: meeting\nwhen: 2026-11-10 15:00\nevery: 2 weeks\nuntil: 2027-06-29\n---\n\n# G01 · Supervisor meeting\n")
+        self.meeting({"id": "G01", "every": None, "until": None, "duration": "45m"})
+        self.assertEqual(p.read_text(), "---\nid: G01\ntype: meeting\nwhen: 2026-11-10 15:00\nduration: 45m\n---\n\n# G01 · Supervisor meeting\n")
+        # ids are never reused: the next one after every meeting on disk
+        self.assertEqual(self.meeting({"title": "Lab", "when": "2026-12-01 10:00", "every": "month on the first Tuesday"})[1]["id"], "G02")
+        self.assertIn("every: month on the first Tuesday\n", (d / "G02 Lab.md").read_text())
+        self.assertEqual(self.meeting({"id": "G01", "delete": True}), (200, {"id": "G01", "deleted": True}))
+        self.assertFalse(p.exists())
+        self.assertEqual([m["id"] for m in json.loads(self.get("/api/tree")[2])["meetings"]], ["G02"])
+        self.assertEqual(self.meeting({"title": "Talk", "when": "2026-12-03"})[1]["id"], "G03")
+
+    def test_meeting_bad_requests(self):
+        d = self.meetings_dir()
+        for payload in ({"title": "Talk"}, {"title": "Talk", "when": "soon"}, {"title": " ?? ", "when": "2026-12-03"},
+                        {"title": "Talk", "when": "2026-12-03", "every": "fortnightly"}, {"title": "Talk", "when": "2026-12-03", "duration": "long"},
+                        {"title": "Talk", "when": "2026-12-03", "until": "2027-01-01"}, {"title": "Talk", "when": "2026-12-03", "every": "week", "until": "2026-12-01"},
+                        {"title": "Talk", "when": "2026-12-03", "needs": ["E99"]}, {"when": "2026-12-03"}):
+            self.assertEqual(self.meeting(payload)[0], 400, payload)
+        self.assertFalse(d.exists())
+        self.assertEqual(self.meeting({"title": "Talk", "when": "2026-12-03"}, key=None)[0], 403)
+        self.assertEqual(self.meeting({"title": "Talk", "when": "2026-12-03"}, origin="http://evil.example")[0], 403)
+        self.assertEqual(self.meeting({"id": "G09", "when": "2026-12-03"})[0], 404)
+        self.assertEqual(self.meeting({"title": "Talk", "when": "2026-12-03 10:00", "every": "week"})[0], 201)
+        before = (d / "G01 Talk.md").read_text()
+        for payload in ({"id": "G01"}, {"id": "G01", "when": None}, {"id": "G01", "when": "soon"}, {"id": "G01", "skip": ["soon"]}, {"id": "G01", "skip": "2026-12-10"},
+                        {"id": "G01", "moved": ["2026-12-10 to 2026-12-11"]}, {"id": "G01", "moved": ["2026-12-10 → soon"]}, {"id": "G01", "every": "2 weekly"},
+                        {"id": "G01", "status": "done"}, {"id": "G01", "delete": "yes"}, {"id": "G01", "until": "end"}):
+            self.assertEqual(self.meeting(payload)[0], 400, payload)
+        self.assertEqual((d / "G01 Talk.md").read_text(), before)
+
+    def test_meetings_read_as_the_page_reads_them(self):
+        """DURATION_RE, EVERY_RE and MOVED_RE, as web/schedule.js has them."""
+        js = (Path(__file__).resolve().parents[1] / "web" / "schedule.js").read_text()
+        for name in ("DURATION_RE", "EVERY_RE"):
+            self.assertEqual(re.search(rf"const {name} = /(.*)/i\n", js).group(1), getattr(rft_server, name).pattern, name)
+        self.assertEqual(re.search(r"const MOVED_RE = /(.*)/\n", js).group(1), rft_server.MOVED_RE.pattern)
+        for v in ("week", "2 weeks", "1w", "weekly", "every 2 weeks", "month on the first Tuesday", "2 months on the last fri", "day"):
+            self.assertTrue(rft_server.every_ok(v), v)
+        for v in ("fortnightly", "2 weekly", "0 weeks", "week on the first Tuesday", "month on the first monkey", ""):
+            self.assertFalse(rft_server.every_ok(v), v)
+        self.assertEqual([rft_server.duration_ok(v) for v in ("1h", "45m", "1h30m", "90 min", "", "h", "0m", "1.5h")], [True] * 4 + [False] * 4)
+
     def test_add_node_asks_the_session_and_answers_the_new_id(self):
         self.session(self.plugin)
         status, res = self.post({"parent": "E01", "type": "direction", "title": "  Then this  "})
@@ -1053,6 +1730,7 @@ class ServerTest(unittest.TestCase):
         """The server as the plugin runs it, its cache in `cache`: its process, port and key."""
         proc = subprocess.Popen([sys.executable, str(SERVER), "--vault", str(self.vault), "--web", str(WEB), "--no-watch"],
                                 stdout=subprocess.PIPE, text=True, env={**os.environ, "XDG_CACHE_HOME": str(cache)})
+        procs.watch(proc)
         self.addCleanup(lambda: (proc.kill(), proc.wait(), proc.stdout.close()))
         m = re.fullmatch(r"RFT_SERVER_URL http://127\.0\.0\.1:(\d+)/\?token=([\w-]{16})", proc.stdout.readline().strip())
         self.assertIsNotNone(m)
@@ -1328,6 +2006,8 @@ class ArtifactTest(unittest.TestCase):
 
     def test_the_page_is_served_in_a_sandbox_of_its_own(self):
         status, ctype, body = self.get("/api/artifact?concept=D04&theme=dark")
+        # the series colours are the project's figure tokens (here the default's) in the light theme
+        self.assertIn("--c1: light-dark(#8E51FF, #9775fa)", body.decode())
         self.assertEqual(status, 200)
         self.assertEqual(ctype, "text/html; charset=utf-8")
         c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
@@ -1439,12 +2119,21 @@ class ManuscriptTest(unittest.TestCase):
         s2 = "% rft-snippet S02 · discussion · Next\n% basis: E06\n\\paragraph{Next}\n% your text\n"
         (vault / "snippets" / "S01.tex").write_text(s1)
         (vault / "snippets" / "S02.tex").write_text(s2)
-        copy = lambda sid, text, content=None: (lambda c: f"% rft-begin {sid} {rft_manuscript.content_fingerprint(rft_manuscript.content_of(text))}\n{c}\n% rft-end {sid}")(content or rft_manuscript.content_of(text))  # noqa: E731
-        head = "\\documentclass{article}\n\\usepackage{amsthm}\n\\usepackage[numbers]{natbib}\n\\usepackage{rft}\n\\begin{document}\n"
+        # each document is plain LaTeX: S01 written out between two marker lines, tracked outside its folder
+        placed = "\\paragraph{CutMix}\nThe gap closes by 0.3 \\cite{zhang2018mixup}."
+        copy = lambda content: f"%%% Result: CutMix %%%\n{content}\n%%% end %%%"  # noqa: E731
+        head = "\\documentclass{article}\n\\usepackage{amsthm}\n\\usepackage[numbers]{natbib}\n\\begin{document}\n"
         tail = "\\bibliographystyle{plainnat}\n\\bibliography{refs}\n\\end{document}\n"
-        (vault / "documents" / "paper" / "main.tex").write_text(head + "\\section{Results}\n" + copy("S01", s1) + "\nSee \\ref{S07}.\n" + tail)
-        (vault / "documents" / "thesis" / "main.tex").write_text(head + copy("S01", s1, "\\paragraph{CutMix}\nIn our words, the gap closes by \\rftnum{E05}{gap}.") + "\n" + tail)
-        (vault / "documents" / "paper" / ".blocks.json").write_text(json.dumps({"S01": rft_manuscript.content_of(s1)}))
+        (vault / "documents" / "paper" / "main.tex").write_text(head + "\\section{Results}\n" + copy(placed) + "\nSee Table S1 and \\ref{S02}.\n" + tail)
+        (vault / "documents" / "thesis" / "main.tex").write_text(head + copy("\\paragraph{CutMix}\nIn our words, the gap closes by 0.3 \\cite{zhang2018mixup}.") + "\n" + tail)
+        for name in ("paper", "thesis"):
+            (vault / "documents" / name / "refs.bib").write_text("@article{zhang2018mixup,\n  title={mixup},\n  year={2018}\n}\n")
+            (vault / "documents" / ".rft" / name).mkdir(parents=True)
+            (vault / "documents" / ".rft" / name / "tracking.json").write_text(json.dumps({
+                "version": 1, "main": "main.tex",
+                "copies": [{"snippet": "S01", "marker": "Result: CutMix", "file": "main.tex", "stamp": rft_manuscript.content_fingerprint(rft_manuscript.content_of(s1)), "placed": placed}],
+                "values": [{"kind": "number", "from": "E05", "key": "gap", "written": "0.3", "file": "main.tex", "before": "The gap closes by ", "after": " \\cite{zhang2018mixup}."}],
+                "bib": {"zhang2018mixup": {"from": "R01", "file": "refs.bib"}}, "allowed": []}))
         fp = rft_manuscript.substance_fingerprint("experiment", cls.e05.read_text())
         (vault / "snippets" / "snippets.json").write_text(json.dumps({"locked": True, "next": 3, "snippets": {"S01": {"stamp": {"E05": fp}}}, "unlocked": []}))
         (vault / "documents" / "documents.json").write_text(json.dumps({"locked": True, "unlocked": []}))
@@ -1492,11 +2181,25 @@ class ManuscriptTest(unittest.TestCase):
         self.assertEqual((m["exists"], m["locked"], m["docsLocked"]), (True, True, True))
         s1, s2 = m["snippets"]
         self.assertEqual((s1["kind"], s1["title"], s1["basis"], s1["review"], s1["stub"], s1["locked"]), ("result", "CutMix", ["E05", "R01"], [], False, True))
-        self.assertEqual(s1["usedIn"], [{"doc": "paper", "state": "sync"}, {"doc": "thesis", "state": "adapted"}])
+        self.assertEqual(s1["usedIn"], [{"doc": "paper", "file": "main.tex", "count": 1, "states": ["placed"]}, {"doc": "thesis", "file": "main.tex", "count": 1, "states": ["adapted"]}])
         self.assertEqual((s2["stub"], s2["unverified"], s2["usedIn"]), (True, ["E06"], []))
         paper, thesis = m["documents"]
-        self.assertEqual((paper["name"], paper["copies"], paper["refsMissing"]), ("paper", [{"id": "S01", "state": "sync", "line": 7, "snippetReview": False}], ["S07"]))
+        self.assertEqual((paper["name"], paper["main"], paper["files"], paper["others"], paper["notIncluded"]), ("paper", "main.tex", ["main.tex", "refs.bib"], [], []))
+        self.assertEqual(paper["copies"], [{"id": "S01", "name": "S01", "nth": 1, "marker": "Result: CutMix", "file": "main.tex", "state": "placed", "markers": True,
+                                            "line": 6, "end": 9, "placed": "\\paragraph{CutMix}\nThe gap closes by 0.3 \\cite{zhang2018mixup}.", "snippetReview": False, "included": True}])
         self.assertEqual(thesis["copies"][0]["state"], "adapted")
+        # the number the copy holds is the tree's; the entry it cites came from R01; an id of the vault in its words is a trace ("Table S1" is not)
+        self.assertEqual(paper["values"], [{"index": 0, "kind": "number", "from": "E05", "key": "gap", "written": "0.3", "file": "main.tex", "line": 8,
+                                            "state": "current", "now": "0.3", "inDocument": "0.3", "inCopyOf": "S01"}])
+        self.assertEqual(paper["bib"], [{"key": "zhang2018mixup", "file": "refs.bib", "from": "R01"}])
+        self.assertEqual((paper["traces"], paper["allowedTraces"], thesis["traces"]),
+                         ([{"file": "main.tex", "line": 10, "kind": "id", "match": "S02", "text": "See Table S1 and \\ref{S02}."}], 0, []))
+        # the run saves another number: the value in both documents is to review, their text as it was
+        results = self.vault / "results" / "E05.json"
+        self.keep(results)
+        results.write_text(json.dumps({"results": {"gap": 0.4, "seeds": 3}}))
+        self.assertEqual([(d["values"][0]["state"], d["values"][0]["now"], d["copies"][0]["state"]) for d in self.ms()["documents"]], [("review", "0.4", "placed"), ("review", "0.4", "adapted")])
+        results.write_text(json.dumps({"results": {"gap": 0.3, "seeds": 3}}))
         # S01 changes: both copies to review, their text as it was
         s1p = self.vault / "snippets" / "S01.tex"
         self.keep(s1p)
@@ -1521,8 +2224,20 @@ class ManuscriptTest(unittest.TestCase):
         status, got = self.write("PUT", "/api/manuscript/file", {"path": "snippets/S02.tex", "text": "x", "version": f["version"]})
         self.assertEqual((status, got["text"]), (409, text))
         d = json.loads(self.get("/api/manuscript/file?path=documents/paper/main.tex")[2])
-        self.assertEqual((d["locked"], list(d["taken"])), (True, ["S01"]))  # what each copy was taken from: the review's "then"
-        for bad in ("snippets/S09.tex", "../secret.tex", "documents/../x/main.tex", "documents/rft.sty", "snippets/snippets.json", "documents/paper/.blocks.json"):
+        self.assertEqual((d["locked"], "taken" in d), (True, False))
+        # any .tex or .bib file of a document, in its subfolders too; nothing else, and nothing of the plugin's own
+        sub = self.vault / "documents" / "paper" / "sections"
+        sub.mkdir()
+        self.addCleanup(shutil.rmtree, sub)
+        (sub / "method.tex").write_text("\\section{Method}\n")
+        (sub / "plot.pdf").write_bytes(b"%PDF")
+        self.assertEqual(json.loads(self.get("/api/manuscript/file?path=documents/paper/sections/method.tex")[2])["text"], "\\section{Method}\n")
+        self.assertIn("zhang2018mixup", json.loads(self.get("/api/manuscript/file?path=documents/paper/refs.bib")[2])["text"])
+        status, got = self.write("PUT", "/api/manuscript/file", {"path": "documents/paper/sections/method.tex", "text": "\\section{Methods}\n", "force": True})
+        self.assertEqual((status, (sub / "method.tex").read_text()), (200, "\\section{Methods}\n"))
+        for bad in ("snippets/S09.tex", "../secret.tex", "documents/../x/main.tex", "documents/rft.sty", "snippets/snippets.json", "documents/paper/.blocks.json",
+                    "documents/.rft/paper/tracking.json", "documents/paper/sections/plot.pdf", "documents/paper/sections/../../thesis/main.tex",
+                    "documents/paper/sections/nope.tex", "documents/paper//main.tex", "documents/paper/.hidden/x.tex"):
             self.assertEqual(self.get(f"/api/manuscript/file?path={quote(bad)}")[0], 404, bad)
             self.assertEqual(self.write("PUT", "/api/manuscript/file", {"path": bad, "text": "x", "force": True})[0], 404, bad)
         self.assertEqual(self.write("PUT", "/api/manuscript/file", {"path": "snippets/S02.tex", "text": "x", "force": True}, key=None)[0], 403)
@@ -1557,16 +2272,16 @@ class ManuscriptTest(unittest.TestCase):
         self.assertEqual(self.write("POST", "/api/lock", {"id": "paper", "locked": False})[0], 404)
 
     def test_what_the_session_makes_for_the_page(self):
-        doc = self.vault / "documents" / "paper" / "main.tex"
-        self.keep(doc)
+        tracking = self.vault / "documents" / ".rft" / "paper" / "tracking.json"
+        self.keep(tracking)
 
         def answer(request):
             if request["action"] == "new":
                 p = self.vault / "snippets" / "S03.tex"
                 p.write_text("% rft-snippet S03 · result · Mine\n% basis: E05\n")
                 self.addCleanup(p.unlink)
-            if request["action"] == "place":
-                doc.write_text(doc.read_text() + "% rft-begin S02 00000000\n% rft-end S02\n")
+            if request["action"] in ("place", "remove", "allow"):
+                tracking.write_text(tracking.read_text() + "\n")
 
         type(self).answer = answer
         self.addCleanup(setattr, type(self), "answer", None)
@@ -1576,10 +2291,31 @@ class ManuscriptTest(unittest.TestCase):
         status, got = self.write("POST", "/api/manuscript/ask", {"action": "place", "name": "paper", "id": "S02", "after": "S01"})
         self.assertEqual((status, got["id"]), (200, "S02"))
         self.assertEqual(self.asked[-1], ("RFT_MANUSCRIPT", {"action": "place", "name": "paper", "id": "S02", "after": "S01"}))
+        # a snippet may be placed again, in a file of the document; a copy is named as the document has it
+        status, got = self.write("POST", "/api/manuscript/ask", {"action": "place", "name": "paper", "id": "S01", "file": "main.tex"})
+        self.assertEqual((status, self.asked[-1][1]), (200, {"action": "place", "name": "paper", "id": "S01", "file": "main.tex"}))
+        self.assertEqual(self.write("POST", "/api/manuscript/ask", {"action": "remove", "name": "paper", "id": "S01"})[0], 200)
+        status, got = self.write("POST", "/api/manuscript/ask", {"action": "allow", "name": "paper", "file": "main.tex", "match": "S02", "text": "See Table S1 and \\ref{S02}.", "extra": 1})
+        self.assertEqual((status, self.asked[-1][1]), (200, {"action": "allow", "name": "paper", "file": "main.tex", "match": "S02", "text": "See Table S1 and \\ref{S02}."}))
+        # what a note gives a document, for the page's Insert; the insertion is the session's
+        self.assertEqual(json.loads(self.get("/api/manuscript/saved?id=E05")[2]), {"id": "E05", "numbers": {"gap": "0.3", "seeds": "3"}, "figures": [], "tables": [], "reference": False})
+        self.assertEqual(json.loads(self.get("/api/manuscript/saved?id=R01")[2]), {"id": "R01", "numbers": {}, "figures": [], "tables": [], "reference": True})
+        self.assertEqual(self.get("/api/manuscript/saved?id=E99")[0], 404)
+        type(self).answer = lambda request: tracking.write_text(tracking.read_text() + "\n")
+        status, got = self.write("POST", "/api/manuscript/ask", {"action": "insert", "name": "paper", "kind": "number", "id": "E05", "match": "gap", "file": "main.tex", "from": 5, "to": 0})
+        self.assertEqual((status, self.asked[-1][1]), (200, {"action": "insert", "name": "paper", "kind": "number", "id": "E05", "match": "gap", "file": "main.tex", "from": 5, "to": 0}))
+        for bad, code in (({"action": "insert", "name": "paper", "kind": "number", "id": "E05", "file": "main.tex", "from": 5, "to": 0}, 400),
+                          ({"action": "insert", "name": "paper", "kind": "essay", "id": "E05", "match": "gap", "file": "main.tex", "from": 5, "to": 0}, 400),
+                          ({"action": "insert", "name": "paper", "kind": "citation", "id": "R77", "file": "main.tex", "from": 5, "to": 0}, 400)):
+            self.assertEqual(self.write("POST", "/api/manuscript/ask", bad)[0], code, bad)
         for bad, code in (({"action": "new", "kind": "result"}, 400), ({"action": "drop"}, 400), ({"action": "document", "name": "My Paper"}, 400),
                           ({"action": "document", "name": "notes", "title": "two\nlines"}, 400), ({"action": "document", "name": "notes", "title": 3}, 400),
                           ({"action": "reviewed", "id": "S42"}, 404), ({"action": "document", "name": "paper"}, 409),
-                          ({"action": "place", "name": "paper", "id": "S01"}, 409), ({"action": "take", "name": "thesis", "id": "S02"}, 404),
+                          ({"action": "place", "name": "paper", "id": "S01#2"}, 400), ({"action": "take", "name": "thesis", "id": "S02"}, 404),
+                          ({"action": "move", "name": "paper", "id": "S01#2"}, 404), ({"action": "remove", "name": "paper", "id": "paper"}, 400),
+                          ({"action": "take-value", "name": "paper", "index": 5}, 404), ({"action": "keep-value", "name": "paper", "index": "0"}, 400),
+                          ({"action": "point", "name": "paper", "id": "S01", "file": "main.tex"}, 400), ({"action": "allow", "name": "paper", "file": "main.tex"}, 400),
+                          ({"action": "declare", "name": "paper"}, 400), ({"action": "place", "name": "paper", "id": "S01", "file": 3}, 400),
                           ({"action": "place", "name": "book", "id": "S01"}, 404)):
             self.assertEqual(self.write("POST", "/api/manuscript/ask", bad)[0], code, bad)
 
@@ -1633,6 +2369,7 @@ class SharedPortTest(unittest.TestCase):
              "--port", str(port), "--project", project, "--no-watch"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             env={**os.environ, "XDG_CACHE_HOME": str(Path(self.tmp.name) / "cache")})
+        procs.watch(p)
         self.procs.append(p)
         lines = queue.Queue()
         threading.Thread(target=lambda: lines.put(p.stdout.readline()), daemon=True).start()
@@ -1673,6 +2410,172 @@ class SharedPortTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body, {"vault": rft_server.Vault(self.vaults["one"], "one").ident})
         self.assertRegex(body["vault"], r"^[0-9a-f]{16}$")
+
+
+
+class DeckTest(unittest.TestCase):
+    """Slide decks as the page sees them (docs/design/presentations.md): the list with what each is
+    for and its lock, one read and written (a conflict refused), a new one (the next P id, locked),
+    the lock, the writes refused without the key, and the images a deck shows."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        vault = Path(cls.tmp.name) / "vault"
+        for d in ("directions", "decks", "figures"):
+            (vault / d).mkdir(parents=True)
+        (vault / "directions" / "D00 Root question.md").write_text(note("D00", "direction", "done", "", "Root question"))
+        (vault / "decks" / "P01 Weekly wrap-up.md").write_text(
+            "---\nid: P01\ntype: deck\nfor: [G01 2026-11-24]\nlocked: true\n---\n\n# Weekly wrap-up\n\n---\n\n## Results\n"
+            "```\n---\n```\n![[E08_loss.svg]]\n")
+        (vault / "decks" / "P03 Practice talk.md").write_text("---\nid: P03\nfor:\n  - G03 2026-12-01\n  - M04\nlocked: false\n---\n# Talk\n")
+        (vault / "decks" / "notes about decks.md").write_text("not a deck")
+        (vault / "figures" / "E08_loss.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
+        cls.vault = vault
+        handler = rft_server.make_handler(rft_server.Vault(vault, "demo"), WEB, KEY)
+        cls.server = rft_server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        cls.port = cls.server.server_address[1]
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.tmp.cleanup()
+
+    get = ServerTest.get
+    write = ServerTest.write
+
+    def keep(self, path: Path):
+        before = path.read_bytes()
+        self.addCleanup(path.write_bytes, before)
+
+    def deck(self, did):
+        status, _, body = self.get(f"/api/deck?id={did}")
+        return status, json.loads(body)
+
+    def test_the_list(self):
+        decks = json.loads(self.get("/api/decks")[2])["decks"]
+        self.assertEqual([(d["id"], d["title"], d["for"], d["locked"], d["slides"]) for d in decks], [
+            ("P01", "Weekly wrap-up", ["G01 2026-11-24"], True, 2),  # the --- in a code block splits nothing
+            ("P03", "Practice talk", ["G03 2026-12-01", "M04"], False, 1),
+        ])
+        self.assertEqual(decks[0]["path"], "decks/P01 Weekly wrap-up.md")
+
+    def test_read_and_write_with_the_version(self):
+        path = self.vault / "decks" / "P01 Weekly wrap-up.md"
+        self.keep(path)
+        status, d = self.deck("P01")
+        self.assertEqual(status, 200)
+        self.assertEqual(d["text"], path.read_text())
+        text = d["text"] + "\n---\n\n## Next steps\n"
+        status, out = self.write("PUT", "/api/deck", {"id": "P01", "text": text, "version": d["version"]})
+        self.assertEqual(status, 200)
+        self.assertEqual(path.read_text(), text)
+        self.assertEqual(out["slides"], 3)
+        # written since it was read: refused, with the deck as it is now
+        status, out = self.write("PUT", "/api/deck", {"id": "P01", "text": "lost", "version": d["version"]})
+        self.assertEqual(status, 409)
+        self.assertEqual(out["text"], text)
+        self.assertEqual(path.read_text(), text)
+        self.assertEqual(self.write("PUT", "/api/deck", {"id": "P01", "text": "x", "force": True})[0], 200)
+        self.assertEqual(self.deck("P09")[0], 404)
+        self.assertEqual(self.deck("../P01")[0], 404)
+
+    def test_a_new_deck_is_locked_and_takes_the_next_id(self):
+        status, d = self.write("POST", "/api/deck", {"title": "Supervisor meeting: 2026/12/01", "for": ["G01 2026-12-01"], "subtitle": "Supervisor meeting · 1 Dec"})
+        self.assertEqual(status, 201)
+        path = self.vault / d["path"]
+        self.addCleanup(path.unlink)
+        self.assertEqual((d["id"], d["name"], d["locked"], d["for"]), ("P04", "P04 Supervisor meeting 2026 12 01", True, ["G01 2026-12-01"]))
+        self.assertEqual(path.read_text(), "---\nid: P04\ntype: deck\nfor: [G01 2026-12-01]\nlocked: true\n---\n\n# Supervisor meeting 2026 12 01\nSupervisor meeting · 1 Dec\n")
+        self.assertEqual(self.write("POST", "/api/deck", {"title": " "})[0], 400)
+        self.assertEqual(self.write("POST", "/api/deck", {"title": "x", "for": ["E05"]})[0], 400)
+        self.assertEqual(self.write("POST", "/api/deck", {"title": "x", "for": "G01"})[0], 400)
+
+    def test_the_lock(self):
+        path = self.vault / "decks" / "P03 Practice talk.md"
+        self.keep(path)
+        status, d = self.write("POST", "/api/deck/lock", {"id": "P03", "locked": True})
+        self.assertEqual((status, d["locked"]), (200, True))
+        self.assertIn("\nlocked: true\n", path.read_text())
+        self.assertIn("  - M04\n", path.read_text())  # the rest of the frontmatter as it was
+        self.assertFalse(self.write("POST", "/api/deck/lock", {"id": "P03", "locked": False})[1]["locked"])
+        self.assertEqual(self.write("POST", "/api/deck/lock", {"id": "P09", "locked": False})[0], 404)
+        self.assertEqual(rft_decks.with_lock("# no frontmatter\n", True), "---\nlocked: true\n---\n\n# no frontmatter\n")
+        self.assertEqual(rft_decks.with_lock("---\r\nid: P07\r\n---\r\n# x\r\n", False), "---\r\nid: P07\r\nlocked: false\r\n---\r\n# x\r\n")
+
+    def test_writes_need_the_key_and_the_page(self):
+        path = self.vault / "decks" / "P01 Weekly wrap-up.md"
+        before = path.read_bytes()
+        self.assertEqual(self.write("PUT", "/api/deck", {"id": "P01", "text": "x", "force": True}, key="wrong")[0], 403)
+        self.assertEqual(self.write("PUT", "/api/deck", {"id": "P01", "text": "x", "force": True}, origin="http://evil.example")[0], 403)
+        self.assertEqual(self.write("POST", "/api/deck/lock", {"id": "P01", "locked": False}, key=None)[0], 403)
+        self.assertEqual(self.write("POST", "/api/deck", {"title": "x"}, key="wrong")[0], 403)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_a_decks_images(self):
+        status, ctype, body = self.get(f"/api/image?deck=P01&src={quote('E08_loss.svg')}")
+        self.assertEqual((status, ctype), (200, "image/svg+xml"))
+        self.assertEqual(self.get(f"/api/image?deck=P09&src={quote('E08_loss.svg')}")[0], 403)
+
+    def test_the_tree_s_figures_for_a_slide_to_pick_from(self):
+        figures = self.vault / "figures"
+        for name in ("E10_accuracy.svg", "E08_gap.svg", "E08_gap.pdf", "notes.txt"):
+            (figures / name).write_text("<svg xmlns='http://www.w3.org/2000/svg'/>")
+            self.addCleanup((figures / name).unlink)
+        got = json.loads(self.get("/api/figures")[2])
+        self.assertEqual(got, {"figures": ["E08_gap.svg", "E08_loss.svg", "E10_accuracy.svg"]})
+
+    def test_an_image_pasted_on_a_slide_is_kept_with_the_decks_under_its_deck_s_name(self):
+        png = bytes.fromhex("89504e470d0a1a0a") + b"not much of a picture"
+        assets = self.vault / "decks" / "assets"
+        self.addCleanup(lambda: shutil.rmtree(assets, ignore_errors=True))
+        status, out = self.write("POST", "/api/deck/asset", {"id": "P03", "type": "image/png", "data": base64.b64encode(png).decode()})
+        self.assertEqual((status, out), (201, {"file": "P03-1.png"}))
+        self.assertEqual((assets / "P03-1.png").read_bytes(), png)
+        # the next one of that deck, whatever its type; another deck counts on its own
+        status, out = self.write("POST", "/api/deck/asset", {"id": "P03", "type": "image/svg+xml", "data": base64.b64encode(b"<svg xmlns='http://www.w3.org/2000/svg'/>").decode()})
+        self.assertEqual((status, out), (201, {"file": "P03-2.svg"}))
+        (assets / "P03-1.png").unlink()
+        self.assertEqual(self.write("POST", "/api/deck/asset", {"id": "P03", "type": "image/jpeg", "data": base64.b64encode(b"jpeg").decode()})[1], {"file": "P03-3.jpg"})
+        self.assertEqual(self.write("POST", "/api/deck/asset", {"id": "P01", "type": "image/png", "data": base64.b64encode(png).decode()})[1], {"file": "P01-1.png"})
+        # the deck shows it by its name alone, as Obsidian finds it
+        status, ctype, body = self.get(f"/api/image?deck=P01&src={quote('P01-1.png')}")
+        self.assertEqual((status, ctype, body), (200, "image/png", png))
+        # refused: no such deck, what is no image, what is no base64, nothing
+        for req, code in (({"id": "P09", "type": "image/png", "data": "QUJD"}, 404), ({"id": "P03", "type": "text/html", "data": "QUJD"}, 400),
+                          ({"id": "P03", "type": "image/png", "data": "not base64!"}, 400), ({"id": "P03", "type": "image/png", "data": ""}, 400),
+                          ({"id": "../P03", "type": "image/png", "data": "QUJD"}, 404), ({"id": "P03", "type": "image/png"}, 400)):
+            self.assertEqual(self.write("POST", "/api/deck/asset", req)[0], code, req)
+        self.assertEqual(sorted(p.name for p in assets.iterdir()), ["P01-1.png", "P03-2.svg", "P03-3.jpg"])
+        # and not without the key
+        self.assertEqual(self.write("POST", "/api/deck/asset", {"id": "P03", "type": "image/png", "data": "QUJD"}, key=None)[0], 403)
+        self.assertEqual(sorted(p.name for p in assets.iterdir()), ["P01-1.png", "P03-2.svg", "P03-3.jpg"])
+
+
+
+class StyleRouteTest(unittest.TestCase):
+    """GET api/style: the project's figure tokens (.rft/config.json "style"), the default's where it
+    leaves one out or gives one that is none, for the page's slides."""
+
+    def test_the_project_s_tokens_over_the_default(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / ".rft").mkdir()
+            (root / "vault" / "directions").mkdir(parents=True)
+            (root / "vault" / "directions" / "D00 Root question.md").write_text(note("D00", "direction", "done", "", "Root question"))
+            (root / ".rft" / "config.json").write_text(json.dumps({"vault": "vault", "style": {"accent": "#4D4875", "grid": "faint", "font": "Arial"}}))
+            handler = rft_server.make_handler(rft_server.Vault(root / "vault", "demo"), WEB, KEY)
+            server = rft_server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            self.addCleanup(server.shutdown)
+            c = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+            c.request("GET", "/api/style", headers={"Host": f"127.0.0.1:{server.server_address[1]}"})
+            got = json.loads(c.getresponse().read())
+            c.close()
+            self.assertEqual((got["accent"], got["font"]), ("#4D4875", "Arial"))
+            self.assertEqual(got["grid"], rft_style.DEFAULT["grid"])  # "faint" is no colour
+            self.assertEqual(got["ramp"], rft_style.DEFAULT["ramp"])
 
 
 if __name__ == "__main__":

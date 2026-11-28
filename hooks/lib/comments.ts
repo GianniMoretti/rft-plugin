@@ -8,14 +8,16 @@
 
 import type { Io, Loaded, RftNode } from './vault'
 import { bodyOf, compareNames, front, join, resolveId, unquote } from './vault'
-import { documentRel, isDocumentLocked, isDocumentName, isSnippetId, isSnippetLocked, readDocsRegistry, readRegistry, readSnippet } from './snippets'
+import { documentMain } from './manuscript'
+import { isDocumentLocked, isDocumentName, isSnippetId, isSnippetLocked, readDocsRegistry, readRegistry, readSnippet } from './snippets'
 
 export const COMMENTS_DIR = '.comments'
 /** The characters kept on each side of a quote, to find it again. */
 export const CONTEXT = 40
 const MAX_TEXT = 20_000
 
-export type Message = { by: 'you' | 'claude'; at: string; text: string }
+/** `agent`: the name of the agent of the user's that wrote it, when the page's server launched one (server/rft_agents.py); with none, a message that is not the user's is Claude's. */
+export type Message = { by: 'you' | 'claude'; at: string; text: string; agent?: string }
 export type ThreadState = 'open' | 'resolved' | 'accepted' | 'rejected' | 'applied'
 export type Thread = {
   id: string
@@ -162,9 +164,11 @@ export async function subjectOf(io: Io, loaded: Loaded, ref: string): Promise<Su
   }
   const doc = ref.trim()
   if (isDocumentName(doc) && !resolveId(loaded.tree, doc)) {
+    // a document is discussed through its main file, whatever its name
+    const main = await documentMain(io, vault, doc)
     let text: string
-    try { text = (await io.read(join(vault, documentRel(doc)))).replace(/\r\n/g, '\n') } catch { throw new CommentError(`"${ref}" is no note, snippet or document`) }
-    return { id: doc, name: `the document ${doc}`, text, locked: isDocumentLocked(await readDocsRegistry(io, vault), doc), path: documentRel(doc), what: 'document' }
+    try { text = (await io.read(join(vault, main ?? ''))).replace(/\r\n/g, '\n') } catch { throw new CommentError(`"${ref}" is no note, snippet or document`) }
+    return { id: doc, name: `the document ${doc}`, text, locked: isDocumentLocked(await readDocsRegistry(io, vault), doc), path: main!, what: 'document' }
   }
   const n = noteOf(loaded, ref)
   const text = loaded.texts[n.id] ?? ''
@@ -202,7 +206,7 @@ function threadText(body: string, t: Thread, full: boolean): string {
   if (t.kind === 'suggestion' && t.replacement != null) lines.push('Replacement:', quoted(t.replacement))
   if (t.state === 'open') lines.push(placeText(body, t))
   const msgs = full ? t.messages : t.messages.slice(-1)
-  for (const m of msgs) lines.push(`- ${m.by === 'you' ? 'user' : 'claude'} · ${m.at}: ${m.text.replace(/\n/g, '\n  ')}`)
+  for (const m of msgs) lines.push(`- ${m.by === 'you' ? 'user' : m.agent ? `${m.agent} (another agent of the user's)` : 'claude'} · ${m.at}: ${m.text.replace(/\n/g, '\n  ')}`)
   if (!full && t.messages.length > 1) lines.splice(lines.length - 1, 0, `  (${t.messages.length - 1} earlier message(s))`)
   return lines.join('\n')
 }

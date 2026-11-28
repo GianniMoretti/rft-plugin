@@ -1,7 +1,9 @@
 // Snippets and documents, two levels. Snippets: LaTeX building blocks resting on verified notes,
-// reused. Documents: built from copies of snippets, each copy referenced to its snippet and in
-// review when the snippet changes, never rewritten by itself. Locked by default: Claude proposes
-// stubs and placements, comments and suggests; the user writes and accepts.
+// reused. Documents: built from copies of snippets, each written out as plain LaTeX between two
+// marker lines, referenced to its snippet in the document's tracking file and in review when the
+// snippet changes, never rewritten by itself. Locked by default: Claude proposes stubs and
+// placements, comments and suggests; the user writes and accepts. (The fixture's document, with
+// every state a copy and a value can be in: tests/copies.test.ts.)
 
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
@@ -11,13 +13,14 @@ import { comment, commentsReport, suggest } from '../hooks/lib/comments'
 import { nextReport, supersede } from '../hooks/lib/knowledge'
 import {
   basisOf, citeIndex, copyState, isStub, macroProblems, manuscriptReport, manuscriptWarnings, markReviewed, migrateManuscript, newDocument,
-  readManuscript, refsMissing, reviewCopy, setDocument, setSnippet, stateOf, usedIn, usesIn,
+  readManuscript, reviewCopy, setDocument, setSnippet, stateOf, usedIn, usesIn,
 } from '../hooks/lib/manuscript'
-import { contentFingerprint, contentOf, parseBlocks, readDocsRegistry, readRegistry, writeDocsRegistry, writeRegistry } from '../hooks/lib/snippets'
+import { contentFingerprint, contentOf, readDocsRegistry, readRegistry, writeDocsRegistry, writeRegistry } from '../hooks/lib/snippets'
 import { eagerTools, featuresInUse } from '../hooks/lib/tools'
 import { verifyNote } from '../hooks/lib/verify'
 import { load, readConfig } from '../hooks/lib/vault'
 import { CWD, D00, E01, E02, MemoryFs, demoFiles, note, world } from './fixture'
+import { BUILT_IN } from './fixtures/local-overleaf'
 
 const DATE = '2026-11-17'
 const E01_PATH = `vault/experiments/${E01}.md`
@@ -26,6 +29,7 @@ const R01_PATH = 'vault/references/R01 Mixup paper.md'
 const S01_PATH = 'vault/snippets/S01.tex'
 const PAPER = 'vault/documents/paper/main.tex'
 const THESIS = 'vault/documents/thesis/main.tex'
+const TRACKING = 'vault/documents/.rft/paper/tracking.json'
 
 /** The demo, a reference with a BibTeX block, E01's saved run; E01 and R01 verified; the two levels started with a paper. */
 async function setup(opts: { started?: boolean } = {}) {
@@ -65,9 +69,12 @@ describe('starting', () => {
     expect(JSON.parse(fs.read('vault/documents/documents.json'))).toEqual({ locked: true, unlocked: [] })
     const doc = fs.read(PAPER)
     expect(doc).toContain('\\documentclass[11pt]{article}')
-    expect(doc).toContain('\\usepackage{rft}')
+    // plain LaTeX: nothing of the plugin's, its theorem environments its own, an empty .bib for what it will cite
+    expect(doc).not.toMatch(/rft/)
+    expect(doc).toContain('\\newtheorem{definition}{Definition}')
+    expect(fs.read('vault/documents/paper/refs.bib')).toBe('')
     expect(doc).not.toContain('\\rftsnippet')
-    expect(await newDocument(io, l, 'thesis-ch3', 'report')).toBe('Added the document thesis-ch3 (vault/documents/thesis-ch3/main.tex).')
+    expect(await newDocument(io, l, 'thesis-ch3', 'report')).toBe('Added the document thesis-ch3 (vault/documents/thesis-ch3/, from the template report: 2 files, main file main.tex).')
     expect(fs.read('vault/documents/thesis-ch3/main.tex')).toContain('\\chapter{demo}')
     // a title typed in the tree view: plain text, its LaTeX special characters escaped
     await newDocument(io, l, 'mix', 'report', '  Mixup & CutMix: 100% of_the {gap}  ')
@@ -152,32 +159,102 @@ describe('snippets, the building blocks', () => {
 })
 
 describe('documents, built from copies of snippets', () => {
-  test('a placement copies the snippet\'s text between markers, stamped, where the user agreed', async () => {
+  const PLACED = '\\paragraph{Training length at 1k images}\nLong training loses 71.3 points at 1k images.'
+  const order = async (io: Awaited<ReturnType<typeof setup>>['io'], l: Awaited<ReturnType<typeof setup>>['l'], name = 'paper') =>
+    (await readManuscript(io, l))!.documents.find(d => d.name === name)!.copies.map(c => `${c.snippet}${c.found ? '' : ' lost'}`)
+
+  test('a placement writes the snippet out as plain LaTeX between two marker lines, where the user agreed, and records it outside the document', async () => {
     const { fs, io, l } = await setup()
     await written(fs, io, l)
     await setSnippet(io, l, { kind: 'definition', title: 'Gap', basis: ['E01'] }, DATE)
-    expect(await setDocument(io, l, { name: 'paper', place: 'S01' })).toBe('Placed a copy of S01 in paper. It is the document\'s now: the user may adapt it; when S01 changes, the copy goes to review.')
-    const content = contentOf(fs.read(S01_PATH))
-    expect(content).toBe('\\paragraph{Training length at 1k images}\nLong training loses \\rftnum{E01}{acc.1k} points at 1k images.')
+    expect(await setDocument(io, l, { name: 'paper', place: 'S01' })).toBe('Placed a copy of S01 in paper, written out as plain LaTeX. It is the document\'s now: the user may adapt it; when S01 changes, the copy goes to review.')
     let doc = fs.read(PAPER)
-    expect(doc).toContain(`\n\n% rft-begin S01 ${contentFingerprint(content)}\n${content}\n% rft-end S01\n\n\\bibliographystyle{plainnat}`)
-    expect(JSON.parse(fs.read('vault/documents/paper/.blocks.json'))).toEqual({ S01: content })
+    expect(doc).toContain(`\n\n%%% Result: Training length at 1k images %%%\n${PLACED}\n%%% end %%%\n\n\\bibliographystyle{plainnat}`)
+    expect(doc).not.toMatch(/rft|S01|E01/)
+    const at = PLACED.indexOf('71.3')
+    expect(JSON.parse(fs.read(TRACKING))).toEqual({
+      version: 1, main: 'main.tex', template: 'article',
+      copies: [{ snippet: 'S01', marker: 'Result: Training length at 1k images', file: 'main.tex', stamp: contentFingerprint(contentOf(fs.read(S01_PATH))), placed: PLACED }],
+      values: [{ kind: 'number', from: 'E01', key: 'acc.1k', written: '71.3', file: 'main.tex', before: PLACED.slice(at - 28, at), after: ' points at 1k images.' }],
+      bib: {}, allowed: [],
+    })
+    expect(fs.exists('vault/documents/paper/.blocks.json')).toBe(false)
     // after a copy, after a heading
     await setDocument(io, l, { name: 'paper', place: 'S02', after: 'S01' })
+    expect(await order(io, l)).toEqual(['S01', 'S02'])
+    expect(fs.read(PAPER)).toContain('%%% end %%%\n\n%%% Definition: Gap %%%\n\\begin{definition}[Gap]\\label{def:gap}\n\\end{definition}\n%%% end %%%')
+    fs.write(PAPER, fs.read(PAPER).replace('\\maketitle', '\\maketitle\n\\section{Definitions}'))
+    expect(await setDocument(io, l, { name: 'paper', move: 'S02', after: 'Definitions' })).toBe('Moved the copy of S02 in paper after Definitions.')
     doc = fs.read(PAPER)
-    expect(parseBlocks(doc).map(b => b.id)).toEqual(['S01', 'S02'])
-    fs.write(PAPER, doc.replace('\\maketitle', '\\maketitle\n\\section{Definitions}'))
-    await setDocument(io, l, { name: 'paper', move: 'S02', after: 'Definitions' })
-    doc = fs.read(PAPER)
-    expect(parseBlocks(doc).map(b => b.id)).toEqual(['S02', 'S01'])
-    expect(doc).toContain('\\section{Definitions}\n\n% rft-begin S02 ')
-    await expect(setDocument(io, l, { name: 'paper', place: 'S01' })).rejects.toThrow('paper already holds a copy of S01: move it instead')
-    await expect(setDocument(io, l, { name: 'paper', move: 'S01', after: 'Nowhere' })).rejects.toThrow('"Nowhere" is neither a copy in this document nor one of its headings')
+    expect(await order(io, l)).toEqual(['S02', 'S01'])
+    expect(doc).toContain('\\section{Definitions}\n\n%%% Definition: Gap %%%')
+    expect(JSON.parse(fs.read(TRACKING)).copies.map((c: { snippet: string }) => c.snippet)).toEqual(['S02', 'S01'])
+    await expect(setDocument(io, l, { name: 'paper', move: 'S01', after: 'S01' })).rejects.toThrow('a copy cannot go after itself')
+    await expect(setDocument(io, l, { name: 'paper', move: 'S01', after: 'Nowhere' })).rejects.toThrow('"Nowhere" is neither a copy in paper nor one of its headings')
     await expect(setDocument(io, l, { name: 'book', place: 'S01' })).rejects.toThrow('"book" is no document')
     await expect(setDocument(io, l, { name: 'paper', place: 'S09' })).rejects.toThrow('S09 is no snippet')
+    await expect(setDocument(io, l, { name: 'paper', remove: 'S09' })).rejects.toThrow('paper holds no copy of S09')
     expect(await setDocument(io, l, { name: 'paper', remove: 'S02' })).toBe('Removed the copy of S02 from paper (the snippet itself stays).')
-    expect(parseBlocks(fs.read(PAPER)).map(b => b.id)).toEqual(['S01'])
+    expect(await order(io, l)).toEqual(['S01'])
+    expect(fs.read(PAPER)).not.toContain('Definition: Gap')
     expect(fs.exists('vault/snippets/S02.tex')).toBe(true)
+  })
+
+  test('a snippet may have several copies in a document, each named by its number; a copy goes in any .tex file of the document', async () => {
+    const { fs, io, l } = await setup()
+    await written(fs, io, l)
+    await setSnippet(io, l, { kind: 'definition', title: 'Gap', basis: ['E01'] }, DATE)
+    fs.write(PAPER, fs.read(PAPER).replace('\\maketitle', '\\maketitle\n\\input{sections/method}'))
+    fs.write('vault/documents/paper/sections/method.tex', '\\section{Method}\nWe train longer.\n')
+    await setDocument(io, l, { name: 'paper', place: 'S02' })
+    expect(await setDocument(io, l, { name: 'paper', place: 'S02', file: 'sections/method.tex' }))
+      .toBe('Placed a copy of S02 in paper (sections/method.tex), written out as plain LaTeX. It is the document\'s now: the user may adapt it; when S02 changes, the copy goes to review. paper now holds 2 copies of S02: S02#1 to S02#2.')
+    // the second copy has a label of its own, at the end of its file; the document's order puts it first
+    expect(fs.read('vault/documents/paper/sections/method.tex')).toBe('\\section{Method}\nWe train longer.\n\n%%% Definition: Gap %%%\n\\begin{definition}[Gap]\\label{def:gap-2}\n\\end{definition}\n%%% end %%%\n')
+    const ms = (await readManuscript(io, l))!
+    expect(ms.documents[0]!.copies.map(c => [c.snippet, c.nth, c.file])).toEqual([['S02', 1, 'sections/method.tex'], ['S02', 2, 'main.tex']])
+    expect(usedIn(ms, 'S02')).toEqual([{ doc: 'paper', file: 'sections/method.tex', count: 1, states: ['placed'] }, { doc: 'paper', file: 'main.tex', count: 1, states: ['placed'] }])
+    expect(await manuscriptReport(io, l)).toContain('  paper (article, main.tex, pdfLaTeX): S02#1 (sections/method.tex), S02#2')
+    await expect(setDocument(io, l, { name: 'paper', move: 'S02', after: 'Method' })).rejects.toThrow('paper holds 2 copies of S02: name one, S02#1 (sections/method.tex), S02#2 (main.tex)')
+    await expect(setDocument(io, l, { name: 'paper', place: 'S01', file: 'sections/nope.tex' })).rejects.toThrow('paper has no file sections/nope.tex to place a copy in (its .tex files: main.tex, sections/method.tex)')
+    await expect(setDocument(io, l, { name: 'paper', place: 'S01', file: 'main.tex', after: 'S02#1' })).rejects.toThrow('the copy S02#1 is in sections/method.tex, not in main.tex')
+    // after a copy in another file: it goes in that file; moved across files, its values follow
+    await setDocument(io, l, { name: 'paper', place: 'S01', after: 'S02#1' })
+    expect(fs.read('vault/documents/paper/sections/method.tex')).toContain('%%% end %%%\n\n%%% Result: Training length at 1k images %%%')
+    expect(JSON.parse(fs.read(TRACKING)).values.map((v: { file: string }) => v.file)).toEqual(['sections/method.tex'])
+    expect(await setDocument(io, l, { name: 'paper', move: 'S01', after: 'S02#2' })).toBe('Moved the copy of S01 in paper after S02#2.')
+    expect(JSON.parse(fs.read(TRACKING)).values.map((v: { file: string }) => v.file)).toEqual(['main.tex'])
+    expect((await readManuscript(io, l))!.documents[0]!.copies.map(c => [c.snippet, c.file])).toEqual([['S02', 'sections/method.tex'], ['S02', 'main.tex'], ['S01', 'main.tex']])
+    expect(await setDocument(io, l, { name: 'paper', remove: 'S02#1' })).toBe('Removed the copy of S02#1 from paper (the snippet itself stays).')
+    expect(fs.read('vault/documents/paper/sections/method.tex')).toBe('\\section{Method}\nWe train longer.\n')
+    expect(await manuscriptReport(io, l)).toContain('  paper (article, main.tex, pdfLaTeX): S02, S01')
+  })
+
+  test('placing copies a figure in under its own name and adds what it cites to the document\'s .bib; removing takes out what nothing else uses', async () => {
+    const { fs, io, l } = await setup()
+    fs.write('vault/figures/E01_loss.pdf', '%PDF of the loss\n')
+    await writeRegistry(io, 'vault', { ...(await readRegistry(io, 'vault')), locked: false })
+    await setSnippet(io, l, { kind: 'figure', title: 'Loss', basis: ['E01'], text: '\\rftfig[width=\\linewidth]{E01}{loss}' }, DATE)
+    await setSnippet(io, l, { kind: 'related-work', title: 'Mixup', basis: ['R01'], text: 'Mixup~\\cite{R01} mixes pairs; see Figure~\\ref{S01}.' }, DATE)
+    fs.write('vault/documents/paper/refs.bib', '@misc{mine2020,\n  title = {Mine}\n}\n')
+    expect(await setDocument(io, l, { name: 'paper', place: 'S01' })).toContain('written out as plain LaTeX (figures/loss.pdf copied in).')
+    expect(await setDocument(io, l, { name: 'paper', place: 'S02' })).toContain('written out as plain LaTeX (zhang2018mixup in its .bib).')
+    await setDocument(io, l, { name: 'paper', place: 'S02', after: 'S01' })
+    expect(fs.read('vault/documents/paper/figures/loss.pdf')).toBe('%PDF of the loss\n')
+    const doc = fs.read(PAPER)
+    expect(doc).toContain('\\includegraphics[width=\\linewidth]{figures/loss.pdf}\n  \\caption{Loss}\\label{fig:loss}')
+    expect(doc).toContain('Mixup~\\cite{zhang2018mixup} mixes pairs; see Figure~\\ref{fig:loss}.')
+    expect(fs.read('vault/documents/paper/refs.bib')).toBe('@misc{mine2020,\n  title = {Mine}\n}\n\n@inproceedings{zhang2018mixup,\n  title={mixup},\n  year={2018}\n}\n')
+    expect(JSON.parse(fs.read(TRACKING)).bib).toEqual({ zhang2018mixup: { from: 'R01', file: 'refs.bib' } })
+    // one of the two copies that cite it goes: the entry stays; the other goes too: it leaves, the user's own stays
+    await setDocument(io, l, { name: 'paper', remove: 'S02#1' })
+    expect(fs.read('vault/documents/paper/refs.bib')).toContain('zhang2018mixup')
+    await setDocument(io, l, { name: 'paper', remove: 'S02' })
+    expect(fs.read('vault/documents/paper/refs.bib')).toBe('@misc{mine2020,\n  title = {Mine}\n}\n')
+    expect(JSON.parse(fs.read(TRACKING)).bib).toEqual({})
+    await setDocument(io, l, { name: 'paper', remove: 'S01' })
+    expect(fs.exists('vault/documents/paper/figures/loss.pdf')).toBe(false)
+    expect(JSON.parse(fs.read(TRACKING))).toMatchObject({ copies: [], values: [] })
   })
 
   test('a copy adapted to the narrative says so; a snippet that changes sends its copies to review, never rewritten; take or keep', async () => {
@@ -188,13 +265,13 @@ describe('documents, built from copies of snippets', () => {
     await setDocument(io, l, { name: 'thesis', place: 'S01' })
     const copies = async () => {
       const ms = (await readManuscript(io, l))!
-      return Object.fromEntries(ms.documents.map(d => [d.name, copyState(d.blocks[0]!, ms.snippets[0]).state]))
+      return Object.fromEntries(ms.documents.map(d => [d.name, copyState(d.copies[0]!, ms.snippets[0]).state]))
     }
-    expect(await copies()).toEqual({ paper: 'sync', thesis: 'sync' })
+    expect(await copies()).toEqual({ paper: 'placed', thesis: 'placed' })
     // the thesis adapts its copy
     fs.write(THESIS, fs.read(THESIS).replace('points at 1k images.', 'points at 1k images, as Chapter 2 announced.'))
-    expect(await copies()).toEqual({ paper: 'sync', thesis: 'adapted' })
-    expect(usedIn((await readManuscript(io, l))!, 'S01')).toEqual([{ doc: 'paper', state: 'sync' }, { doc: 'thesis', state: 'adapted' }])
+    expect(await copies()).toEqual({ paper: 'placed', thesis: 'adapted' })
+    expect(usedIn((await readManuscript(io, l))!, 'S01')).toEqual([{ doc: 'paper', file: 'main.tex', count: 1, states: ['placed'] }, { doc: 'thesis', file: 'main.tex', count: 1, states: ['adapted'] }])
     // the snippet changes: both copies to review, their text as it was
     const paperBefore = fs.read(PAPER)
     fs.write(S01_PATH, fs.read(S01_PATH).replace('loses', 'costs'))
@@ -204,29 +281,42 @@ describe('documents, built from copies of snippets', () => {
     fs.write(S01_PATH, fs.read(S01_PATH).replace('% basis: E01', '% basis: E01\n% a note to self'))
     expect(contentFingerprint(contentOf(fs.read(S01_PATH)))).toBe(contentFingerprint('\\paragraph{Training length at 1k images}\nLong training costs \\rftnum{E01}{acc.1k} points at 1k images.'))
     // the paper takes the new text; the thesis keeps its own
-    expect(await reviewCopy(io, l, 'paper', 'S01', 'take')).toBe('The copy of S01 in paper now holds the snippet\'s text.')
+    expect(await reviewCopy(io, l, 'paper', 'S01', 'take')).toBe('The copy of S01 in paper now holds the snippet\'s text, written out as plain LaTeX.')
     expect(await reviewCopy(io, l, 'thesis', 'S01', 'keep')).toBe('The copy of S01 in thesis is kept as it is, now answering to the snippet as it is.')
-    expect(await copies()).toEqual({ paper: 'sync', thesis: 'adapted' })
-    expect(fs.read(PAPER)).toContain('Long training costs')
-    expect(fs.read(THESIS)).toContain('Long training loses \\rftnum{E01}{acc.1k} points at 1k images, as Chapter 2 announced.')
-    expect(JSON.parse(fs.read('vault/documents/thesis/.blocks.json')).S01).toContain('costs')
+    expect(await copies()).toEqual({ paper: 'placed', thesis: 'adapted' })
+    expect(fs.read(PAPER)).toContain('%%% Result: Training length at 1k images %%%\n\\paragraph{Training length at 1k images}\nLong training costs 71.3 points at 1k images.\n%%% end %%%')
+    expect(fs.read(PAPER)).not.toContain('a note to self')
+    expect(fs.read(THESIS)).toContain('Long training loses 71.3 points at 1k images, as Chapter 2 announced.')
+    const kept = JSON.parse(fs.read('vault/documents/.rft/thesis/tracking.json'))
+    expect([kept.copies[0].placed, kept.copies[0].seen]).toEqual([PLACED.replace('loses', 'costs'), PLACED.replace('images.', 'images, as Chapter 2 announced.')])
+    expect([JSON.parse(fs.read(TRACKING)).values.length, kept.values.length]).toEqual([1, 1])
     const report = await manuscriptReport(io, l)
-    expect(report).toContain('S01 result · Training length at 1k images · written · E01 · used in paper, thesis (adapted)')
-    expect(report).toContain('  paper: S01\n  thesis: S01 (adapted)')
+    expect(report).toContain('S01 result · Training length at 1k images · written · E01 · used in paper (main.tex); thesis (main.tex: adapted)')
+    expect(report).toContain('  paper (article, main.tex, pdfLaTeX): S01\n  thesis (report, main.tex, pdfLaTeX): S01 (adapted)')
+    // a kept copy whose markers a co-author then deletes is still found, by the text it had
+    fs.write(THESIS, fs.read(THESIS).replace('%%% Result: Training length at 1k images %%%\n', '').replace('%%% end %%%\n', ''))
+    const found = (await readManuscript(io, l))!.documents.find(d => d.name === 'thesis')!.copies[0]!
+    expect([found.found, copyState(found, (await readManuscript(io, l))!.snippets[0]).state]).toEqual(['text', 'adapted'])
+    // moved, it gets its markers back
+    fs.write(THESIS, fs.read(THESIS).replace('\\maketitle', '\\maketitle\n\\section{Results}'))
+    await setDocument(io, l, { name: 'thesis', move: 'S01', after: 'Results' })
+    expect(fs.read(THESIS)).toContain('\\section{Results}\n\n%%% Result: Training length at 1k images %%%\n\\paragraph{Training length at 1k images}\nLong training loses 71.3 points at 1k images, as Chapter 2 announced.\n%%% end %%%')
   })
 
-  test('a document\'s outline: its headings and copies with their state; what it refers to and does not hold', async () => {
+  test('a document\'s outline: its headings and copies with their state, and the traces of the tree in its files', async () => {
     const { fs, io, l } = await setup()
     await written(fs, io, l)
     fs.write(PAPER, fs.read(PAPER).replace('\\maketitle', '\\maketitle\n\\section{Results}\nAs Definition~\\ref{S07} and \\cref{S01} say.'))
     await setDocument(io, l, { name: 'paper', place: 'S01', after: 'Results' })
+    const line = fs.read(PAPER).split('\n').findIndex(x => x.includes('\\cref{S01}')) + 1
     expect(await manuscriptReport(io, l, 'paper')).toBe([
-      'paper (vault/documents/paper/main.tex): locked: its text is the user\'s. Its outline:',
+      'paper (vault/documents/paper/, template article, main file main.tex, pdfLaTeX): locked: its text is the user\'s.',
+      'Its files: main.tex, refs.bib.',
+      'Its outline:',
       '§ Results',
       '  S01 result · Training length at 1k images: as the snippet',
-      'It refers to snippets it holds no copy of: S07.',
+      `Traces of the tree in its files, which are shared as they are (1): main.tex:${line}: the id S01.`,
     ].join('\n'))
-    expect(refsMissing((await readManuscript(io, l))!.documents[0]!)).toEqual(['S07'])
   })
 })
 
@@ -263,8 +353,8 @@ describe('what a snippet rests on', () => {
     const all = await manuscriptReport(io, l)
     expect(all).toContain('Snippets (vault/snippets/), the building blocks, locked: the user writes them')
     expect(all).toContain('  S01 result · Training length at 1k images · written · E01 · in no document')
-    expect(all).toContain('Documents (vault/documents/), built from copies of snippets, locked: their text is the user\'s')
-    expect(all).toContain('  paper: no copies yet')
+    expect(all).toContain('Documents (vault/documents/; each with its template, main file and engine), built from copies of snippets, locked: their text is the user\'s')
+    expect(all).toContain('  paper (article, main.tex, pdfLaTeX): no copies yet')
     const one = await manuscriptReport(io, l, 'S01')
     expect(one).toContain('S01 result · Training length at 1k images (vault/snippets/S01.tex): written; in no document; locked: the user writes it.')
     expect(one).toContain('    numbers: \\rftnum{E01}{acc.1k} = 71.3, \\rftnum{E01}{acc.10k} = 88.2, \\rftnum{E01}{seeds} = 3')
@@ -277,17 +367,16 @@ describe('what a snippet rests on', () => {
     await setDocument(io, l, { name: 'paper', place: 'S01' })
     fs.write(S01_PATH, fs.read(S01_PATH).replace('% your text', 'Now written.'))
     const next = await nextReport(io, l, DATE)
-    expect(next).toContain('Copies in documents whose snippet changed since (the user takes the new text or keeps theirs): paper: S01.')
+    expect(next).toContain('Copies in documents whose snippet changed since (the user takes the new text or keeps theirs): paper: S01 (main.tex).')
     expect(next).toContain('Verified notes no snippet rests on yet (rft_manuscript): R01.')
     fs.write('vault/snippets/S02.tex', '% rft-snippet S02 · essay · Hand made\n% basis: E09\nAs \\rftnum{E01}{nope} \\cite{nobody, R01}.\n')
-    fs.write(PAPER, fs.read(PAPER).replace('\\bibliographystyle', '% rft-begin S07 0badf00d\nOld.\n% rft-end S07\nSee \\ref{S05}.\n\\bibliographystyle'))
+    fs.write(PAPER, fs.read(PAPER).replace('\\bibliographystyle', '% rft-begin S07 0badf00d\nOld.\n% rft-end S07\nSee \\ref{S05} and \\ref{S01}.\n\\bibliographystyle'))
     expect(await manuscriptWarnings(io, l)).toEqual([
       'S02: kind "essay" is not one of definition, theorem, lemma, proposition, corollary, proof, method, result, related-work, motivation, discussion, figure, table',
       'S02: its basis names no note of the tree: E09',
       "S02: \\rftnum{E01}{nope}: no such number; E01's are acc.1k, acc.10k, seeds",
       'S02: cites what no reference note holds: nobody',
-      'vault/documents/paper/main.tex: holds copies of snippets that do not exist: S07',
-      'vault/documents/paper/main.tex: refers to snippets it holds no copy of: S05',
+      expect.stringMatching(/^vault\/documents\/paper: its files are shared as they are and hold 3 traces of the tree: main\.tex:\d+: a marker of the first design \(rft-begin\); main\.tex:\d+: a marker of the first design \(rft-end\); main\.tex:\d+: the id S01$/),
     ])
     expect(await macroProblems(io, l, '\\rftnum{E02}{x}')).toEqual(['\\rftnum{E02}{x}: E02 has no saved RESULTS (its notebook has not run, or did not reproduce it)'])
   })
@@ -368,7 +457,55 @@ describe('in a session', () => {
     ]) expect(((await $.tool.call(call as never)) as { deny?: string }).deny).toBeUndefined()
     expect(w.tools).toContain('rft_set_document')
     const r = await $.tool.call({ tool: 'mcp__rft__rft_set_document', name: 'paper', place: 'S02', after: 'S01' } as never)
-    expect(r.text).toContain('Placed a copy of S02 in paper after S01.')
+    expect(r.text).toContain('Placed a copy of S02 in paper after S01, written out as plain LaTeX.')
+  })
+
+  test('one lock covers all a document\'s files; unlocked, Claude writes its .tex and .bib files only', async ($, on) => {
+    const { fs, io, l } = await setup()
+    // a document made from a kit, unlocked for Claude, and one that stays locked
+    for (const [f, text] of Object.entries({ 'example_paper.tex': '\\documentclass{article}\n\\usepackage{icml2027}\n\\begin{document}\n\\input{sections/method}\n\\end{document}\n', 'sections/method.tex': '\\section{Method}\nText.\n', 'example_paper.bib': '', 'icml2027.sty': '% the style\n', 'icml2027.bst': '% the bibliography style\n', 'kit.cls': '% a class\n', 'figures/logo.png': 'PNG stand-in\n' })) {
+      fs.write(`vault/templates/icml2027/${f}`, text)
+    }
+    await newDocument(io, l, 'icml', 'icml2027')
+    await newDocument(io, l, 'camera-ready', 'icml2027')
+    await writeDocsRegistry(io, 'vault', { ...(await readDocsRegistry(io, 'vault')), unlocked: ['icml'] })
+    const { ran } = await session($, on, filesOf(fs))
+    const at = (doc: string, f: string) => `${CWD}/vault/documents/${doc}/${f}`
+    const deny = async (call: Record<string, unknown>) => ((await $.tool.call(call as never)) as { deny?: string }).deny
+    // unlocked: its text is Claude's to edit and to add to
+    expect(await deny({ tool: 'Edit', file_path: at('icml', 'sections/method.tex'), old_string: 'Text.', new_string: 'Better text.' })).toBeUndefined()
+    expect(await deny({ tool: 'Write', file_path: at('icml', 'sections/results.tex'), content: '\\section{Results}\n' })).toBeUndefined()
+    expect(await deny({ tool: 'Edit', file_path: at('icml', 'example_paper.bib'), old_string: '', new_string: '@misc{mine,\n  title={Mine}\n}\n' })).toBeUndefined()
+    // its template's files and what the user put there are not, with the reason
+    for (const f of ['icml2027.sty', 'icml2027.bst', 'kit.cls']) {
+      const why = await deny({ tool: 'Edit', file_path: at('icml', f), old_string: '% ', new_string: '%% ' })
+      expect([f, why]).toEqual([f, expect.stringContaining(`In the document icml you write .tex and .bib files only. ${f} is a class or style file of its template`)])
+    }
+    expect(await deny({ tool: 'Write', file_path: at('icml', 'figures/logo.png'), content: 'x' })).toContain('figures/logo.png is a file the user put there')
+    expect(await deny({ tool: 'Write', file_path: at('icml', 'new.sty'), content: '% mine' })).toContain('you write .tex and .bib files only')
+    expect(await deny({ tool: 'Bash', command: `sed -i 's/style/STYLE/' vault/documents/icml/icml2027.sty` })).toContain('icml2027.sty is a class or style file of its template')
+    // locked: any of its files
+    for (const f of ['example_paper.tex', 'sections/method.tex', 'example_paper.bib', 'icml2027.sty', 'figures/logo.png']) {
+      expect([f, await deny({ tool: 'Edit', file_path: at('camera-ready', f), old_string: 'a', new_string: 'b' })]).toEqual([f, expect.stringContaining('The document camera-ready is locked, and the lock covers all its files')])
+    }
+    // only the user pulls and pushes: git against a document's own repository is refused, however it is named
+    for (const command of [
+      'git --git-dir=vault/documents/.rft/icml/git --work-tree=vault/documents/icml push',
+      `git --git-dir ${CWD}/vault/documents/.rft/icml/git --work-tree ${CWD}/vault/documents/icml pull`,
+      'cd vault/documents/icml && GIT_DIR=../.rft/icml/git git push origin main',
+      'GIT_DIR="vault/documents/.rft/icml/git" GIT_WORK_TREE=vault/documents/icml git commit -am x && git push',
+      'git -C vault/documents/.rft/icml/git log',
+    ]) expect([command, await deny({ tool: 'Bash', command })]).toEqual([command, expect.stringContaining('A document\'s repository is the user\'s to pull and push')])
+    // git elsewhere is not the plugin's business
+    expect(await deny({ tool: 'Bash', command: 'git status' })).toBeUndefined()
+    // only the three writes to its text, and that one command, went on
+    expect(ran).toEqual(['Edit', 'Write', 'Edit', 'Bash'])
+    // rft_manuscript names each document's template, main file and engine, and one document's files
+    const all = await $.tool.call({ tool: 'mcp__rft__rft_manuscript' } as never)
+    expect(all.text).toContain('  icml (icml2027, example_paper.tex, pdfLaTeX): no copies yet')
+    const one = await $.tool.call({ tool: 'mcp__rft__rft_manuscript', ref: 'icml' } as never)
+    expect(one.text).toContain('icml (vault/documents/icml/, template icml2027, main file example_paper.tex, pdfLaTeX): unlocked: you may edit its .tex and .bib files.')
+    expect(one.text).toContain('Its files: example_paper.tex, example_paper.bib, figures/logo.png, icml2027.bst, icml2027.sty, kit.cls, sections/method.tex.')
   })
 
   test('/rft-manuscript brings the first layout over, starts both levels, adds a document, or asks Claude for proposals', async ($, on) => {
@@ -382,8 +519,97 @@ describe('in a session', () => {
     expect((await run('')).text).toContain('Started snippets (vault/snippets/) and documents (vault/documents/), both locked')
     expect(w.fs.read(PAPER)).toContain('\\documentclass[11pt]{article}')
     expect((await run('new thesis-ch3 report')).text).toContain('Added the document thesis-ch3')
-    expect((await run('new x book')).text).toContain('A document is an article (a paper) or a report')
+    expect((await run('new x book')).text).toBe('"book" is no template: a document is made from article and report (built in)')
     expect((await run('book')).text).toContain('"book" is no document (paper, thesis-ch3)')
     expect((await run('paper')).text).toBe('Asked Claude to propose snippets to write and where to place them in paper: tables to choose from; nothing is written until you pick.')
+  })
+})
+
+describe('a document is made from a template', () => {
+  // a kit as a folder of the vault's templates/: its class and style files, its sample text, a figure, and what it says of its documents
+  const KIT: Record<string, string> = {
+    'vault/templates/icml2027/example_paper.tex': '\\documentclass{article}\n\\usepackage{icml2027}\n\\begin{document}\nSample text.\n\\bibliography{example_paper}\n\\end{document}\n',
+    'vault/templates/icml2027/example_paper.bib': '@article{sample,\n  title={Sample}\n}\n',
+    'vault/templates/icml2027/icml2027.sty': '% the style\n',
+    'vault/templates/icml2027/icml2027.bst': '% the bibliography style\n',
+    'vault/templates/icml2027/figures/icml_numpapers.pdf': '%PDF stand-in\n',
+    'vault/templates/icml2027/.DS_Store': 'junk',
+    'vault/templates/thesis-xe/template.json': '{"engine": "xelatex", "main": "thesis.tex"}\n',
+    'vault/templates/thesis-xe/thesis.tex': '\\documentclass{book}\n\\begin{document}\n\\include{chapters/one}\n\\end{document}\n',
+    'vault/templates/thesis-xe/standalone.tex': '\\documentclass{article}\n\\begin{document}\nOne chapter alone.\n\\end{document}\n',
+    'vault/templates/thesis-xe/chapters/one.tex': '\\chapter{One}\n',
+    'vault/templates/two-mains/a.tex': '\\begin{document}\nA\n\\end{document}\n',
+    'vault/templates/two-mains/b.tex': '\\begin{document}\nB\n\\end{document}\n',
+    // the notes' own templates are files of the same folder: not a document's template
+    'vault/templates/_experiment.md': '# a note\'s template\n',
+  }
+  const kit = async () => {
+    const s = await setup()
+    for (const [path, text] of Object.entries(KIT)) s.fs.write(path, text)
+    return s
+  }
+  const under = (fs: MemoryFs, folder: string) => Object.fromEntries([...fs.files].filter(([k]) => k.startsWith(folder)).map(([k, v]) => [k.slice(folder.length), v.text]))
+
+  test('the built-in templates: an article and a report, as the fixture has them; a document from before templates reads as made from its class', async () => {
+    const { fs, io, l } = await setup({ started: false })
+    await newDocument(io, l, 'paper', 'article', 'Small data & more')
+    await newDocument(io, l, 'chapter', 'report', 'Small data & more')
+    expect(under(fs, 'vault/documents/paper/')).toEqual(BUILT_IN.article!)
+    expect(under(fs, 'vault/documents/chapter/')).toEqual(BUILT_IN.report!)
+    expect(JSON.parse(fs.read('vault/documents/.rft/chapter/tracking.json'))).toEqual({ version: 1, main: 'main.tex', template: 'report', copies: [], values: [], bib: {}, allowed: [] })
+    // made before templates: no tracking file, or one that names none
+    fs.remove('vault/documents/.rft/chapter/tracking.json')
+    fs.write('vault/documents/.rft/paper/tracking.json', JSON.stringify({ version: 1, main: 'main.tex', copies: [], values: [], bib: {}, allowed: [] }))
+    const ms = (await readManuscript(io, l))!
+    expect(ms.documents.map(d => [d.name, d.template, d.main, d.engine])).toEqual([['chapter', 'report', 'main.tex', 'pdflatex'], ['paper', 'article', 'main.tex', 'pdflatex']])
+  })
+
+  test('a template of the vault: every file copied as it is, its engine and main file recorded, its settings file left behind', async () => {
+    const { fs, io, l } = await kit()
+    expect(await newDocument(io, l, 'icml', 'icml2027')).toBe('Added the document icml (vault/documents/icml/, from the template icml2027: 5 files, main file example_paper.tex).')
+    const want = under(fs, 'vault/templates/icml2027/')
+    delete want['.DS_Store']
+    expect(under(fs, 'vault/documents/icml/')).toEqual(want)
+    expect(JSON.parse(fs.read('vault/documents/.rft/icml/tracking.json'))).toEqual({ version: 1, main: 'example_paper.tex', template: 'icml2027', copies: [], values: [], bib: {}, allowed: [] })
+    // a template that names its engine and its main file
+    await newDocument(io, l, 'thesis', 'thesis-xe')
+    expect(Object.keys(under(fs, 'vault/documents/thesis/')).sort()).toEqual(['chapters/one.tex', 'standalone.tex', 'thesis.tex'])
+    expect(JSON.parse(fs.read('vault/documents/.rft/thesis/tracking.json'))).toMatchObject({ main: 'thesis.tex', engine: 'xelatex', template: 'thesis-xe' })
+    const ms = (await readManuscript(io, l))!
+    const d = ms.documents.find(x => x.name === 'thesis')!
+    expect([d.main, d.mainAsked, d.engine, d.template, [...d.included].sort()]).toEqual(['thesis.tex', [], 'xelatex', 'thesis-xe', ['chapters/one.tex', 'thesis.tex']])
+    // several files with \begin{document} and no word from the template: the user is asked in the page
+    expect(await newDocument(io, l, 'two', 'two-mains')).toContain('its main file still to choose in the page')
+    expect((await readManuscript(io, l))!.documents.find(x => x.name === 'two')!.mainAsked).toEqual(['a.tex', 'b.tex'])
+    const report = await manuscriptReport(io, l)
+    expect(report).toContain('  icml (icml2027, example_paper.tex, pdfLaTeX): no copies yet')
+    expect(report).toContain('  thesis (thesis-xe, thesis.tex, XeLaTeX): no copies yet')
+    expect(report).toContain('  two (two-mains, a.tex?, pdfLaTeX): no copies yet')
+    expect(report).toContain('Templates a document is made from (rft_set_document {name, template}, when the user asks for a document): article and report (built in); icml2027, thesis-xe, two-mains (vault/templates/).')
+  })
+
+  test('the document keeps no tie to its template: changing the template afterwards changes no document', async () => {
+    const { fs, io, l } = await kit()
+    await newDocument(io, l, 'icml', 'icml2027')
+    const before = under(fs, 'vault/documents/icml/')
+    fs.write('vault/templates/icml2027/icml2027.sty', '% the style, next year\n')
+    fs.write('vault/templates/icml2027/new.tex', 'New.\n')
+    fs.remove('vault/templates/icml2027/example_paper.bib')
+    expect(under(fs, 'vault/documents/icml/')).toEqual(before)
+    expect((await readManuscript(io, l))!.documents.find(x => x.name === 'icml')!.template).toBe('icml2027')
+  })
+
+  test('rft_set_document makes a document from a template; a name that is taken, a template that is none and a name that is no name are refused', async () => {
+    const { fs, io, l } = await kit()
+    expect(await setDocument(io, l, { name: 'camera-ready', template: 'icml2027' })).toContain('Added the document camera-ready (vault/documents/camera-ready/, from the template icml2027')
+    expect(fs.read('vault/documents/camera-ready/icml2027.sty')).toBe('% the style\n')
+    await expect(setDocument(io, l, { name: 'paper', template: 'icml2027' })).rejects.toThrow('there is already a document paper')
+    await expect(setDocument(io, l, { name: 'x', template: 'neurips' })).rejects.toThrow('"neurips" is no template: a document is made from article and report (built in); icml2027, thesis-xe, two-mains (vault/templates/)')
+    await expect(setDocument(io, l, { name: 'x', template: '../icml2027' })).rejects.toThrow('is no template')
+    await expect(setDocument(io, l, { name: 'x', template: '_experiment.md' })).rejects.toThrow('is no template')
+    await expect(setDocument(io, l, { name: 'My Paper', template: 'article' })).rejects.toThrow('lowercase letters, digits and dashes')
+    await expect(setDocument(io, l, { name: 'y', template: 'article', place: 'S01' })).rejects.toThrow('make the document first')
+    await expect(setDocument(io, l, { name: 'nope', place: 'S01' })).rejects.toThrow('with a template (article and report (built in); icml2027, thesis-xe, two-mains (vault/templates/)) rft_set_document makes it')
+    expect(fs.exists('vault/documents/x')).toBe(false)
   })
 })

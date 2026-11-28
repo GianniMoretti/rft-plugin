@@ -6,7 +6,7 @@
 // Every file access goes through `Io`, so the same code runs on the engine's `$.fs` and on
 // an in-memory vault in tests.
 
-import type { Milestone } from './dates'
+import type { Meeting, Milestone } from './dates'
 import { S } from './dates'
 
 /**
@@ -256,6 +256,8 @@ export type Io = {
   list: (path: string) => Promise<{ name: string; kind: string; mtimeMs: number; size: number }[]>
   exists: (path: string) => Promise<boolean>
   remove: (path: string) => Promise<void>
+  /** A file copied as it is, bytes and all (a figure into a document); without it a copy goes through `read` and `write`, as text. */
+  copy?: (from: string, to: string) => Promise<void>
 }
 
 export const CONFIG_PATH = '.rft/config.json'
@@ -267,6 +269,9 @@ export const MERMAID = 'Reasoning tree (diagram).md'
 /** The deadlines' folder in the vault, outside the tree, and their id letter. */
 export const MILESTONES = 'milestones'
 export const MILESTONE_RE = /^M(\d+)$/
+/** The meetings' folder in the vault, outside the tree, and their id letter. */
+export const MEETINGS = 'meetings'
+export const MEETING_RE = /^G(\d+)$/
 /** The calendar file of the deadlines and the planned runs, regenerated. */
 export const ICS = 'rft.ics'
 /** The concepts' artifacts: one HTML page each, whose first line is this header. */
@@ -334,6 +339,7 @@ export const rooted = (io: Io, root: string): Io => {
     list: path => io.list(at(path)),
     exists: path => io.exists(at(path)),
     remove: path => io.remove(at(path)),
+    ...(io.copy ? { copy: (from: string, to: string) => io.copy!(at(from), at(to)) } : {}),
   }
 }
 
@@ -526,6 +532,8 @@ export type Loaded = {
   signature: string
   /** The deadlines in the vault's `milestones/`, by id. */
   milestones: Milestone[]
+  /** The meetings in the vault's `meetings/`, by id. */
+  meetings: Meeting[]
   /** The vault holds at least one concept artifact (`artifacts/*.html` with its header). */
   hasArtifacts?: boolean
   /** The vault has snippets and documents (`snippets/snippets.json`). */
@@ -534,7 +542,7 @@ export type Loaded = {
 
 export async function signatureOf(io: Io, vault: string): Promise<string> {
   const parts: string[] = []
-  for (const sub of [...Object.values(SUBDIR), MILESTONES]) {
+  for (const sub of [...Object.values(SUBDIR), MILESTONES, MEETINGS]) {
     const dir = join(vault, sub)
     if (!(await io.exists(dir))) continue
     for (const f of await io.list(dir)) {
@@ -655,7 +663,8 @@ export async function load(io: Io, config: Config): Promise<Loaded> {
   const tree: Tree = { nodes, roots }
   tree.concepts = computeConcepts(tree, config.project, conceptDeclarations(texts))
   const milestones = await loadMilestones(io, config.vault, byName, nodes)
-  return { config, tree, texts, problems, signature: await signatureOf(io, config.vault), milestones, hasArtifacts: await hasArtifacts(io, config.vault), hasManuscript: await io.exists(join(config.vault, MANUSCRIPT_REGISTRY)).catch(() => false) }
+  const meetings = await loadMeetings(io, config.vault, byName, nodes)
+  return { config, tree, texts, problems, signature: await signatureOf(io, config.vault), milestones, meetings, hasArtifacts: await hasArtifacts(io, config.vault), hasManuscript: await io.exists(join(config.vault, MANUSCRIPT_REGISTRY)).catch(() => false) }
 }
 
 /** Whether the vault holds a concept artifact: an html file in `artifacts/` that starts with the header. */
@@ -718,6 +727,38 @@ export async function loadMilestones(io: Io, vault: string, byName: Record<strin
     }
     if (unquote(fm.source)) m.source = unquote(fm.source)
     if (unquoteJson(fm.why)) m.why = unquoteJson(fm.why)
+    out.push(m)
+  }
+  return out
+}
+
+/** The notes a `needs:` value names, by id, and the names that are none. */
+function needsOf(value: string | undefined, byName: Record<string, string>, nodes: Record<string, RftNode>): { needs: string[]; missing: string[] } {
+  const needs: string[] = []
+  const missing: string[] = []
+  for (const ref of linksIn(value)) {
+    const nid = byName[ref] ?? (nodes[idOf(ref)] ? idOf(ref) : null)
+    if (nid) { if (!needs.includes(nid)) needs.push(nid) } else missing.push(ref)
+  }
+  return { needs, missing }
+}
+
+/** The meetings in `meetings/`: their fields as written (web/schedule.js reads them), and the notes they need. */
+export async function loadMeetings(io: Io, vault: string, byName: Record<string, string>, nodes: Record<string, RftNode>): Promise<Meeting[]> {
+  const dir = join(vault, MEETINGS)
+  if (!(await io.exists(dir))) return []
+  const out: Meeting[] = []
+  const files = (await io.list(dir)).filter(f => f.kind === 'file' && f.name.endsWith('.md'))
+  for (const f of files.sort((a, b) => compareNames(a.name, b.name))) {
+    const name = f.name.slice(0, -3)
+    const fm = front(normalise(await io.read(join(dir, f.name))))
+    const id = unquote(fm.id) || idOf(name)
+    if (out.some(m => m.id === id)) continue
+    const m: Meeting = {
+      id, name, title: name.slice(idOf(name).length).trim(), path: `${MEETINGS}/${f.name}`, when: unquote(fm.when),
+      skip: S.listItems(fm.skip), moved: S.listItems(fm.moved), ...needsOf(fm.needs, byName, nodes),
+    }
+    for (const k of ['duration', 'every', 'until'] as const) if (unquote(fm[k])) m[k] = unquote(fm[k])
     out.push(m)
   }
   return out
@@ -1226,7 +1267,7 @@ export async function sync(io: Io, loaded: Loaded, opts: { relayout?: boolean } 
   // the calendar file, once there is a date to show; its stamp kept while nothing else changes
   const ip = join(config.vault, ICS)
   const prevIcs = (await io.exists(ip)) ? await io.read(ip) : undefined
-  const calendar = (stamp: string) => S.ics({ project: config.project, nodes: Object.values(tree.nodes), milestones: loaded.milestones ?? [], stamp })
+  const calendar = (stamp: string) => S.ics({ project: config.project, nodes: Object.values(tree.nodes), milestones: loaded.milestones ?? [], meetings: loaded.meetings ?? [], stamp })
   const kept = prevIcs && /DTSTAMP:(\d{8}T\d{6}Z)/.exec(prevIcs)
   const same = kept ? calendar(kept[1]!) : null
   if (!(same && same.text === prevIcs)) {
@@ -1259,13 +1300,16 @@ async function allFiles(io: Io, dir: string, rel = ''): Promise<string[]> {
 export const needsRefs = (n: RftNode) =>
   (n.type === 'experiment' || n.type === 'direction') && !['discussed', 'dropped', 'moved'].includes(n.status)
 
-/** Whether a folder is in a git repository: it or a folder above it holds `.git`. */
-export async function isInGit(io: Io, abs: string): Promise<boolean> {
+/** The git repository a folder is in: the folder, it or one above it, that holds `.git`; null outside any. */
+export async function gitRootOf(io: Io, abs: string): Promise<string | null> {
   for (let dir = abs; ; dir = resolvePath(dir, '..')) {
-    if (await io.exists(join(dir, '.git'))) return true
-    if (resolvePath(dir, '..') === dir) return false
+    if (await io.exists(join(dir, '.git'))) return dir
+    if (resolvePath(dir, '..') === dir) return null
   }
 }
+
+/** Whether a folder is in a git repository. */
+export const isInGit = async (io: Io, abs: string): Promise<boolean> => (await gitRootOf(io, abs)) !== null
 
 /**
  * `root`: the tree's folder, which relative repo paths start from (else they are left to `io`);
@@ -1354,6 +1398,7 @@ export async function validate(io: Io, loaded: Loaded, opts: { root?: string; ho
     if (limit !== null && held.length > limit) warnings.push(`${held.length} open notes are ${p} (${held.join(', ')}), more than the ${limit} allowed: the user lowers some in the tree view`)
   }
   warnings.push(...milestoneWarnings(loaded))
+  warnings.push(...meetingWarnings(loaded))
   const seenNames = new Map<string, string>()
   for (const c of Object.values(tree.concepts ?? {})) {
     const key = c.name.toLowerCase()
@@ -1411,6 +1456,39 @@ function milestoneWarnings(loaded: Loaded): string[] {
     if (!S.MILESTONE_STATUSES.includes(m.status)) out.push(`${m.name}: status "${m.status}" is not ${orList(S.MILESTONE_STATUSES)}`)
     if (m.status === 'suggested' && !m.source) out.push(`${m.name}: a suggested deadline names the official page it was read from (source:)`)
     if (m.status !== 'open' && m.status !== 'suggested') continue
+    const replace = 'the user replaces it or takes it out of needs'
+    for (const id of m.needs) {
+      const n = tree.nodes[id]!
+      if (n.supersededBy) out.push(`${m.name} needs ${n.name}, which was superseded by ${n.supersededBy}: ${replace}`)
+      else if (['dropped', 'discussed', 'moved'].includes(n.status)) out.push(`${m.name} needs ${n.name}, which was ${n.status}: ${replace}`)
+    }
+    for (const ref of m.missing) out.push(`${m.name} needs [[${ref}]], which is not a note of the tree`)
+  }
+  return out
+}
+
+/** What is wrong with the meetings: a when, a length, a rule or a day that is none; a skipped or moved day that is no occurrence; needs that will not be done. */
+function meetingWarnings(loaded: Loaded): string[] {
+  const out: string[] = []
+  const { tree } = loaded
+  for (const m of loaded.meetings ?? []) {
+    if (!MEETING_RE.test(m.id)) out.push(`${m.path}: id ${m.id} is not G<number>`)
+    const start = S.parseDue(m.when)
+    if (!start) { out.push(`${m.name}: ${m.when ? `when "${m.when}" is not a date` : 'no when:'} ${DUE_HINT}`); continue }
+    if (m.duration && !S.parseDuration(m.duration)) out.push(`${m.name}: duration "${m.duration}" is not a length (1h, 45m, 1h30m)`)
+    if (m.every && !S.parseEvery(m.every)) out.push(`${m.name}: every "${m.every}" is not how often it comes back (week, 2 weeks, month, month on the first Tuesday): it is shown once`)
+    if (m.until && !S.parseDay(m.until)) out.push(`${m.name}: until "${m.until}" is not a date (2027-06-30)`)
+    else if (m.until && m.until < start.day) out.push(`${m.name}: until ${m.until} is before its first day (${start.day})`)
+    if ((m.skip.length || m.moved.length) && !m.every) out.push(`${m.name}: skip and moved are for a meeting that comes back (every:); move a single meeting by its when:`)
+    for (const d of m.skip) {
+      if (!S.parseDay(d)) out.push(`${m.name}: skip "${d}" is not a date`)
+      else if (m.every && !S.isOccurrence(m, d)) out.push(`${m.name}: skip ${d} is not a day it falls on`)
+    }
+    for (const x of m.moved) {
+      const mv = S.parseMoved(x, start)
+      if (!mv) out.push(`${m.name}: moved "${x}" is not <day> → <when> (2026-12-01 → 2026-12-02 10:00)`)
+      else if (m.every && !S.isOccurrence(m, mv.from)) out.push(`${m.name}: moved ${mv.from} is not a day it falls on`)
+    }
     const replace = 'the user replaces it or takes it out of needs'
     for (const id of m.needs) {
       const n = tree.nodes[id]!

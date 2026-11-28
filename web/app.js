@@ -64,8 +64,9 @@
   let showOrigins = false
   let retyping = false
   const K = window.RftKanban
-  const PAGES = ['tree', 'concepts', 'kanban', 'calendar', 'manuscript']
+  const PAGES = ['tree', 'concepts', 'kanban', 'calendar', 'manuscript', 'slides']
   let manuscriptView = null // web/manuscript.js, mounted on the live page only
+  let slidesView = null // web/decks.js, the same
   let boardSet = new Set() // the notes on the kanban: those that match, in the focused concept when there is one
   let kanbanOrder = 'priority' // priority | date
   let kanbanOpen = new Set() // the folded columns opened
@@ -303,6 +304,7 @@
     const fold = nodeIn.append('g').attr('class', 'fold')
       .on('click', (ev, n) => { ev.stopPropagation(); toggle(n.data.id) })
       .on('dblclick', ev => ev.stopPropagation())
+    fold.append('circle').attr('class', 'hit').attr('r', 12)
     fold.append('circle').attr('r', 5.5)
     fold.append('text')
 
@@ -325,7 +327,7 @@
       .attr('display', n => (n.data.children.length ? null : 'none'))
       .attr('transform', n => foldOffset(n.data.id))
     all.select('g.fold text').text(n => (collapsed.has(n.data.id) ? `+${countBelow(n.data.id)}` : '−'))
-    all.select('g.fold circle').attr('r', n => (collapsed.has(n.data.id) ? 8 : 5.5))
+    all.select('g.fold circle:not(.hit)').attr('r', n => (collapsed.has(n.data.id) ? 8 : 5.5))
     all.transition().duration(dur).attr('transform', n => `translate(${pos.get(n.data.id).p})`)
     // a link fades with the note it leads to
     gLinks.selectAll('path.link').attr('class', l => `link ${toneOf(l.target.data)}${matchSet.has(l.target.data.id) ? '' : ' dim'}`)
@@ -374,14 +376,24 @@
     return n ? n.children.reduce((s, c) => s + 1 + countBelow(c), 0) : 0
   }
 
-  function foldOffset(id) {
+  function foldAt(id) {
     const r = sideOf(id)
-    if (layoutKind === 'td') return `translate(${r + 8},${-r - 4})`
-    if (layoutKind === 'lr') return `translate(${-r - 2},${-r - 8})`
+    if (layoutKind === 'td') return [r + 8, -r - 4]
+    if (layoutKind === 'lr') return [-r - 2, -r - 8]
     const p = positions.get(id)
-    if (!p || !p.radius) return `translate(${r + 8},${-r - 4})`
+    if (!p || !p.radius) return [r + 8, -r - 4]
     const len = Math.hypot(p.p[0], p.p[1]) || 1
-    return `translate(${(-p.p[1] / len) * (r + 9)},${(p.p[0] / len) * (r + 9)})`
+    return [(-p.p[1] / len) * (r + 9), (p.p[0] / len) * (r + 9)]
+  }
+  const foldOffset = id => `translate(${foldAt(id)})`
+  // a touch screen (app.css's phone and touch rules): a fold handle keeps its size on screen, as the
+  // labels do, with a target 24 px across (its .hit circle) whose edge stays clear of the note's shape
+  const touchScreen = matchMedia('(max-width: 700px), (pointer: coarse)')
+  function touchFold(id, grow) {
+    const [x, y] = foldAt(id)
+    const len = Math.hypot(x, y) || 1
+    const reach = (sideOf(id) * grow * k + 16) / k
+    return `translate(${(x / len) * reach},${(y / len) * reach}) scale(${1 / k})`
   }
 
   // labels keep a constant size on screen and show as much of the title as the room at this
@@ -430,6 +442,7 @@
       // nodes stay visible when far: a circle at least 3.5 px across on screen, the rest in proportion
       const grow = Math.max(1, 3.5 / (k * R))
       d3.select(this).select('g.mark').attr('transform', grow > 1 ? `scale(${grow})` : null)
+      if (touchScreen.matches && d.children.length) d3.select(this).select('g.fold').attr('transform', touchFold(d.id, grow))
       const side = sideOf(d.id) * grow
       if (layoutKind === 'td') {
         text.attr('x', 0).attr('y', side + 4 + size).attr('text-anchor', 'middle').attr('transform', null)
@@ -511,6 +524,7 @@
     if (n.parent) lastChild.set(n.parent, id)
     const drawer = document.getElementById('drawer')
     drawer.hidden = false
+    document.dispatchEvent(new CustomEvent('rft:note', { detail: id })) // web/phone.js: Back comes back to it
     renderConceptPath(document.getElementById('drawer-concept'), n.concept, "Open this concept's artifact", openArtifact)
     renderOrigin(n)
     renderRefs(n)
@@ -561,6 +575,9 @@
     showEditButton()
     showNote()
   }
+
+  // a note web/phone.js goes back to (Back, from a note reached by a link)
+  document.addEventListener('rft:go', ev => { if (tree && byId.has(ev.detail)) go(ev.detail) })
 
   function go(id) {
     if (editing && editing.id !== id && !leaveEditor()) return
@@ -1655,9 +1672,14 @@
   }
   document.getElementById('legend-toggle').addEventListener('click', () => {
     const pad = document.getElementById('pad')
-    // the open scratchpad stands in the legend's place: the ? closes it and shows the legend
-    const open = (pad && !pad.hidden) || legend.classList.contains('closed')
+    // the open scratchpad or inbox stands in the legend's place: the ? closes it and shows the legend
+    const inbox = document.getElementById('inbox')
+    const reading = document.getElementById('reading')
+    // (an item's reading note stands in the inbox's place: closed first, it gives the place back)
+    if (reading && !reading.hidden) document.getElementById('reading-close').click()
+    const open = (pad && !pad.hidden) || (inbox && !inbox.hidden) || legend.classList.contains('closed')
     if (pad && !pad.hidden) document.getElementById('pad-close').click()
+    if (inbox && !inbox.hidden) document.getElementById('inbox-close').click()
     store.set('legendShown', open)
     setLegendOpen(open)
   })
@@ -1679,8 +1701,10 @@
     document.getElementById('kanban').hidden = v !== 'kanban'
     calSection.hidden = v !== 'calendar'
     document.getElementById('manuscript').hidden = v !== 'manuscript'
+    document.getElementById('slides').hidden = v !== 'slides'
     syncConceptButtons()
     if (v === 'manuscript' && manuscriptView) void manuscriptView.show()
+    if (v === 'slides' && slidesView) void slidesView.show()
     if (v === 'concepts') drawConceptTree()
     if (v === 'kanban') drawKanban()
     if (v === 'calendar') drawCalendar()
@@ -1746,9 +1770,11 @@
       }
       g.append('rect').attr('width', BAR).attr('height', 9).attr('rx', 2).attr('class', 'cbar-frame')
     })
-    const focusBtn = node.filter(n => n.data.id !== C.ROOT).append('text').attr('class', 'cfocus')
-      .attr('y', n => radius(n.data) + 76).attr('text-anchor', 'middle').text('focus ⤢')
+    const focusBtn = node.filter(n => n.data.id !== C.ROOT).append('g').attr('class', 'cfocus')
       .on('click', (ev, n) => { ev.stopPropagation(); setFocus(n.data.id) })
+    // on a touch screen, a target wider and taller than the word (app.css)
+    focusBtn.append('rect').attr('class', 'hit').attr('x', -60).attr('y', n => radius(n.data) + 50).attr('width', 120).attr('height', 40)
+    focusBtn.append('text').attr('y', n => radius(n.data) + 76).attr('text-anchor', 'middle').text('focus ⤢')
     focusBtn.append('title').text('Show only this concept in the reasoning tree')
     requestAnimationFrame(() => {
       const box = cviewport.node().getBBox()
@@ -1772,6 +1798,7 @@
 
   // ---------------------------------------------------------------- pages in a frame
 
+  const themeNow = () => (document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
   // a page of its own in a frame inside `box`: made once, loaded again only when `version` changes
   // (a page the frame was not made for: made anew), its messages taken only from that frame
   const frames = new Map() // box → { frame, version, sandbox, onMessage }
@@ -1869,11 +1896,70 @@
 
   /** The notebook framed: its editor, through this page's own server (notebook/<name>/), the one address a tunnel to it reaches. */
   function showNbFrame(n, url) {
+    const src = A.notebookSrc(url, themeNow())
     nbMsg.hidden = true
     nbFrame.hidden = false
-    nbTab.href = url
-    openFrame(nbFrame, url, { title: `The notebook of ${n.id}`, allow: 'clipboard-read; clipboard-write' })
+    nbTab.href = src
+    const shown = frames.get(nbFrame)?.version
+    const frame = openFrame(nbFrame, src, { title: `The notebook of ${n.id}`, allow: 'clipboard-read; clipboard-write' })
+    if (shown === src) return // the page it already shows
+    if (!frame.dataset.themed) {
+      frame.dataset.themed = '1'
+      frame.addEventListener('load', () => themeNotebook(frame))
+    }
+    // the page on its way: styled once its document is there, before its scripts run (each widget
+    // of marimo's copies the page's stylesheets when it is made, so a later one would miss them)
+    let before = null
+    try { before = frame.contentDocument } catch (e) { /* not this page's */ }
+    clearInterval(nbStyling)
+    const until = Date.now() + 30000
+    nbStyling = setInterval(() => {
+      let doc = null
+      try { doc = frame.contentDocument } catch (e) { /* not this page's */ }
+      if ((doc && doc !== before && themeNotebook(frame)) || Date.now() > until || !frame.isConnected) clearInterval(nbStyling)
+    }, 20)
   }
+  let nbStyling = 0
+
+  /** The editor in the page's colours and fonts (A.notebookStyle): a stylesheet in its document,
+      which the page's own server serves, so the page may. Under the name of marimo's own custom
+      stylesheets, since those are what it carries into its widgets, and the first of them, since
+      of several under one name it carries the first: so a notebook's own (`css_file`) comes after
+      it and has the last word, and is copied into it for the widgets. True once it is there. */
+  function themeNotebook(frame) {
+    let doc = null
+    try { doc = frame.contentDocument } catch (e) { /* not this page's to style */ }
+    if (!doc || !doc.head || !doc.body) return false
+    if (doc.querySelector('style[data-rft]')) return true
+    const page = getComputedStyle(document.documentElement)
+    const tokens = {}
+    for (const k of ['bg', 'panel', 'fg', 'muted', 'line', 'accent']) tokens[k] = page.getPropertyValue(`--${k}`)
+    const style = doc.createElement('style')
+    style.dataset.rft = 'theme'
+    style.title = 'marimo-custom'
+    style.textContent = A.notebookStyle(tokens)
+    const theirs = () => [...doc.querySelectorAll('style[title="marimo-custom"]:not([data-rft])')]
+    const first = theirs()[0]
+    if (first) first.before(style)
+    else doc.head.appendChild(style)
+    const fold = () => {
+      for (const s of theirs()) {
+        if (s.dataset.rftFolded) continue
+        s.dataset.rftFolded = '1'
+        style.textContent += `\n${s.textContent}`
+      }
+    }
+    fold()
+    // the rest of the page still on its way: once it is read, before its scripts run
+    if (doc.readyState === 'loading') doc.addEventListener('readystatechange', fold)
+    return true
+  }
+  // the theme's button: the notebook shown follows it (its frame loads again, the kernel as it was);
+  // one that is closed takes the page's theme when it is opened next
+  new MutationObserver(() => {
+    const n = nbShown && byId.get(nbShown)
+    if (n && !nbFrame.hidden && nbUrls.has(n.id)) showNbFrame(n, nbUrls.get(n.id))
+  }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
 
   function showNbMsg(text) {
     nbMsg.textContent = text
@@ -1946,7 +2032,6 @@
   const artView = document.getElementById('artifact-view')
   const artFrame = document.getElementById('art-frame')
   const artScroll = new Map() // concept → where its artifact was scrolled to
-  const themeNow = () => (document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
   let imageKey = '' // the key the frame gets for its images, which writes nothing (image_key in server/rft_server.py)
   async function deriveImageKey() {
     const key = editKey()
@@ -1968,6 +2053,7 @@
     markCards()
     artifactShown = cid
     drawer.hidden = false
+    document.dispatchEvent(new CustomEvent('rft:note', { detail: null })) // web/phone.js: a concept's artifact, no note
     drawer.classList.add('artifact-mode')
     mainEl.classList.add('artifact-open')
     artView.hidden = false
@@ -2489,15 +2575,18 @@
 
   // ---------------------------------------------------------------- the calendar (web/schedule.js)
 
-  // the deadlines (milestones, and notes' own due dates) and the experiments' runs, as a timeline
-  // (one row per experiment, the deadlines as lines across them, the GPUs below) or a month (the
-  // deadlines on their days, the runs across them). The dates are the user's alone: set here (drag
-  // a bar or its end, + Deadline, a deadline's edit) and in the note's drawer, which also answer
+  // the deadlines (milestones, and notes' own due dates), the meetings and the experiments' runs, as
+  // a timeline (a row per meeting and per experiment, the deadlines as lines across them, the GPUs
+  // below) or a month (the deadlines and the meetings on their days, the runs across them). The
+  // dates are the user's alone: set here (drag a bar or its end, + Deadline, + Meeting, a deadline's
+  // or a meeting's edit, an occurrence skipped or moved) and in the note's drawer, which also answer
   // Claude's suggested ones. The filters and the concept focus choose the rows, as on the kanban.
   const S = window.RftSchedule
   const CAL_MODES = ['timeline', 'month']
   const CAL_ZOOM = [10, 16, 24, 34, 48] // a day's width on the timeline, in px at A 100 %
   const TL_LABEL = 230 // the timeline's column of titles, in px at A 100 %
+  // that column's width: at most 38 % of a narrow screen (a phone), so the days keep the rest
+  const tlLabelW = () => Math.round(Math.min(TL_LABEL, Math.max(120, window.innerWidth * 0.38)) * font)
   const calSection = document.getElementById('calendar')
   const calBody = document.getElementById('cal-body')
   const calDeadlines = document.getElementById('cal-deadlines')
@@ -2507,7 +2596,8 @@
   let calMonth = null // the month shown, YYYY-MM
   let calDrag = null // a bar being dragged: nothing is redrawn under it
   let calScroll = null // where the timeline was scrolled to, kept across redraws: { from, left }
-  let calOpen = null // the deadline whose editor is open
+  let calOpen = null // the deadline or the meeting whose editor is open
+  let calOcc = null // with a meeting open, the occurrence chosen (the day its rule gives it), or null for the meeting itself
   let plans = [] // every deadline planned (S.plan), for the whole tree
   let planOf = new Map() // a note → the nearest deadline that needs it, and its plan for the note
 
@@ -2526,7 +2616,7 @@
 
   /** The deadlines planned again: after every read of the tree. */
   function planAll() {
-    plans = S.plan(tree.nodes, tree.milestones || [], todayStr())
+    plans = S.plan(tree.nodes, tree.milestones || [], todayStr(), tree.meetings || [])
     planOf = new Map()
     for (const p of plans) for (const i of p.items) if (!planOf.has(i.id)) planOf.set(i.id, { plan: p, item: i })
   }
@@ -2604,6 +2694,7 @@
   }
   const setDates = (id, dates, what = 'Dates not set') => calWrite('api/dates', { id, ...dates }, what)
   const writeMilestone = (body, what = 'Deadline not changed') => calWrite('api/milestone', body, what)
+  const writeMeeting = (body, what = 'Meeting not changed') => calWrite('api/meeting', body, what)
 
   // ---------------------------------------------------------------- the deadlines strip
 
@@ -2611,24 +2702,35 @@
     calDeadlines.replaceChildren()
     for (const p of plans.filter(p => p.daysLeft >= 0 || p.atRisk)) calDeadlines.appendChild(deadlineCard(p))
     for (const m of (tree.milestones || []).filter(m => m.status === 'suggested')) calDeadlines.appendChild(suggestedDeadline(m))
+    // the meetings of the next 7 days, once each (one that needs notes is above, as a deadline),
+    // and the one whose editor is open, wherever it falls
+    const shown = new Set(plans.filter(p => p.kind === 'meeting').map(p => p.id))
+    for (const { meeting: m } of S.upcoming(tree.meetings || [], d.today, S.addDays(d.today, 7))) {
+      if (shown.has(m.id)) continue
+      shown.add(m.id)
+      calDeadlines.appendChild(meetingCard(m, d.today))
+    }
+    const open = meetingOf(calOpen)
+    if (open && !shown.has(open.id)) calDeadlines.appendChild(meetingCard(open, d.today))
     if (!calDeadlines.childElementCount) {
-      calDeadlines.innerHTML = `<span class="muted">No deadline ahead.${EMBED ? '' : ' <b>+ Deadline</b> adds one; Claude suggests paper submissions when you name a venue.'}</span>`
+      calDeadlines.innerHTML = `<span class="muted">No deadline or meeting ahead.${EMBED ? '' : ' <b>+ Deadline</b> and <b>+ Meeting</b> add one (or click a day of the Month); Claude suggests paper submissions when you name a venue.'}</span>`
     }
   }
 
   const milestoneOf = id => (tree.milestones || []).find(m => m.id === id)
 
-  /** A deadline: when, how much room is left or what puts it at risk, the notes it needs; a milestone's own editor. */
+  /** A deadline: when, how much room is left or what puts it at risk, the notes it needs; a milestone's or a meeting's own editor. */
   function deadlineCard(p) {
     const el = document.createElement('article')
-    el.className = `cal-dl${p.atRisk ? ' risk' : ''}${p.slack !== null && p.slack > 0 && p.slack <= 3 ? ' tight' : ''}`
+    const open = p.kind !== 'note' && calOpen === p.id && !EMBED
+    el.className = `cal-dl${p.kind === 'meeting' ? ' cal-mt' : ''}${p.atRisk ? ' risk' : ''}${p.slack !== null && p.slack > 0 && p.slack <= 3 ? ' tight' : ''}${open && p.kind === 'meeting' ? ' open' : ''}`
     el.dataset.id = p.id
     const head = document.createElement('div')
     head.className = 'cal-dl-head'
     const name = document.createElement('a')
     name.className = 'cal-dl-name'
     name.textContent = p.name
-    name.title = p.kind === 'note' ? 'Open the note' : 'Edit this deadline'
+    name.title = p.kind === 'note' ? 'Open the note' : p.kind === 'meeting' ? 'Edit this meeting (it needs these notes by its next occurrence)' : 'Edit this deadline'
     name.addEventListener('click', () => (p.kind === 'note' ? go(p.id) : toggleEditor(p.id)))
     head.append(name)
     const here = localOf(p.at)
@@ -2642,12 +2744,20 @@
       t.title = detail
       el.appendChild(t)
     }
-    if (p.kind === 'milestone' && calOpen === p.id && !EMBED) el.appendChild(milestoneEditor(milestoneOf(p.id)))
+    if (p.kind === 'milestone' && open) {
+      const m = milestoneOf(p.id)
+      el.appendChild(milestoneEditor(m))
+      const due = S.parseDue(m.due)
+      el.appendChild(deckRow(m.id, '', m.title || m.name.replace(/^M\d+\s*/, ''), due ? shortDay(due.day) : ''))
+    }
+    if (p.kind === 'meeting' && open && meetingOf(p.id)) el.appendChild(meetingEditor(meetingOf(p.id)))
     return el
   }
 
+  /** A deadline's or a meeting's editor opened in its card, or closed. */
   function toggleEditor(id) {
     calOpen = calOpen === id ? null : id
+    calOcc = null
     drawCalendar()
   }
 
@@ -2711,11 +2821,264 @@
     return el
   }
 
+  // ---------------------------------------------------------------- the meetings
+
+  const meetingOf = id => (id && /^G\d+$/.test(id) ? (tree.meetings || []).find(m => m.id === id) : null) || null
+  const ZONES = ['', 'UTC', 'AoE']
+  const zoneOptions = zone => [...ZONES, ...(zone && !ZONES.includes(zone) ? [zone] : [])]
+    .map(z => `<option value="${escH(z)}"${(zone || '') === z ? ' selected' : ''}>${z ? escH(z) : 'local time'}</option>`).join('')
+  /** `1st`, `2nd`, `23rd`. */
+  const ordinal = n => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th'}`
+  /** The time a meeting of `minutes` that starts at `time` ends: `15:30`. */
+  const endOf = (time, minutes) => { const t = (60 * +time.slice(0, 2) + +time.slice(3, 5) + minutes) % 1440; return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}` }
+  /** An occurrence's day and hours: `Tue 1 Dec, 14:00–15:00`, `Fri 13 Nov, all day`. */
+  const occWhen = (at, minutes) => `${shortDay(at.day)}, ${at.time ? `${at.time}${minutes ? `–${endOf(at.time, minutes)}` : ''}${at.zone ? ` ${at.zone}` : ''}` : 'all day'}`
+  /** A meeting's `when:` from a day, a time and a zone (a zone only with a time). */
+  const whenOf = (day, time, zone) => [day, time, time && zone ? zone : ''].filter(Boolean).join(' ')
+  const idsIn = text => text.split(/[\s,]+/).filter(Boolean)
+
+  /** A meeting's editor opened in the strip, on one of its occurrences (`orig`, the day its rule gives it) or on itself. */
+  function openMeeting(id, orig) {
+    calOpen = id
+    calOcc = orig || null
+    drawCalendar()
+    calDeadlines.querySelector(`[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }
+
+  /** A meeting in the strip: its next occurrence, how it comes back, and its editor when open. */
+  function meetingCard(m, today) {
+    const next = S.nextOccurrence(m, today)
+    const minutes = S.parseDuration(m.duration)
+    const open = calOpen === m.id && !EMBED
+    const el = document.createElement('article')
+    el.className = `cal-dl cal-mt${open ? ' open' : ''}`
+    el.dataset.id = m.id
+    const head = document.createElement('div')
+    head.className = 'cal-dl-head'
+    const name = document.createElement('a')
+    name.className = 'cal-dl-name'
+    name.textContent = m.name
+    name.title = EMBED ? m.name : 'Edit this meeting'
+    name.addEventListener('click', () => toggleEditor(m.id))
+    head.append(name)
+    const here = next ? localOf(next.at) : ''
+    head.insertAdjacentHTML('beforeend', `<span class="cal-dl-when"${here ? ` title="${escH(here)}"` : ''}>${next ? `${escH(occWhen(next.at, minutes))} · <b>${escH(S.when(S.between(today, next.day)))}</b>` : 'none ahead'}</span>`)
+    el.appendChild(head)
+    const detail = document.createElement('div')
+    detail.className = 'cal-dl-detail'
+    detail.textContent = [S.repeatText(m), next && next.moved ? `this one moved from ${shortDay(next.orig)}` : ''].filter(Boolean).join(' · ')
+    el.appendChild(detail)
+    if (open) el.appendChild(meetingEditor(m))
+    return el
+  }
+
+  /**
+   * The slide decks of a meeting's occurrence (`orig`, its rule's day; '' for a once-only meeting)
+   * or of a deadline, each opened in the Slides tab, and + Slides, a new deck for it (`title`,
+   * `subtitle` its title slide's second line). Nothing when there is no Slides tab.
+   */
+  function deckRow(id, orig, title, subtitle) {
+    const row = document.createElement('div')
+    row.className = 'cal-decks'
+    if (!slidesView) return row
+    const label = document.createElement('span')
+    label.className = 'muted'
+    label.textContent = 'Slides'
+    row.append(label)
+    for (const d of slidesView.decksFor(id, orig)) {
+      const a = document.createElement('button')
+      a.type = 'button'
+      a.className = 'linkish'
+      a.textContent = d.name
+      a.title = 'Open this deck in the Slides tab'
+      a.addEventListener('click', () => { setView('slides'); void slidesView.openDeck(d.id) })
+      row.append(a)
+    }
+    const add = document.createElement('button')
+    add.type = 'button'
+    add.textContent = '+ Slides'
+    add.title = `A new deck for ${orig ? `this occurrence (${shortDay(orig)})` : 'it'}, opened in the Slides tab`
+    add.addEventListener('click', async () => {
+      setView('slides')
+      await slidesView.newFor(window.RftSlides.forItem(id, orig), title, subtitle)
+    })
+    row.append(add)
+    return row
+  }
+
+  /** A meeting's editor: the occurrence chosen (moved, skipped, the last one), then the meeting or its series. */
+  function meetingEditor(m) {
+    const box = document.createElement('div')
+    box.className = 'cal-mt-edit'
+    if (m.every && calOcc) box.appendChild(occurrenceForm(m, calOcc))
+    // the decks of this occurrence (a once-only meeting's: its own), and a new one for it
+    const start = S.parseDue(m.when)
+    const orig = m.every ? calOcc : start && start.day
+    if (orig && !(m.skip || []).includes(orig)) {
+      const t = m.title || m.name
+      // the day it takes place on, which a move may have changed
+      const occ = S.occurrences(m, S.addDays(orig, -366), S.addDays(orig, 366)).find(x => x.orig === orig)
+      box.appendChild(deckRow(m.id, m.every ? orig : '', m.every ? `${t} ${orig}` : t, `${t} · ${shortDay(occ ? occ.day : orig)}`))
+    }
+    box.appendChild(seriesForm(m))
+    box.addEventListener('keydown', ev => { if (ev.key === 'Escape') { calOpen = null; calOcc = null; drawCalendar() } })
+    return box
+  }
+
+  /** What to do with one occurrence of a meeting that comes back: move it, skip it, bring it back, end the series with it. */
+  function occurrenceForm(m, orig) {
+    const start = S.parseDue(m.when) || { day: orig }
+    const skip = m.skip || [], moved = m.moved || []
+    const skipped = skip.includes(orig)
+    const away = moved.map(x => S.parseMoved(x, start)).find(x => x && x.from === orig)
+    const at = away ? away.to : { ...start, day: orig }
+    const others = moved.filter(x => { const mv = S.parseMoved(x, start); return !mv || mv.from !== orig })
+    const f = document.createElement('form')
+    f.className = 'cal-dl-edit cal-occ'
+    const what = `${skipped ? 'Skipped' : 'This one'}, ${escH(occWhen({ ...start, day: orig }, 0))}${away ? ` (moved to ${escH(occWhen(at, 0))})` : ''}`
+    if (skipped) {
+      f.innerHTML = `<span><b>${what}</b></span><span class="cal-dl-buttons"><button type="submit" class="primary" title="It takes place again, as the rule gives it">Bring it back</button></span>`
+      f.addEventListener('submit', ev => { ev.preventDefault(); writeMeeting({ id: m.id, skip: skip.filter(d => d !== orig) }, 'Not brought back') })
+      return f
+    }
+    f.innerHTML = `<span><b>${what}</b></span>
+      <label>Move to <input name="day" type="date" value="${escH(at.day)}" required></label><input name="time" type="time" value="${escH(at.time || '')}" aria-label="The time">
+      <span class="cal-dl-buttons"><button type="submit" class="primary">Move</button>${away ? `<button type="button" data-act="back" title="Back to its own day and time">Back</button>` : ''}<button type="button" data-act="skip" title="It does not take place this time">Skip</button><button type="button" data-act="last" title="End the series with this one">Last one</button></span>`
+    f.addEventListener('submit', async ev => {
+      ev.preventDefault()
+      const day = f.day.value, time = f.time.value
+      if (!S.isDay(day)) return notify('Give the day it moves to.')
+      const to = S.parseDue(whenOf(day, time, start.zone))
+      const home = day === orig && (time || '') === (start.time || '')
+      await writeMeeting({ id: m.id, moved: home ? others : [...others, S.formatMoved(orig, to)] }, 'Not moved')
+    })
+    f.querySelector('[data-act="back"]')?.addEventListener('click', () => writeMeeting({ id: m.id, moved: others }, 'Not moved back'))
+    f.querySelector('[data-act="skip"]').addEventListener('click', () => writeMeeting({ id: m.id, skip: [...skip, orig], moved: others }, 'Not skipped'))
+    f.querySelector('[data-act="last"]').addEventListener('click', () => writeMeeting({
+      id: m.id, until: orig, skip: skip.filter(d => d <= orig),
+      moved: moved.filter(x => { const mv = S.parseMoved(x, start); return mv && mv.from <= orig }),
+    }, 'Not ended'))
+    return f
+  }
+
+  /**
+   * How often a meeting comes back, as a menu worked out from its day (every week on Tuesday, every
+   * month on the fourth Tuesday, on the last Tuesday) and Custom…, which takes any rule as written
+   * (3 weeks, 2 months on the first Friday). `onChange(repeats)` when it changes.
+   */
+  function repeatPicker(day, every, onChange = () => {}) {
+    const el = document.createElement('span')
+    el.className = 'cal-repeat'
+    const sel = document.createElement('select')
+    sel.setAttribute('aria-label', 'How often it comes back')
+    const custom = document.createElement('input')
+    custom.type = 'text'
+    custom.size = 18
+    custom.placeholder = '3 weeks, 2 months on the last Friday'
+    custom.setAttribute('aria-label', 'How often it comes back, as written')
+    custom.hidden = true
+    el.append(sel, custom)
+    const optionsFor = d => {
+      const out = [{ kind: 'once', value: '', label: 'Does not repeat' }]
+      if (S.isDay(d)) {
+        const wd = S.WEEKDAY_NAMES[S.weekday(d)]
+        const { nth, last } = S.nthOf(d)
+        out.push({ kind: 'day', value: 'day', label: 'Every day' }, { kind: 'week', value: 'week', label: `Every week on ${wd}` },
+          { kind: '2 weeks', value: '2 weeks', label: `Every 2 weeks on ${wd}` }, { kind: 'date', value: 'month', label: `Every month on the ${ordinal(+d.slice(8))}` },
+          { kind: 'nth', value: `month on the ${S.ORDINALS[nth - 1]} ${wd}`, label: `Every month on the ${S.ORDINALS[nth - 1]} ${wd}` })
+        if (last) out.push({ kind: 'last', value: `month on the last ${wd}`, label: `Every month on the last ${wd}` })
+      }
+      out.push({ kind: 'custom', value: null, label: 'Custom…' })
+      return out
+    }
+    let options = []
+    const fill = (d, kind) => {
+      options = optionsFor(d)
+      sel.replaceChildren(...options.map(o => { const x = document.createElement('option'); x.value = o.kind; x.textContent = o.label; return x }))
+      sel.value = options.some(o => o.kind === kind) ? kind : kind === 'last' ? 'nth' : 'once'
+      custom.hidden = sel.value !== 'custom'
+    }
+    // the rule as written, among the day's choices, or as Custom…
+    const canon = every ? S.formatEvery(S.parseEvery(every)) || every : ''
+    const found = optionsFor(day).find(o => o.value === canon)
+    fill(day, found ? found.kind : canon ? 'custom' : 'once')
+    if (!found && canon) custom.value = every
+    sel.addEventListener('change', () => { custom.hidden = sel.value !== 'custom'; if (!custom.hidden) custom.focus(); onChange(sel.value !== 'once') })
+    return {
+      el,
+      /** The rule to write: '' for none. */
+      value: () => (sel.value === 'custom' ? custom.value.trim() : (options.find(o => o.kind === sel.value) || {}).value || ''),
+      /** The day changed: the same kind of choice for it. */
+      setDay: d => fill(d, sel.value),
+      repeats: () => sel.value !== 'once',
+    }
+  }
+
+  /** A meeting's own fields: its (first) day and time, how long, how often and until when, what it needs; Save, Delete. */
+  function seriesForm(m) {
+    const start = S.parseDue(m.when) || {}
+    const f = document.createElement('form')
+    f.className = 'cal-dl-edit'
+    f.innerHTML = `<span><b>${m.every ? 'The series' : 'The meeting'}</b></span>
+      <label>${m.every ? 'From' : 'On'} <input name="day" type="date" value="${escH(start.day || '')}" required></label>
+      <input name="time" type="time" value="${escH(start.time || '')}" aria-label="The time (none: all day)" title="The time (none: all day)">
+      <select name="zone" aria-label="The time zone">${zoneOptions(start.zone)}</select>
+      <label>for <input name="duration" type="text" size="6" value="${escH(m.duration || '')}" placeholder="1h" title="How long: 1h, 45m, 1h30m"></label>
+      <span data-slot="repeat"></span>
+      <label data-slot="until">until <input name="until" type="date" value="${escH(m.until || '')}" title="The last day it may fall on (none: no end)"></label>
+      <label>Needs <input name="needs" type="text" value="${escH((m.needs || []).join(', '))}" placeholder="E03" list="cal-ids" title="The notes it needs done by its next occurrence"></label>
+      <span class="cal-dl-buttons"><button type="submit" class="primary">Save</button><button type="button" data-act="delete">Delete</button><button type="button" data-act="cancel">Cancel</button></span>`
+    const untilBox = f.querySelector('[data-slot="until"]')
+    const picker = repeatPicker(start.day, m.every || '', repeats => { untilBox.hidden = !repeats })
+    f.querySelector('[data-slot="repeat"]').replaceWith(picker.el)
+    untilBox.hidden = !picker.repeats()
+    f.day.addEventListener('change', () => picker.setDay(f.day.value))
+    f.addEventListener('submit', async ev => {
+      ev.preventDefault()
+      const when = whenOf(f.day.value, f.time.value, f.zone.value)
+      const every = picker.value()
+      const until = every ? f.until.value : ''
+      const body = { id: m.id, when, duration: f.duration.value.trim() || null, every: every || null, until: until || null, needs: idsIn(f.needs.value) }
+      // the occurrences skipped or moved that the new rule no longer gives go
+      const draft = { ...m, when, every, until }
+      const begin = S.parseDue(when)
+      const skip = every ? (m.skip || []).filter(d => S.isOccurrence(draft, d)) : []
+      const moved = every ? (m.moved || []).filter(x => { const mv = S.parseMoved(x, begin); return mv && S.isOccurrence(draft, mv.from) }) : []
+      if (skip.length !== (m.skip || []).length) body.skip = skip
+      if (moved.length !== (m.moved || []).length) body.moved = moved
+      if (await writeMeeting(body)) { calOpen = null; calOcc = null }
+      drawCalendar()
+    })
+    f.querySelector('[data-act="delete"]').addEventListener('click', async () => {
+      if (!window.confirm(`Delete ${m.name}${m.every ? ' and all its occurrences' : ''}?`)) return
+      if (await writeMeeting({ id: m.id, delete: true }, 'Not deleted')) { calOpen = null; calOcc = null }
+      drawCalendar()
+    })
+    f.querySelector('[data-act="cancel"]').addEventListener('click', () => { calOpen = null; calOcc = null; drawCalendar() })
+    return f
+  }
+
+  /** The meetings that fall from `from` up to `to` (excluded), their skipped occurrences too in the page that edits: each with the deadline it is, when it needs notes. */
+  function meetingsIn(from, to) {
+    const planFor = new Map(plans.filter(p => p.kind === 'meeting').map(p => [p.id, p]))
+    return (tree.meetings || []).map(m => ({
+      meeting: m,
+      occ: S.occurrences(m, from, to, { skipped: !EMBED }).map(o => {
+        const p = planFor.get(m.id)
+        return { ...o, plan: p && p.orig === o.orig && !o.skipped ? p : null }
+      }),
+    })).filter(x => x.occ.length)
+  }
+
+  /** An occurrence's tooltip: the meeting, when, how it comes back, moved or skipped, and the deadline it is. */
+  const occTitle = (m, o) => [`${m.name}: ${occWhen(o.at, S.parseDuration(m.duration))}${localOf(o.at) ? ` (${localOf(o.at)})` : ''}`, S.repeatText(m),
+    o.moved ? `moved from ${shortDay(o.orig)}` : '', o.skipped ? 'skipped (click to bring it back)' : '', o.plan ? S.deadlineLine(o.plan) : ''].filter(Boolean).join(' · ')
+
   // ---------------------------------------------------------------- the timeline
 
   function drawTimeline(d) {
     const dayW = Math.round(CAL_ZOOM[calZoom] * font)
-    const labelW = Math.round(TL_LABEL * font)
+    const labelW = tlLabelW()
     const winOf = new Map(d.wins.map(w => [w.id, w]))
     const shown = n => boardSet.has(n.id)
     const rows = tree.nodes.filter(n => shown(n) && n.type === 'experiment' && !n.supersededBy &&
@@ -2799,7 +3162,7 @@
       f.style.top = `${2 + 18 * (lane++ % 2)}px`
       f.textContent = p.name
       f.title = S.deadlineLine(p)
-      f.addEventListener('click', () => (p.kind === 'note' ? go(p.id) : toggleEditor(p.id)))
+      f.addEventListener('click', () => (p.kind === 'note' ? go(p.id) : p.kind === 'meeting' ? openMeeting(p.id, p.orig) : toggleEditor(p.id)))
       flags.lastChild.appendChild(f)
     }
     head.append(months, daysRow, flags)
@@ -2818,6 +3181,10 @@
       lines.insertAdjacentHTML('beforeend', `<span class="tl-dline${p.atRisk ? ' risk' : ''}" style="left:${x(p.due)}px"></span>`)
     }
     grid.appendChild(lines)
+
+    // the meetings, a row each, above the experiments
+    const mrows = meetingRows({ from, to, dayW, days, x })
+    for (const r of mrows) grid.appendChild(r)
 
     // the rows, by concept
     const byConcept = new Map()
@@ -2842,6 +3209,7 @@
       const empty = document.createElement('p')
       empty.className = 'tl-empty muted'
       empty.style.left = `${labelW}px`
+      if (mrows.length) empty.style.top = `${Math.round((90 + 26 * mrows.length) * font)}px`
       empty.textContent = 'No experiment has dates yet: give one a start and an estimate in its drawer, or a deadline the notes it needs (+ Deadline).'
       grid.appendChild(empty)
     }
@@ -2855,10 +3223,45 @@
     else scrollToDay(scroll, d.today)
   }
 
+  /** The meetings on the timeline: a row each (its title, how it comes back), a mark on each day it falls on; under a Meetings heading. */
+  function meetingRows(g) {
+    const list = meetingsIn(g.from, S.addDays(g.to, 1))
+    if (!list.length) return []
+    const head = document.createElement('div')
+    head.className = 'tl-row tl-group'
+    head.innerHTML = `<div class="tl-label">Meetings</div><div class="tl-track" style="width:${g.days * g.dayW}px"></div>`
+    const out = [head]
+    for (const { meeting: m, occ } of list) {
+      const row = document.createElement('div')
+      row.className = 'tl-row tl-mtrow'
+      row.dataset.meeting = m.id
+      const label = document.createElement('div')
+      label.className = 'tl-label'
+      label.title = `${m.name} · ${S.repeatText(m)}${EMBED ? '' : ' (click to edit)'}`
+      label.innerHTML = `<span class="tl-title">${escH(m.title || m.name)}</span><span class="muted tl-mt-rep">${escH(S.repeatText(m))}</span>`
+      label.addEventListener('click', () => openMeeting(m.id, null))
+      const track = document.createElement('div')
+      track.className = 'tl-track'
+      track.style.width = `${g.days * g.dayW}px`
+      for (const o of occ) {
+        const t = document.createElement('span')
+        t.className = `tl-mt${o.moved ? ' moved' : ''}${o.skipped ? ' skipped' : ''}${o.plan && o.plan.atRisk ? ' risk' : ''}${calOpen === m.id && calOcc === o.orig ? ' open' : ''}`
+        t.style.left = `${g.x(o.day) + 1}px`
+        t.style.width = `${Math.max(6, g.dayW - 2)}px`
+        t.title = occTitle(m, o)
+        t.addEventListener('click', () => openMeeting(m.id, m.every ? o.orig : null))
+        track.appendChild(t)
+      }
+      row.append(label, track)
+      out.push(row)
+    }
+    return out
+  }
+
   function scrollToDay(scroll, day) {
     const from = scroll.dataset.from
     const dayW = Math.round(CAL_ZOOM[calZoom] * font)
-    const labelW = Math.round(TL_LABEL * font)
+    const labelW = tlLabelW()
     scroll.scrollLeft = Math.max(0, S.between(from, day) * dayW - (scroll.clientWidth - labelW) / 4)
   }
 
@@ -3036,13 +3439,17 @@
     const weeks = S.monthWeeks(y, m)
     const notes = new Map(tree.nodes.map(n => [n.id, n]))
     const wins = d.wins.filter(w => boardSet.has(w.id))
-    const deadlines = new Map() // day → what falls due on it
+    const deadlines = new Map() // day → what falls due on it, then the meetings on it
     const at = (day, item) => { if (!deadlines.has(day)) deadlines.set(day, []); deadlines.get(day).push(item) }
-    for (const p of plans) at(p.due, { plan: p })
+    // a meeting that needs notes is drawn as the meeting, red when at risk
+    for (const p of plans) if (p.kind !== 'meeting') at(p.due, { plan: p })
     for (const ms of tree.milestones || []) {
       const due = S.parseDue(ms.due)
       if (due && (ms.status === 'suggested' || ms.status === 'done')) at(due.day, { milestone: ms, due })
     }
+    const meetings = meetingsIn(weeks[0][0], S.addDays(weeks[weeks.length - 1][6], 1)).flatMap(x => x.occ.map(o => ({ meeting: x.meeting, occ: o })))
+    meetings.sort((a, b) => (a.occ.at.time || '').localeCompare(b.occ.at.time || '') || a.meeting.id.localeCompare(b.meeting.id, 'en', { numeric: true }))
+    for (const it of meetings) at(it.occ.day, it)
     const box = document.createElement('div')
     box.className = 'mo'
     const headRow = document.createElement('div')
@@ -3065,8 +3472,8 @@
         for (const it of deadlines.get(day) || []) list.appendChild(monthChip(it))
         cell.appendChild(list)
         if (!EMBED) {
-          cell.title = `${shortDay(day)}: click to add a deadline on this day`
-          cell.addEventListener('click', ev => { if (ev.target === cell || ev.target.classList.contains('mo-num') || ev.target === list) openDeadlineAdder(day) })
+          cell.title = `${shortDay(day)}: click to add a deadline or a meeting on this day`
+          cell.addEventListener('click', ev => { if (ev.target === cell || ev.target.classList.contains('mo-num') || ev.target === list) dayMenu(cell, day) })
         }
         row.appendChild(cell)
       }
@@ -3088,24 +3495,69 @@
     document.getElementById('cal-range').textContent = monthName(calMonth)
   }
 
-  /** A deadline on its day in the month: at risk in red, Claude's suggestion dashed, a done one faded. */
+  /** A month's chip: its time (a phone leaves it out, for the name; app.css), then its name. */
+  function timedChip(el, time, name) {
+    el.textContent = ''
+    if (time) {
+      const t = document.createElement('span')
+      t.className = 'mo-t'
+      t.textContent = `${time} `
+      el.append(t)
+    }
+    el.append(name)
+  }
+
+  /** A deadline on its day in the month: at risk in red, Claude's suggestion dashed, a done one faded; a meeting, moved ones in italics, skipped ones struck through. */
   function monthChip(it) {
     const el = document.createElement('button')
     el.type = 'button'
+    if (it.occ) {
+      const { meeting: m, occ: o } = it
+      el.className = `mo-dl mo-mt${o.moved ? ' moved' : ''}${o.skipped ? ' skipped' : ''}${o.plan && o.plan.atRisk ? ' risk' : ''}${calOpen === m.id && calOcc === o.orig ? ' open' : ''}`
+      timedChip(el, o.at.time ? `${o.at.time}${o.at.zone ? ` ${o.at.zone}` : ''}` : '', m.title || m.name)
+      el.title = occTitle(m, o)
+      const decks = slidesView && !o.skipped ? slidesView.decksFor(m.id, m.every ? o.orig : '') : []
+      if (decks.length) {
+        el.insertAdjacentHTML('afterbegin', '<svg class="mo-deck" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2" width="13" height="9" rx="1.5"/><path d="M8 11v2.5M5 15l3-1.5 3 1.5"/></svg>')
+        el.title += ` · slides: ${decks.map(d => d.name).join(', ')}`
+      }
+      el.addEventListener('click', ev => { ev.stopPropagation(); openMeeting(m.id, m.every ? o.orig : null) })
+      return el
+    }
     if (it.plan) {
       const p = it.plan
       el.className = `mo-dl${p.atRisk ? ' risk' : ''}`
-      el.textContent = `${p.at.time ? `${p.at.time}${p.at.zone ? ` ${p.at.zone}` : ''} ` : ''}${p.name}`
+      timedChip(el, p.at.time ? `${p.at.time}${p.at.zone ? ` ${p.at.zone}` : ''}` : '', p.name)
       el.title = `${S.deadlineLine(p)}${localOf(p.at) ? ` (${localOf(p.at)})` : ''}`
       el.addEventListener('click', ev => { ev.stopPropagation(); if (p.kind === 'note') go(p.id); else { calOpen = p.id; drawCalendar(); calDeadlines.querySelector(`[data-id="${p.id}"]`)?.scrollIntoView({ block: 'nearest' }) } })
     } else {
       const ms = it.milestone
       el.className = `mo-dl ${ms.status}`
-      el.textContent = `${it.due.time ? `${it.due.time} ` : ''}${ms.name}`
+      timedChip(el, it.due.time || '', ms.name)
       el.title = ms.status === 'suggested' ? `Claude suggests ${ms.name}${ms.why ? `: ${ms.why}` : ''} (accept or dismiss it above)` : `${ms.name}: done`
       el.addEventListener('click', ev => ev.stopPropagation())
     }
     return el
+  }
+
+  /** What to add on a day of the month: a deadline or a meeting. */
+  function dayMenu(cell, day) {
+    calBody.querySelectorAll('.mo-add').forEach(x => x.remove())
+    const menu = document.createElement('span')
+    menu.className = 'mo-add'
+    const close = () => { menu.remove(); document.removeEventListener('pointerdown', away, true) }
+    const away = ev => { if (!menu.contains(ev.target)) close() }
+    for (const [label, open] of [['+ Deadline', openDeadlineAdder], ['+ Meeting', openMeetingAdder]]) {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.textContent = label
+      b.addEventListener('click', ev => { ev.stopPropagation(); close(); open(day) })
+      menu.appendChild(b)
+    }
+    menu.addEventListener('keydown', ev => { if (ev.key === 'Escape') close() })
+    cell.appendChild(menu)
+    menu.firstChild.focus()
+    document.addEventListener('pointerdown', away, true)
   }
 
   // ---------------------------------------------------------------- the calendar's controls
@@ -3134,7 +3586,7 @@
   }
   const zoomBy = step => {
     const scroll = calBody.querySelector('.tl-scroll')
-    const labelW = Math.round(TL_LABEL * font)
+    const labelW = tlLabelW()
     // the day in the middle stays in the middle
     const before = Math.round(CAL_ZOOM[calZoom] * font)
     const mid = scroll ? (scroll.scrollLeft + (scroll.clientWidth - labelW) / 2) / before : 0
@@ -3147,7 +3599,7 @@
   document.getElementById('cal-zoom-in').addEventListener('click', () => zoomBy(1))
   document.getElementById('cal-zoom-out').addEventListener('click', () => zoomBy(-1))
   document.getElementById('cal-ics').addEventListener('click', ev => {
-    const text = S.ics({ project: tree.project, nodes: tree.nodes, milestones: tree.milestones || [], stamp: new Date().toISOString() }).text
+    const text = S.ics({ project: tree.project, nodes: tree.nodes, milestones: tree.milestones || [], meetings: tree.meetings || [], stamp: new Date().toISOString() }).text
     const a = ev.currentTarget
     if (a.href) URL.revokeObjectURL(a.href)
     a.href = URL.createObjectURL(new Blob([text], { type: 'text/calendar' }))
@@ -3158,6 +3610,7 @@
   // notes it needs; the server writes it in milestones/
   function openDeadlineAdder(day) {
     if (EMBED) return
+    closeMeetingAdder()
     calAdder.hidden = false
     if (day) document.getElementById('cal-add-day').value = day
     document.getElementById('cal-add-title').focus()
@@ -3179,6 +3632,44 @@
     if (ok) closeDeadlineAdder()
   })
   if (EMBED) document.getElementById('cal-add').hidden = true
+
+  // + Meeting: what, its (first) day and time, how long, how often (a menu worked out from the day)
+  // and until when, the notes it needs by its next one; the server writes it in meetings/
+  const mtAdder = document.getElementById('cal-mt-adder')
+  const mtDay = document.getElementById('cal-mt-day')
+  const mtUntil = document.getElementById('cal-mt-until-label')
+  let mtPicker = null
+  function openMeetingAdder(day) {
+    if (EMBED) return
+    closeDeadlineAdder()
+    mtAdder.hidden = false
+    if (day) mtDay.value = day
+    mtPicker = repeatPicker(mtDay.value, '', repeats => { mtUntil.hidden = !repeats })
+    document.getElementById('cal-mt-repeat').replaceChildren(mtPicker.el)
+    mtUntil.hidden = true
+    document.getElementById('cal-mt-title').focus()
+  }
+  function closeMeetingAdder() {
+    mtAdder.hidden = true
+    mtAdder.reset()
+  }
+  mtDay.addEventListener('change', () => mtPicker && mtPicker.setDay(mtDay.value))
+  document.getElementById('cal-mt-add').addEventListener('click', () => (mtAdder.hidden ? openMeetingAdder(null) : closeMeetingAdder()))
+  document.getElementById('cal-mt-cancel').addEventListener('click', closeMeetingAdder)
+  mtAdder.addEventListener('keydown', ev => { if (ev.key === 'Escape') closeMeetingAdder() })
+  mtAdder.addEventListener('submit', async ev => {
+    ev.preventDefault()
+    const val = id => document.getElementById(id).value.trim()
+    const body = { title: val('cal-mt-title'), when: whenOf(mtDay.value, val('cal-mt-time'), val('cal-mt-zone')) }
+    if (val('cal-mt-duration')) body.duration = val('cal-mt-duration')
+    const every = mtPicker ? mtPicker.value() : ''
+    if (every) body.every = every
+    if (every && val('cal-mt-until')) body.until = val('cal-mt-until')
+    const needs = idsIn(val('cal-mt-needs'))
+    if (needs.length) body.needs = needs
+    if (await writeMeeting(body, 'Meeting not added')) closeMeetingAdder()
+  })
+  if (EMBED) document.getElementById('cal-mt-add').hidden = true
 
   // ---------------------------------------------------------------- a note's dates, in the drawer
 
@@ -3348,6 +3839,7 @@
   const composerPost = document.getElementById('composer-post')
   const composerAsk = document.getElementById('composer-ask')
   const composerMsg = document.getElementById('composer-msg')
+  const composerAgent = document.getElementById('composer-agent')
   const fnPop = document.getElementById('fn-pop')
   const lockBtn = document.getElementById('drawer-lock')
   const CONTEXT = 40 // characters kept on each side of a quote, as the server keeps them
@@ -3362,7 +3854,20 @@
   const mdm = M.make({ tex, image: (src, alt) => `<em class="missing">(image: ${escH(alt || src)})</em>`, link: idForLink })
   const noteOf = r => ({ id: r.id, body: r.body, version: r.version || null, locked: Boolean(r.locked), threads: Array.isArray(r.threads) ? r.threads : [] })
   const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s)
-  const who = by => (by === 'claude' ? 'Claude' : 'You')
+  // the agents the user set up (agents.js): who answers a thread, and who wrote a message of one
+  const AG = window.RftAgents || { extra: () => ({}), name: () => 'Claude', who: m => (m && m.by === 'you' ? 'You' : 'Claude'), asking: () => 'Claude', picker: () => null, setupLink: () => null, onChange: () => {} }
+  const who = m => AG.who(m)
+  if (AG.setKey) AG.setKey(() => editKey())
+  // the agents came in, or changed: the picker and the Ask buttons are drawn again
+  AG.onChange(() => { if (shown && editing == null) { renderThreads(); layoutSidenotes() } })
+  AG.onChange(() => { if (composing) composerAsks() })
+  // a standing way into the agents' setup, in the bar (behind ⋯ on a phone): beside a thread or above the inbox it
+  // shows only once there is a thread or an item, which a first setup cannot wait for
+  const agentsEntry = document.getElementById('agents-entry')
+  const showAgentsEntry = () => { if (agentsEntry) agentsEntry.hidden = Boolean(EMBED) || !(AG.canSetup && AG.canSetup()) }
+  if (agentsEntry) agentsEntry.querySelector('button').addEventListener('click', () => { if (AG.setup) AG.setup() })
+  AG.onChange(showAgentsEntry)
+  showAgentsEntry()
   const STATE = { resolved: 'Resolved', accepted: 'Accepted', rejected: 'Rejected', applied: 'Applied by Claude' }
   const TIP = {
     ask: 'Ask Claude to answer this thread (with your reply, if you wrote one), in the background: the answer comes into the thread',
@@ -3386,7 +3891,7 @@
   function threadButtons(t, replyTip) {
     const no = cantAccept(t)
     return iconBtn('reply', 'Reply', replyTip, 'neutral') +
-      iconBtn('ask', t.asked ? 'Ask Claude again' : 'Ask Claude', t.asked ? `Again: ${TIP.ask}` : TIP.ask, 'ask') +
+      iconBtn('ask', `Ask ${AG.name('thread')}${t.asked ? ' again' : ''}`, (t.asked ? 'Again: ' : '') + TIP.ask.replace('Ask Claude', `Ask ${AG.name('thread')}`), 'ask') +
       (t.kind === 'suggestion'
         ? iconBtn('accept', 'Accept', no || TIP.accept, 'ok', Boolean(no)) + iconBtn('reject', 'Reject', TIP.reject, 'no')
         : iconBtn('resolve', 'Resolve', TIP.resolve, 'ok'))
@@ -3577,8 +4082,9 @@
     el.innerHTML = `<div class="s-head"><b>${kind}</b>${replies ? ` · ${replies} ${replies > 1 ? 'replies' : 'reply'}` : ''}${t.exact ? '' : ' · the text changed'}</div>` +
       (t.kind === 'suggestion' && t.replacement != null
         ? `<div class="s-repl">${t.replacement ? escH(clip(t.replacement, 240)) : '<em>(delete the text)</em>'}</div>` : '') +
-      (last ? `<div class="s-msg"><span class="s-who">${who(last.by)}:</span> ${mdm.inline(clip(String(last.text || '').replace(/\s+/g, ' ').trim(), 320))}</div>` : '') +
-      (t.asked ? '<div class="s-asked">Claude is answering…</div>' : '') +
+      (last ? `<div class="s-msg"><span class="s-who">${escH(who(last))}:</span> ${mdm.inline(clip(String(last.text || '').replace(/\s+/g, ' ').trim(), 320))}</div>` : '') +
+      (t.asked ? `<div class="s-asked">${escH(AG.asking(t))} is answering…</div>` : '') +
+      (!err && !t.asked && t.task && t.task.state === 'failed' ? `<div class="s-error">${escH(`Not answered: ${t.task.error}`)}</div>` : '') +
       (err ? `<div class="s-error">${escH(err)}</div>` : '') + acts
     const box = el.querySelector('.s-reply')
     if (box) box.value = drafts.get(draftKey(t.id)) || ''
@@ -3745,12 +4251,20 @@
   article.addEventListener('mouseup', () => setTimeout(onSelectionEnd, 0))
   // a selection made with the keyboard: in the highlighter, once Shift is let go
   article.addEventListener('keyup', ev => { if (highlighting ? ev.key === 'Shift' : ev.shiftKey) onSelectionEnd() })
+  let pressingBar = false
+  let selTimer = 0
   document.addEventListener('selectionchange', () => {
     const s = window.getSelection()
-    if (!s || s.isCollapsed) hideSelBar()
+    if (!s || s.isCollapsed) { if (!pressingBar) hideSelBar(); return }
+    // a touch screen: a long press selects, its handles adjust it, and no mouseup ends it
+    if (touchScreen.matches && article.contains(s.anchorNode)) {
+      clearTimeout(selTimer)
+      selTimer = setTimeout(onSelectionEnd, 450)
+    }
   })
-  // a press on the bar keeps the selection
+  // a press on the bar keeps the selection (a mouse), or the bar (a finger, whose tap clears the selection first)
   selBar.addEventListener('mousedown', ev => ev.preventDefault())
+  selBar.addEventListener('pointerdown', () => { pressingBar = true; setTimeout(() => { pressingBar = false }, 800) }, true)
   selBar.addEventListener('click', ev => {
     const b = ev.target.closest('button[data-compose]')
     if (b) openComposer(b.dataset.compose)
@@ -3835,6 +4349,24 @@
     composerMsg.classList.toggle('error', isError)
   }
 
+  /**
+   * Who the composer's second button asks (agents.js): Claude, with no setup or with the chat
+   * picked. With a setup the picker is here too: a note with no thread yet has no Discussion under
+   * it to pick in, and the first Ask of a note is this button.
+   */
+  function composerAsks() {
+    const kind = composing
+    const had = composerAgent.contains(document.activeElement)
+    const pick = kind && kind !== 'footnote' && AG.picker('thread')
+    composerAgent.replaceChildren(...(pick ? [pick] : []))
+    composerAgent.hidden = !pick
+    if (had && pick) pick.querySelector('select').focus()
+    composerAsk.textContent = kind === 'suggestion' ? 'Post and suggest' : `Post and ask ${AG.name('thread')}`
+    composerAsk.title = kind === 'suggestion'
+      ? `Post it and ask ${AG.name('thread')} to write the new text, in the background, for you to accept`
+      : `Post it and ask ${AG.name('thread')} to answer it, in the background: the answer comes into the thread`
+  }
+
   function openComposer(kind) {
     if (!anchor) return
     if (!editKey()) { noKey.hidden = false; hideSelBar(); return }
@@ -3849,10 +4381,7 @@
       : kind === 'suggestion' ? 'Why; or, with the text above left as it is, what should change (Claude writes it when you ask)'
         : 'The footnote, shown in the margin'
     composerAsk.hidden = kind === 'footnote'
-    composerAsk.textContent = kind === 'suggestion' ? 'Post and suggest' : 'Post and ask Claude'
-    composerAsk.title = kind === 'suggestion'
-      ? 'Post it and ask Claude to write the new text, in the background, for you to accept'
-      : 'Post it and ask Claude to answer it, in the background: the answer comes into the thread'
+    composerAsks()
     composerPost.textContent = kind === 'footnote' ? 'Add footnote' : 'Post'
     setComposerMsg('')
     hideSelBar()
@@ -3951,15 +4480,18 @@
       : `${STATE[t.state] || t.state}${t.closed && t.state !== 'applied' ? ` · ${escH(t.closed.at)}` : t.closed ? ` · ${escH(t.closed.at)}` : ''}`
     const change = t.kind !== 'suggestion' ? ''
       : t.replacement == null
-        ? `<div class="t-note muted">No new text yet${isOpen ? ': Ask Claude to write it, or reply' : ''}.</div>`
+        ? `<div class="t-note muted">No new text yet${isOpen ? `: Ask ${escH(AG.name('thread'))} to write it, or reply` : ''}.</div>`
         : `<div class="t-change"><div class="muted">Replace with</div><div class="t-repl">${t.replacement ? escH(clip(t.replacement, 1200)) : '<em class="muted">(nothing: delete the text)</em>'}</div></div>`
     const where = !isOpen ? ''
       : !t.at ? `<div class="t-warn">The text this ${t.kind} is on is no longer in the note.</div>`
         : !t.exact ? `<div class="t-warn">The text changed since; that part now reads: <q>${escH(clip(shown.body.slice(t.at[0], t.at[1]), 240))}</q></div>` : ''
     const msgs = (t.messages || []).map(m =>
-      `<li class="by-${m.by === 'claude' ? 'claude' : 'you'}"><div class="t-who">${who(m.by)} <time>${escH(m.at || '')}</time></div><div class="t-text">${mdm.render(m.text || '').html}</div></li>`).join('')
-    const asked = isOpen && t.asked ? `<div class="t-asked">Claude is answering… <span class="muted">(asked ${escH(String(t.asked).slice(11) || t.asked)})</span></div>` : ''
-    const err = threadErrors.get(draftKey(t.id))
+      `<li class="by-${m.by === 'claude' ? 'claude' : 'you'}"><div class="t-who">${escH(who(m))} <time>${escH(m.at || '')}</time></div><div class="t-text">${mdm.render(m.text || '').html}</div></li>`).join('')
+    // an agent of the user's that the server launched can be stopped; one that gave no answer says why, until the next ask
+    const running = can && t.task && t.task.state === 'running' && t.asking
+    const asked = isOpen && t.asked ? `<div class="t-asked">${escH(AG.asking(t))} is answering… <span class="muted">(asked ${escH(String(t.asked).slice(11) || t.asked)})</span>${running ? ' <button type="button" class="linkish" data-act="cancel" title="Stop it: nothing is written">Cancel</button>' : ''}</div>` : ''
+    const failed = isOpen && !t.asked && t.task && t.task.state === 'failed' ? `Not answered: ${t.task.error}` : ''
+    const err = threadErrors.get(draftKey(t.id)) || failed
     let bar = ''
     if (can && isOpen) {
       bar = `<textarea rows="2" placeholder="Reply" aria-label="Reply"></textarea>
@@ -3986,6 +4518,9 @@
     for (const box of threadsBox.querySelectorAll('.thread textarea')) {
       box.value = drafts.get(draftKey(box.closest('.thread').dataset.thread)) || ''
     }
+    // who answers a thread, when the user set agents up: picked here, for every Ask of the note
+    const pick = !EMBED && open.length ? AG.picker('thread', () => { renderThreads(); layoutSidenotes() }) || (AG.setupLink && AG.setupLink()) : null
+    if (pick) threadsBox.querySelector('.threads-head').append(pick)
     if (focused) {
       const box = threadsBox.querySelector(`.thread[data-thread="${CSS.escape(focused.tid)}"] textarea`)
       if (box) { box.focus(); box.setSelectionRange(focused.at, focused.at) }
@@ -4017,7 +4552,7 @@
 
   async function act(id, tid, action, extra = {}) {
     threadErrors.delete(`${id} ${tid}`)
-    const r = await send({ id, thread: tid, action, ...extra })
+    const r = await send({ id, thread: tid, action, ...(action === 'ask' ? AG.extra('thread') : {}), ...extra })
     if (!r.ok) {
       threadErrors.set(`${id} ${tid}`, `Not done: ${r.error}.`)
       if (shown && shown.id === id) { renderThreads(); layoutSidenotes() }
@@ -4050,6 +4585,7 @@
       }
     }
     if (what !== 'reply') await act(id, tid, what)
+    if (what === 'cancel' && b.isConnected) b.disabled = false
   }
 
   /** A reply being written, in the box under the note or on the card in the margin: the other box shows it too. */
@@ -4197,6 +4733,10 @@
     // the scratchpad lives on the server: the standalone page has none, and a server started
     // before it existed serves neither its script nor api/scratchpad
     if (!EMBED && window.RftScratchpad) window.RftScratchpad.mount({ key: editKey, store, every: POLL_MS })
+    // the inbox too (the standalone page leaves its script out)
+    // and an item's reading note, which its row in the inbox opens
+    const reading = !EMBED && window.RftInbox && window.RftReading ? window.RftReading.mount({ key: editKey, every: POLL_MS }) : null
+    if (!EMBED && window.RftInbox) window.RftInbox.mount({ key: editKey, store, every: POLL_MS, reading })
     // the experiment queue's monitor: only on the server too (the standalone page leaves its script out)
     if (!EMBED && window.RftQueue) {
       window.RftQueue.mount({
@@ -4217,6 +4757,22 @@
     } else {
       document.getElementById('show-manuscript').hidden = true
       if (view === 'manuscript') view = 'tree'
+    }
+    // the slide decks' tab: only on the server too; the Calendar asks it which decks an occurrence has
+    if (!EMBED && window.RftDecks) {
+      slidesView = window.RftDecks.mount({
+        key: editKey, store, notify,
+        open: id => { if (byId.has(id)) select(id) },
+        nodes: () => byId,
+        visible: () => view === 'slides',
+        wanted: () => view === 'slides' || view === 'calendar',
+        meetings: () => tree.meetings || [],
+        milestones: () => tree.milestones || [],
+        changed: () => { if (view === 'calendar' && !calSection.contains(document.activeElement)) drawCalendar() },
+      })
+    } else {
+      document.getElementById('show-slides').hidden = true
+      if (view === 'slides') view = 'tree'
     }
     render(false)
     hasView = true

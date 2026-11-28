@@ -1,0 +1,146 @@
+{
+ "copies": [
+  {
+   "snippet": "S05",
+   "file": "main.tex",
+   "order": 1,
+   "state": "placed",
+   "markers": false,
+   "why": "markers deleted, text intact: found by its text",
+   "marker": "Motivation: Why low data"
+  },
+  {
+   "snippet": "S01",
+   "file": "main.tex",
+   "order": 2,
+   "state": "placed",
+   "markers": true,
+   "why": "",
+   "marker": "Definition: CutMix"
+  },
+  {
+   "snippet": "S01",
+   "file": "sections/method.tex",
+   "order": 3,
+   "state": "adapted",
+   "markers": true,
+   "why": "second copy of the same snippet, reworded",
+   "marker": "Definition: CutMix"
+  },
+  {
+   "snippet": "S04",
+   "file": "sections/method.tex",
+   "order": 4,
+   "state": "review",
+   "markers": true,
+   "why": "the snippet now says 300 epochs",
+   "marker": "Method: Training setup"
+  },
+  {
+   "snippet": "S03",
+   "file": "sections/method.tex",
+   "order": 5,
+   "state": "placed",
+   "markers": true,
+   "why": "",
+   "marker": "Figure: Training loss"
+  },
+  {
+   "snippet": "S07",
+   "file": "sections/method.tex",
+   "order": 6,
+   "state": "gone",
+   "markers": true,
+   "why": "no snippet S07 in the vault",
+   "marker": "Lemma: Mixing bound"
+  },
+  {
+   "snippet": "S02",
+   "file": "main.tex",
+   "order": 7,
+   "state": "placed",
+   "markers": true,
+   "why": "its text is the snippet written out as placed; one of its numbers is in review, below",
+   "marker": "Result: CutMix at 1k images"
+  },
+  {
+   "snippet": "S06",
+   "file": null,
+   "order": null,
+   "state": "lost",
+   "markers": false,
+   "why": "markers deleted and text rewritten",
+   "marker": "Discussion: Limitations"
+  }
+ ],
+ "usedIn": {
+  "S01": {
+   "main.tex": 1,
+   "sections/method.tex": 1
+  },
+  "S02": {
+   "main.tex": 1
+  },
+  "S03": {
+   "sections/method.tex": 1
+  },
+  "S04": {
+   "sections/method.tex": 1
+  },
+  "S05": {
+   "main.tex": 1
+  }
+ },
+ "values": [
+  {
+   "kind": "number",
+   "file": "main.tex",
+   "from": "E05",
+   "state": "current",
+   "inCopyOf": null,
+   "why": "in the abstract, outside any copy",
+   "key": "acc.1k"
+  },
+  {
+   "kind": "number",
+   "file": "main.tex",
+   "from": "E05",
+   "state": "current",
+   "inCopyOf": "S02",
+   "why": "",
+   "key": "acc.1k"
+  },
+  {
+   "kind": "number",
+   "file": "main.tex",
+   "from": "E05",
+   "state": "review",
+   "inCopyOf": "S02",
+   "why": "written 81.4, the tree now says 81.6",
+   "key": "acc.full"
+  },
+  {
+   "kind": "number",
+   "file": "sections/method.tex",
+   "from": "E05",
+   "state": "changed",
+   "inCopyOf": null,
+   "why": "written 3, the text now says 5, the tree says 3",
+   "key": "seeds"
+  },
+  {
+   "kind": "figure",
+   "file": "sections/method.tex",
+   "from": "E08",
+   "state": "current",
+   "inCopyOf": "S03",
+   "why": "",
+   "key": "loss"
+  }
+ ],
+ "bib": {
+  "yun2019cutmix": "R07",
+  "zhang2018mixup": null
+ },
+ "scan": []
+}
