@@ -119,7 +119,7 @@ class AgentsPage(unittest.TestCase):
         b = self.b
         self.open_note()
         self.assertEqual(b.js("document.querySelectorAll('.agent-pick').length"), 0)
-        # one small way into the setup, and nothing else of agents
+        # beside the thread, one small way into the setup, and nothing else of agents there
         self.assertEqual(b.js("[...document.querySelectorAll('#threads .agent-open')].map(e => e.textContent)"), ["Set up an agent"])
         self.assertEqual(b.js("document.querySelector('#threads [data-act=ask]').getAttribute('aria-label')"), "Ask Claude")
         b.js("document.querySelector('#threads [data-act=ask]').click()")
@@ -230,6 +230,64 @@ class AgentsPage(unittest.TestCase):
         self.assertEqual(box[2], [])
         self.assertLessEqual(box[3], 360)
         self.shot("phone-dialog")
+
+    ENTRY = "(() => { const e = document.getElementById('agents-open'), r = e.getBoundingClientRect(); return { text: e.textContent, seen: r.width > 0 && r.height > 0 && getComputedStyle(e).visibility === 'visible', left: r.left, right: r.right, height: r.height } })()"
+
+    def test_a_standing_way_into_the_setup_in_the_bar_and_behind_the_phones_menu(self):
+        """What the user met on 2026-11-28: with no agent set up, the way into the setup stood only
+        beside an open thread or above an inbox with items, so on a note with no thread there was
+        none. The bar holds one whatever is open; on a phone it is in the menu behind the three
+        dots; a page without the vault's key is offered none."""
+        url = self.serve()
+        b = self.b
+        (self.vault / ".comments" / "D00.json").unlink()  # no thread anywhere
+        b.js("location.reload()")
+        b.wait(test_phone.READY)
+        b.js(test_phone.page("tree"))
+        b.js(test_phone.tap_node("D00"))
+        self.assertTrue(b.wait("!document.getElementById('agents-entry').hidden"), "no entry in the bar")
+        # the note is open with no thread, the inbox is closed: nothing else of agents is on the page
+        seen = "[...document.querySelectorAll(%s)].filter(x => { const r = x.getBoundingClientRect(); return r.width > 0 && r.height > 0 }).length"
+        self.assertEqual(b.js("[%s, %s, document.querySelectorAll('#threads .thread').length]" % (seen % "'.agent-open'", seen % "'.agent-pick'")), [0, 0, 0])
+        e = b.js(self.ENTRY)
+        self.assertEqual((e["text"], e["seen"]), ("Agents…", True))
+        self.assertLessEqual(e["right"], 1500)
+        b.js("document.getElementById('agents-open').click()")
+        self.assertTrue(b.wait("!!document.querySelector('dialog.agent-setup[open]')"), "the entry opened no dialog")
+        self.assertEqual(b.js("[...document.querySelectorAll('dialog.agent-setup input')].map(i => i.value)"), ["", "", "", ""])
+        b.js("document.querySelector('dialog.agent-setup .agent-head button').click()")
+        self.assertTrue(b.wait("!document.querySelector('dialog.agent-setup')"))
+        self.shot("bar-entry")
+
+        # a phone keeps it behind the three dots, a row a finger can press
+        b.size(360, 740)
+        b.js("location.reload()")
+        b.wait(test_phone.READY)
+        self.assertTrue(b.wait("!document.getElementById('agents-entry').hidden"))
+        self.assertFalse(b.js(self.ENTRY)["seen"], "on a phone the entry is in the menu, not in the bar")
+        b.js("document.getElementById('bar-more-toggle').click()")
+        self.assertTrue(b.wait("document.getElementById('bar-more').classList.contains('open')"))
+        e = b.js(self.ENTRY)
+        self.assertEqual((e["text"], e["seen"]), ("Agents…", True))
+        self.assertGreaterEqual(e["left"], 0)
+        self.assertLessEqual(e["right"], 360)
+        self.assertGreaterEqual(e["height"], 44)
+        self.assertLessEqual(b.js("document.documentElement.scrollWidth"), 360)
+        self.shot("phone-menu")
+        b.js("document.getElementById('agents-open').click()")
+        self.assertTrue(b.wait("!!document.querySelector('dialog.agent-setup[open]')"), "the menu's row opened no dialog")
+        self.assertFalse(b.js("document.getElementById('bar-more').classList.contains('open')"), "a choice closes the menu")
+        self.assertEqual(b.errors, [])
+
+        # a page that does not carry the key may not change the setup, and is shown no way in
+        (self.tmp / "other").mkdir()
+        other = test_phone.Browser(self.tmp / "other")
+        self.addCleanup(other.close)
+        other.call("Emulation.setDeviceMetricsOverride", width=1500, height=900, deviceScaleFactor=1, mobile=False)
+        other.open(url.split("?")[0])
+        self.assertTrue(other.wait("!!(window.RftAgents && window.RftAgents.state().path)"), "the agents did not load")
+        self.assertEqual(other.js("[document.getElementById('agents-entry').hidden, window.RftAgents.canSetup()]"), [True, False])
+        self.assertFalse(other.js(self.ENTRY)["seen"])
 
     def test_a_model_answers_a_thread_picked_beside_the_buttons(self):
         self.serve(SETUP)

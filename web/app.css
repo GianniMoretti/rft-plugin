@@ -1417,6 +1417,7 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
   #bar-more .group[aria-label="Filters"] { flex-direction: row; flex-wrap: wrap; align-items: center; }
   /* labels in one column: after a symbol's room where a row has none */
   #bar #bar-more #filters-toggle { width: auto; flex: 1 1 auto; padding-left: 48px; }
+  #bar #bar-more #agents-open { padding-left: 48px; }
   #bar-more .filter-status { padding: 0 12px; font-size: 14px; }
 
   /* a note, the filters, the scratchpad, the queue, a notebook: each the whole page */
@@ -1549,6 +1550,7 @@ main:has(#drawer:not([hidden])) #slides { right: min(var(--drawer-w), 92vw); }
 .threads-head > .agent-open { margin-left: auto; }
 .threads-head:has(> .agent-open) { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; }
 #inbox > .agent-open { margin: 6px 12px; align-self: flex-start; }
+#agents-entry[hidden] { display: none; }
 dialog.agent-setup { width: min(34rem, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto; border: 1px solid var(--line, #d0d0d8); border-radius: 10px; padding: 14px 16px; background: var(--bg, Canvas); color: inherit; }
 dialog.agent-setup::backdrop { background: rgb(0 0 0 / 0.35); }
 .agent-head { display: flex; justify-content: space-between; align-items: center; }

@@ -230,9 +230,12 @@
     f.name.focus()
   }
 
+  /** Whether this page may change the setup: it carries the vault's key, and the server says where the setup is kept. */
+  const canSetup = () => Boolean(key() && state.path)
+
   /** The way into the setup, where a picker would stand: a small button. Null when the page may not write, or the server keeps no setup. */
   function setupLink(label) {
-    if (!key() || !state.path) return null
+    if (!canSetup()) return null
     return el('button', { type: 'button', class: 'linkish agent-open', text: label || (any() ? 'Agents…' : 'Set up an agent'), title: 'Add a model or a harness of your own to answer threads and process inbox items', onclick: setup })
   }
 
@@ -247,7 +250,7 @@
     } catch { /* an older server, or a page saved as a file: no agents */ }
   }
 
-  window.RftAgents = { CHAT, load, any, options, chosen, choose, extra, name, who, asking, picker, setup, setupLink, setKey: f => { key = f }, onChange: f => { listeners.add(f) }, state: () => state }
+  window.RftAgents = { CHAT, load, any, options, chosen, choose, extra, name, who, asking, picker, setup, setupLink, canSetup, setKey: f => { key = f }, onChange: f => { listeners.add(f) }, state: () => state }
   if (location.protocol.startsWith('http')) {
     load()
     setInterval(load, 5000)

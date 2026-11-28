@@ -3859,6 +3859,13 @@
   if (AG.setKey) AG.setKey(() => editKey())
   // the agents came in, or changed: the picker and the Ask buttons are drawn again
   AG.onChange(() => { if (shown && editing == null) { renderThreads(); layoutSidenotes() } })
+  // a standing way into the agents' setup, in the bar (behind ⋯ on a phone): beside a thread or above the inbox it
+  // shows only once there is a thread or an item, which a first setup cannot wait for
+  const agentsEntry = document.getElementById('agents-entry')
+  const showAgentsEntry = () => { if (agentsEntry) agentsEntry.hidden = Boolean(EMBED) || !(AG.canSetup && AG.canSetup()) }
+  if (agentsEntry) agentsEntry.querySelector('button').addEventListener('click', () => { if (AG.setup) AG.setup() })
+  AG.onChange(showAgentsEntry)
+  showAgentsEntry()
   const STATE = { resolved: 'Resolved', accepted: 'Accepted', rejected: 'Rejected', applied: 'Applied by Claude' }
   const TIP = {
     ask: 'Ask Claude to answer this thread (with your reply, if you wrote one), in the background: the answer comes into the thread',
