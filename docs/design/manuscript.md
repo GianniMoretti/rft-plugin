@@ -160,8 +160,8 @@ vault/templates/
   as a push is). A conflict stays in the files as git's own lines, and compiling, pulling and
   pushing wait until they are gone. After a pull nothing is rewritten: the copies and values are
   read again from the files (by markers, else by text, else lost; a number a co-author changed
-  is no longer the tree's). A document is also made from a repository (cloned; in it a passage
-  declared a copy is tracked by its text, and the file is left as it is). Talking to Overleaf
+  is no longer the tree's). A document is also made from a repository (cloned; a passage
+  declared a copy in it gets its two marker lines, as in any document). Talking to Overleaf
   directly is out of scope: its GitHub sync is the bridge.
 - **A thesis is one document**; there is no document inside a document. **Duplicate** makes a
   second document with the same files and tracking, tied to nothing of the first. **Bring in**

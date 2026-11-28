@@ -443,26 +443,31 @@ describe('the .bib of a document with several', () => {
     expect(tracking(fs).bib).toEqual({})
   })
 
-  test('in a document that came from a repository, a passage declared a copy is tracked and its file does not change', async () => {
+  test('in a document that came from a repository, a passage declared a copy gets its marker lines as in any other; lost to a co-author, it is found again by marker lines written by hand', async () => {
     const { fs, io, l, ms } = await setup(THESIS)
     // as a clone leaves it: nothing tied to the tree, and the template it records
     fs.write('vault/documents/.rft/thesis/tracking.json', JSON.stringify({ version: 1, template: 'repository', copies: [], values: [], bib: {}, allowed: [] }))
     const chapter = 'vault/documents/thesis/papers/paperA/sections/introduction.tex'
+    const rel = 'papers/paperA/sections/introduction.tex'
     fs.write(chapter, '\\section{Introduction}\nCutMix cuts a box from one image and pastes it on another, mixing the labels by area.\nMore text.\n')
-    const before = JSON.stringify([...fs.files].filter(([k]) => k.startsWith('vault/documents/thesis/')))
-    const said = await pointCopy(io, l, 'thesis', 'S01', { file: 'papers/paperA/sections/introduction.tex', from: 2, to: 2 })
-    expect(said).toContain('are now a copy of S01: tracked by its text, the file left as it is')
-    expect(JSON.stringify([...fs.files].filter(([k]) => k.startsWith('vault/documents/thesis/')))).toBe(before)
-    const d = (await ms()).documents.find(x => x.name === 'thesis')!
-    const c = d.copies[0]!
-    expect([c.snippet, c.found, c.file, c.begin, c.end, copyState(c, (await ms()).snippets.find(x => x.id === 'S01')).state]).toEqual(['S01', 'text', 'papers/paperA/sections/introduction.tex', 1, 1, 'adapted'])
-    expect(usedIn(await ms(), 'S01').filter(u => u.doc === 'thesis')).toEqual([{ doc: 'thesis', file: 'papers/paperA/sections/introduction.tex', count: 1, states: ['adapted'] }])
-    // its two marker lines, when the user asks for them
-    await restoreMarkers(io, l, 'thesis', 'S01')
+    const copy = async () => {
+      const m = await ms()
+      const c = m.documents.find(x => x.name === 'thesis')!.copies[0]!
+      return [c.snippet, c.found, c.file, c.begin, c.end, copyState(c, m.snippets.find(x => x.id === 'S01')).state]
+    }
+    expect(await pointCopy(io, l, 'thesis', 'S01', { file: rel, from: 2, to: 2 })).toBe(`Lines 2 to 2 of ${rel} in thesis are now a copy of S01, between two marker lines: its text is kept as it is, and it goes to review when S01 changes.`)
     expect(fs.read(chapter)).toBe('\\section{Introduction}\n%%% Definition: CutMix %%%\nCutMix cuts a box from one image and pastes it on another, mixing the labels by area.\n%%% end %%%\nMore text.\n')
-    // in a document of the user's own making the passage gets its marker lines at once, as before
-    await pointCopy(io, l, 'paper', 'S06', { file: 'main.tex', from: 20, to: 20 })
-    expect(fs.read(`${DOC}/main.tex`).split('\n')[19]).toBe('%%% Discussion: Limitations %%%')
+    expect(await copy()).toEqual(['S01', 'markers', rel, 1, 3, 'adapted'])
+    expect(usedIn(await ms(), 'S01').filter(u => u.doc === 'thesis')).toEqual([{ doc: 'thesis', file: rel, count: 1, states: ['adapted'] }])
+    // a co-author rewords it between its marker lines: it is followed
+    fs.write(chapter, '\\section{Introduction}\n%%% Definition: CutMix %%%\nCutMix pastes a box of one image onto another and mixes the two labels by area.\n%%% end %%%\nMore text.\n')
+    expect(await copy()).toEqual(['S01', 'markers', rel, 1, 3, 'adapted'])
+    // a co-author deletes the two marker lines and rewords it again: lost, shown and not dropped
+    fs.write(chapter, '\\section{Introduction}\nCutMix: a box of one image over another, labels mixed by area.\nMore text.\n')
+    expect(await copy()).toEqual(['S01', null, rel, null, null, 'lost'])
+    // the user writes the two lines back by hand, around the passage as it now reads: found again
+    fs.write(chapter, '\\section{Introduction}\n%%%  definition: cutmix  %%%\nCutMix: a box of one image over another, labels mixed by area.\n%%% end %%%\nMore text.\n')
+    expect(await copy()).toEqual(['S01', 'markers', rel, 1, 3, 'adapted'])
   })
 
   test('a citation of the user\'s own entry is said to rest on no reference note; the document\'s files are unchanged', async () => {

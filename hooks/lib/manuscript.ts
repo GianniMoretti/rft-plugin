@@ -1170,10 +1170,9 @@ export async function declareEnvironment(io: Io, loaded: Loaded, name: string, e
  * The user points to a passage of a document as a copy of a snippet (the tree view, a selection):
  * the lines from `from` to `to` of `file` (from 1) get marker lines around them. `ref` names a
  * lost copy (it is found again, there) or a snippet (a new copy: text a co-author wrote is tied to
- * the snippet without being replaced). Its text is the passage's, so it reads as adapted. In a
- * document that came from a repository the file is left as it is: no marker lines are written
- * around a co-author's passage, the copy is found by its text, and the page offers its marker
- * lines back (restoreMarkers) when the user wants them.
+ * the snippet without being replaced). Its text is the passage's, so it reads as adapted. The
+ * same in a document that came from a repository: a co-author's passage gets its two marker
+ * lines too, which is what lets the copy be followed when they reword it.
  */
 export async function pointCopy(io: Io, loaded: Loaded, name: string, ref: string, at: { file: string; from: number; to: number }): Promise<string> {
   const ms = await readManuscript(io, loaded)
@@ -1207,22 +1206,13 @@ export async function pointCopy(io: Io, loaded: Loaded, name: string, ref: strin
   if (contentFingerprint(entry.placed) === contentFingerprint(passage)) delete entry.seen
   const order = readingOrder(w.files, d.main)
   const next = locateCopies(w.files, w.tracking).find(c => c.found && order.at(c.file, c.begin!) >= order.at(at.file, from))
-  // a passage of a document that came from a repository is a co-author's: tied to the snippet, its file not changed
-  const bare = !again && d.template === FROM_REPOSITORY
-  if (bare) entry.seen = passage
-  else {
-    w.files[at.file] = [...lines.slice(0, from), ...markedText(entry.marker, passage).split('\n'), ...lines.slice(to + 1)].join('\n')
-    w.touched.add(at.file)
-  }
+  w.files[at.file] = [...lines.slice(0, from), ...markedText(entry.marker, passage).split('\n'), ...lines.slice(to + 1)].join('\n')
+  w.touched.add(at.file)
   w.tracking.copies.splice(next ? next.index : w.tracking.copies.length, 0, entry)
   await save(io, vault, d, w)
-  if (bare) return `Lines ${at.from} to ${at.to} of ${at.file} in ${name} are now a copy of ${m[1]}: tracked by its text, the file left as it is (the page gives it its two marker lines when the user wants them). It goes to review when ${m[1]} changes.`
   return again ? `The copy of ${m[1]} in ${name} is found again: lines ${at.from} to ${at.to} of ${at.file}, between its marker lines.`
     : `Lines ${at.from} to ${at.to} of ${at.file} in ${name} are now a copy of ${m[1]}, between two marker lines: its text is kept as it is, and it goes to review when ${m[1]} changes.`
 }
-
-/** The template a document made from a repository records (server/rft_server.py document_clone). */
-export const FROM_REPOSITORY = 'repository'
 
 /** A copy found by its text gets its two marker lines back, around its text as it is. */
 export async function restoreMarkers(io: Io, loaded: Loaded, name: string, ref: string): Promise<string> {
