@@ -337,6 +337,7 @@ button.linkish { border: 0; background: none; color: var(--accent); padding: 0; 
 #composer-repl { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .composer textarea:focus, .thread textarea:focus { outline: none; border-color: var(--accent); }
 #composer-msg.error { color: var(--dropped); }
+#composer-agent[hidden] { display: none; }
 .t-quote { margin: 0; padding: 1px 8px; border-left: 3px solid var(--line); color: var(--muted); font-size: 0.9em;
   white-space: pre-wrap; overflow-wrap: anywhere; max-height: 7.5em; overflow: auto; }
 #threads { margin-top: 18px; padding-top: 8px; border-top: 1px solid var(--line); }

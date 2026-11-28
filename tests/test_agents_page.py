@@ -122,6 +122,9 @@ class AgentsPage(unittest.TestCase):
         # beside the thread, one small way into the setup, and nothing else of agents there
         self.assertEqual(b.js("[...document.querySelectorAll('#threads .agent-open')].map(e => e.textContent)"), ["Set up an agent"])
         self.assertEqual(b.js("document.querySelector('#threads [data-act=ask]').getAttribute('aria-label')"), "Ask Claude")
+        self.compose("comment")
+        self.assertEqual(b.js("[document.getElementById('composer-agent').hidden, document.getElementById('composer-ask').textContent]"), [True, "Post and ask Claude"])
+        b.js("document.getElementById('composer-cancel').click()")
         b.js("document.querySelector('#threads [data-act=ask]').click()")
         self.assertTrue(b.wait("window.sent.some(r => r.url.includes('api/comment'))"))
         self.assertEqual(b.js(SENT % "'api/comment'"), [{"id": "D00", "thread": "c1", "action": "ask"}])
@@ -320,6 +323,91 @@ class AgentsPage(unittest.TestCase):
         self.assertEqual(b.errors, [])
         self.shot("answered")
 
+    SELECT = """(() => { const p = [...document.querySelectorAll('#note p')].find(p => p.textContent.length > 40);
+        const t = document.createTreeWalker(p, NodeFilter.SHOW_TEXT).nextNode();
+        getSelection().setBaseAndExtent(t, 0, t, Math.min(20, t.length));
+        document.getElementById('note').dispatchEvent(new MouseEvent('mouseup', { bubbles: true })) })()"""
+    CHOOSE = "(() => { const s = document.querySelector(%s + ' .agent-pick select'); s.value = %s; s.dispatchEvent(new Event('change', { bubbles: true })) })()"
+
+    def compose(self, kind):
+        """A passage of the note selected, and the box to write a comment, a suggestion or a footnote on it opened."""
+        b = self.b
+        b.js(self.SELECT)
+        self.assertTrue(b.wait("!document.getElementById('sel-bar').hidden"), "no bar under the selection")
+        b.js("document.querySelector('#sel-bar [data-compose=%s]').click()" % kind)
+        self.assertTrue(b.wait("!document.getElementById('composer').hidden"), "the box did not open")
+
+    def test_the_first_thread_of_a_note_is_asked_of_the_agent_picked_where_it_is_written(self):
+        # a note with no thread has no Discussion under it, so nothing to pick in there: the picker is also in the box
+        (self.vault / ".comments" / "D00.json").unlink()
+        self.serve(SETUP)
+        b = self.b
+        b.js(test_phone.page("tree"))
+        b.js(test_phone.tap_node("D00"))
+        self.assertTrue(b.wait("[...document.querySelectorAll('#note p')].some(p => p.textContent.length > 40)"), "the note did not draw")
+        self.assertEqual(b.js("[document.getElementById('threads').hidden, [...document.querySelectorAll('.agent-pick')].filter(e => e.getClientRects().length).length]"), [True, 0])
+        self.compose("suggestion")
+        self.assertEqual(b.js(PICK % "'#composer'")["value"], "chat")
+        self.assertIn("ask Claude to write the new text", b.js("document.getElementById('composer-ask').title"))
+        b.js("document.getElementById('composer-cancel').click()")
+        # a footnote is asked of nobody
+        self.compose("footnote")
+        self.assertEqual(b.js("[document.getElementById('composer-agent').hidden, document.querySelectorAll('#composer .agent-pick').length]"), [True, 0])
+        b.js("document.getElementById('composer-cancel').click()")
+        self.compose("comment")
+        pick = b.js(PICK % "'#composer'")
+        self.assertEqual(pick["value"], "chat")
+        self.assertEqual([(o[0], o[1]) for o in pick["options"]], [("chat", False), ("qwen", False), ("far", True), ("reader", False)])
+        self.assertEqual(b.js("document.getElementById('composer-ask').textContent"), "Post and ask Claude")
+        self.type("#composer-text", "Is it still the question?")
+        b.js(self.CHOOSE % (json.dumps("#composer"), json.dumps("qwen")))
+        # the button says who, the picker where it runs, and what was typed is still there
+        self.assertEqual(b.js("document.getElementById('composer-ask').textContent"), "Post and ask qwen")
+        self.assertEqual(b.js(PICK % "'#composer'"), {**pick, "value": "qwen", "where": "runs on this machine"})
+        self.assertEqual(b.js("document.getElementById('composer-text').value"), "Is it still the question?")
+        self.shot("composer")
+        b.js("document.getElementById('composer-ask').click()")
+        self.assertTrue(b.wait("[...document.querySelectorAll('#threads .thread .t-who')].some(w => w.textContent.startsWith('qwen'))", 15), "qwen's reply did not show")
+        made = self.threads()[0]
+        sent = b.js(SENT % "'api/comment'")
+        self.assertEqual([(r["action"], r.get("agent")) for r in sent], [("new", None), ("ask", "qwen")])
+        self.assertEqual(sent[1], {"id": "D00", "thread": made["id"], "action": "ask", "agent": "qwen"})
+        self.assertEqual([(m["by"], m.get("agent"), m["text"]) for m in made["messages"]], [("you", None, "Is it still the question?"), ("claude", "qwen", "Yes, it still is.")])
+        self.assertFalse(any(line.startswith("RFT_ASK ") for line in self.lines))  # the chat was not asked
+        # the thread is there now, and so is the Discussion's own picker, with the same pick
+        self.assertEqual(b.js(PICK % "'#threads'")["value"], "qwen")
+        self.assertEqual(b.errors, [])
+        self.shot("composer-answered")
+
+    def test_in_a_document_the_picker_is_in_the_box_a_comment_is_written_in(self):
+        self.serve(SETUP)
+        b = self.b
+        b.js(test_phone.page("manuscript"))
+        b.js("document.querySelector('[data-ms-level=documents]').click()")
+        self.assertTrue(b.wait("[...document.getElementById('ms-doc').options].some(o => o.value === 'two-pages')"), "no document")
+        b.js("(() => { const s = document.getElementById('ms-doc'); s.value = 'two-pages'; s.dispatchEvent(new Event('change', { bubbles: true })) })()")
+        self.assertTrue(b.wait("(() => { const c = document.querySelector('#ms-cm .CodeMirror'); return !!c && c.CodeMirror.lineCount() > 3 })()"), "the document's text did not draw")
+        self.assertEqual(b.js("document.querySelectorAll('#ms-threads .agent-pick').length"), 0)
+        b.js("document.querySelector('#ms-cm .CodeMirror').CodeMirror.setSelection({ line: 3, ch: 0 }, { line: 3, ch: 9 })")
+        b.js("document.querySelector('.ms-sel-btn[data-kind=comment]').click()")
+        self.assertTrue(b.wait("!!document.querySelector('.ms-composer')"), "the box did not open")
+        self.assertEqual(b.js(PICK % "'.ms-composer'")["value"], "chat")
+        self.assertEqual(b.js("document.querySelectorAll('#ms-threads .agent-pick').length"), 1)
+        b.js("document.querySelector('.ms-composer textarea').focus()")
+        b.call("Input.insertText", text="Which page?")
+        b.js(self.CHOOSE % (json.dumps(".ms-composer"), json.dumps("qwen")))
+        self.assertTrue(b.wait("[...document.querySelectorAll('.ms-composer button')].some(x => x.textContent === 'Post and ask qwen')"), "the button does not say who")
+        self.assertEqual(b.js("document.querySelector('.ms-composer textarea').value"), "Which page?")
+        self.shot("document-composer")
+        b.js("[...document.querySelectorAll('.ms-composer button')].find(x => x.textContent === 'Post and ask qwen').click()")
+        self.assertTrue(b.wait("window.sent.some(r => r.url.includes('api/comment') && JSON.parse(r.body).action === 'ask')"), "nothing was asked")
+        sent = b.js(SENT % "'api/comment'")
+        self.assertEqual([(r["action"], r.get("agent")) for r in sent], [("new", None), ("ask", "qwen")])
+        self.assertTrue(b.wait("[...document.querySelectorAll('#ms-threads .ms-thread')].some(t => t.textContent.includes('Yes, it still is.'))", 15), "qwen's reply did not show")
+        # with the box closed and a thread open, the picker stands above the threads, once
+        self.assertEqual(b.js("[document.querySelectorAll('.ms-composer').length, document.querySelectorAll('#ms-threads .agent-pick').length]"), [0, 1])
+        self.assertEqual(b.errors, [])
+
     def test_a_model_that_fails_says_why_on_the_thread(self):
         self.serve(SETUP)
         b = self.b
@@ -409,6 +497,16 @@ class AgentsPage(unittest.TestCase):
         self.assertGreaterEqual(box[3], 16)   # no zoom on focus
         self.assertLessEqual(box[4], 360)     # nothing wider than the screen
         self.shot("phone-thread")
+        b.js("""(() => { const p = [...document.querySelectorAll('#note p')].find(p => p.textContent.length > 40);
+            const t = document.createTreeWalker(p, NodeFilter.SHOW_TEXT).nextNode();
+            p.scrollIntoView(); getSelection().setBaseAndExtent(t, 0, t, Math.min(20, t.length)) })()""")
+        self.assertTrue(b.wait("!document.getElementById('sel-bar').hidden"), "no bar under a touch selection")
+        b.tap("#sel-bar [data-compose=comment]")
+        self.assertTrue(b.wait("!!document.querySelector('#composer .agent-pick select')"), "no picker in the box on the phone")
+        box = b.js("(() => { const r = document.querySelector('#composer .agent-pick select').getBoundingClientRect(), c = document.getElementById('composer').getBoundingClientRect(); return [r.left, r.right, r.height, c.left, c.right, document.documentElement.scrollWidth] })()")
+        self.assertTrue(box[0] >= 0 and box[1] <= 360 and box[2] >= 44 and box[3] >= 0 and box[4] <= 360 and box[5] <= 360, box)
+        self.shot("phone-composer")
+        b.js("document.getElementById('composer-cancel').click()")
         b.js("document.getElementById('drawer-close') && document.getElementById('drawer-close').click()")
         b.js("document.getElementById('inbox-toggle').click()")
         self.assertTrue(b.wait("!!document.querySelector('#inbox .agent-pick select')"), "no picker in the inbox on the phone")

@@ -1427,8 +1427,9 @@
         }
       }
       if (composing) threadsEl.append(composer())
-      // who answers a thread, when the user set agents up
-      const pick = open.length ? AG.picker('thread', renderThreads) : null
+      // who answers a thread, when the user set agents up: in the box being written (a document with
+      // no thread yet has nowhere else to pick), else above the open threads
+      const pick = !composing && open.length ? AG.picker('thread', renderThreads) : null
       if (pick) threadsEl.append(pick)
       for (const t of open) threadsEl.append(threadEl(t))
       const closed = threads.filter(t => t.state !== 'open')
@@ -1516,7 +1517,7 @@
         await refresh()
       }
       return el('div', { class: 'ms-composer' },
-        el('blockquote', { class: 'ms-quote', text: c.anchor.quote }), repl, msg,
+        el('blockquote', { class: 'ms-quote', text: c.anchor.quote }), repl, msg, AG.picker('thread', renderThreads),
         el('div', { class: 'ms-thread-act' },
           el('button', { type: 'button', class: 'primary', text: 'Post', onclick: post(false) }),
           el('button', { type: 'button', text: c.kind === 'comment' ? `Post and ask ${AG.name('thread')}` : 'Post and suggest', onclick: post(true) }),

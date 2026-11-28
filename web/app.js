@@ -3839,6 +3839,7 @@
   const composerPost = document.getElementById('composer-post')
   const composerAsk = document.getElementById('composer-ask')
   const composerMsg = document.getElementById('composer-msg')
+  const composerAgent = document.getElementById('composer-agent')
   const fnPop = document.getElementById('fn-pop')
   const lockBtn = document.getElementById('drawer-lock')
   const CONTEXT = 40 // characters kept on each side of a quote, as the server keeps them
@@ -3859,6 +3860,7 @@
   if (AG.setKey) AG.setKey(() => editKey())
   // the agents came in, or changed: the picker and the Ask buttons are drawn again
   AG.onChange(() => { if (shown && editing == null) { renderThreads(); layoutSidenotes() } })
+  AG.onChange(() => { if (composing) composerAsks() })
   // a standing way into the agents' setup, in the bar (behind ⋯ on a phone): beside a thread or above the inbox it
   // shows only once there is a thread or an item, which a first setup cannot wait for
   const agentsEntry = document.getElementById('agents-entry')
@@ -4347,6 +4349,24 @@
     composerMsg.classList.toggle('error', isError)
   }
 
+  /**
+   * Who the composer's second button asks (agents.js): Claude, with no setup or with the chat
+   * picked. With a setup the picker is here too: a note with no thread yet has no Discussion under
+   * it to pick in, and the first Ask of a note is this button.
+   */
+  function composerAsks() {
+    const kind = composing
+    const had = composerAgent.contains(document.activeElement)
+    const pick = kind && kind !== 'footnote' && AG.picker('thread')
+    composerAgent.replaceChildren(...(pick ? [pick] : []))
+    composerAgent.hidden = !pick
+    if (had && pick) pick.querySelector('select').focus()
+    composerAsk.textContent = kind === 'suggestion' ? 'Post and suggest' : `Post and ask ${AG.name('thread')}`
+    composerAsk.title = kind === 'suggestion'
+      ? `Post it and ask ${AG.name('thread')} to write the new text, in the background, for you to accept`
+      : `Post it and ask ${AG.name('thread')} to answer it, in the background: the answer comes into the thread`
+  }
+
   function openComposer(kind) {
     if (!anchor) return
     if (!editKey()) { noKey.hidden = false; hideSelBar(); return }
@@ -4361,11 +4381,7 @@
       : kind === 'suggestion' ? 'Why; or, with the text above left as it is, what should change (Claude writes it when you ask)'
         : 'The footnote, shown in the margin'
     composerAsk.hidden = kind === 'footnote'
-    // whoever is picked to answer threads (agents.js): Claude, with no setup or with the chat picked
-    composerAsk.textContent = kind === 'suggestion' ? 'Post and suggest' : `Post and ask ${AG.name('thread')}`
-    composerAsk.title = kind === 'suggestion'
-      ? `Post it and ask ${AG.name('thread')} to write the new text, in the background, for you to accept`
-      : `Post it and ask ${AG.name('thread')} to answer it, in the background: the answer comes into the thread`
+    composerAsks()
     composerPost.textContent = kind === 'footnote' ? 'Add footnote' : 'Post'
     setComposerMsg('')
     hideSelBar()
