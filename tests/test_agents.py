@@ -471,6 +471,7 @@ class ModelThreadTest(Served):
             self.assertEqual(self.e02.read_text(encoding="utf-8"), want)
             self.assertIn("It is a suggestion", self.model.prompts[-1])
             self.assertIn("<replacement>", self.model.prompts[-1])
+            self.assertNotIn("Begin with the first words", self.model.prompts[-1])  # a comment's words, not a suggestion's
 
     def test_a_malformed_new_text_is_a_plain_reply(self):
         tid = self.new_thread("suggestion", "Say how many seeds.")
@@ -574,6 +575,8 @@ class ModelThreadTest(Served):
         self.assertNotIn("START", prompt)
         self.assertNotIn(" END", prompt)
         self.assertLess(len(prompt), rft_agents.NOTE_CHARS + 3000)
+        # a comment's answer is asked for as the reply alone: a small model otherwise copies the way the thread is written
+        self.assertTrue(prompt.endswith('Begin with the first words of the reply itself: no heading, no name or number of the thread, and no ">" before your lines.'), prompt[-200:])
 
 
 class TaskTest(Served):

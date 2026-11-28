@@ -611,8 +611,12 @@ def thread_prompt(what: str, name: str, body: str, thread: dict, at: tuple[int, 
     part, whole = note_part(body, at)
     kind = {"snippet": "a snippet, a building block in LaTeX,", "document": "a document, in LaTeX,"}.get(what, "a note, in markdown,")
     if thread.get("kind") == "comment":
+        # the last sentence: a small model copies the way the thread is written above (it opens with a
+        # line "c21 · time", or writes its answer as a quote). Seen with qwen3:8b on 2026-11-28: 10
+        # answers of 10 without these words, 0 of 10 with them. A suggestion's answers showed none.
         todo = (f"It is a comment: a discussion of this part of the {what}. Your whole answer is your reply in the thread, "
-                "as the user will read it: markdown, short, and nothing about what you did.")
+                "as the user will read it: markdown, short, and nothing about what you did. "
+                'Begin with the first words of the reply itself: no heading, no name or number of the thread, and no ">" before your lines.')
     else:
         how = "written as the instruction says" if thread.get("replacement") is None else f"from the proposed replacement, adapted only where the {what} needs it"
         todo = (f"It is a suggestion. Your answer is the new text for the quoted part, between <replacement> and </replacement>, {how}, "
